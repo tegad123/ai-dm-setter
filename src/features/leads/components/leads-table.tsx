@@ -86,7 +86,13 @@ export function LeadsTable() {
         <div className='flex flex-col gap-4 sm:flex-row'>
           <div className='relative flex-1'>
             <IconSearch className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
-            <Input placeholder='Search leads...' disabled className='pl-9' />
+            <Input
+              placeholder='Search leads...'
+              disabled
+              className='pl-9'
+              value=''
+              readOnly
+            />
           </div>
           <Select disabled>
             <SelectTrigger className='w-[200px]'>

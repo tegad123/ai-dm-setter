@@ -8,10 +8,12 @@ import { IconLoader2 } from '@tabler/icons-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useAuth } from '@/hooks/use-auth';
 import { InteractiveGridPattern } from './interactive-grid';
 
 export default function SignInViewPage() {
   const router = useRouter();
+  const { setToken } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,7 +37,7 @@ export default function SignInViewPage() {
       }
 
       const data = await res.json();
-      localStorage.setItem('token', data.token);
+      setToken(data.token);
       router.push('/dashboard/overview');
     } catch (err: unknown) {
       const message =

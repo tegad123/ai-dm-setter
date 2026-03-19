@@ -7,7 +7,8 @@ const VALID_PROVIDERS = [
   'ELEVENLABS',
   'LEADCONNECTOR',
   'OPENAI',
-  'ANTHROPIC'
+  'ANTHROPIC',
+  'CALENDLY'
 ] as const;
 type Provider = (typeof VALID_PROVIDERS)[number];
 

@@ -15,7 +15,7 @@ import { useAuth } from '@/hooks/use-auth';
 
 export function UserNav() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
     <DropdownMenu>
@@ -52,10 +52,21 @@ export function UserNav() {
           <DropdownMenuItem onClick={() => router.push('/dashboard/profile')}>
             Profile
           </DropdownMenuItem>
-          <DropdownMenuItem>Settings</DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => router.push('/dashboard/settings/persona')}
+          >
+            Settings
+          </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>Log out</DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            logout();
+            router.push('/auth/sign-in');
+          }}
+        >
+          Log out
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -7,9 +7,23 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/hooks/use-auth';
+import { useEffect, useState } from 'react';
 
 export default function ProfileViewPage() {
   const { user } = useAuth();
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  useEffect(() => {
+    if (user) {
+      setName(user.name || '');
+      setEmail(user.email || '');
+    }
+  }, [user]);
+
   return (
     <div className='flex w-full flex-col gap-6 p-4'>
       <div>
@@ -45,11 +59,20 @@ export default function ProfileViewPage() {
             </div>
             <div className='space-y-2'>
               <Label htmlFor='name'>Full Name</Label>
-              <Input id='name' defaultValue={user?.name || ''} />
+              <Input
+                id='name'
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
             <div className='space-y-2'>
               <Label htmlFor='email'>Email</Label>
-              <Input id='email' type='email' defaultValue={user?.email || ''} />
+              <Input
+                id='email'
+                type='email'
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
             </div>
             <Button>Save Changes</Button>
           </CardContent>
@@ -62,15 +85,30 @@ export default function ProfileViewPage() {
           <CardContent className='space-y-4'>
             <div className='space-y-2'>
               <Label htmlFor='current-password'>Current Password</Label>
-              <Input id='current-password' type='password' />
+              <Input
+                id='current-password'
+                type='password'
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+              />
             </div>
             <div className='space-y-2'>
               <Label htmlFor='new-password'>New Password</Label>
-              <Input id='new-password' type='password' />
+              <Input
+                id='new-password'
+                type='password'
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
             </div>
             <div className='space-y-2'>
               <Label htmlFor='confirm-password'>Confirm New Password</Label>
-              <Input id='confirm-password' type='password' />
+              <Input
+                id='confirm-password'
+                type='password'
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
             </div>
             <Button>Update Password</Button>
           </CardContent>

@@ -14,8 +14,9 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Plus, Trash2, X, MessageSquareText } from 'lucide-react';
+import { Plus, Trash2, X, MessageSquareText, Upload } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -183,6 +184,195 @@ export default function TrainingDataPage() {
   }
 
   // --------------------------------------------------
+  // Bulk import state & handler
+  // --------------------------------------------------
+
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkImporting, setBulkImporting] = useState(false);
+
+  function autoDetectCategory(leadMsg: string, response: string): Category {
+    const combined = (leadMsg + ' ' + response).toLowerCase();
+    if (
+      combined.includes('how much') ||
+      combined.includes('price') ||
+      combined.includes('cost') ||
+      combined.includes('afford') ||
+      combined.includes('expensive')
+    )
+      return 'OBJECTION_MONEY';
+    if (
+      combined.includes('trust') ||
+      combined.includes('scam') ||
+      combined.includes('legit') ||
+      combined.includes('real')
+    )
+      return 'OBJECTION_TRUST';
+    if (
+      combined.includes('time') ||
+      combined.includes('busy') ||
+      combined.includes('schedule')
+    )
+      return 'OBJECTION_TIME';
+    if (
+      combined.includes('tried before') ||
+      combined.includes("didn't work") ||
+      combined.includes('failed') ||
+      combined.includes('lost money')
+    )
+      return 'OBJECTION_PRIOR_FAILURE';
+    if (
+      combined.includes('book') ||
+      combined.includes('call') ||
+      combined.includes('schedule a') ||
+      combined.includes('sign up')
+    )
+      return 'CLOSING';
+    if (
+      combined.includes('follow up') ||
+      combined.includes('checking in') ||
+      combined.includes('still interested')
+    )
+      return 'FOLLOW_UP';
+    if (
+      combined.includes('hey') ||
+      combined.includes('interested') ||
+      combined.includes('saw your') ||
+      combined.includes('hi ')
+    )
+      return 'GREETING';
+    if (
+      combined.includes('what do you do') ||
+      combined.includes('challenge') ||
+      combined.includes('goal') ||
+      combined.includes('how long') ||
+      combined.includes('experience')
+    )
+      return 'QUALIFICATION';
+    return 'GENERAL';
+  }
+
+  function parseBulkText(
+    text: string
+  ): Array<{ category: Category; leadMessage: string; idealResponse: string }> {
+    const blocks = text.split(/\n---\n|\n-{3,}\n/).filter((b) => b.trim());
+    const results: Array<{
+      category: Category;
+      leadMessage: string;
+      idealResponse: string;
+    }> = [];
+
+    for (const block of blocks) {
+      // Try [LEAD]: ... [YOU]: ... format
+      const labelMatch = block.match(
+        /\[LEAD\]:?\s*([\s\S]*?)\[YOU\]:?\s*([\s\S]*)/i
+      );
+      if (labelMatch) {
+        const lead = labelMatch[1].trim();
+        const you = labelMatch[2].trim();
+        if (lead && you) {
+          results.push({
+            category: autoDetectCategory(lead, you),
+            leadMessage: lead,
+            idealResponse: you
+          });
+          continue;
+        }
+      }
+
+      // Try Lead: ... You: ... format
+      const colonMatch = block.match(
+        /(?:Lead|Them|Customer|Prospect):?\s*([\s\S]*?)(?:You|Me|Response|Reply):?\s*([\s\S]*)/i
+      );
+      if (colonMatch) {
+        const lead = colonMatch[1].trim();
+        const you = colonMatch[2].trim();
+        if (lead && you) {
+          results.push({
+            category: autoDetectCategory(lead, you),
+            leadMessage: lead,
+            idealResponse: you
+          });
+          continue;
+        }
+      }
+
+      // Try two-line format (first line = lead, second = response)
+      const lines = block
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (lines.length >= 2) {
+        const lead = lines[0];
+        const you = lines.slice(1).join('\n');
+        results.push({
+          category: autoDetectCategory(lead, you),
+          leadMessage: lead,
+          idealResponse: you
+        });
+      }
+    }
+    return results;
+  }
+
+  async function handleBulkImport() {
+    if (!personaId) {
+      toast.error('No persona found. Please set up your persona first.');
+      return;
+    }
+
+    const textToImport = bulkText.trim();
+    if (!textToImport) {
+      toast.error('Please paste or upload conversation data first.');
+      return;
+    }
+
+    setBulkImporting(true);
+    try {
+      // Use the server-side bulk parser for better accuracy
+      const result = await apiFetch<{
+        imported: number;
+        categories: Record<string, number>;
+      }>('/settings/training/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ content: textToImport })
+      });
+
+      if (result.imported > 0) {
+        // Refresh the examples list
+        await fetchExamples();
+        setBulkText('');
+        setShowBulkImport(false);
+
+        // Build category summary
+        const summary = Object.entries(result.categories)
+          .map(([cat, count]) => `${formatCategory(cat)}: ${count}`)
+          .join(', ');
+        toast.success(`Imported ${result.imported} examples! (${summary})`);
+      } else {
+        toast.error('No examples could be parsed from the input.');
+      }
+    } catch {
+      toast.error('Failed to import training data');
+    } finally {
+      setBulkImporting(false);
+    }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    setBulkText(text);
+    setShowBulkImport(true);
+    toast.success(`Loaded ${file.name} — click Import to save`);
+
+    // Reset the input so the same file can be re-selected
+    e.target.value = '';
+  }
+
+  // --------------------------------------------------
   // Render
   // --------------------------------------------------
 
@@ -208,12 +398,40 @@ export default function TrainingDataPage() {
             examples, the better it mirrors your style.
           </p>
         </div>
-        {!showForm && (
-          <Button onClick={() => setShowForm(true)} className='shrink-0'>
-            <Plus className='mr-2 h-4 w-4' />
-            Add Example
-          </Button>
-        )}
+        <div className='flex gap-2'>
+          {!showForm && (
+            <Button onClick={() => setShowForm(true)} className='shrink-0'>
+              <Plus className='mr-2 h-4 w-4' />
+              Add Example
+            </Button>
+          )}
+          {!showBulkImport && (
+            <>
+              <Button
+                variant='outline'
+                onClick={() => setShowBulkImport(true)}
+                className='shrink-0'
+              >
+                <Upload className='mr-2 h-4 w-4' />
+                Bulk Import
+              </Button>
+              <label>
+                <input
+                  type='file'
+                  accept='.md,.txt,.csv'
+                  className='hidden'
+                  onChange={handleFileUpload}
+                />
+                <Button variant='outline' className='shrink-0' asChild>
+                  <span>
+                    <Upload className='mr-2 h-4 w-4' />
+                    Upload File
+                  </span>
+                </Button>
+              </label>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Add Example Form */}
@@ -285,6 +503,89 @@ export default function TrainingDataPage() {
             <div className='flex justify-end pt-2'>
               <Button onClick={handleSave} disabled={saving}>
                 {saving ? 'Saving...' : 'Save Example'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bulk Import Form */}
+      {showBulkImport && (
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <CardTitle className='text-lg'>
+                Bulk Import Conversations
+              </CardTitle>
+              <Button
+                variant='ghost'
+                size='icon'
+                onClick={() => {
+                  setShowBulkImport(false);
+                  setBulkText('');
+                }}
+              >
+                <X className='h-4 w-4' />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <p className='text-muted-foreground text-sm'>
+              Paste your DM conversations below. Separate each example with{' '}
+              <code className='bg-muted rounded px-1 text-xs'>---</code>.
+              Categories are auto-detected from keywords.
+            </p>
+            <div className='bg-muted space-y-1 rounded-md p-3 font-mono text-xs'>
+              <p className='text-muted-foreground'># Format:</p>
+              <p>[LEAD]: Hey I saw your post about trading!</p>
+              <p>
+                [YOU]: Yo appreciate you reaching out! What got you into
+                trading?
+              </p>
+              <p>---</p>
+              <p>[LEAD]: How much does your program cost?</p>
+              <p>
+                [YOU]: Great question. Before we talk numbers, let me understand
+                your situation...
+              </p>
+            </div>
+            <Separator />
+            <div className='space-y-2'>
+              <Label htmlFor='bulk-text'>Paste conversations</Label>
+              <Textarea
+                id='bulk-text'
+                placeholder={
+                  '[LEAD]: Their message here\n[YOU]: Your response here\n---\n[LEAD]: Next lead message\n[YOU]: Your response'
+                }
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                rows={12}
+                className='font-mono text-sm'
+              />
+            </div>
+            {bulkText.trim() && (
+              <p className='text-muted-foreground text-sm'>
+                Preview: <strong>{parseBulkText(bulkText).length}</strong>{' '}
+                examples detected
+              </p>
+            )}
+            <div className='flex justify-end gap-2 pt-2'>
+              <Button
+                variant='outline'
+                onClick={() => {
+                  setShowBulkImport(false);
+                  setBulkText('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleBulkImport}
+                disabled={bulkImporting || !bulkText.trim()}
+              >
+                {bulkImporting
+                  ? 'Importing...'
+                  : `Import ${parseBulkText(bulkText).length} Examples`}
               </Button>
             </div>
           </CardContent>

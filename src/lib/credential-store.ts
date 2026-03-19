@@ -52,8 +52,13 @@ export async function getCredentials(
   try {
     const raw = cred.credentials as any;
     // If it's a string, it's encrypted; if object, it was stored in dev mode
-    if (typeof raw === 'string') return decryptCredentials(raw);
-    return raw as Record<string, string>;
+    const decrypted =
+      typeof raw === 'string'
+        ? decryptCredentials(raw)
+        : (raw as Record<string, string>);
+    // Merge metadata fields so libs can access voiceId, model, pageId, etc.
+    const meta = (cred.metadata as Record<string, string>) || {};
+    return { ...meta, ...decrypted };
   } catch {
     return null;
   }

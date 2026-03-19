@@ -7,7 +7,8 @@ const PROVIDERS = [
   'ANTHROPIC',
   'META',
   'ELEVENLABS',
-  'LEADCONNECTOR'
+  'LEADCONNECTOR',
+  'CALENDLY'
 ] as const;
 
 export async function GET(req: NextRequest) {

@@ -150,8 +150,15 @@ export async function POST(req: NextRequest) {
       );
     }
     console.error('POST /api/ai/test-message error:', error);
+    // Surface the actual API error message to the user
+    const errMsg =
+      error instanceof Error
+        ? error.message
+        : 'Failed to generate test response';
+    // Extract Anthropic/OpenAI specific error messages
+    const match = errMsg.match(/"message":"([^"]+)"/);
     return NextResponse.json(
-      { error: 'Failed to generate test response' },
+      { error: match ? match[1] : errMsg },
       { status: 500 }
     );
   }

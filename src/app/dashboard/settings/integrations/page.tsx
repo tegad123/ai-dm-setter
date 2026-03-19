@@ -26,7 +26,8 @@ type Provider =
   | 'ANTHROPIC'
   | 'META'
   | 'ELEVENLABS'
-  | 'LEADCONNECTOR';
+  | 'LEADCONNECTOR'
+  | 'CALENDLY';
 type AIProvider = 'OPENAI' | 'ANTHROPIC';
 
 interface IntegrationStatus {
@@ -65,7 +66,8 @@ export default function IntegrationsPage() {
     ANTHROPIC: false,
     META: false,
     ELEVENLABS: false,
-    LEADCONNECTOR: false
+    LEADCONNECTOR: false,
+    CALENDLY: false
   });
 
   // AI provider toggle
@@ -89,6 +91,12 @@ export default function IntegrationsPage() {
   const [lcLocationId, setLcLocationId] = useState('');
   const [lcSaving, setLcSaving] = useState(false);
   const [lcSavedKey, setLcSavedKey] = useState('');
+
+  // Form state -- Calendly
+  const [calApiKey, setCalApiKey] = useState('');
+  const [calEventTypeUri, setCalEventTypeUri] = useState('');
+  const [calSaving, setCalSaving] = useState(false);
+  const [calSavedKey, setCalSavedKey] = useState('');
 
   // Meta
   const [metaDisconnecting, setMetaDisconnecting] = useState(false);
@@ -140,7 +148,10 @@ export default function IntegrationsPage() {
       await apiFetch(`/settings/integrations/${selectedAI}`, {
         method: 'PUT',
         body: JSON.stringify({
-          credentials: { apiKey: aiApiKey },
+          credentials: {
+            apiKey: aiApiKey,
+            ...(aiModel.trim() ? { model: aiModel.trim() } : {})
+          },
           metadata: aiModel.trim() ? { model: aiModel.trim() } : {}
         })
       });
@@ -168,7 +179,10 @@ export default function IntegrationsPage() {
       await apiFetch('/settings/integrations/ELEVENLABS', {
         method: 'PUT',
         body: JSON.stringify({
-          credentials: { apiKey: elApiKey },
+          credentials: {
+            apiKey: elApiKey,
+            ...(elVoiceId.trim() ? { voiceId: elVoiceId.trim() } : {})
+          },
           metadata: elVoiceId.trim() ? { voiceId: elVoiceId.trim() } : {}
         })
       });
@@ -214,6 +228,66 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function saveCalendly() {
+    if (!calApiKey.trim()) {
+      toast.error('Please enter your Calendly Personal Access Token');
+      return;
+    }
+    setCalSaving(true);
+    try {
+      // First save the key, then auto-fetch user URI
+      const headers = {
+        Authorization: `Bearer ${calApiKey.trim()}`,
+        'Content-Type': 'application/json'
+      };
+      const meRes = await fetch('https://api.calendly.com/users/me', {
+        headers
+      });
+      let userUri = '';
+      let eventTypeUri = calEventTypeUri.trim();
+
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        userUri = meData.resource?.uri || '';
+
+        // If no event type URI provided, try to fetch the first one
+        if (!eventTypeUri && userUri) {
+          const etRes = await fetch(
+            `https://api.calendly.com/event_types?user=${encodeURIComponent(userUri)}&active=true`,
+            { headers }
+          );
+          if (etRes.ok) {
+            const etData = await etRes.json();
+            const firstEvent = etData.collection?.[0];
+            if (firstEvent) {
+              eventTypeUri = firstEvent.uri;
+            }
+          }
+        }
+      }
+
+      await apiFetch('/settings/integrations/CALENDLY', {
+        method: 'PUT',
+        body: JSON.stringify({
+          credentials: { apiKey: calApiKey.trim() },
+          metadata: {
+            userUri,
+            eventTypeUri
+          }
+        })
+      });
+      toast.success('Calendly connected successfully');
+      setCalSavedKey(calApiKey);
+      setCalApiKey('');
+      setCalEventTypeUri('');
+      setStatuses((prev) => ({ ...prev, CALENDLY: true }));
+    } catch {
+      toast.error('Failed to save Calendly credentials');
+    } finally {
+      setCalSaving(false);
+    }
+  }
+
   // --------------------------------------------------
   // Disconnect handlers
   // --------------------------------------------------
@@ -230,6 +304,7 @@ export default function IntegrationsPage() {
       if (provider === 'OPENAI' || provider === 'ANTHROPIC') setAiSavedKey('');
       if (provider === 'ELEVENLABS') setElSavedKey('');
       if (provider === 'LEADCONNECTOR') setLcSavedKey('');
+      if (provider === 'CALENDLY') setCalSavedKey('');
     } catch {
       toast.error('Failed to disconnect');
     }
@@ -488,7 +563,80 @@ export default function IntegrationsPage() {
         </Card>
 
         {/* ---------------------------------------------------------------- */}
-        {/* Card 4: Meta (Instagram & Facebook) */}
+        {/* Card 4: Calendly */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div>
+                <CardTitle>Calendly</CardTitle>
+                <CardDescription>
+                  Connect your Calendly for automated call booking
+                </CardDescription>
+              </div>
+              <StatusBadge connected={statuses.CALENDLY} />
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            {statuses.CALENDLY && calSavedKey && (
+              <p className='text-muted-foreground text-sm'>
+                Current key: {maskKey(calSavedKey)}
+              </p>
+            )}
+
+            <div className='space-y-2'>
+              <Label htmlFor='cal-api-key'>Personal Access Token</Label>
+              <Input
+                id='cal-api-key'
+                type='password'
+                placeholder='Get yours at calendly.com/integrations/api'
+                value={calApiKey}
+                onChange={(e) => setCalApiKey(e.target.value)}
+              />
+              <p className='text-muted-foreground text-xs'>
+                Go to{' '}
+                <a
+                  href='https://calendly.com/integrations/api_webhooks'
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  className='underline'
+                >
+                  Calendly API &amp; Webhooks
+                </a>{' '}
+                → Generate New Token
+              </p>
+            </div>
+
+            <div className='space-y-2'>
+              <Label htmlFor='cal-event-type'>
+                Event Type URI (optional &mdash; auto-detected)
+              </Label>
+              <Input
+                id='cal-event-type'
+                type='text'
+                placeholder='Leave blank to use your first active event type'
+                value={calEventTypeUri}
+                onChange={(e) => setCalEventTypeUri(e.target.value)}
+              />
+            </div>
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            <Button onClick={saveCalendly} disabled={calSaving}>
+              {calSaving ? 'Connecting...' : 'Connect Calendly'}
+            </Button>
+            {statuses.CALENDLY && (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('CALENDLY')}
+              >
+                Disconnect
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Card 5: Meta (Instagram & Facebook) */}
         {/* ---------------------------------------------------------------- */}
         <Card>
           <CardHeader>
