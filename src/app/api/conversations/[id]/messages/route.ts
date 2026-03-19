@@ -75,7 +75,15 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { content, sender = 'HUMAN' } = body;
+    const {
+      content,
+      sender = 'HUMAN',
+      stage,
+      stageConfidence,
+      sentimentScore,
+      systemPromptVersion,
+      followUpAttemptNumber
+    } = body;
 
     if (!content) {
       return NextResponse.json(
@@ -91,7 +99,23 @@ export async function POST(
         conversationId: id,
         content,
         sender,
-        timestamp: now
+        timestamp: now,
+        // Self-optimizing layer tracking fields (only set for AI messages)
+        ...(sender === 'AI'
+          ? {
+              stage: stage ?? null,
+              stageConfidence:
+                typeof stageConfidence === 'number'
+                  ? Math.max(0, Math.min(1, stageConfidence))
+                  : null,
+              sentimentScore:
+                typeof sentimentScore === 'number'
+                  ? Math.max(-1, Math.min(1, sentimentScore))
+                  : null,
+              systemPromptVersion: systemPromptVersion ?? null,
+              followUpAttemptNumber: followUpAttemptNumber ?? null
+            }
+          : {})
       }
     });
 

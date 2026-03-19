@@ -9,6 +9,7 @@ import type {
   Platform,
   TriggerType
 } from '@prisma/client';
+import { createHash } from 'crypto';
 import {
   buildDynamicSystemPrompt,
   getQualityScoringPrompt
@@ -47,6 +48,9 @@ export interface AIReplyResult {
   suggestedTag: string | null; // Lead status suggestion from AI
   suggestedTags: string[]; // Multiple auto-tags (Phase 2)
   stage: string | null; // Current conversation stage
+  stageConfidence: number | null; // 0-1 confidence in stage classification
+  sentimentScore: number | null; // -1 to 1 lead sentiment
+  systemPromptVersion: string | null; // Semver hash of rendered prompt
 }
 
 /** Structured response the AI returns per the master template */
@@ -56,6 +60,8 @@ interface AIStructuredResponse {
   stage: string;
   suggested_tag: string;
   suggested_tags: string[]; // Multiple auto-tags with Phase 2 tagging system
+  stage_confidence: number | null; // 0-1 confidence in stage classification
+  sentiment_score: number | null; // -1 to 1 lead sentiment
 }
 
 type AIProvider = 'openai' | 'anthropic';
@@ -212,6 +218,25 @@ function parseStructuredResponse(raw: string): AIStructuredResponse {
 
   try {
     const parsed = JSON.parse(jsonStr);
+
+    // Clamp stage_confidence to 0-1, default null
+    let stageConfidence: number | null = null;
+    if (
+      typeof parsed.stage_confidence === 'number' &&
+      !isNaN(parsed.stage_confidence)
+    ) {
+      stageConfidence = Math.max(0, Math.min(1, parsed.stage_confidence));
+    }
+
+    // Clamp sentiment_score to -1 to 1, default null
+    let sentimentScore: number | null = null;
+    if (
+      typeof parsed.sentiment_score === 'number' &&
+      !isNaN(parsed.sentiment_score)
+    ) {
+      sentimentScore = Math.max(-1, Math.min(1, parsed.sentiment_score));
+    }
+
     return {
       format: parsed.format === 'voice_note' ? 'voice_note' : 'text',
       message: typeof parsed.message === 'string' ? parsed.message : raw,
@@ -222,7 +247,9 @@ function parseStructuredResponse(raw: string): AIStructuredResponse {
         ? parsed.suggested_tags.filter(
             (t: unknown) => typeof t === 'string' && t.length > 0
           )
-        : []
+        : [],
+      stage_confidence: stageConfidence,
+      sentiment_score: sentimentScore
     };
   } catch {
     // AI didn't return valid JSON — treat the whole response as a text message
@@ -231,7 +258,9 @@ function parseStructuredResponse(raw: string): AIStructuredResponse {
       message: raw,
       stage: '',
       suggested_tag: '',
-      suggested_tags: []
+      suggested_tags: [],
+      stage_confidence: null,
+      sentiment_score: null
     };
   }
 }
@@ -293,6 +322,70 @@ function randomBetween(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// ─── Prompt Versioning ───────────────────────────────────
+
+/**
+ * Resolve (or create) a semantic version for the rendered system prompt.
+ * Strips lead-specific variables, hashes the remaining text, and looks up
+ * or creates a PromptVersion record so we can trace which prompt version
+ * produced each AI reply.
+ */
+export async function resolvePromptVersion(
+  accountId: string,
+  promptText: string
+): Promise<string> {
+  // Strip lead-specific variables so the hash is stable across leads
+  const normalized = promptText
+    .replace(/Lead name:\s*\S+/gi, 'Lead name: __LEAD__')
+    .replace(/@[\w.]+/g, '@__HANDLE__')
+    .replace(
+      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+      '__EMAIL__'
+    );
+
+  const hash = createHash('sha256')
+    .update(normalized)
+    .digest('hex')
+    .slice(0, 16);
+
+  // Check if a version with this hash already exists for the account
+  const existing = await prisma.promptVersion.findFirst({
+    where: { accountId, promptHash: hash }
+  });
+
+  if (existing) {
+    return existing.version;
+  }
+
+  // Find the latest version for this account to increment from
+  const latest = await prisma.promptVersion.findFirst({
+    where: { accountId },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  let nextVersion: string;
+  if (latest?.version) {
+    const parts = latest.version.split('.').map(Number);
+    // Increment patch version: "1.0.2" → "1.0.3"
+    parts[2] = (parts[2] || 0) + 1;
+    nextVersion = parts.join('.');
+  } else {
+    nextVersion = '1.0.0';
+  }
+
+  // Create the new version record
+  await prisma.promptVersion.create({
+    data: {
+      accountId,
+      version: nextVersion,
+      promptHash: hash,
+      description: `Auto-detected prompt change (hash: ${hash})`
+    }
+  });
+
+  return nextVersion;
+}
+
 // ─── Exported Functions ─────────────────────────────────
 
 /**
@@ -333,13 +426,14 @@ export async function generateReply(
   const chatMessages = formatConversationHistory(conversationHistory);
 
   // Single AI call — the template instructs JSON output with format + message + stage + tag
-  const [rawReply, qualityScore] = await Promise.all([
+  const [rawReply, qualityScore, promptVersion] = await Promise.all([
     callAI(accountId, systemPrompt, chatMessages, 0.85, 500),
     calculateLeadQualityScore(
       accountId,
       conversationHistory,
       leadContext.status
-    )
+    ),
+    resolvePromptVersion(accountId, systemPrompt)
   ]);
 
   // Parse structured response
@@ -364,7 +458,10 @@ export async function generateReply(
     suggestedDelay,
     suggestedTag: structured.suggested_tag || null,
     suggestedTags: structured.suggested_tags || [],
-    stage: structured.stage || null
+    stage: structured.stage || null,
+    stageConfidence: structured.stage_confidence,
+    sentimentScore: structured.sentiment_score,
+    systemPromptVersion: promptVersion
   };
 }
 

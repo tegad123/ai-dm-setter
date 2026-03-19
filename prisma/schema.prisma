@@ -98,6 +98,35 @@ enum TrainingCategory {
   GENERAL
 }
 
+// ─── Self-Optimizing Layer Enums ───────────────────────
+
+enum ConversationOutcome {
+  ONGOING
+  BOOKED
+  LEFT_ON_READ
+  UNQUALIFIED_REDIRECT
+  RESISTANT_EXIT
+  SOFT_OBJECTION
+  PRICE_QUESTION_DEFLECTED
+}
+
+enum LeadIntentTag {
+  HIGH_INTENT
+  RESISTANT
+  UNQUALIFIED
+  NEUTRAL
+}
+
+enum LeadSource {
+  INBOUND
+  OUTBOUND
+}
+
+enum DataSource {
+  LIVE
+  SEED
+}
+
 // ─── Multi-Tenant Models ────────────────────────────────
 
 model Account {
@@ -252,6 +281,7 @@ model Lead {
   tags                 LeadTag[]
   teamNotes            TeamNote[]
   contentAttribution   ContentAttribution?  @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
+  crmOutcomes          CrmOutcome[]
 
   @@index([accountId, status])
   @@index([accountId, platform])
@@ -260,15 +290,31 @@ model Lead {
 }
 
 model Conversation {
-  id              String    @id @default(cuid())
-  leadId          String    @unique
-  aiActive        Boolean   @default(true)
-  unreadCount     Int       @default(0)
-  priorityScore   Int       @default(0)       // 0-100, higher = hotter lead
-  lastAIAnalysis  DateTime?                   // When AI last scored this conversation
+  id              String              @id @default(cuid())
+  leadId          String              @unique
+  aiActive        Boolean             @default(true)
+  unreadCount     Int                 @default(0)
+  priorityScore   Int                 @default(0)       // 0-100, higher = hotter lead
+  lastAIAnalysis  DateTime?                              // When AI last scored this conversation
   lastMessageAt   DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  // Self-Optimizing Layer: Outcome + Tracking
+  outcome         ConversationOutcome @default(ONGOING)
+  leadSource      LeadSource?
+  leadIntentTag   LeadIntentTag       @default(NEUTRAL)
+  dataSource      DataSource          @default(LIVE)
+  consentToLog    Boolean             @default(true)
+
+  // Stage reached timestamps (set once, when first reached)
+  stageQualificationAt         DateTime?
+  stageVisionBuildingAt        DateTime?
+  stagePainIdentificationAt    DateTime?
+  stageUrgencyAt               DateTime?
+  stageSolutionOfferAt         DateTime?
+  stageCapitalQualificationAt  DateTime?
+  stageBookingAt               DateTime?
 
   // Relations
   lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -276,6 +322,7 @@ model Conversation {
 
   @@index([lastMessageAt])
   @@index([priorityScore])
+  @@index([outcome])
 }
 
 model Message {
@@ -288,11 +335,22 @@ model Message {
   sentByUserId   String?                // Only for HUMAN sender
   timestamp      DateTime      @default(now())
 
+  // Self-Optimizing Layer: Effectiveness Tracking
+  stage                      String?   // Conversation stage from AI response
+  stageConfidence            Float?    // 0-1 confidence in stage classification
+  sentimentScore             Float?    // -1 to 1 lead sentiment (secondary signal)
+  gotResponse                Boolean?  // Back-filled: did lead reply after this AI msg?
+  leadContinuedConversation  Boolean?  // Back-filled: did lead send 2+ more msgs?
+  responseTimeSeconds        Int?      // Back-filled: seconds until lead's next reply
+  followUpAttemptNumber      Int?      // For ghosted lead follow-ups (1, 2, 3)
+  systemPromptVersion        String?   // Semver of prompt used to generate this message
+
   // Relations
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sentByUser   User?        @relation("HumanSender", fields: [sentByUserId], references: [id])
 
   @@index([conversationId, timestamp])
+  @@index([conversationId, sender, timestamp])
 }
 
 model Notification {
@@ -392,4 +450,37 @@ model ContentAttribution {
   @@unique([accountId, contentId, platform])
   @@index([accountId, createdAt])
   @@index([accountId, contentType])
+}
+
+// ─── Self-Optimizing Layer Models ─────────────────────
+
+model PromptVersion {
+  id          String   @id @default(cuid())
+  accountId   String
+  version     String   // Semver: "1.0.0", "1.1.0", etc.
+  promptHash  String   // SHA-256 hash of rendered prompt (minus lead-specific vars)
+  description String?  // What changed from previous version
+  createdAt   DateTime @default(now())
+
+  @@unique([accountId, version])
+  @@index([accountId, createdAt])
+}
+
+model CrmOutcome {
+  id         String   @id @default(cuid())
+  accountId  String
+  leadId     String
+  showed     Boolean
+  closed     Boolean  @default(false)
+  dealValue  Float?
+  closeReason String? // ENROLLED | NOT_READY | CANT_AFFORD | NO_SHOW | OTHER
+  notes      String?  @db.Text
+  source     String   @default("manual") // "webhook" | "manual"
+  receivedAt DateTime @default(now())
+
+  // Relations
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, leadId])
+  @@index([accountId, receivedAt])
 }

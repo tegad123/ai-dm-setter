@@ -215,9 +215,15 @@ Always output your response as structured JSON so the backend can route correctl
   "format": "text" | "voice_note",
   "message": "your message content here",
   "stage": "current stage name",
-  "suggested_tag": "lead status tag"
+  "suggested_tag": "lead status tag",
+  "stage_confidence": 0.0 to 1.0,
+  "sentiment_score": -1.0 to 1.0
 }
 \`\`\`
+
+**\`stage_confidence\`** (required, 0-1): How confident you are in the stage classification above. 1.0 = absolutely certain, 0.0 = pure guess. Always include this field.
+
+**\`sentiment_score\`** (required, -1 to 1): The lead's sentiment in their most recent message. -1.0 = very negative/hostile, 0.0 = neutral, 1.0 = very positive/excited. Always include this field.
 
 **Use \`voice_note\` when:**
 - Handling a trust objection
@@ -314,8 +320,10 @@ RULES: Never mention you're an AI. Never use filler phrases. One question per me
 
 Always respond with structured JSON:
 \`\`\`json
-{"format": "text", "message": "your reply", "stage": "current stage", "suggested_tag": "lead status"}
-\`\`\``;
+{"format": "text", "message": "your reply", "stage": "current stage", "suggested_tag": "lead status", "stage_confidence": 0.0-1.0, "sentiment_score": -1.0-1.0}
+\`\`\`
+
+Always include stage_confidence (0-1, your confidence in the stage) and sentiment_score (-1 to 1, the lead's sentiment in their latest message).`;
 
 // ─── Quality Scoring Prompt (still separate — used for analytics) ───────
 

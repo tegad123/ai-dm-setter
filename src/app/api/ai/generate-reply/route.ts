@@ -64,7 +64,13 @@ export async function POST(request: NextRequest) {
       reply: result.reply,
       shouldVoiceNote: result.shouldVoiceNote,
       qualityScore: result.qualityScore,
-      suggestedDelay: result.suggestedDelay
+      suggestedDelay: result.suggestedDelay,
+      suggestedTag: result.suggestedTag,
+      suggestedTags: result.suggestedTags,
+      stage: result.stage,
+      stageConfidence: result.stageConfidence,
+      sentimentScore: result.sentimentScore,
+      systemPromptVersion: result.systemPromptVersion
     });
   } catch (error) {
     if (error instanceof AuthError) {

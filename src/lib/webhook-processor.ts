@@ -1,5 +1,9 @@
 import prisma from '@/lib/prisma';
 import type { Platform, TriggerType, ContentType } from '@prisma/client';
+import {
+  updateConversationOutcome,
+  recordStageTimestamp
+} from '@/lib/conversation-state-machine';
 
 // ---------------------------------------------------------------------------
 // Shared webhook processing logic for Instagram & Facebook
@@ -156,6 +160,55 @@ export async function processIncomingMessage(
       timestamp: new Date()
     }
   });
+
+  // 5. Back-fill effectiveness tracking on the most recent AI message
+  const lastAIMessage = await prisma.message.findFirst({
+    where: { conversationId: conversation.id, sender: 'AI' },
+    orderBy: { timestamp: 'desc' }
+  });
+
+  if (lastAIMessage && lastAIMessage.gotResponse === null) {
+    const responseTimeSec = Math.round(
+      (Date.now() - lastAIMessage.timestamp.getTime()) / 1000
+    );
+    await prisma.message.update({
+      where: { id: lastAIMessage.id },
+      data: {
+        gotResponse: true,
+        responseTimeSeconds: responseTimeSec
+      }
+    });
+  }
+
+  // 6. Mark older AI messages as leadContinuedConversation
+  const olderAIMessages = await prisma.message.findMany({
+    where: {
+      conversationId: conversation.id,
+      sender: 'AI',
+      gotResponse: true,
+      leadContinuedConversation: null
+    },
+    orderBy: { timestamp: 'desc' },
+    take: 5
+  });
+
+  if (olderAIMessages.length > 0) {
+    await prisma.message.updateMany({
+      where: { id: { in: olderAIMessages.map((m) => m.id) } },
+      data: { leadContinuedConversation: true }
+    });
+  }
+
+  // 7. Re-engagement: if conversation was LEFT_ON_READ, reopen it
+  if (conversation.outcome === 'LEFT_ON_READ') {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { outcome: 'ONGOING' }
+    });
+  }
+
+  // 8. Run state machine to evaluate outcome transitions
+  await updateConversationOutcome(conversation.id);
 
   return {
     leadId: lead.id,
