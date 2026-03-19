@@ -6,6 +6,12 @@ export interface Message {
   isVoiceNote?: boolean;
 }
 
+export interface ConversationTag {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface Conversation {
   id: string;
   leadName: string;
@@ -17,6 +23,8 @@ export interface Conversation {
   lastMessageTime: string;
   unread: number;
   messages: Message[];
+  tags?: ConversationTag[];
+  priorityScore?: number;
 }
 
 export const conversations: Conversation[] = [

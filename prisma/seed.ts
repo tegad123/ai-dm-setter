@@ -8,6 +8,10 @@ async function main() {
 
   // ─── Clean existing data ─────────────────────────────
   await prisma.$transaction([
+    prisma.teamNote.deleteMany(),
+    prisma.leadTag.deleteMany(),
+    prisma.tag.deleteMany(),
+    prisma.contentAttribution.deleteMany(),
     prisma.trainingExample.deleteMany(),
     prisma.integrationCredential.deleteMany(),
     prisma.aIPersona.deleteMany(),
@@ -47,6 +51,7 @@ async function main() {
         passwordHash,
         role: 'ADMIN',
         isActive: true,
+        commissionRate: 20.0,
         leadsHandled: 247,
         callsBooked: 38,
         closeRate: 0.45
@@ -60,6 +65,7 @@ async function main() {
         passwordHash,
         role: 'CLOSER',
         isActive: true,
+        commissionRate: 10.0,
         leadsHandled: 0,
         callsBooked: 0,
         closeRate: 0.62
@@ -73,6 +79,7 @@ async function main() {
         passwordHash,
         role: 'SETTER',
         isActive: true,
+        commissionRate: 6.0,
         leadsHandled: 45,
         callsBooked: 8
       }
@@ -85,6 +92,7 @@ async function main() {
         passwordHash,
         role: 'SETTER',
         isActive: true,
+        commissionRate: 6.0,
         leadsHandled: 32,
         callsBooked: 5
       }
@@ -1365,6 +1373,283 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   ]);
 
   console.log('Created 6 notifications.');
+
+  // ─── Tags (Default + AI Auto-Tags) ────────────────────
+
+  const defaultTags = [
+    { name: 'HIGH_INTENT', color: '#EF4444', isAuto: true }, // Red
+    { name: 'WARM', color: '#F97316', isAuto: true }, // Orange
+    { name: 'COLD', color: '#3B82F6', isAuto: true }, // Blue
+    { name: 'GHOST_RISK', color: '#6B7280', isAuto: true }, // Gray
+    { name: 'MONEY_OBJECTION', color: '#EAB308', isAuto: true }, // Yellow
+    { name: 'REACTIVATED', color: '#8B5CF6', isAuto: true }, // Purple
+    { name: 'REEL_INBOUND', color: '#EC4899', isAuto: false }, // Pink
+    { name: 'STORY_REPLY', color: '#14B8A6', isAuto: false }, // Teal
+    { name: 'OUTBOUND', color: '#64748B', isAuto: false }, // Slate
+    { name: 'VIP', color: '#F59E0B', isAuto: false } // Amber
+  ];
+
+  const tags = await prisma.$transaction(
+    defaultTags.map((t) =>
+      prisma.tag.create({
+        data: {
+          accountId: account.id,
+          name: t.name,
+          color: t.color,
+          isAuto: t.isAuto
+        }
+      })
+    )
+  );
+
+  console.log(`Created ${tags.length} tags.`);
+
+  // ─── Content Attributions ──────────────────────────────
+
+  const contentPieces = await prisma.$transaction([
+    prisma.contentAttribution.create({
+      data: {
+        accountId: account.id,
+        contentType: 'REEL',
+        contentId: 'reel_001',
+        contentUrl: 'https://www.instagram.com/reel/example1',
+        caption:
+          'How I turned $500 into $5000 in 30 days using this one strategy...',
+        platform: 'INSTAGRAM',
+        leadsCount: 8,
+        revenue: 4500.0,
+        callsBooked: 5,
+        postedAt: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      }
+    }),
+    prisma.contentAttribution.create({
+      data: {
+        accountId: account.id,
+        contentType: 'STORY',
+        contentId: 'story_001',
+        contentUrl: 'https://www.instagram.com/stories/example1',
+        caption: 'Student result: just hit his first $1k week',
+        platform: 'INSTAGRAM',
+        leadsCount: 3,
+        revenue: 1500.0,
+        callsBooked: 2,
+        postedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000)
+      }
+    }),
+    prisma.contentAttribution.create({
+      data: {
+        accountId: account.id,
+        contentType: 'POST',
+        contentId: 'post_001',
+        contentUrl: 'https://www.instagram.com/p/example1',
+        caption:
+          'The 3 mistakes killing your trading account (and how to fix them)',
+        platform: 'INSTAGRAM',
+        leadsCount: 5,
+        revenue: 2000.0,
+        callsBooked: 3,
+        postedAt: new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+      }
+    }),
+    prisma.contentAttribution.create({
+      data: {
+        accountId: account.id,
+        contentType: 'DM_DIRECT',
+        contentId: null,
+        contentUrl: null,
+        caption: null,
+        platform: 'INSTAGRAM',
+        leadsCount: 4,
+        revenue: 500.0,
+        callsBooked: 1
+      }
+    })
+  ]);
+
+  console.log(`Created ${contentPieces.length} content attributions.`);
+
+  // Link some leads to content attributions
+  await prisma.$transaction([
+    prisma.lead.update({
+      where: { id: leads[0].id },
+      data: { contentAttributionId: contentPieces[0].id }
+    }),
+    prisma.lead.update({
+      where: { id: leads[1].id },
+      data: { contentAttributionId: contentPieces[0].id }
+    }),
+    prisma.lead.update({
+      where: { id: leads[2].id },
+      data: { contentAttributionId: contentPieces[1].id }
+    }),
+    prisma.lead.update({
+      where: { id: leads[3].id },
+      data: { contentAttributionId: contentPieces[2].id }
+    }),
+    prisma.lead.update({
+      where: { id: leads[4].id },
+      data: { contentAttributionId: contentPieces[3].id }
+    })
+  ]);
+
+  console.log('Linked leads to content attributions.');
+
+  // ─── Lead Tags (AI auto-applied + manual) ──────────────
+
+  const highIntentTag = tags.find((t) => t.name === 'HIGH_INTENT')!;
+  const warmTag = tags.find((t) => t.name === 'WARM')!;
+  const coldTag = tags.find((t) => t.name === 'COLD')!;
+  const ghostRiskTag = tags.find((t) => t.name === 'GHOST_RISK')!;
+  const moneyObjTag = tags.find((t) => t.name === 'MONEY_OBJECTION')!;
+  const reelInboundTag = tags.find((t) => t.name === 'REEL_INBOUND')!;
+  const vipTag = tags.find((t) => t.name === 'VIP')!;
+
+  await prisma.$transaction([
+    // Marcus Johnson — hot lead from reel
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[0].id,
+        tagId: highIntentTag.id,
+        appliedBy: 'AI',
+        confidence: 0.92
+      }
+    }),
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[0].id,
+        tagId: reelInboundTag.id,
+        appliedBy: jessica.id
+      }
+    }),
+    // Aisha Williams — warm, in qualification
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[1].id,
+        tagId: warmTag.id,
+        appliedBy: 'AI',
+        confidence: 0.78
+      }
+    }),
+    // Brandon Chen — money objection
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[2].id,
+        tagId: moneyObjTag.id,
+        appliedBy: 'AI',
+        confidence: 0.85
+      }
+    }),
+    // Priya Sharma — qualified, VIP
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[3].id,
+        tagId: highIntentTag.id,
+        appliedBy: 'AI',
+        confidence: 0.95
+      }
+    }),
+    prisma.leadTag.create({
+      data: { leadId: leads[3].id, tagId: vipTag.id, appliedBy: daniel.id }
+    }),
+    // Tyler Brooks — ghosted
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[7].id,
+        tagId: ghostRiskTag.id,
+        appliedBy: 'AI',
+        confidence: 0.88
+      }
+    }),
+    prisma.leadTag.create({
+      data: {
+        leadId: leads[7].id,
+        tagId: coldTag.id,
+        appliedBy: 'AI',
+        confidence: 0.72
+      }
+    })
+  ]);
+
+  console.log('Applied tags to leads.');
+
+  // ─── Team Notes ────────────────────────────────────────
+
+  await prisma.$transaction([
+    prisma.teamNote.create({
+      data: {
+        accountId: account.id,
+        leadId: leads[0].id,
+        authorId: jessica.id,
+        content:
+          'Marcus is super engaged — asked about pricing twice already. Ready for closer handoff. He trades forex part-time and wants to go full-time.'
+      }
+    }),
+    prisma.teamNote.create({
+      data: {
+        accountId: account.id,
+        leadId: leads[0].id,
+        authorId: anthony.id,
+        content:
+          'Got on a quick call with him. Very motivated. Following up tomorrow with the payment link. Should close this week.'
+      }
+    }),
+    prisma.teamNote.create({
+      data: {
+        accountId: account.id,
+        leadId: leads[2].id,
+        authorId: jessica.id,
+        content:
+          'Brandon said he needs to wait until next month — got bills. Not a hard no, just timing. Flag for re-engagement in 3 weeks.'
+      }
+    }),
+    prisma.teamNote.create({
+      data: {
+        accountId: account.id,
+        leadId: leads[3].id,
+        authorId: mike.id,
+        content:
+          'Priya is a serious prospect. She runs a small prop firm and wants the accelerator for her team. Could be a bulk deal.'
+      }
+    }),
+    prisma.teamNote.create({
+      data: {
+        accountId: account.id,
+        leadId: leads[7].id,
+        authorId: jessica.id,
+        content:
+          'Tyler went silent after I sent the booking link. Tried voice note follow-up, no response. Moving to ghost risk.'
+      }
+    })
+  ]);
+
+  console.log('Created team notes.');
+
+  // ─── Update Conversations with Priority Scores ─────────
+
+  // Update existing conversations with priority scores based on lead quality
+  const convos = await prisma.conversation.findMany({
+    include: { lead: true }
+  });
+
+  for (const convo of convos) {
+    const score = Math.min(
+      100,
+      Math.max(
+        0,
+        convo.lead.qualityScore * 0.6 +
+          (convo.unreadCount > 0 ? 20 : 0) +
+          (['HOT_LEAD', 'QUALIFIED', 'BOOKED'].includes(convo.lead.status)
+            ? 20
+            : 0)
+      )
+    );
+    await prisma.conversation.update({
+      where: { id: convo.id },
+      data: { priorityScore: Math.round(score), lastAIAnalysis: now }
+    });
+  }
+
+  console.log('Updated conversation priority scores.');
   console.log('Seeding complete!');
 }
 

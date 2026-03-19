@@ -10,11 +10,15 @@ import type {
 } from '@/features/conversations/data/conversation-data';
 import { ConversationList } from './conversation-list';
 import { ConversationThread } from './conversation-thread';
+import { NotesPanel } from '@/features/team-notes/components/notes-panel';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /** Map API conversation shape to the local UI shape used by child components */
 function toLocalConvo(
-  c: ApiConversation,
+  c: ApiConversation & {
+    tags?: Array<{ id: string; name: string; color: string }>;
+    priorityScore?: number;
+  },
   messages: Message[] = []
 ): Conversation {
   return {
@@ -32,16 +36,25 @@ function toLocalConvo(
         })
       : '',
     unread: c.unreadCount,
-    messages
+    messages,
+    tags: c.tags ?? [],
+    priorityScore: c.priorityScore ?? 0
   };
 }
 
+type InboxTab = 'all' | 'priority' | 'unread';
+
 export function ConversationsView() {
+  const [inboxTab, setInboxTab] = useState<InboxTab>('all');
   const {
     conversations: apiConversations,
     loading: listLoading,
     refetch: refetchList
-  } = useConversations();
+  } = useConversations(
+    undefined,
+    inboxTab === 'priority' ? true : undefined,
+    inboxTab === 'unread' ? true : undefined
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Determine which conversation is selected
@@ -129,6 +142,8 @@ export function ConversationsView() {
         conversations={localConversations}
         selected={selected}
         onSelect={handleSelect}
+        activeTab={inboxTab}
+        onTabChange={setInboxTab}
       />
       <ConversationThread
         conversation={selected}
@@ -136,6 +151,15 @@ export function ConversationsView() {
         onSendMessage={handleSendMessage}
         onToggleAI={handleToggleAI}
       />
+      {/* Team Notes Panel */}
+      {activeApiConvo && (
+        <div className='hidden w-80 border-l lg:flex lg:flex-col'>
+          <NotesPanel
+            leadId={activeApiConvo.leadId}
+            leadName={activeApiConvo.leadName}
+          />
+        </div>
+      )}
     </div>
   );
 }

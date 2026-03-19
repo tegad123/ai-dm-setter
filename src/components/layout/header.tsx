@@ -6,6 +6,7 @@ import SearchInput from '../search-input';
 import { UserNav } from './user-nav';
 import { ThemeModeToggle } from '../themes/theme-mode-toggle';
 import { NotificationBell } from '@/features/notifications/components/notification-bell';
+import { AwayModeToggle } from '@/features/away-mode/components/away-mode-toggle';
 
 export default function Header() {
   return (
@@ -20,6 +21,8 @@ export default function Header() {
         <div className='hidden md:flex'>
           <SearchInput />
         </div>
+        <AwayModeToggle />
+        <Separator orientation='vertical' className='h-4' />
         <NotificationBell />
         <UserNav />
         <ThemeModeToggle />

@@ -24,14 +24,18 @@ import {
   allStatuses
 } from '@/features/shared/lead-status-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
+import { TagBadge } from '@/features/tags/components/tag-badge';
 import { useState, useMemo } from 'react';
 import { IconSearch } from '@tabler/icons-react';
-import { useLeads } from '@/hooks/use-api';
+import { useLeads, useTags } from '@/hooks/use-api';
 import type { LeadStatus } from '@/features/shared/lead-status-badge';
 
 export function LeadsTable() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [tagFilter, setTagFilter] = useState<string>('all');
+
+  const { tags: availableTags } = useTags();
 
   // Map lowercase status filter to UPPER_CASE for the API
   const apiStatus =
@@ -45,12 +49,13 @@ export function LeadsTable() {
   } = useLeads({
     status: apiStatus,
     search: search || undefined,
+    tag: tagFilter !== 'all' ? tagFilter : undefined,
     limit: 100
   });
 
   // Map API response fields to match what the UI expects
   const leads = useMemo(() => {
-    return apiLeads.map((lead) => ({
+    return apiLeads.map((lead: any) => ({
       id: lead.id,
       fullName: lead.name,
       username: lead.handle,
@@ -58,6 +63,11 @@ export function LeadsTable() {
       status: lead.status.toLowerCase() as LeadStatus,
       qualityScore: lead.qualityScore ?? 0,
       triggerType: lead.triggerType === 'DM' ? 'direct_dm' : 'comment',
+      tags: (lead.tags ?? []).map((lt: any) => ({
+        id: lt.tag.id,
+        name: lt.tag.name,
+        color: lt.tag.color
+      })),
       bookingSlot: lead.bookedAt
         ? new Date(lead.bookedAt).toLocaleDateString('en-US', {
             weekday: 'short',
@@ -117,6 +127,25 @@ export function LeadsTable() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={tagFilter} onValueChange={setTagFilter}>
+          <SelectTrigger className='w-[180px]'>
+            <SelectValue placeholder='Filter by tag' />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='all'>All Tags</SelectItem>
+            {availableTags.map((t) => (
+              <SelectItem key={t.id} value={t.name}>
+                <div className='flex items-center gap-2'>
+                  <span
+                    className='inline-block h-2 w-2 rounded-full'
+                    style={{ backgroundColor: t.color }}
+                  />
+                  {t.name.replace(/_/g, ' ')}
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Stats Bar */}
@@ -136,6 +165,7 @@ export function LeadsTable() {
               <TableHead>Lead</TableHead>
               <TableHead>Platform</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Tags</TableHead>
               <TableHead>Quality</TableHead>
               <TableHead>Trigger</TableHead>
               <TableHead>Booking</TableHead>
@@ -147,7 +177,7 @@ export function LeadsTable() {
             {leads.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={8}
+                  colSpan={9}
                   className='text-muted-foreground py-8 text-center'
                 >
                   {error ? 'Failed to load leads.' : 'No leads found.'}
@@ -169,6 +199,21 @@ export function LeadsTable() {
                   </TableCell>
                   <TableCell>
                     <LeadStatusBadge status={lead.status} />
+                  </TableCell>
+                  <TableCell>
+                    <div className='flex flex-wrap gap-1'>
+                      {lead.tags.length > 0 ? (
+                        lead.tags.map((tag: any) => (
+                          <TagBadge
+                            key={tag.id}
+                            name={tag.name}
+                            color={tag.color}
+                          />
+                        ))
+                      ) : (
+                        <span className='text-muted-foreground text-xs'>—</span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div className='flex items-center gap-2'>

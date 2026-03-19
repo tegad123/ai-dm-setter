@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get('status') as LeadStatus | null;
     const platform = searchParams.get('platform') as Platform | null;
     const search = searchParams.get('search');
+    const tag = searchParams.get('tag'); // Filter by tag name
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.max(
       1,
@@ -32,6 +33,11 @@ export async function GET(req: NextRequest) {
         { handle: { contains: search, mode: 'insensitive' } }
       ];
     }
+    if (tag) {
+      where.tags = {
+        some: { tag: { name: tag } }
+      };
+    }
 
     const [leads, total] = await Promise.all([
       prisma.lead.findMany({
@@ -39,6 +45,11 @@ export async function GET(req: NextRequest) {
         include: {
           conversation: {
             select: { id: true, aiActive: true, unreadCount: true }
+          },
+          tags: {
+            include: {
+              tag: { select: { id: true, name: true, color: true } }
+            }
           }
         },
         orderBy: { createdAt: 'desc' },

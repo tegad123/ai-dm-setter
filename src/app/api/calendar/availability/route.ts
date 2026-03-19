@@ -1,4 +1,4 @@
-import { getAvailability } from '@/lib/leadconnector';
+import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -42,7 +42,11 @@ export async function GET(req: NextRequest) {
     const endDate =
       searchParams.get('endDate') ?? defaultEnd.toISOString().split('T')[0];
 
-    const rawSlots = await getAvailability(auth.accountId, startDate, endDate);
+    const { provider, slots: rawSlots } = await getUnifiedAvailability(
+      auth.accountId,
+      startDate,
+      endDate
+    );
 
     // Group slots by date and format for display
     const dayMap = new Map<string, FormattedSlot[]>();
@@ -52,7 +56,9 @@ export async function GET(req: NextRequest) {
       const formatted: FormattedSlot = {
         start: slot.start,
         end: slot.end,
-        display: `${formatTime(slot.start)} - ${formatTime(slot.end)}`
+        display: slot.end
+          ? `${formatTime(slot.start)} - ${formatTime(slot.end)}`
+          : formatTime(slot.start)
       };
 
       if (!dayMap.has(dateKey)) {
@@ -69,7 +75,7 @@ export async function GET(req: NextRequest) {
         times: times.sort((a, b) => a.start.localeCompare(b.start))
       }));
 
-    return NextResponse.json({ slots });
+    return NextResponse.json({ provider, slots });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(

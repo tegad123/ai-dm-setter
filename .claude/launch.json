@@ -2,10 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dashboard-dev",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["run", "dev", "--port", "3000"],
+      "name": "next-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--port", "3000"],
       "port": 3000
+    },
+    {
+      "name": "prisma-studio",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["prisma", "studio", "--port", "5555"],
+      "port": 5555
     }
   ]
 }

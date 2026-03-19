@@ -12,7 +12,12 @@ import {
   getTriggerPerformance,
   getRevenue,
   getTeam,
-  getNotifications
+  getNotifications,
+  getTags,
+  getTeamNotes,
+  getContentAttributions,
+  getContentAnalytics,
+  getTeamAnalytics
 } from '@/lib/api';
 import type {
   Lead,
@@ -24,7 +29,12 @@ import type {
   TriggerPerformanceItem,
   RevenuePoint,
   TeamMember,
-  Notification
+  Notification,
+  Tag,
+  TeamNote,
+  ContentAttribution,
+  ContentAnalytics,
+  TeamAnalytics
 } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
@@ -79,6 +89,7 @@ export function useLeads(params?: {
   status?: string;
   platform?: string;
   search?: string;
+  tag?: string;
   page?: number;
   limit?: number;
 }) {
@@ -88,6 +99,7 @@ export function useLeads(params?: {
       params?.status,
       params?.platform,
       params?.search,
+      params?.tag,
       params?.page,
       params?.limit
     ]
@@ -106,13 +118,20 @@ export function useLeads(params?: {
 // Conversations
 // ---------------------------------------------------------------------------
 
-export function useConversations(search?: string) {
+export function useConversations(
+  search?: string,
+  priority?: boolean,
+  unread?: boolean
+) {
   const {
     data: raw,
     loading,
     error,
     refetch
-  } = useApiFetch(() => getConversations(search), [search]);
+  } = useApiFetch(
+    () => getConversations(search, priority, unread),
+    [search, priority, unread]
+  );
   // API returns { conversations: [...] } — unwrap
   const conversations = Array.isArray(raw)
     ? raw
@@ -313,5 +332,114 @@ export function useNotifications(userId?: string) {
     loading,
     error,
     refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+export function useTags() {
+  const { data, loading, error, refetch } = useApiFetch(() => getTags(), []);
+  const tags = (data as any)?.tags ?? ([] as Tag[]);
+
+  return {
+    tags: tags as Tag[],
+    loading,
+    error,
+    refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Team Notes
+// ---------------------------------------------------------------------------
+
+export function useTeamNotes(leadId: string | undefined, page?: number) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(
+    () =>
+      leadId
+        ? getTeamNotes(leadId, page)
+        : Promise.resolve({ notes: [], total: 0, page: 1, limit: 20 }),
+    [leadId, page]
+  );
+
+  return {
+    notes: (raw as any)?.notes ?? ([] as TeamNote[]),
+    total: (raw as any)?.total ?? 0,
+    loading,
+    error,
+    refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Content Attribution
+// ---------------------------------------------------------------------------
+
+export function useContentAttributions(params?: {
+  contentType?: string;
+  platform?: string;
+  sortBy?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const { data, loading, error, refetch } = useApiFetch(
+    () => getContentAttributions(params),
+    [
+      params?.contentType,
+      params?.platform,
+      params?.sortBy,
+      params?.page,
+      params?.limit
+    ]
+  );
+
+  return {
+    content: (data as any)?.content ?? ([] as ContentAttribution[]),
+    total: (data as any)?.total ?? 0,
+    totals: (data as any)?.totals ?? {
+      totalLeads: 0,
+      totalRevenue: 0,
+      totalCallsBooked: 0
+    },
+    loading,
+    error,
+    refetch
+  };
+}
+
+export function useContentAnalytics(from?: string, to?: string) {
+  const { data, loading, error } = useApiFetch(
+    () => getContentAnalytics(from, to),
+    [from, to]
+  );
+
+  return {
+    analytics: data as ContentAnalytics | null,
+    loading,
+    error
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Team Performance Analytics
+// ---------------------------------------------------------------------------
+
+export function useTeamAnalytics(from?: string, to?: string) {
+  const { data, loading, error } = useApiFetch(
+    () => getTeamAnalytics(from, to),
+    [from, to]
+  );
+
+  return {
+    analytics: data as TeamAnalytics | null,
+    loading,
+    error
   };
 }

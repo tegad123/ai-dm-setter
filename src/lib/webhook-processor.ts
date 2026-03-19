@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import type { Platform, TriggerType } from '@prisma/client';
+import type { Platform, TriggerType, ContentType } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Shared webhook processing logic for Instagram & Facebook
@@ -14,6 +14,12 @@ interface IncomingMessageParams {
   messageText: string;
   triggerType: 'DM' | 'COMMENT';
   triggerSource?: string;
+  contentSource?: {
+    contentType: ContentType;
+    contentId?: string;
+    contentUrl?: string;
+    caption?: string;
+  };
 }
 
 interface ProcessResult {
@@ -37,10 +43,49 @@ export async function processIncomingMessage(
     senderHandle,
     messageText,
     triggerType,
-    triggerSource
+    triggerSource,
+    contentSource
   } = params;
 
-  // 1. Find or create the lead (scoped to account)
+  // 1. Resolve content attribution (if content source provided)
+  let contentAttributionId: string | null = null;
+
+  if (contentSource) {
+    const existingAttribution = contentSource.contentId
+      ? await prisma.contentAttribution.findUnique({
+          where: {
+            accountId_contentId_platform: {
+              accountId,
+              contentId: contentSource.contentId,
+              platform: platform as Platform
+            }
+          }
+        })
+      : null;
+
+    if (existingAttribution) {
+      contentAttributionId = existingAttribution.id;
+      await prisma.contentAttribution.update({
+        where: { id: existingAttribution.id },
+        data: { leadsCount: { increment: 1 } }
+      });
+    } else {
+      const attribution = await prisma.contentAttribution.create({
+        data: {
+          accountId,
+          contentType: contentSource.contentType,
+          contentId: contentSource.contentId ?? null,
+          contentUrl: contentSource.contentUrl ?? null,
+          caption: contentSource.caption ?? null,
+          platform: platform as Platform,
+          leadsCount: 1
+        }
+      });
+      contentAttributionId = attribution.id;
+    }
+  }
+
+  // 2. Find or create the lead (scoped to account)
   let lead = await prisma.lead.findFirst({
     where: { platformUserId, platform: platform as Platform, accountId }
   });
@@ -55,7 +100,8 @@ export async function processIncomingMessage(
         status: 'NEW_LEAD',
         triggerType: triggerType as TriggerType,
         triggerSource: triggerSource ?? null,
-        platformUserId
+        platformUserId,
+        contentAttributionId
       }
     });
 
@@ -69,9 +115,15 @@ export async function processIncomingMessage(
         leadId: lead.id
       }
     });
+  } else if (contentAttributionId && !lead.contentAttributionId) {
+    // Link existing lead to content if not already linked
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { contentAttributionId }
+    });
   }
 
-  // 2. Find or create the conversation
+  // 3. Find or create the conversation
   let conversation = await prisma.conversation.findUnique({
     where: { leadId: lead.id }
   });
@@ -95,7 +147,7 @@ export async function processIncomingMessage(
     });
   }
 
-  // 3. Save the incoming message
+  // 4. Save the incoming message
   const message = await prisma.message.create({
     data: {
       conversationId: conversation.id,
@@ -116,7 +168,10 @@ export async function processIncomingMessage(
 // Schedule an AI reply with a random 5–10 minute delay
 // ---------------------------------------------------------------------------
 
-export async function scheduleAIReply(conversationId: string): Promise<void> {
+export async function scheduleAIReply(
+  conversationId: string,
+  accountId?: string
+): Promise<void> {
   const delayMs = randomBetween(5 * 60 * 1000, 10 * 60 * 1000);
 
   // In production this would be a proper job queue (e.g. BullMQ, SQS).
@@ -126,10 +181,26 @@ export async function scheduleAIReply(conversationId: string): Promise<void> {
       // Check if AI is still active for this conversation
       const conversation = await prisma.conversation.findUnique({
         where: { id: conversationId },
-        select: { aiActive: true }
+        select: { aiActive: true, lead: { select: { accountId: true } } }
       });
 
-      if (!conversation?.aiActive) return;
+      // Check per-conversation AI toggle
+      const aiActive = conversation?.aiActive ?? false;
+
+      // Check global away mode — if enabled, AI responds even if per-convo AI is off
+      // UNLESS the user explicitly turned AI off on this specific conversation
+      let awayModeActive = false;
+      if (accountId || conversation?.lead?.accountId) {
+        const resolvedAccountId = accountId || conversation!.lead.accountId;
+        const account = await prisma.account.findUnique({
+          where: { id: resolvedAccountId },
+          select: { awayMode: true }
+        });
+        awayModeActive = account?.awayMode ?? false;
+      }
+
+      // If neither per-convo AI nor away mode is active, skip
+      if (!aiActive && !awayModeActive) return;
 
       // Call the internal generate-reply endpoint
       const baseUrl =
@@ -191,6 +262,51 @@ export async function processCommentTrigger(
 
   // Schedule an AI-generated DM reply to the commenter
   await scheduleAIReply(result.conversationId);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-Tagging — apply AI-suggested tags to leads after reply generation
+// ---------------------------------------------------------------------------
+
+export async function applyAutoTags(
+  accountId: string,
+  leadId: string,
+  suggestedTags: string[]
+): Promise<void> {
+  if (!suggestedTags.length) return;
+
+  try {
+    // Get all auto-tags for this account
+    const accountTags = await prisma.tag.findMany({
+      where: { accountId, isAuto: true },
+      select: { id: true, name: true }
+    });
+
+    const tagMap = new Map(accountTags.map((t) => [t.name, t.id]));
+
+    for (const tagName of suggestedTags) {
+      const normalizedName = tagName.trim().toUpperCase().replace(/\s+/g, '_');
+      const tagId = tagMap.get(normalizedName);
+
+      if (tagId) {
+        // Upsert to avoid duplicate errors
+        await prisma.leadTag.upsert({
+          where: { leadId_tagId: { leadId, tagId } },
+          update: { appliedBy: 'AI', confidence: 0.8 },
+          create: { leadId, tagId, appliedBy: 'AI', confidence: 0.8 }
+        });
+      }
+    }
+
+    console.log(
+      `[webhook-processor] Auto-tagged lead ${leadId} with: ${suggestedTags.join(', ')}`
+    );
+  } catch (err) {
+    console.error(
+      `[webhook-processor] Failed to auto-tag lead ${leadId}:`,
+      err
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,8 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search');
+    const priority = searchParams.get('priority'); // "true" to filter high-priority
+    const unreadOnly = searchParams.get('unread'); // "true" to filter unread only
 
     const where: Record<string, unknown> = {
       lead: {
@@ -23,6 +25,19 @@ export async function GET(request: NextRequest) {
       }
     };
 
+    if (priority === 'true') {
+      where.priorityScore = { gte: 50 };
+    }
+    if (unreadOnly === 'true') {
+      where.unreadCount = { gt: 0 };
+    }
+
+    // Sort by priority score when in priority mode, otherwise by last message
+    const orderBy =
+      priority === 'true'
+        ? { priorityScore: 'desc' as const }
+        : { lastMessageAt: 'desc' as const };
+
     const rawConversations = await prisma.conversation.findMany({
       where,
       include: {
@@ -32,7 +47,12 @@ export async function GET(request: NextRequest) {
             name: true,
             handle: true,
             platform: true,
-            status: true
+            status: true,
+            tags: {
+              include: {
+                tag: { select: { id: true, name: true, color: true } }
+              }
+            }
           }
         },
         messages: {
@@ -41,7 +61,7 @@ export async function GET(request: NextRequest) {
           select: { content: true }
         }
       },
-      orderBy: { lastMessageAt: 'desc' }
+      orderBy
     });
 
     // Flatten the lead data for the frontend
@@ -56,6 +76,12 @@ export async function GET(request: NextRequest) {
       lastMessage: c.messages[0]?.content ?? '',
       lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
       unreadCount: c.unreadCount,
+      priorityScore: c.priorityScore,
+      tags: c.lead.tags.map((lt) => ({
+        id: lt.tag.id,
+        name: lt.tag.name,
+        color: lt.tag.color
+      })),
       createdAt: c.createdAt.toISOString()
     }));
 

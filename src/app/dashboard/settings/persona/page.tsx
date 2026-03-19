@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
+import { VoiceProfileDashboard } from '@/features/voice-profile/components/profile-dashboard';
 
 interface PersonaData {
   fullName: string;
@@ -203,6 +204,9 @@ export default function PersonaSettingsPage() {
       </div>
 
       <Separator />
+
+      {/* Voice Profile — Creator DNA */}
+      <VoiceProfileDashboard />
 
       <div className='grid gap-6'>
         {/* Section 1: Identity */}

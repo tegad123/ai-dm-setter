@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ─── Enums ──────────────────────────────────────────────
@@ -56,6 +57,7 @@ enum NotificationType {
   CLOSED_DEAL
   NEW_LEAD
   SYSTEM
+  TEAM_NOTE
 }
 
 enum AccountPlan {
@@ -70,6 +72,18 @@ enum IntegrationProvider {
   LEADCONNECTOR
   OPENAI
   ANTHROPIC
+  CALENDLY
+  CALCOM
+}
+
+enum ContentType {
+  REEL
+  STORY
+  POST
+  LIVE
+  AD
+  COMMENT_TRIGGER
+  DM_DIRECT
 }
 
 enum TrainingCategory {
@@ -95,6 +109,8 @@ model Account {
   primaryColor       String?     @default("#2563EB") // Brand color
   onboardingComplete Boolean     @default(false)
   plan               AccountPlan @default(FREE)
+  awayMode           Boolean     @default(false)     // Global AI takeover toggle
+  awayModeEnabledAt  DateTime?                       // When away mode was last enabled
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
@@ -105,6 +121,9 @@ model Account {
   personas           AIPersona[]
   trainingExamples   TrainingExample[]
   integrations       IntegrationCredential[]
+  tags               Tag[]
+  teamNotes          TeamNote[]
+  contentAttributions ContentAttribution[]
 
   @@index([slug])
 }
@@ -179,21 +198,25 @@ model IntegrationCredential {
 // ─── Existing Models (now with accountId) ───────────────
 
 model User {
-  id           String   @id @default(cuid())
-  accountId    String
-  email        String   @unique
-  name         String
-  passwordHash String
-  role         Role     @default(SETTER)
-  avatarUrl    String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String   @id @default(cuid())
+  accountId       String
+  email           String   @unique
+  name            String
+  passwordHash    String
+  role            Role     @default(SETTER)
+  avatarUrl       String?
+  isActive        Boolean  @default(true)
+  commissionRate  Float?   @default(0)      // Percentage (e.g., 10.0 = 10%)
+  totalCommission Float    @default(0)      // Lifetime earned commission
+  avgResponseTime Int?                       // Average response time in seconds
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   // Relations
   account         Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
   notifications   Notification[]
   sentMessages    Message[]       @relation("HumanSender")
+  teamNotes       TeamNote[]
   leadsHandled    Int             @default(0)
   callsBooked     Int             @default(0)
   closeRate       Float?
@@ -204,47 +227,55 @@ model User {
 }
 
 model Lead {
-  id             String     @id @default(cuid())
-  accountId      String
-  name           String
-  handle         String
-  platform       Platform
-  status         LeadStatus @default(NEW_LEAD)
-  qualityScore   Int        @default(0)
-  triggerType    TriggerType
-  triggerSource  String?              // Which post/DM triggered entry
-  bookedAt       DateTime?
-  showedUp       Boolean    @default(false)
-  closedAt       DateTime?
-  revenue        Float?
-  platformUserId String?              // Meta user ID for API calls
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id                     String     @id @default(cuid())
+  accountId              String
+  name                   String
+  handle                 String
+  platform               Platform
+  status                 LeadStatus @default(NEW_LEAD)
+  qualityScore           Int        @default(0)
+  triggerType            TriggerType
+  triggerSource          String?              // Which post/DM triggered entry
+  bookedAt               DateTime?
+  showedUp               Boolean    @default(false)
+  closedAt               DateTime?
+  revenue                Float?
+  platformUserId         String?              // Meta user ID for API calls
+  contentAttributionId   String?              // Which content generated this lead
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
 
   // Relations
-  account        Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  conversation   Conversation?
-  notifications  Notification[]
+  account              Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation         Conversation?
+  notifications        Notification[]
+  tags                 LeadTag[]
+  teamNotes            TeamNote[]
+  contentAttribution   ContentAttribution?  @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
 
   @@index([accountId, status])
   @@index([accountId, platform])
   @@index([accountId, createdAt])
+  @@index([contentAttributionId])
 }
 
 model Conversation {
-  id            String   @id @default(cuid())
-  leadId        String   @unique
-  aiActive      Boolean  @default(true)
-  unreadCount   Int      @default(0)
-  lastMessageAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String    @id @default(cuid())
+  leadId          String    @unique
+  aiActive        Boolean   @default(true)
+  unreadCount     Int       @default(0)
+  priorityScore   Int       @default(0)       // 0-100, higher = hotter lead
+  lastAIAnalysis  DateTime?                   // When AI last scored this conversation
+  lastMessageAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   // Relations
   lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages Message[]
 
   @@index([lastMessageAt])
+  @@index([priorityScore])
 }
 
 model Message {
@@ -283,4 +314,82 @@ model Notification {
 
   @@index([accountId, userId, isRead])
   @@index([createdAt])
+}
+
+// ─── Phase 1: Competitive Feature Models ──────────────
+
+model Tag {
+  id        String    @id @default(cuid())
+  name      String                            // e.g. "HIGH_INTENT", "GHOST_RISK"
+  color     String    @default("#6B7280")     // Hex color for UI badge
+  isAuto    Boolean   @default(false)         // true = AI-generated tag
+  accountId String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relations
+  account Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  leads   LeadTag[]
+
+  @@unique([accountId, name])
+  @@index([accountId])
+}
+
+model LeadTag {
+  id         String   @id @default(cuid())
+  leadId     String
+  tagId      String
+  appliedBy  String?                          // userId or "AI" for auto-tags
+  confidence Float?                           // AI confidence score (0-1)
+  createdAt  DateTime @default(now())
+
+  // Relations
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, tagId])
+  @@index([leadId])
+  @@index([tagId])
+}
+
+model TeamNote {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  leadId    String
+  authorId  String
+  accountId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  lead    Lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@index([accountId])
+}
+
+model ContentAttribution {
+  id          String      @id @default(cuid())
+  contentType ContentType                     // REEL, STORY, POST, LIVE, AD, etc.
+  contentId   String?                         // Platform-specific content ID
+  contentUrl  String?                         // URL to the original content
+  caption     String?     @db.Text            // Caption text (or first portion)
+  platform    Platform                        // INSTAGRAM, FACEBOOK
+  accountId   String
+  leadsCount  Int         @default(0)         // Denormalized count for performance
+  revenue     Float       @default(0)         // Denormalized revenue total
+  callsBooked Int         @default(0)         // Denormalized calls booked count
+  postedAt    DateTime?                       // When the content was posted
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  leads   Lead[]
+
+  @@unique([accountId, contentId, platform])
+  @@index([accountId, createdAt])
+  @@index([accountId, contentType])
 }

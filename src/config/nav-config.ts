@@ -26,12 +26,31 @@ export const navItems: NavItem[] = [
     items: []
   },
   {
+    title: 'Content',
+    url: '/dashboard/content',
+    icon: 'analytics',
+    isActive: false,
+    shortcut: ['n', 'n'],
+    items: []
+  },
+  {
     title: 'Analytics',
     url: '/dashboard/analytics',
     icon: 'analytics',
-    isActive: false,
+    isActive: true,
     shortcut: ['a', 'a'],
-    items: []
+    items: [
+      {
+        title: 'Overview',
+        url: '/dashboard/analytics',
+        icon: 'analytics'
+      },
+      {
+        title: 'Team Performance',
+        url: '/dashboard/analytics/team',
+        icon: 'teams'
+      }
+    ]
   },
   {
     title: 'Team',
@@ -60,6 +79,11 @@ export const navItems: NavItem[] = [
       {
         title: 'Training Data',
         url: '/dashboard/settings/training',
+        icon: 'settings'
+      },
+      {
+        title: 'Tags',
+        url: '/dashboard/settings/tags',
         icon: 'settings'
       },
       {

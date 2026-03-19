@@ -112,6 +112,7 @@ export async function getLeads(params?: {
   status?: string;
   platform?: string;
   search?: string;
+  tag?: string;
   page?: number;
   limit?: number;
 }) {
@@ -119,6 +120,7 @@ export async function getLeads(params?: {
   if (params?.status) query.set('status', params.status);
   if (params?.platform) query.set('platform', params.platform);
   if (params?.search) query.set('search', params.search);
+  if (params?.tag) query.set('tag', params.tag);
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   const qs = query.toString();
@@ -189,9 +191,17 @@ export interface Message {
   sentAt: string;
 }
 
-export async function getConversations(search?: string) {
-  const qs = search ? `?search=${encodeURIComponent(search)}` : '';
-  return apiFetch<Conversation[]>(`/conversations${qs}`);
+export async function getConversations(
+  search?: string,
+  priority?: boolean,
+  unread?: boolean
+) {
+  const query = new URLSearchParams();
+  if (search) query.set('search', search);
+  if (priority) query.set('priority', 'true');
+  if (unread) query.set('unread', 'true');
+  const qs = query.toString();
+  return apiFetch<Conversation[]>(`/conversations${qs ? `?${qs}` : ''}`);
 }
 
 export async function getConversation(id: string) {
@@ -386,4 +396,308 @@ export async function createNotification(data: {
     method: 'POST',
     body: JSON.stringify(data)
   });
+}
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  isAuto: boolean;
+  leadsCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LeadTagInfo {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export async function getTags() {
+  return apiFetch<{ tags: Tag[] }>('/tags');
+}
+
+export async function createTag(data: {
+  name: string;
+  color?: string;
+  isAuto?: boolean;
+}) {
+  return apiFetch<Tag>('/tags', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateTag(
+  id: string,
+  data: Partial<{ name: string; color: string; isAuto: boolean }>
+) {
+  return apiFetch<Tag>(`/tags/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function deleteTag(id: string) {
+  return apiFetch<void>(`/tags/${id}`, { method: 'DELETE' });
+}
+
+export async function addTagToLead(
+  leadId: string,
+  tagId: string,
+  appliedBy?: string
+) {
+  return apiFetch(`/leads/${leadId}/tags`, {
+    method: 'POST',
+    body: JSON.stringify({ tagId, appliedBy })
+  });
+}
+
+export async function removeTagFromLead(leadId: string, tagId: string) {
+  return apiFetch<void>(`/leads/${leadId}/tags?tagId=${tagId}`, {
+    method: 'DELETE'
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Team Notes
+// ---------------------------------------------------------------------------
+
+export interface TeamNote {
+  id: string;
+  content: string;
+  leadId: string;
+  authorId: string;
+  author: {
+    id: string;
+    name: string;
+    role: string;
+    avatarUrl: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamNotesResponse {
+  notes: TeamNote[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function getTeamNotes(leadId: string, page?: number) {
+  const qs = page ? `?page=${page}` : '';
+  return apiFetch<TeamNotesResponse>(`/leads/${leadId}/notes${qs}`);
+}
+
+export async function createTeamNote(leadId: string, content: string) {
+  return apiFetch<TeamNote>(`/leads/${leadId}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ content })
+  });
+}
+
+export async function updateTeamNote(
+  leadId: string,
+  noteId: string,
+  content: string
+) {
+  return apiFetch<TeamNote>(`/leads/${leadId}/notes/${noteId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content })
+  });
+}
+
+export async function deleteTeamNote(leadId: string, noteId: string) {
+  return apiFetch<void>(`/leads/${leadId}/notes/${noteId}`, {
+    method: 'DELETE'
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Content Attribution
+// ---------------------------------------------------------------------------
+
+export interface ContentAttribution {
+  id: string;
+  contentType: string;
+  contentId: string | null;
+  contentUrl: string | null;
+  caption: string | null;
+  platform: string;
+  leadsCount: number;
+  actualLeadsCount: number;
+  revenue: number;
+  callsBooked: number;
+  conversionRate: number;
+  postedAt: string | null;
+  createdAt: string;
+}
+
+export interface ContentListResponse {
+  content: ContentAttribution[];
+  total: number;
+  page: number;
+  limit: number;
+  totals: {
+    totalLeads: number;
+    totalRevenue: number;
+    totalCallsBooked: number;
+  };
+}
+
+export async function getContentAttributions(params?: {
+  contentType?: string;
+  platform?: string;
+  from?: string;
+  to?: string;
+  sortBy?: string;
+  order?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.contentType) query.set('contentType', params.contentType);
+  if (params?.platform) query.set('platform', params.platform);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.sortBy) query.set('sortBy', params.sortBy);
+  if (params?.order) query.set('order', params.order);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return apiFetch<ContentListResponse>(`/content${qs ? `?${qs}` : ''}`);
+}
+
+export async function getContentAttribution(id: string) {
+  return apiFetch<{ content: ContentAttribution & { leads: Lead[] } }>(
+    `/content/${id}`
+  );
+}
+
+export interface ContentAnalytics {
+  topByLeads: ContentAttribution[];
+  topByRevenue: ContentAttribution[];
+  typeBreakdown: {
+    contentType: string;
+    contentCount: number;
+    leadsCount: number;
+    revenue: number;
+    callsBooked: number;
+  }[];
+  platformBreakdown: {
+    platform: string;
+    contentCount: number;
+    leadsCount: number;
+    revenue: number;
+    callsBooked: number;
+  }[];
+}
+
+// ---------------------------------------------------------------------------
+// Away Mode
+// ---------------------------------------------------------------------------
+
+export interface AwayModeState {
+  awayMode: boolean;
+  awayModeEnabledAt: string | null;
+}
+
+export async function getAwayMode() {
+  return apiFetch<AwayModeState>('/settings/away-mode');
+}
+
+export async function setAwayMode(awayMode: boolean) {
+  return apiFetch<AwayModeState>('/settings/away-mode', {
+    method: 'PUT',
+    body: JSON.stringify({ awayMode })
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Team Performance Analytics
+// ---------------------------------------------------------------------------
+
+export interface TeamMemberStats {
+  id: string;
+  name: string;
+  role: string;
+  avatarUrl: string | null;
+  leadsHandled: number;
+  callsBooked: number;
+  closeRate: number | null;
+  commissionRate: number | null;
+  totalCommission: number;
+  avgResponseTime: number | null;
+  messagesSent: number;
+  heatmap: Record<string, number>; // "dayOfWeek-hour" -> count
+}
+
+export interface TeamAnalytics {
+  members: TeamMemberStats[];
+  teamHeatmap: Record<string, number>;
+  totalMessages: number;
+}
+
+export async function getTeamAnalytics(from?: string, to?: string) {
+  const query = new URLSearchParams();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  const qs = query.toString();
+  return apiFetch<TeamAnalytics>(`/analytics/team${qs ? `?${qs}` : ''}`);
+}
+
+// ---------------------------------------------------------------------------
+// Commission Analytics
+// ---------------------------------------------------------------------------
+
+export interface CommissionMember {
+  id: string;
+  name: string;
+  role: string;
+  avatarUrl: string | null;
+  commissionRate: number | null;
+  totalCommission: number;
+  callsBooked: number;
+  leadsHandled: number;
+}
+
+export interface CommissionDeal {
+  id: string;
+  leadName: string;
+  revenue: number | null;
+  closedAt: string | null;
+}
+
+export interface CommissionAnalytics {
+  members: CommissionMember[];
+  recentDeals: CommissionDeal[];
+  totals: {
+    totalRevenue: number;
+    totalCommissions: number;
+    totalDeals: number;
+  };
+}
+
+export async function getCommissionAnalytics(from?: string, to?: string) {
+  const query = new URLSearchParams();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  const qs = query.toString();
+  return apiFetch<CommissionAnalytics>(
+    `/analytics/commissions${qs ? `?${qs}` : ''}`
+  );
+}
+
+export async function getContentAnalytics(from?: string, to?: string) {
+  const query = new URLSearchParams();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  const qs = query.toString();
+  return apiFetch<ContentAnalytics>(`/analytics/content${qs ? `?${qs}` : ''}`);
 }

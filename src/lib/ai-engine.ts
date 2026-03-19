@@ -45,6 +45,7 @@ export interface AIReplyResult {
   qualityScore: number;
   suggestedDelay: number; // milliseconds
   suggestedTag: string | null; // Lead status suggestion from AI
+  suggestedTags: string[]; // Multiple auto-tags (Phase 2)
   stage: string | null; // Current conversation stage
 }
 
@@ -54,6 +55,7 @@ interface AIStructuredResponse {
   message: string;
   stage: string;
   suggested_tag: string;
+  suggested_tags: string[]; // Multiple auto-tags with Phase 2 tagging system
 }
 
 type AIProvider = 'openai' | 'anthropic';
@@ -215,7 +217,12 @@ function parseStructuredResponse(raw: string): AIStructuredResponse {
       message: typeof parsed.message === 'string' ? parsed.message : raw,
       stage: typeof parsed.stage === 'string' ? parsed.stage : '',
       suggested_tag:
-        typeof parsed.suggested_tag === 'string' ? parsed.suggested_tag : ''
+        typeof parsed.suggested_tag === 'string' ? parsed.suggested_tag : '',
+      suggested_tags: Array.isArray(parsed.suggested_tags)
+        ? parsed.suggested_tags.filter(
+            (t: unknown) => typeof t === 'string' && t.length > 0
+          )
+        : []
     };
   } catch {
     // AI didn't return valid JSON — treat the whole response as a text message
@@ -223,7 +230,8 @@ function parseStructuredResponse(raw: string): AIStructuredResponse {
       format: 'text',
       message: raw,
       stage: '',
-      suggested_tag: ''
+      suggested_tag: '',
+      suggested_tags: []
     };
   }
 }
@@ -355,6 +363,7 @@ export async function generateReply(
     qualityScore,
     suggestedDelay,
     suggestedTag: structured.suggested_tag || null,
+    suggestedTags: structured.suggested_tags || [],
     stage: structured.stage || null
   };
 }

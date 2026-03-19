@@ -37,7 +37,9 @@ type Provider =
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'OPENAI'
-  | 'ANTHROPIC';
+  | 'ANTHROPIC'
+  | 'CALENDLY'
+  | 'CALCOM';
 
 export async function getCredentials(
   accountId: string,

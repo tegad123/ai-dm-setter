@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
+import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
 import { IconSend, IconMicrophone, IconRobot } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
@@ -72,6 +73,13 @@ export function ConversationThread({
             </p>
           </div>
           <LeadStatusBadge status={conversation.status as LeadStatus} />
+          {conversation.tags && conversation.tags.length > 0 && (
+            <div className='flex flex-wrap gap-1'>
+              {conversation.tags.map((tag) => (
+                <TagBadge key={tag.id} name={tag.name} color={tag.color} />
+              ))}
+            </div>
+          )}
         </div>
         <div className='flex items-center gap-2'>
           <span className='text-muted-foreground text-xs'>AI Active</span>

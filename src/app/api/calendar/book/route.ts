@@ -1,6 +1,7 @@
-import { bookAppointment, createContact } from '@/lib/leadconnector';
+import { bookUnifiedAppointment } from '@/lib/calendar-adapter';
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { calculateAndApplyCommissions } from '@/lib/commission-calculator';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
@@ -30,26 +31,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    // Create or find contact in LeadConnector (uses account's credentials)
-    const { contactId } = await createContact(auth.accountId, {
-      name: lead.name,
-      tags: ['AI-DM-Setter', lead.platform, lead.status]
+    // Book using the unified calendar adapter (auto-detects provider)
+    const result = await bookUnifiedAppointment(auth.accountId, {
+      leadName: lead.name,
+      leadHandle: lead.handle,
+      platform: lead.platform,
+      slotStart,
+      slotEnd,
+      notes:
+        notes ??
+        `Auto-booked via DM Setter. Platform: ${lead.platform}. Lead status: ${lead.status}.`
     });
-
-    // Book the appointment (calendarId comes from account's credential store)
-    const { appointmentId, confirmationUrl } = await bookAppointment(
-      auth.accountId,
-      {
-        contactId,
-        calendarId: '', // overridden by bookAppointment from credential store
-        startTime: slotStart,
-        endTime: slotEnd,
-        title: `Sales Call — ${lead.name} (@${lead.handle})`,
-        notes:
-          notes ??
-          `Auto-booked via DM Setter. Platform: ${lead.platform}. Lead status: ${lead.status}.`
-      }
-    );
 
     // Update lead status to BOOKED
     await prisma.lead.update({
@@ -60,21 +52,32 @@ export async function POST(req: NextRequest) {
       }
     });
 
+    // Update content attribution callsBooked count if linked
+    if (lead.contentAttributionId) {
+      await prisma.contentAttribution.update({
+        where: { id: lead.contentAttributionId },
+        data: { callsBooked: { increment: 1 } }
+      });
+    }
+
     // Create team notification for the booked call
     await prisma.notification.create({
       data: {
         accountId: auth.accountId,
         type: 'CALL_BOOKED',
         title: 'New Call Booked',
-        body: `${lead.name} (@${lead.handle}) booked a sales call for ${new Date(slotStart).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+        body: `${lead.name} (@${lead.handle}) booked a sales call for ${new Date(slotStart).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}. Provider: ${result.provider}.`,
         leadId: lead.id,
-        userId: null // null = team-wide notification
+        userId: null
       }
     });
 
     return NextResponse.json({
-      appointmentId,
-      confirmationUrl
+      provider: result.provider,
+      appointmentId: result.appointmentId,
+      confirmationUrl: result.confirmationUrl,
+      meetingUrl: result.meetingUrl,
+      startTime: result.startTime
     });
   } catch (error) {
     if (error instanceof AuthError) {
