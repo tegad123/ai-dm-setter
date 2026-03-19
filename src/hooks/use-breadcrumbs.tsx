@@ -8,30 +8,47 @@ type BreadcrumbItem = {
   link: string;
 };
 
-// This allows to add custom title as well
 const routeMapping: Record<string, BreadcrumbItem[]> = {
   '/dashboard': [{ title: 'Dashboard', link: '/dashboard' }],
-  '/dashboard/employee': [
+  '/dashboard/overview': [
     { title: 'Dashboard', link: '/dashboard' },
-    { title: 'Employee', link: '/dashboard/employee' }
+    { title: 'Overview', link: '/dashboard/overview' }
   ],
-  '/dashboard/product': [
+  '/dashboard/leads': [
     { title: 'Dashboard', link: '/dashboard' },
-    { title: 'Product', link: '/dashboard/product' }
+    { title: 'Leads', link: '/dashboard/leads' }
+  ],
+  '/dashboard/conversations': [
+    { title: 'Dashboard', link: '/dashboard' },
+    { title: 'Conversations', link: '/dashboard/conversations' }
+  ],
+  '/dashboard/analytics': [
+    { title: 'Dashboard', link: '/dashboard' },
+    { title: 'Analytics', link: '/dashboard/analytics' }
+  ],
+  '/dashboard/team': [
+    { title: 'Dashboard', link: '/dashboard' },
+    { title: 'Team', link: '/dashboard/team' }
+  ],
+  '/dashboard/profile': [
+    { title: 'Dashboard', link: '/dashboard' },
+    { title: 'Profile', link: '/dashboard/profile' }
+  ],
+  '/dashboard/settings/notifications': [
+    { title: 'Dashboard', link: '/dashboard' },
+    { title: 'Settings', link: '/dashboard/settings/notifications' },
+    { title: 'Notifications', link: '/dashboard/settings/notifications' }
   ]
-  // Add more custom mappings as needed
 };
 
 export function useBreadcrumbs() {
   const pathname = usePathname();
 
   const breadcrumbs = useMemo(() => {
-    // Check if we have a custom mapping for this exact path
     if (routeMapping[pathname]) {
       return routeMapping[pathname];
     }
 
-    // If no exact match, fall back to generating breadcrumbs from the path
     const segments = pathname.split('/').filter(Boolean);
     return segments.map((segment, index) => {
       const path = `/${segments.slice(0, index + 1).join('/')}`;

@@ -12,12 +12,12 @@ import '../styles/globals.css';
 
 const META_THEME_COLORS = {
   light: '#ffffff',
-  dark: '#09090b'
+  dark: '#0A0A0A'
 };
 
 export const metadata: Metadata = {
-  title: 'Next Shadcn',
-  description: 'Basic dashboard with Next.js and Shadcn'
+  title: 'AI DM Setter',
+  description: 'AI-powered DM automation dashboard'
 };
 
 export const viewport: Viewport = {

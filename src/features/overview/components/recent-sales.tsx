@@ -1,70 +1,76 @@
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   Card,
-  CardHeader,
   CardContent,
-  CardTitle,
-  CardDescription
+  CardDescription,
+  CardHeader,
+  CardTitle
 } from '@/components/ui/card';
 
-const salesData = [
+const recentActivity = [
   {
-    name: 'Olivia Martin',
-    email: 'olivia.martin@email.com',
-    avatar: 'https://api.slingacademy.com/public/sample-users/1.png',
-    fallback: 'OM',
-    amount: '+$1,999.00'
+    name: 'Marcus Johnson',
+    action: 'Call booked',
+    time: '5m ago',
+    initials: 'MJ',
+    platform: 'IG'
   },
   {
-    name: 'Jackson Lee',
-    email: 'jackson.lee@email.com',
-    avatar: 'https://api.slingacademy.com/public/sample-users/2.png',
-    fallback: 'JL',
-    amount: '+$39.00'
+    name: 'Sarah Mitchell',
+    action: 'Hot lead detected',
+    time: '18m ago',
+    initials: 'SM',
+    platform: 'IG'
   },
   {
-    name: 'Isabella Nguyen',
-    email: 'isabella.nguyen@email.com',
-    avatar: 'https://api.slingacademy.com/public/sample-users/3.png',
-    fallback: 'IN',
-    amount: '+$299.00'
+    name: 'David Kim',
+    action: 'Call booked',
+    time: '1h ago',
+    initials: 'DK',
+    platform: 'FB'
   },
   {
-    name: 'William Kim',
-    email: 'will@email.com',
-    avatar: 'https://api.slingacademy.com/public/sample-users/4.png',
-    fallback: 'WK',
-    amount: '+$99.00'
+    name: 'Emma Chen',
+    action: 'Closed — $997',
+    time: '3h ago',
+    initials: 'EC',
+    platform: 'IG'
   },
   {
-    name: 'Sofia Davis',
-    email: 'sofia.davis@email.com',
-    avatar: 'https://api.slingacademy.com/public/sample-users/5.png',
-    fallback: 'SD',
-    amount: '+$39.00'
+    name: 'Brandon Clark',
+    action: 'Closed — $1,997',
+    time: '6h ago',
+    initials: 'BC',
+    platform: 'FB'
   }
 ];
 
 export function RecentSales() {
   return (
-    <Card className='h-full'>
+    <Card>
       <CardHeader>
-        <CardTitle>Recent Sales</CardTitle>
-        <CardDescription>You made 265 sales this month.</CardDescription>
+        <CardTitle>Recent Activity</CardTitle>
+        <CardDescription>Latest lead events from AI setter</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className='space-y-8'>
-          {salesData.map((sale, index) => (
-            <div key={index} className='flex items-center'>
+        <div className='space-y-4'>
+          {recentActivity.map((item, i) => (
+            <div key={i} className='flex items-center gap-4'>
               <Avatar className='h-9 w-9'>
-                <AvatarImage src={sale.avatar} alt='Avatar' />
-                <AvatarFallback>{sale.fallback}</AvatarFallback>
+                <AvatarFallback className='bg-primary/10 text-primary text-xs'>
+                  {item.initials}
+                </AvatarFallback>
               </Avatar>
-              <div className='ml-4 space-y-1'>
-                <p className='text-sm leading-none font-medium'>{sale.name}</p>
-                <p className='text-muted-foreground text-sm'>{sale.email}</p>
+              <div className='flex-1 space-y-1'>
+                <p className='text-sm leading-none font-medium'>
+                  {item.name}
+                  <span className='text-muted-foreground ml-2 text-xs'>
+                    {item.platform}
+                  </span>
+                </p>
+                <p className='text-muted-foreground text-xs'>{item.action}</p>
               </div>
-              <div className='ml-auto font-medium'>{sale.amount}</div>
+              <div className='text-muted-foreground text-xs'>{item.time}</div>
             </div>
           ))}
         </div>

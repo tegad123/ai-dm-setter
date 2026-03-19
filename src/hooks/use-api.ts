@@ -1,0 +1,317 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  getLeads,
+  getConversations,
+  getConversation as fetchConversation,
+  getMessages,
+  getOverviewStats,
+  getLeadVolume,
+  getFunnel,
+  getTriggerPerformance,
+  getRevenue,
+  getTeam,
+  getNotifications
+} from '@/lib/api';
+import type {
+  Lead,
+  Conversation,
+  Message,
+  OverviewStats,
+  LeadVolumePoint,
+  FunnelStep,
+  TriggerPerformanceItem,
+  RevenuePoint,
+  TeamMember,
+  Notification
+} from '@/lib/api';
+
+// ---------------------------------------------------------------------------
+// Generic fetcher helper
+// ---------------------------------------------------------------------------
+
+function useApiFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []) {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const fetch = useCallback(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetcher()
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setError(err instanceof Error ? err : new Error(String(err)));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+
+  useEffect(() => {
+    const cleanup = fetch();
+    return cleanup;
+  }, [fetch]);
+
+  const refetch = useCallback(() => {
+    fetch();
+  }, [fetch]);
+
+  return { data, loading, error, refetch };
+}
+
+// ---------------------------------------------------------------------------
+// Leads
+// ---------------------------------------------------------------------------
+
+export function useLeads(params?: {
+  status?: string;
+  platform?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const { data, loading, error, refetch } = useApiFetch(
+    () => getLeads(params),
+    [
+      params?.status,
+      params?.platform,
+      params?.search,
+      params?.page,
+      params?.limit
+    ]
+  );
+
+  return {
+    leads: data?.leads ?? ([] as Lead[]),
+    total: data?.total ?? 0,
+    loading,
+    error,
+    refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Conversations
+// ---------------------------------------------------------------------------
+
+export function useConversations(search?: string) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(() => getConversations(search), [search]);
+  // API returns { conversations: [...] } — unwrap
+  const conversations = Array.isArray(raw)
+    ? raw
+    : ((raw as any)?.conversations ?? []);
+
+  return {
+    conversations: conversations as Conversation[],
+    loading,
+    error,
+    refetch
+  };
+}
+
+export function useConversation(id: string | undefined) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(
+    () => (id ? fetchConversation(id) : Promise.resolve(null)),
+    [id]
+  );
+  // API returns { conversation: {...} } — unwrap
+  const conversation =
+    ((raw as any)?.conversation ?? (raw as any)?.id) ? raw : null;
+
+  return {
+    conversation: conversation as Conversation | null,
+    loading,
+    error,
+    refetch
+  };
+}
+
+export function useMessages(
+  conversationId: string | undefined,
+  limit?: number
+) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(
+    () =>
+      conversationId
+        ? getMessages(conversationId, limit)
+        : Promise.resolve([] as Message[]),
+    [conversationId, limit]
+  );
+  // API returns { messages: [...] } — unwrap and normalize field names
+  const rawMessages = Array.isArray(raw) ? raw : ((raw as any)?.messages ?? []);
+  const messages = rawMessages.map((m: any) => ({
+    ...m,
+    sentAt: m.sentAt || m.timestamp // Prisma returns `timestamp`, frontend expects `sentAt`
+  }));
+
+  return {
+    messages: messages as Message[],
+    loading,
+    error,
+    refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+export function useOverviewStats() {
+  const { data, loading, error } = useApiFetch(() => getOverviewStats(), []);
+
+  return {
+    stats: data as OverviewStats | null,
+    loading,
+    error
+  };
+}
+
+export function useLeadVolume() {
+  const { data: raw, loading, error } = useApiFetch(() => getLeadVolume(), []);
+  // API returns { data: [...] } — unwrap the array
+  const data = Array.isArray(raw) ? raw : ((raw as any)?.data ?? []);
+
+  return {
+    data: data as LeadVolumePoint[],
+    loading,
+    error
+  };
+}
+
+export function useFunnel() {
+  const { data: raw, loading, error } = useApiFetch(() => getFunnel(), []);
+
+  // API returns { totalLeads, qualified, booked, showedUp, closed } — transform to FunnelStep[]
+  let data: FunnelStep[] = [];
+  if (raw && !Array.isArray(raw)) {
+    const r = raw as any;
+    const total = r.totalLeads || 1;
+    data = [
+      { stage: 'Total Leads', count: r.totalLeads || 0, percentage: 100 },
+      {
+        stage: 'Qualified',
+        count: r.qualified || 0,
+        percentage: Math.round(((r.qualified || 0) / total) * 100)
+      },
+      {
+        stage: 'Booked',
+        count: r.booked || 0,
+        percentage: Math.round(((r.booked || 0) / total) * 100)
+      },
+      {
+        stage: 'Showed Up',
+        count: r.showedUp || 0,
+        percentage: Math.round(((r.showedUp || 0) / total) * 100)
+      },
+      {
+        stage: 'Closed',
+        count: r.closed || 0,
+        percentage: Math.round(((r.closed || 0) / total) * 100)
+      }
+    ];
+  } else if (Array.isArray(raw)) {
+    data = raw as FunnelStep[];
+  }
+
+  return {
+    data,
+    loading,
+    error
+  };
+}
+
+export function useTriggerPerformance() {
+  const {
+    data: raw,
+    loading,
+    error
+  } = useApiFetch(() => getTriggerPerformance(), []);
+  const data = Array.isArray(raw) ? raw : ((raw as any)?.data ?? []);
+
+  return {
+    data: data as TriggerPerformanceItem[],
+    loading,
+    error
+  };
+}
+
+export function useRevenueData() {
+  const { data: raw, loading, error } = useApiFetch(() => getRevenue(), []);
+  const data = Array.isArray(raw) ? raw : ((raw as any)?.data ?? []);
+
+  return {
+    data: data as RevenuePoint[],
+    loading,
+    error
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Team
+// ---------------------------------------------------------------------------
+
+export function useTeam() {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(() => getTeam(), []);
+  // API may return array directly or { members: [...] } or { data: [...] }
+  const members = Array.isArray(raw)
+    ? raw
+    : ((raw as any)?.members ?? (raw as any)?.data ?? []);
+
+  return {
+    members: members as TeamMember[],
+    loading,
+    error,
+    refetch
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+export function useNotifications(userId?: string) {
+  const { data, loading, error, refetch } = useApiFetch(
+    () => getNotifications(userId),
+    [userId]
+  );
+
+  return {
+    notifications: data?.notifications ?? ([] as Notification[]),
+    unreadCount: data?.unreadCount ?? 0,
+    loading,
+    error,
+    refetch
+  };
+}

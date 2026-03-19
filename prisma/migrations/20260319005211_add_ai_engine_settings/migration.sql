@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "AIPersona" ADD COLUMN     "responseDelayMax" INTEGER NOT NULL DEFAULT 600,
+ADD COLUMN     "responseDelayMin" INTEGER NOT NULL DEFAULT 300,
+ADD COLUMN     "setupComplete" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "setupStep" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "voiceNotesEnabled" BOOLEAN NOT NULL DEFAULT true,
+ALTER COLUMN "isActive" SET DEFAULT false;

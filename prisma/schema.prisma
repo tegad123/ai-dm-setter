@@ -1,0 +1,286 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  CLOSER
+  SETTER
+  READ_ONLY
+}
+
+enum Platform {
+  INSTAGRAM
+  FACEBOOK
+}
+
+enum LeadStatus {
+  NEW_LEAD
+  IN_QUALIFICATION
+  HOT_LEAD
+  QUALIFIED
+  BOOKED
+  SHOWED_UP
+  NO_SHOW
+  CLOSED
+  SERIOUS_NOT_READY
+  MONEY_OBJECTION
+  TRUST_OBJECTION
+  GHOSTED
+  UNQUALIFIED
+}
+
+enum TriggerType {
+  COMMENT
+  DM
+}
+
+enum MessageSender {
+  AI
+  LEAD
+  HUMAN
+}
+
+enum NotificationType {
+  CALL_BOOKED
+  HOT_LEAD
+  HUMAN_OVERRIDE_NEEDED
+  NO_SHOW
+  CLOSED_DEAL
+  NEW_LEAD
+  SYSTEM
+}
+
+enum AccountPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum IntegrationProvider {
+  META
+  ELEVENLABS
+  LEADCONNECTOR
+  OPENAI
+  ANTHROPIC
+}
+
+enum TrainingCategory {
+  GREETING
+  QUALIFICATION
+  OBJECTION_TRUST
+  OBJECTION_MONEY
+  OBJECTION_TIME
+  OBJECTION_PRIOR_FAILURE
+  CLOSING
+  FOLLOW_UP
+  GENERAL
+}
+
+// ─── Multi-Tenant Models ────────────────────────────────
+
+model Account {
+  id                 String      @id @default(cuid())
+  name               String                          // Business name
+  slug               String      @unique             // URL-safe identifier
+  logoUrl            String?
+  brandName          String?                         // Display name (optional override)
+  primaryColor       String?     @default("#2563EB") // Brand color
+  onboardingComplete Boolean     @default(false)
+  plan               AccountPlan @default(FREE)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  // Relations
+  users              User[]
+  leads              Lead[]
+  notifications      Notification[]
+  personas           AIPersona[]
+  trainingExamples   TrainingExample[]
+  integrations       IntegrationCredential[]
+
+  @@index([slug])
+}
+
+model AIPersona {
+  id                       String   @id @default(cuid())
+  accountId                String
+  personaName              String                    // e.g. "Sales Daniel"
+  fullName                 String                    // e.g. "Daniel Elumelu"
+  companyName              String?                   // e.g. "DAE Trading Accelerator"
+  tone                     String?                   // e.g. "casual, direct, friendly"
+  systemPrompt             String   @db.Text         // Main conversation prompt
+  qualificationFlow        Json?                     // JSON array of qualification steps
+  objectionHandling        Json?                     // JSON object for objection responses
+  voiceNoteDecisionPrompt  String?  @db.Text
+  qualityScoringPrompt     String?  @db.Text
+  freeValueLink            String?                   // Bootcamp/resource URL
+  customPhrases            Json?                     // JSON: {"greeting": "yo", "affirmation": "bet"}
+  promptConfig             Json?                     // All template variables: {whatYouSell, adminBio, toneDescription, ...}
+  responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
+  responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
+  voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled
+  setupStep                Int      @default(0)       // Onboarding progress (0-8), 8 = all steps complete
+  setupComplete            Boolean  @default(false)   // All setup steps done
+  isActive                 Boolean  @default(false)   // AI goes live only after activation
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  // Relations
+  account          Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  trainingExamples TrainingExample[]
+
+  @@index([accountId, isActive])
+}
+
+model TrainingExample {
+  id            String           @id @default(cuid())
+  accountId     String
+  personaId     String
+  category      TrainingCategory
+  leadMessage   String           @db.Text  // What the lead said
+  idealResponse String           @db.Text  // How the AI should reply
+  notes         String?
+  createdAt     DateTime         @default(now())
+
+  // Relations
+  account Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona AIPersona @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, personaId])
+  @@index([category])
+}
+
+model IntegrationCredential {
+  id          String              @id @default(cuid())
+  accountId   String
+  provider    IntegrationProvider
+  credentials Json                // Encrypted: {accessToken, apiKey, etc.}
+  metadata    Json?               // Non-secret config: {pageId, voiceId, calendarId}
+  isActive    Boolean             @default(true)
+  verifiedAt  DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, provider])
+  @@index([accountId, provider])
+}
+
+// ─── Existing Models (now with accountId) ───────────────
+
+model User {
+  id           String   @id @default(cuid())
+  accountId    String
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(SETTER)
+  avatarUrl    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  account         Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  notifications   Notification[]
+  sentMessages    Message[]       @relation("HumanSender")
+  leadsHandled    Int             @default(0)
+  callsBooked     Int             @default(0)
+  closeRate       Float?
+
+  @@index([accountId])
+  @@index([email])
+  @@index([role])
+}
+
+model Lead {
+  id             String     @id @default(cuid())
+  accountId      String
+  name           String
+  handle         String
+  platform       Platform
+  status         LeadStatus @default(NEW_LEAD)
+  qualityScore   Int        @default(0)
+  triggerType    TriggerType
+  triggerSource  String?              // Which post/DM triggered entry
+  bookedAt       DateTime?
+  showedUp       Boolean    @default(false)
+  closedAt       DateTime?
+  revenue        Float?
+  platformUserId String?              // Meta user ID for API calls
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  // Relations
+  account        Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation   Conversation?
+  notifications  Notification[]
+
+  @@index([accountId, status])
+  @@index([accountId, platform])
+  @@index([accountId, createdAt])
+}
+
+model Conversation {
+  id            String   @id @default(cuid())
+  leadId        String   @unique
+  aiActive      Boolean  @default(true)
+  unreadCount   Int      @default(0)
+  lastMessageAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  sender         MessageSender
+  content        String
+  isVoiceNote    Boolean       @default(false)
+  voiceNoteUrl   String?
+  sentByUserId   String?                // Only for HUMAN sender
+  timestamp      DateTime      @default(now())
+
+  // Relations
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser   User?        @relation("HumanSender", fields: [sentByUserId], references: [id])
+
+  @@index([conversationId, timestamp])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  accountId String
+  userId    String?                     // null = team-wide
+  type      NotificationType
+  title     String
+  body      String
+  leadId    String?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lead    Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, userId, isRead])
+  @@index([createdAt])
+}
