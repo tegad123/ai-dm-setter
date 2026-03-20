@@ -577,3 +577,45 @@ model OptimizationSuggestion {
   @@index([accountId, status])
   @@index([accountId, createdAt])
 }
+
+// ─── Booking Prediction Models ──────────────────────
+
+model PredictionModel {
+  id              String   @id @default(cuid())
+  accountId       String
+  version         Int      @default(1)
+  modelType       String   @default("logistic_regression") // logistic_regression | gradient_boosted
+  weights         Json     // Model coefficients/weights
+  features        Json     // Feature names and config used
+  trainingSize    Int      // Number of conversations used to train
+  holdoutSize     Int      // Number of conversations in holdout set
+  accuracy        Float    // Accuracy on holdout set (0-1)
+  auc             Float    // AUC-ROC on holdout set (0-1)
+  precision       Float    @default(0)
+  recall          Float    @default(0)
+  isActive        Boolean  @default(true)
+  trainedAt       DateTime @default(now())
+
+  // Relations
+  predictions PredictionLog[]
+
+  @@unique([accountId, version])
+  @@index([accountId, isActive])
+}
+
+model PredictionLog {
+  id               String   @id @default(cuid())
+  accountId        String
+  conversationId   String
+  modelId          String
+  predictedProb    Float    // 0-1 booking probability
+  actualOutcome    String?  // BOOKED | LEFT_ON_READ | etc (filled later)
+  features         Json     // Feature values used for this prediction
+  predictedAt      DateTime @default(now())
+
+  // Relations
+  model PredictionModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, conversationId])
+  @@index([modelId, predictedAt])
+}
