@@ -15,6 +15,7 @@ import {
   getQualityScoringPrompt
 } from '@/lib/ai-prompts';
 import { getCredentials } from '@/lib/credential-store';
+import { resolveMessageVariant } from '@/lib/ab-testing';
 import prisma from '@/lib/prisma';
 
 // ─── Types ──────────────────────────────────────────────
@@ -31,6 +32,7 @@ export interface Message {
 }
 
 export interface LeadContext {
+  leadId?: string;
   leadName: string;
   handle: string;
   platform: Platform;
@@ -51,6 +53,8 @@ export interface AIReplyResult {
   stageConfidence: number | null; // 0-1 confidence in stage classification
   sentimentScore: number | null; // -1 to 1 lead sentiment
   systemPromptVersion: string | null; // Semver hash of rendered prompt
+  abTestId: string | null; // A/B test ID if variant was applied
+  abTestVariant: string | null; // "A" or "B" if variant was applied
 }
 
 /** Structured response the AI returns per the master template */
@@ -439,10 +443,24 @@ export async function generateReply(
   // Parse structured response
   const structured = parseStructuredResponse(rawReply);
 
+  // ── Phase 3: A/B Variant Resolution ───────────────────
+  // Check if there's an active A/B test for this conversation stage.
+  // If so, replace the AI-generated message with the test variant.
+  const variantResult = await resolveMessageVariant(
+    accountId,
+    leadContext.leadId || '',
+    structured.stage || '',
+    structured.message
+  );
+
+  const finalMessage = variantResult.message;
+  const abTestId = variantResult.testId;
+  const abTestVariant = variantResult.variant;
+
   // Use per-account delay settings
   const suggestedDelay = calculateSuggestedDelay(
     conversationHistory,
-    structured.message,
+    finalMessage,
     delayMinMs,
     delayMaxMs
   );
@@ -452,7 +470,7 @@ export async function generateReply(
     voiceNotesEnabled && structured.format === 'voice_note';
 
   return {
-    reply: structured.message,
+    reply: finalMessage,
     shouldVoiceNote,
     qualityScore,
     suggestedDelay,
@@ -461,7 +479,9 @@ export async function generateReply(
     stage: structured.stage || null,
     stageConfidence: structured.stage_confidence,
     sentimentScore: structured.sentiment_score,
-    systemPromptVersion: promptVersion
+    systemPromptVersion: promptVersion,
+    abTestId,
+    abTestVariant
   };
 }
 

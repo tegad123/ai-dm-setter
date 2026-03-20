@@ -282,6 +282,7 @@ model Lead {
   teamNotes            TeamNote[]
   contentAttribution   ContentAttribution?  @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
   crmOutcomes          CrmOutcome[]
+  abTestAssignments    ABTestAssignment[]
 
   @@index([accountId, status])
   @@index([accountId, platform])
@@ -455,12 +456,18 @@ model ContentAttribution {
 // ─── Self-Optimizing Layer Models ─────────────────────
 
 model PromptVersion {
-  id          String   @id @default(cuid())
-  accountId   String
-  version     String   // Semver: "1.0.0", "1.1.0", etc.
-  promptHash  String   // SHA-256 hash of rendered prompt (minus lead-specific vars)
-  description String?  // What changed from previous version
-  createdAt   DateTime @default(now())
+  id              String   @id @default(cuid())
+  accountId       String
+  version         String   // Semver: "1.0.0", "1.1.0", etc.
+  promptHash      String   // SHA-256 hash of rendered prompt (minus lead-specific vars)
+  description     String?  // What changed from previous version
+  changeType      String?  // "MAJOR" | "MINOR" | "PATCH"
+  appliedBy       String?  // "ADMIN" | "STAGING_AUTO"
+  optimizationId  String?  // Links to OptimizationSuggestion that triggered this
+  promptContent   String?  @db.Text // Full prompt snapshot for rollback
+  performanceBefore Json?  // {bookingRate, responseRate, avgTimeToBook}
+  performanceAfter  Json?  // Populated after sufficient post-change data
+  createdAt       DateTime @default(now())
 
   @@unique([accountId, version])
   @@index([accountId, createdAt])
@@ -483,4 +490,86 @@ model CrmOutcome {
 
   @@index([accountId, leadId])
   @@index([accountId, receivedAt])
+}
+
+// ─── A/B Testing + Optimization Models ──────────────
+
+enum ABTestStatus {
+  RUNNING
+  COMPLETED
+  PAUSED
+}
+
+enum OptimizationStatus {
+  PENDING_APPROVAL
+  APPROVED
+  STAGING_TEST
+  APPLIED
+  REJECTED
+  MODIFIED
+  REVERTED
+}
+
+enum OptimizationType {
+  SYSTEM_PROMPT_UPDATE
+  MESSAGE_VARIATION
+  FLOW_ADJUSTMENT
+}
+
+model ABTest {
+  id               String       @id @default(cuid())
+  accountId        String
+  testName         String
+  stage            String       // Conversation stage this test applies to
+  variantA         String       @db.Text
+  variantB         String       @db.Text
+  metric           String       @default("response_rate") // Primary metric to optimize
+  sampleSizeTarget Int          @default(50) // Per variant
+  countA           Int          @default(0)
+  countB           Int          @default(0)
+  resultsA         Json?        // {responseRate, bookingRate, avgMessagesToBook}
+  resultsB         Json?        // {responseRate, bookingRate, avgMessagesToBook}
+  winner           String?      // "A" | "B" | "INCONCLUSIVE"
+  status           ABTestStatus @default(RUNNING)
+  createdAt        DateTime     @default(now())
+  completedAt      DateTime?
+
+  // Relations
+  assignments ABTestAssignment[]
+
+  @@index([accountId, status])
+}
+
+model ABTestAssignment {
+  id         String   @id @default(cuid())
+  testId     String
+  leadId     String
+  variant    String   // "A" | "B"
+  assignedAt DateTime @default(now())
+
+  // Relations
+  test ABTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  lead Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, leadId])
+  @@index([testId, variant])
+}
+
+model OptimizationSuggestion {
+  id                 String             @id @default(cuid())
+  accountId          String
+  type               OptimizationType
+  reasoning          String             @db.Text
+  currentVersion     String?            // Current prompt version
+  proposedVersion    String?            // Proposed new version
+  proposedChanges    String?            @db.Text // Description of what to change
+  supportingData     Json?              // {sampleSize, confidence, expectedImprovement, segmentBreakdown}
+  stagingTestResults Json?              // {conversationsTested, regressionsDetected, comparisonSummary}
+  status             OptimizationStatus @default(PENDING_APPROVAL)
+  adminNotes         String?            @db.Text
+  createdAt          DateTime           @default(now())
+  resolvedAt         DateTime?
+
+  @@index([accountId, status])
+  @@index([accountId, createdAt])
 }
