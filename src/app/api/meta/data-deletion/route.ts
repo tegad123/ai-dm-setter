@@ -80,9 +80,7 @@ export async function POST(request: NextRequest) {
       where: { platformUserId: userId },
       data: {
         name: '[deleted]',
-        platformUserId: `deleted_${userId.slice(-6)}`,
-        email: null,
-        phone: null
+        platformUserId: `deleted_${userId.slice(-6)}`
       }
     });
 
