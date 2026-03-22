@@ -5,6 +5,8 @@ import {
   broadcastConversationUpdate,
   broadcastAIStatusChange
 } from '@/lib/realtime';
+import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
+import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
@@ -77,13 +79,19 @@ export async function POST(
     const body = await request.json();
     const {
       content,
-      sender = 'HUMAN',
+      sender: rawSender = 'HUMAN',
       stage,
       stageConfidence,
       sentimentScore,
       systemPromptVersion,
       followUpAttemptNumber
     } = body;
+
+    // Normalize sender to match Prisma enum (HUMAN, AI, LEAD)
+    const sender = (rawSender as string).toUpperCase() as
+      | 'HUMAN'
+      | 'AI'
+      | 'LEAD';
 
     if (!content) {
       return NextResponse.json(
@@ -158,6 +166,46 @@ export async function POST(
 
     if (sender === 'HUMAN') {
       broadcastAIStatusChange({ conversationId: id, aiActive: false });
+    }
+
+    // Fire-and-forget: send the message to the platform (Facebook/Instagram)
+    // Don't block the API response — deliver in background
+    if (sender === 'HUMAN' || sender === 'AI') {
+      prisma.lead
+        .findUnique({
+          where: { id: conversation.leadId },
+          select: { platformUserId: true, platform: true, accountId: true }
+        })
+        .then(async (lead) => {
+          if (!lead?.platformUserId) return;
+          try {
+            if (lead.platform === 'FACEBOOK') {
+              await sendFacebookMessage(
+                lead.accountId,
+                lead.platformUserId,
+                content
+              );
+              console.log(
+                `[send] Facebook message sent to ${lead.platformUserId}`
+              );
+            } else if (lead.platform === 'INSTAGRAM') {
+              await sendInstagramDM(
+                lead.accountId,
+                lead.platformUserId,
+                content
+              );
+              console.log(`[send] Instagram DM sent to ${lead.platformUserId}`);
+            }
+          } catch (sendErr) {
+            console.error(
+              '[send] Failed to deliver message to platform:',
+              sendErr
+            );
+          }
+        })
+        .catch((err) => {
+          console.error('[send] Failed to lookup lead:', err);
+        });
     }
 
     return NextResponse.json(message, { status: 201 });

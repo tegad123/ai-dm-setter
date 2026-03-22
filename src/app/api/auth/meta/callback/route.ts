@@ -131,7 +131,26 @@ export async function GET(req: NextRequest) {
     const pageName = page.name;
     const igAccountId = page.instagram_business_account?.id || null;
 
-    // Step 4: Save to credential store
+    // Step 4a: If Instagram is connected, fetch the IG username
+    let igUsername: string | null = null;
+    if (igAccountId) {
+      try {
+        const igRes = await fetch(
+          `${GRAPH_API}/${igAccountId}?fields=username,name,profile_picture_url&access_token=${pageAccessToken}`
+        );
+        if (igRes.ok) {
+          const igData = await igRes.json();
+          igUsername = igData.username || null;
+          console.log(
+            `[meta-oauth] Instagram account: @${igUsername} (${igAccountId})`
+          );
+        }
+      } catch (err) {
+        console.warn('[meta-oauth] Failed to fetch IG username:', err);
+      }
+    }
+
+    // Step 4b: Save to credential store
     await saveCredentials(
       state.accountId,
       'META',
@@ -140,6 +159,7 @@ export async function GET(req: NextRequest) {
         pageId,
         pageName,
         ...(igAccountId ? { instagramAccountId: igAccountId } : {}),
+        ...(igUsername ? { instagramUsername: igUsername } : {}),
         platform: igAccountId ? 'INSTAGRAM_AND_FACEBOOK' : 'FACEBOOK'
       }
     );

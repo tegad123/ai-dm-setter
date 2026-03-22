@@ -1,15 +1,28 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 
-// Simple middleware — will add JWT auth protection in Phase 2
-export default function middleware(req: NextRequest) {
-  // For now, allow all requests through
-  // TODO: Add JWT token verification for /dashboard routes
-  return NextResponse.next();
-}
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/auth(.*)',
+  '/privacy',
+  '/terms',
+  '/api/webhooks(.*)',
+  '/api/auth/meta(.*)',
+  '/api/auth/instagram(.*)',
+  '/api/meta/(.*)',
+  '/api/realtime(.*)'
+]);
+
+export default clerkMiddleware(async (auth, request) => {
+  if (!isPublicRoute(request)) {
+    await auth.protect();
+  }
+});
 
 export const config = {
   matcher: [
+    // Skip Next.js internals and all static files
     '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    // Always run for API routes
     '/(api|trpc)(.*)'
   ]
 };

@@ -25,6 +25,7 @@ export interface Conversation {
   messages: Message[];
   tags?: ConversationTag[];
   priorityScore?: number;
+  qualityScore?: number;
 }
 
 export const conversations: Conversation[] = [

@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Upload, FileText, Sparkles } from 'lucide-react';
 import { VoiceProfileDashboard } from '@/features/voice-profile/components/profile-dashboard';
 
 interface PersonaData {
@@ -84,6 +84,8 @@ export default function PersonaSettingsPage() {
   const [persona, setPersona] = useState<PersonaData>(defaultPersona);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -180,6 +182,125 @@ export default function PersonaSettingsPage() {
     }
   }
 
+  async function handleDocumentUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setExtracting(true);
+    setUploadedFileName(file.name);
+
+    try {
+      // Read the file content
+      let documentText = '';
+
+      if (file.type === 'application/pdf') {
+        // For PDFs, we'll read as array buffer and send to the API
+        // The API can handle raw text extraction
+        toast.info('Reading PDF...');
+        const text = await file.text();
+        documentText = text;
+      } else {
+        // For .txt, .md, .doc, .docx — read as text
+        documentText = await file.text();
+      }
+
+      if (!documentText.trim()) {
+        toast.error('Could not read file content. Try a .txt or .md file.');
+        return;
+      }
+
+      toast.info('AI is analyzing your document...', { duration: 10000 });
+
+      const res = await apiFetch<{ extracted: any }>(
+        '/settings/persona/extract',
+        {
+          method: 'POST',
+          body: JSON.stringify({ documentText: documentText.slice(0, 50000) }) // Limit to 50k chars
+        }
+      );
+
+      const data = res.extracted;
+      if (data) {
+        setPersona({
+          fullName: data.fullName || persona.fullName,
+          companyName: data.companyName || persona.companyName,
+          freeValueLink: data.freeValueLink || persona.freeValueLink,
+          objectionHandling: {
+            trust:
+              data.objectionHandling?.trust || persona.objectionHandling.trust,
+            priorFailure:
+              data.objectionHandling?.priorFailure ||
+              persona.objectionHandling.priorFailure,
+            money:
+              data.objectionHandling?.money || persona.objectionHandling.money,
+            time: data.objectionHandling?.time || persona.objectionHandling.time
+          },
+          promptConfig: {
+            whatYouSell:
+              data.promptConfig?.whatYouSell ||
+              persona.promptConfig.whatYouSell,
+            adminBio:
+              data.promptConfig?.adminBio || persona.promptConfig.adminBio,
+            toneDescription:
+              data.promptConfig?.toneDescription ||
+              persona.promptConfig.toneDescription,
+            toneExamplesGood:
+              data.promptConfig?.toneExamplesGood ||
+              persona.promptConfig.toneExamplesGood,
+            toneExamplesBad:
+              data.promptConfig?.toneExamplesBad ||
+              persona.promptConfig.toneExamplesBad,
+            openingMessageStyle:
+              data.promptConfig?.openingMessageStyle ||
+              persona.promptConfig.openingMessageStyle,
+            qualificationQuestions:
+              data.promptConfig?.qualificationQuestions ||
+              persona.promptConfig.qualificationQuestions,
+            disqualificationCriteria:
+              data.promptConfig?.disqualificationCriteria ||
+              persona.promptConfig.disqualificationCriteria,
+            disqualificationMessage:
+              data.promptConfig?.disqualificationMessage ||
+              persona.promptConfig.disqualificationMessage,
+            freeValueMessage:
+              data.promptConfig?.freeValueMessage ||
+              persona.promptConfig.freeValueMessage,
+            freeValueFollowup:
+              data.promptConfig?.freeValueFollowup ||
+              persona.promptConfig.freeValueFollowup,
+            callPitchMessage:
+              data.promptConfig?.callPitchMessage ||
+              persona.promptConfig.callPitchMessage,
+            bookingConfirmationMessage:
+              data.promptConfig?.bookingConfirmationMessage ||
+              persona.promptConfig.bookingConfirmationMessage,
+            followupDay1:
+              data.promptConfig?.followupDay1 ||
+              persona.promptConfig.followupDay1,
+            followupDay3:
+              data.promptConfig?.followupDay3 ||
+              persona.promptConfig.followupDay3,
+            followupDay7:
+              data.promptConfig?.followupDay7 ||
+              persona.promptConfig.followupDay7,
+            customRules:
+              data.promptConfig?.customRules || persona.promptConfig.customRules
+          }
+        });
+        toast.success(
+          `Persona auto-filled from "${file.name}"! Review the fields and click Save.`
+        );
+      }
+    } catch (err) {
+      console.error('Document extraction error:', err);
+      toast.error('Failed to extract persona from document');
+    } finally {
+      setExtracting(false);
+      // Reset file input
+      e.target.value = '';
+    }
+  }
+
   if (loading) {
     return (
       <div className='flex flex-1 items-center justify-center p-12'>
@@ -202,6 +323,62 @@ export default function PersonaSettingsPage() {
           Save Changes
         </Button>
       </div>
+
+      {/* Document Upload — Auto-fill */}
+      <Card className='border-2 border-dashed border-blue-200 bg-blue-50/30 dark:border-blue-800 dark:bg-blue-950/20'>
+        <CardContent className='flex flex-col items-center gap-4 py-8 sm:flex-row sm:justify-between'>
+          <div className='flex items-center gap-3'>
+            <div className='flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900'>
+              <Sparkles className='h-6 w-6 text-blue-600 dark:text-blue-400' />
+            </div>
+            <div>
+              <h3 className='font-semibold'>Auto-Fill from Document</h3>
+              <p className='text-muted-foreground text-sm'>
+                Upload your setter playbook, sales script, or brand guide — AI
+                will extract everything and fill all fields automatically.
+              </p>
+            </div>
+          </div>
+          <div className='flex items-center gap-3'>
+            {uploadedFileName && !extracting && (
+              <span className='text-muted-foreground flex items-center gap-1 text-sm'>
+                <FileText className='h-4 w-4' />
+                {uploadedFileName}
+              </span>
+            )}
+            <label htmlFor='doc-upload'>
+              <input
+                id='doc-upload'
+                type='file'
+                accept='.txt,.md,.doc,.docx,.pdf'
+                className='hidden'
+                onChange={handleDocumentUpload}
+                disabled={extracting}
+              />
+              <Button
+                variant='default'
+                disabled={extracting}
+                className='cursor-pointer'
+                asChild
+              >
+                <span>
+                  {extracting ? (
+                    <>
+                      <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className='mr-2 h-4 w-4' />
+                      Upload Document
+                    </>
+                  )}
+                </span>
+              </Button>
+            </label>
+          </div>
+        </CardContent>
+      </Card>
 
       <Separator />
 

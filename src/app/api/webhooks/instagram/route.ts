@@ -39,18 +39,27 @@ export async function POST(request: NextRequest) {
 
   // Verify the webhook signature
   if (!verifyWebhookSignature(rawBody, signature)) {
-    console.warn('[instagram-webhook] Invalid signature');
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    console.warn(
+      '[instagram-webhook] Invalid signature, raw sig:',
+      signature?.slice(0, 20)
+    );
+    if (process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+    console.warn('[instagram-webhook] Skipping signature check in dev mode');
   }
 
   // Return 200 immediately — Meta requires a fast response.
   // Process events asynchronously.
   const payload = JSON.parse(rawBody);
 
-  // Fire-and-forget processing so we respond within Meta's timeout
-  processInstagramEvents(payload).catch((err) => {
+  // Process synchronously for now (dev debugging) — switch to fire-and-forget in prod
+  try {
+    await processInstagramEvents(payload);
+    console.log('[instagram-webhook] Processing complete');
+  } catch (err) {
     console.error('[instagram-webhook] Event processing error:', err);
-  });
+  }
 
   return NextResponse.json({ received: true }, { status: 200 });
 }
@@ -62,26 +71,48 @@ export async function POST(request: NextRequest) {
 async function processInstagramEvents(payload: any): Promise<void> {
   if (payload.object !== 'instagram') return;
 
-  // Fetch all active META integration credentials once for account lookup
-  const metaCredentials = await prisma.integrationCredential.findMany({
-    where: { provider: 'META', isActive: true }
+  // Fetch all active META and INSTAGRAM integration credentials for account lookup
+  const allCredentials = await prisma.integrationCredential.findMany({
+    where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
   });
 
   for (const entry of payload.entry ?? []) {
-    // ── Resolve accountId from the page ID in the webhook entry ────────
-    const pageId: string = entry.id ?? '';
-    const matchedCred = metaCredentials.find(
-      (cred) => (cred.metadata as any)?.pageId === pageId
-    );
+    // ── Resolve accountId from the entry ID in the webhook ────────
+    const entryId: string = entry.id ?? '';
+    // Match by META pageId OR INSTAGRAM igUserId
+    const matchedCred = allCredentials.find((cred) => {
+      const meta = cred.metadata as any;
+      return meta?.pageId === entryId || meta?.igUserId === entryId;
+    });
 
-    if (!matchedCred) {
-      console.warn(
-        `[instagram-webhook] No IntegrationCredential found for pageId=${pageId}, skipping entry`
-      );
-      continue;
+    let accountId: string;
+
+    if (matchedCred) {
+      accountId = matchedCred.accountId;
+    } else {
+      // Fallback: match via env var INSTAGRAM_PAGE_ID or FACEBOOK_PAGE_ID → use first account
+      const envPageId =
+        process.env.INSTAGRAM_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
+      if (envPageId && envPageId === entryId) {
+        const firstAccount = await prisma.account.findFirst({
+          orderBy: { createdAt: 'asc' },
+          select: { id: true }
+        });
+        if (!firstAccount) {
+          console.warn(`[instagram-webhook] No accounts in DB, skipping entry`);
+          continue;
+        }
+        accountId = firstAccount.id;
+        console.log(
+          `[instagram-webhook] Matched entryId=${entryId} via env var → account=${accountId}`
+        );
+      } else {
+        console.warn(
+          `[instagram-webhook] No IntegrationCredential found for entryId=${entryId}, skipping entry`
+        );
+        continue;
+      }
     }
-
-    const accountId = matchedCred.accountId;
 
     // ── Handle messaging events (new DM received) ──────────────────────
     for (const event of entry.messaging ?? []) {
@@ -116,8 +147,14 @@ async function processInstagramEvents(payload: any): Promise<void> {
           triggerType: 'DM'
         });
 
-        // If AI is active, schedule a reply
-        await scheduleAIReply(result.conversationId);
+        // Only schedule AI reply if AI is active on this conversation
+        const convo = await prisma.conversation.findUnique({
+          where: { id: result.conversationId },
+          select: { aiActive: true }
+        });
+        if (convo?.aiActive) {
+          await scheduleAIReply(result.conversationId, accountId);
+        }
       } catch (err) {
         console.error(
           `[instagram-webhook] Failed to process DM from ${senderId}:`,

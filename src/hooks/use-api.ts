@@ -46,17 +46,19 @@ function useApiFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const fetch = useCallback(() => {
+  const fetch = useCallback((silent = false) => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
 
     fetcher()
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((err) => {
-        if (!cancelled)
+        if (!cancelled && !silent)
           setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
@@ -70,12 +72,13 @@ function useApiFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []) {
   }, deps);
 
   useEffect(() => {
-    const cleanup = fetch();
+    const cleanup = fetch(false);
     return cleanup;
   }, [fetch]);
 
+  // Silent refetch — updates data without showing loading state
   const refetch = useCallback(() => {
-    fetch();
+    fetch(true);
   }, [fetch]);
 
   return { data, loading, error, refetch };

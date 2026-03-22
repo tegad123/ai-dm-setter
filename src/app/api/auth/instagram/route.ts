@@ -2,19 +2,19 @@ import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
-// GET — Initiate Meta OAuth flow
-// Redirects the user to Facebook OAuth dialog using the platform's App ID.
-// The user grants page permissions so we can manage their IG/FB DMs.
+// GET — Initiate Instagram OAuth flow (separate from Facebook)
+// Uses Instagram API with Instagram Login
+// https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
 
-    const appId = process.env.META_APP_ID;
+    const appId = process.env.INSTAGRAM_APP_ID;
     if (!appId) {
       return NextResponse.json(
-        { error: 'META_APP_ID is not configured on the platform' },
+        { error: 'INSTAGRAM_APP_ID is not configured' },
         { status: 500 }
       );
     }
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL ||
       process.env.NEXTAUTH_URL ||
       'http://localhost:3000';
-    const redirectUri = `${baseUrl}/api/auth/meta/callback`;
+    const redirectUri = `${baseUrl}/api/auth/instagram/callback`;
 
     // Encode accountId in state so we can associate the token after callback
     const state = Buffer.from(
@@ -31,18 +31,20 @@ export async function GET(req: NextRequest) {
     ).toString('base64url');
 
     const scopes = [
-      'pages_messaging',
-      'pages_read_engagement',
-      'pages_manage_metadata',
-      'business_management'
+      'instagram_business_basic',
+      'instagram_business_manage_messages',
+      'instagram_business_manage_comments'
     ].join(',');
 
-    const oauthUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');
+    // Instagram's own OAuth dialog (NOT facebook.com)
+    const oauthUrl = new URL('https://www.instagram.com/oauth/authorize');
     oauthUrl.searchParams.set('client_id', appId);
     oauthUrl.searchParams.set('redirect_uri', redirectUri);
     oauthUrl.searchParams.set('state', state);
     oauthUrl.searchParams.set('scope', scopes);
     oauthUrl.searchParams.set('response_type', 'code');
+    oauthUrl.searchParams.set('enable_fb_login', '0');
+    oauthUrl.searchParams.set('force_authentication', '1');
 
     return NextResponse.redirect(oauthUrl.toString());
   } catch (error) {
@@ -52,9 +54,9 @@ export async function GET(req: NextRequest) {
         { status: error.status }
       );
     }
-    console.error('GET /api/auth/meta error:', error);
+    console.error('GET /api/auth/instagram error:', error);
     return NextResponse.json(
-      { error: 'Failed to initiate Meta OAuth' },
+      { error: 'Failed to initiate Instagram OAuth' },
       { status: 500 }
     );
   }

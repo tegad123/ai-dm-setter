@@ -6,6 +6,7 @@ const PROVIDERS = [
   'OPENAI',
   'ANTHROPIC',
   'META',
+  'INSTAGRAM',
   'ELEVENLABS',
   'LEADCONNECTOR',
   'CALENDLY'
@@ -20,7 +21,8 @@ export async function GET(req: NextRequest) {
       select: {
         provider: true,
         isActive: true,
-        verifiedAt: true
+        verifiedAt: true,
+        metadata: true
       }
     });
 
@@ -30,7 +32,8 @@ export async function GET(req: NextRequest) {
       return {
         provider,
         isConnected: cred ? cred.isActive : false,
-        verifiedAt: cred?.verifiedAt?.toISOString() || null
+        verifiedAt: cred?.verifiedAt?.toISOString() || null,
+        metadata: cred?.metadata ?? null
       };
     });
 

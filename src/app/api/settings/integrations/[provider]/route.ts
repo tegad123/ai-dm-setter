@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PROVIDERS = [
   'META',
+  'INSTAGRAM',
   'ELEVENLABS',
   'LEADCONNECTOR',
   'OPENAI',

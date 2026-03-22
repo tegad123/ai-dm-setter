@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
             handle: true,
             platform: true,
             status: true,
+            qualityScore: true,
             tags: {
               include: {
                 tag: { select: { id: true, name: true, color: true } }
@@ -77,6 +78,7 @@ export async function GET(request: NextRequest) {
       lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
       unreadCount: c.unreadCount,
       priorityScore: c.priorityScore,
+      qualityScore: c.lead.qualityScore ?? 0,
       tags: c.lead.tags.map((lt) => ({
         id: lt.tag.id,
         name: lt.tag.name,

@@ -25,6 +25,7 @@ type Provider =
   | 'OPENAI'
   | 'ANTHROPIC'
   | 'META'
+  | 'INSTAGRAM'
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'CALENDLY';
@@ -34,6 +35,7 @@ interface IntegrationStatus {
   provider: Provider;
   isConnected: boolean;
   verifiedAt: string | null;
+  metadata: Record<string, any> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,7 @@ export default function IntegrationsPage() {
     OPENAI: false,
     ANTHROPIC: false,
     META: false,
+    INSTAGRAM: false,
     ELEVENLABS: false,
     LEADCONNECTOR: false,
     CALENDLY: false
@@ -98,8 +101,17 @@ export default function IntegrationsPage() {
   const [calSaving, setCalSaving] = useState(false);
   const [calSavedKey, setCalSavedKey] = useState('');
 
-  // Meta
+  // Meta / Facebook
   const [metaDisconnecting, setMetaDisconnecting] = useState(false);
+  const [metaMetadata, setMetaMetadata] = useState<Record<string, any> | null>(
+    null
+  );
+
+  // Instagram
+  const [igDisconnecting, setIgDisconnecting] = useState(false);
+  const [igMetadata, setIgMetadata] = useState<Record<string, any> | null>(
+    null
+  );
 
   // Loading
   const [loading, setLoading] = useState(true);
@@ -116,6 +128,12 @@ export default function IntegrationsPage() {
       const map: Record<string, boolean> = {};
       for (const i of data.integrations) {
         map[i.provider] = i.isConnected;
+        if (i.provider === 'META' && i.metadata) {
+          setMetaMetadata(i.metadata as any);
+        }
+        if (i.provider === 'INSTAGRAM' && i.metadata) {
+          setIgMetadata(i.metadata as any);
+        }
       }
       setStatuses((prev) => ({ ...prev, ...map }));
 
@@ -305,6 +323,8 @@ export default function IntegrationsPage() {
       if (provider === 'ELEVENLABS') setElSavedKey('');
       if (provider === 'LEADCONNECTOR') setLcSavedKey('');
       if (provider === 'CALENDLY') setCalSavedKey('');
+      if (provider === 'META') setMetaMetadata(null);
+      if (provider === 'INSTAGRAM') setIgMetadata(null);
     } catch {
       toast.error('Failed to disconnect');
     }
@@ -636,30 +656,48 @@ export default function IntegrationsPage() {
         </Card>
 
         {/* ---------------------------------------------------------------- */}
-        {/* Card 5: Meta (Instagram & Facebook) */}
+        {/* Card 5: Facebook Messenger */}
         {/* ---------------------------------------------------------------- */}
         <Card>
           <CardHeader>
             <div className='flex items-center justify-between'>
-              <div>
-                <CardTitle>Meta (Instagram &amp; Facebook)</CardTitle>
-                <CardDescription>
-                  Connect your Facebook/Instagram pages to send and receive DMs
-                </CardDescription>
+              <div className='flex items-center gap-3'>
+                <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-600'>
+                  <svg
+                    viewBox='0 0 24 24'
+                    className='h-5 w-5 text-white'
+                    fill='currentColor'
+                  >
+                    <path d='M12 2C6.36 2 2 6.13 2 11.7c0 2.91 1.2 5.42 3.15 7.2V22l2.93-1.61c.83.23 1.71.35 2.63.35h.29c5.45 0 9.85-3.96 9.85-8.84v-.2C20.85 6.13 17.64 2 12 2zm1.07 11.93l-2.54-2.71-4.94 2.71 5.43-5.77 2.6 2.71 4.88-2.71-5.43 5.77z' />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle>Facebook Messenger</CardTitle>
+                  <CardDescription>
+                    Receive and reply to Facebook Page DMs automatically
+                  </CardDescription>
+                </div>
               </div>
               <StatusBadge connected={statuses.META} />
             </div>
           </CardHeader>
           <CardContent>
             {statuses.META ? (
-              <p className='text-muted-foreground text-sm'>
-                Your Meta account is connected. You can disconnect below if
-                needed.
-              </p>
+              <div className='space-y-1'>
+                <p className='text-sm font-semibold'>
+                  {metaMetadata?.pageName || 'Facebook Page'}
+                </p>
+                <p className='text-muted-foreground text-xs'>
+                  Page ID: {metaMetadata?.pageId || 'Unknown'}
+                </p>
+                <p className='text-muted-foreground mt-2 text-sm'>
+                  Receiving and sending Messenger DMs for this page.
+                </p>
+              </div>
             ) : (
               <p className='text-muted-foreground text-sm'>
-                Click the button below to authenticate with Facebook and connect
-                your pages.
+                Connect your Facebook Page to automatically receive and respond
+                to Messenger DMs with AI.
               </p>
             )}
           </CardContent>
@@ -682,7 +720,82 @@ export default function IntegrationsPage() {
                   window.location.href = '/api/auth/meta';
                 }}
               >
-                Connect with Facebook
+                Connect Facebook Page
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Card 6: Instagram DMs */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-3'>
+                <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400'>
+                  <svg
+                    viewBox='0 0 24 24'
+                    className='h-5 w-5 text-white'
+                    fill='currentColor'
+                  >
+                    <path d='M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z' />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle>Instagram DMs</CardTitle>
+                  <CardDescription>
+                    Receive and reply to Instagram Direct Messages automatically
+                  </CardDescription>
+                </div>
+              </div>
+              <StatusBadge connected={statuses.INSTAGRAM} />
+            </div>
+          </CardHeader>
+          <CardContent>
+            {statuses.INSTAGRAM ? (
+              <div className='space-y-1'>
+                <p className='text-sm font-semibold'>
+                  {igMetadata?.username
+                    ? `@${igMetadata.username}`
+                    : 'Instagram Account'}
+                </p>
+                {igMetadata?.name && (
+                  <p className='text-muted-foreground text-xs'>
+                    {igMetadata.name}
+                  </p>
+                )}
+                <p className='text-muted-foreground mt-2 text-sm'>
+                  Receiving and sending Instagram DMs for this account.
+                </p>
+              </div>
+            ) : (
+              <p className='text-muted-foreground text-sm'>
+                Log in with your Instagram Business or Creator account to
+                automatically receive and respond to DMs with AI.
+              </p>
+            )}
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            {statuses.INSTAGRAM ? (
+              <Button
+                variant='outline'
+                disabled={igDisconnecting}
+                onClick={async () => {
+                  setIgDisconnecting(true);
+                  await disconnectProvider('INSTAGRAM');
+                  setIgDisconnecting(false);
+                }}
+              >
+                {igDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  window.location.href = '/api/auth/instagram';
+                }}
+              >
+                Connect Instagram
               </Button>
             )}
           </CardFooter>

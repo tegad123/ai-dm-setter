@@ -39,17 +39,31 @@ export async function POST(request: NextRequest) {
 
   // Verify the webhook signature
   if (!verifyWebhookSignature(rawBody, signature)) {
-    console.warn('[facebook-webhook] Invalid signature');
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    console.warn(
+      '[facebook-webhook] Invalid signature, raw sig:',
+      signature?.slice(0, 20)
+    );
+    // In dev mode, continue processing even with invalid signature
+    if (process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+    console.warn('[facebook-webhook] Skipping signature check in dev mode');
   }
 
   // Return 200 immediately — Meta requires a fast response.
   const payload = JSON.parse(rawBody);
+  console.log(
+    '[facebook-webhook] Received payload:',
+    JSON.stringify(payload).slice(0, 500)
+  );
 
-  // Fire-and-forget processing so we respond within Meta's timeout
-  processFacebookEvents(payload).catch((err) => {
+  // Process synchronously for now (dev debugging) — switch to fire-and-forget in prod
+  try {
+    await processFacebookEvents(payload);
+    console.log('[facebook-webhook] Processing complete');
+  } catch (err) {
     console.error('[facebook-webhook] Event processing error:', err);
-  });
+  }
 
   return NextResponse.json({ received: true }, { status: 200 });
 }
@@ -73,14 +87,33 @@ async function processFacebookEvents(payload: any): Promise<void> {
       (cred) => (cred.metadata as any)?.pageId === pageId
     );
 
-    if (!matchedCred) {
-      console.warn(
-        `[facebook-webhook] No IntegrationCredential found for pageId=${pageId}, skipping entry`
-      );
-      continue;
-    }
+    let accountId: string;
 
-    const accountId = matchedCred.accountId;
+    if (matchedCred) {
+      accountId = matchedCred.accountId;
+    } else {
+      // Fallback: match via env var FACEBOOK_PAGE_ID → use first account in DB
+      const envPageId = process.env.FACEBOOK_PAGE_ID;
+      if (envPageId && envPageId === pageId) {
+        const firstAccount = await prisma.account.findFirst({
+          orderBy: { createdAt: 'asc' },
+          select: { id: true }
+        });
+        if (!firstAccount) {
+          console.warn(`[facebook-webhook] No accounts in DB, skipping entry`);
+          continue;
+        }
+        accountId = firstAccount.id;
+        console.log(
+          `[facebook-webhook] Matched pageId=${pageId} via env var → account=${accountId}`
+        );
+      } else {
+        console.warn(
+          `[facebook-webhook] No IntegrationCredential found for pageId=${pageId}, skipping entry`
+        );
+        continue;
+      }
+    }
 
     // ── Handle messaging events (new Messenger DM received) ────────────
     for (const event of entry.messaging ?? []) {
@@ -113,8 +146,14 @@ async function processFacebookEvents(payload: any): Promise<void> {
           triggerType: 'DM'
         });
 
-        // If AI is active, schedule a reply
-        await scheduleAIReply(result.conversationId);
+        // Only schedule AI reply if AI is active on this conversation
+        const convo = await prisma.conversation.findUnique({
+          where: { id: result.conversationId },
+          select: { aiActive: true }
+        });
+        if (convo?.aiActive) {
+          await scheduleAIReply(result.conversationId, accountId);
+        }
       } catch (err) {
         console.error(
           `[facebook-webhook] Failed to process DM from ${senderId}:`,

@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { PlatformIcon } from '@/features/shared/platform-icon';
+import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
 import { IconSearch, IconFlame, IconMail } from '@tabler/icons-react';
 import { useState } from 'react';
@@ -115,6 +116,21 @@ export function ConversationList({
                       <span className='text-sm font-medium'>
                         {convo.leadName}
                       </span>
+                      {/* Quality score pill */}
+                      {(convo.qualityScore ?? 0) > 0 && (
+                        <span
+                          className={cn(
+                            'rounded-full px-1.5 py-0.5 text-[9px] font-bold tabular-nums',
+                            (convo.qualityScore ?? 0) >= 70
+                              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                              : (convo.qualityScore ?? 0) >= 40
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                                : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                          )}
+                        >
+                          {convo.qualityScore}%
+                        </span>
+                      )}
                       {/* Priority indicator */}
                       {priorityScore >= 80 && (
                         <IconFlame className='h-3.5 w-3.5 text-orange-500' />
@@ -141,6 +157,23 @@ export function ConversationList({
                       </span>
                     )}
                   </div>
+                  {/* AI-generated tags */}
+                  {convo.tags && convo.tags.length > 0 && (
+                    <div className='mt-1 flex flex-wrap gap-0.5'>
+                      {convo.tags.slice(0, 3).map((tag) => (
+                        <TagBadge
+                          key={tag.id}
+                          name={tag.name}
+                          color={tag.color}
+                        />
+                      ))}
+                      {convo.tags.length > 3 && (
+                        <span className='text-muted-foreground text-[9px]'>
+                          +{convo.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <p className='text-muted-foreground mt-1 truncate text-xs'>
                     {convo.lastMessage}
                   </p>

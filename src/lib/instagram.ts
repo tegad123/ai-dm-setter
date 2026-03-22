@@ -7,6 +7,7 @@ import prisma from '@/lib/prisma';
 // ---------------------------------------------------------------------------
 
 const GRAPH_API_BASE = 'https://graph.facebook.com/v21.0';
+const IG_API_BASE = 'https://graph.instagram.com/v21.0';
 
 function getAppSecret(): string {
   const secret = process.env.META_APP_SECRET;
@@ -15,36 +16,86 @@ function getAppSecret(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve per-account Meta credentials (Page Access Token + Page ID)
-// Falls back to env vars for backwards compatibility / dev usage
+// Resolve per-account Instagram credentials
+// Priority: 1) INSTAGRAM provider  2) META provider  3) env vars
 // ---------------------------------------------------------------------------
 
-async function resolveMetaCredentials(
+async function resolveInstagramCredentials(
   accountId: string
-): Promise<{ accessToken: string; pageId: string }> {
-  // Try credential store first
-  const cred = await prisma.integrationCredential.findFirst({
+): Promise<{
+  accessToken: string;
+  igUserId: string | null;
+  source: 'INSTAGRAM' | 'META' | 'ENV';
+}> {
+  // 1. Try dedicated INSTAGRAM provider (from Instagram OAuth)
+  const igCred = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'INSTAGRAM', isActive: true }
+  });
+
+  if (igCred) {
+    const credentials = await getCredentials(accountId, 'INSTAGRAM');
+    const accessToken = credentials?.accessToken;
+    const igUserId = (igCred.metadata as any)?.igUserId || null;
+
+    if (accessToken) {
+      return { accessToken, igUserId, source: 'INSTAGRAM' };
+    }
+  }
+
+  // 2. Try META provider (Facebook Page token — can send IG DMs if IG is linked to Page)
+  const metaCred = await prisma.integrationCredential.findFirst({
     where: { accountId, provider: 'META', isActive: true }
   });
 
-  if (cred) {
+  if (metaCred) {
     const credentials = await getCredentials(accountId, 'META');
     const accessToken = credentials?.accessToken;
-    const pageId = (cred.metadata as any)?.pageId;
+
+    if (accessToken) {
+      return { accessToken, igUserId: null, source: 'META' };
+    }
+  }
+
+  // 3. Fallback to env vars
+  const accessToken =
+    process.env.INSTAGRAM_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN;
+
+  if (!accessToken) {
+    throw new Error(
+      `No Instagram credentials found for account ${accountId}. ` +
+        'Connect Instagram or Facebook in Settings > Integrations.'
+    );
+  }
+
+  return { accessToken, igUserId: null, source: 'ENV' };
+}
+
+// Legacy resolver for functions that need pageId (conversations, messages via Page API)
+async function resolveMetaCredentials(
+  accountId: string
+): Promise<{ accessToken: string; pageId: string }> {
+  const metaCred = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'META', isActive: true }
+  });
+
+  if (metaCred) {
+    const credentials = await getCredentials(accountId, 'META');
+    const accessToken = credentials?.accessToken;
+    const pageId = (metaCred.metadata as any)?.pageId;
 
     if (accessToken && pageId) {
       return { accessToken, pageId };
     }
   }
 
-  // Fallback to env vars
-  const accessToken = process.env.META_ACCESS_TOKEN;
+  const accessToken =
+    process.env.INSTAGRAM_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN;
   const pageId = process.env.INSTAGRAM_PAGE_ID;
 
   if (!accessToken || !pageId) {
     throw new Error(
       `No Meta credentials found for account ${accountId}. ` +
-        'Provide credentials via the credential store or set META_ACCESS_TOKEN and INSTAGRAM_PAGE_ID env vars.'
+        'Connect Facebook in Settings > Integrations.'
     );
   }
 
@@ -60,15 +111,28 @@ export async function sendDM(
   recipientId: string,
   message: string
 ): Promise<void> {
-  const { accessToken, pageId } = await resolveMetaCredentials(accountId);
+  const { accessToken, igUserId, source } =
+    await resolveInstagramCredentials(accountId);
 
-  const res = await fetch(`${GRAPH_API_BASE}/${pageId}/messages`, {
+  // Instagram API with Instagram Login uses graph.instagram.com/me/messages
+  // Facebook Page API uses graph.facebook.com/{page-id}/messages
+  let endpoint: string;
+  if (source === 'INSTAGRAM' && igUserId) {
+    endpoint = `${IG_API_BASE}/me/messages`;
+  } else {
+    // Fall back to Page API
+    const { pageId } = await resolveMetaCredentials(accountId);
+    endpoint = `${GRAPH_API_BASE}/${pageId}/messages`;
+  }
+
+  // Instagram API expects access_token as query param, not in body
+  const url = `${endpoint}?access_token=${encodeURIComponent(accessToken)}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       recipient: { id: recipientId },
-      message: { text: message },
-      access_token: accessToken
+      message: { text: message }
     })
   });
 
@@ -174,7 +238,7 @@ export async function getUserProfile(
   accountId: string,
   userId: string
 ): Promise<{ name: string; username: string; profilePic: string }> {
-  const { accessToken } = await resolveMetaCredentials(accountId);
+  const { accessToken } = await resolveInstagramCredentials(accountId);
 
   const res = await fetch(
     `${GRAPH_API_BASE}/${userId}?fields=name,username,profile_pic&access_token=${accessToken}`

@@ -68,6 +68,7 @@ enum AccountPlan {
 
 enum IntegrationProvider {
   META
+  INSTAGRAM
   ELEVENLABS
   LEADCONNECTOR
   OPENAI

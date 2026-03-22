@@ -98,13 +98,19 @@ async function resolveAICredentials(
     };
   }
 
+  // Load .env with override to handle shell env vars that are set but empty
+  const dotenv = await import('dotenv');
+  const parsed = dotenv.config({ override: true }).parsed || {};
+
   const envProvider = (
-    process.env.AI_PROVIDER || 'openai'
+    parsed.AI_PROVIDER ||
+    process.env.AI_PROVIDER ||
+    'openai'
   ).toLowerCase() as AIProvider;
   const envKey =
     envProvider === 'anthropic'
-      ? process.env.ANTHROPIC_API_KEY
-      : process.env.OPENAI_API_KEY;
+      ? parsed.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
+      : parsed.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
   if (!envKey) {
     throw new Error(
@@ -115,7 +121,7 @@ async function resolveAICredentials(
   return {
     provider: envProvider,
     apiKey: envKey,
-    model: process.env.AI_MODEL || undefined
+    model: parsed.AI_MODEL || process.env.AI_MODEL || undefined
   };
 }
 
@@ -429,14 +435,18 @@ export async function generateReply(
 
   const chatMessages = formatConversationHistory(conversationHistory);
 
-  // Single AI call — the template instructs JSON output with format + message + stage + tag
+  // Skip quality scoring on cold leads (< 3 messages) to save API costs
+  const shouldScore = conversationHistory.length >= 3;
+
   const [rawReply, qualityScore, promptVersion] = await Promise.all([
     callAI(accountId, systemPrompt, chatMessages, 0.85, 500),
-    calculateLeadQualityScore(
-      accountId,
-      conversationHistory,
-      leadContext.status
-    ),
+    shouldScore
+      ? calculateLeadQualityScore(
+          accountId,
+          conversationHistory,
+          leadContext.status
+        )
+      : Promise.resolve(0),
     resolvePromptVersion(accountId, systemPrompt)
   ]);
 

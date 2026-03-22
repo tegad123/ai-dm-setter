@@ -34,6 +34,7 @@ export function decryptCredentials(encrypted: string): Record<string, string> {
 // IntegrationProvider type matches Prisma enum
 type Provider =
   | 'META'
+  | 'INSTAGRAM'
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'OPENAI'

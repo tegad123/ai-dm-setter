@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useConversations, useMessages } from '@/hooks/use-api';
 import { sendMessage, toggleAI } from '@/lib/api';
 import type { Conversation as ApiConversation } from '@/lib/api';
@@ -18,6 +18,7 @@ function toLocalConvo(
   c: ApiConversation & {
     tags?: Array<{ id: string; name: string; color: string }>;
     priorityScore?: number;
+    qualityScore?: number;
   },
   messages: Message[] = []
 ): Conversation {
@@ -38,7 +39,8 @@ function toLocalConvo(
     unread: c.unreadCount,
     messages,
     tags: c.tags ?? [],
-    priorityScore: c.priorityScore ?? 0
+    priorityScore: c.priorityScore ?? 0,
+    qualityScore: c.qualityScore ?? 0
   };
 }
 
@@ -96,7 +98,7 @@ export function ConversationsView() {
   const handleSendMessage = useCallback(
     async (content: string) => {
       if (!activeId) return;
-      await sendMessage(activeId, content, 'human');
+      await sendMessage(activeId, content, 'HUMAN');
       refetchMessages();
     },
     [activeId, refetchMessages]
@@ -110,6 +112,15 @@ export function ConversationsView() {
     },
     [activeId, refetchList]
   );
+
+  // Auto-refresh conversations every 8s to pick up new tags, scores, and messages
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetchList();
+      if (activeId) refetchMessages();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [refetchList, refetchMessages, activeId]);
 
   if (listLoading) {
     return (

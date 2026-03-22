@@ -221,11 +221,27 @@ export async function processIncomingMessage(
 // Schedule an AI reply with a random 5–10 minute delay
 // ---------------------------------------------------------------------------
 
+// Track pending AI replies to prevent duplicates
+const pendingAIReplies = new Set<string>();
+
 export async function scheduleAIReply(
   conversationId: string,
   accountId?: string
 ): Promise<void> {
-  const delayMs = randomBetween(5 * 60 * 1000, 10 * 60 * 1000);
+  // Deduplication: if we already have a pending reply for this conversation, skip
+  if (pendingAIReplies.has(conversationId)) {
+    console.log(
+      `[ai-reply] Skipping duplicate — reply already pending for ${conversationId}`
+    );
+    return;
+  }
+  pendingAIReplies.add(conversationId);
+
+  // Dev: 10-30s delay. Production: 5-10 min delay for natural feel.
+  const isDev = process.env.NODE_ENV !== 'production';
+  const delayMs = isDev
+    ? randomBetween(10 * 1000, 30 * 1000)
+    : randomBetween(5 * 60 * 1000, 10 * 60 * 1000);
 
   // In production this would be a proper job queue (e.g. BullMQ, SQS).
   // For now we use setTimeout — the delay makes the AI feel more natural.
@@ -255,22 +271,172 @@ export async function scheduleAIReply(
       // If neither per-convo AI nor away mode is active, skip
       if (!aiActive && !awayModeActive) return;
 
-      // Call the internal generate-reply endpoint
-      const baseUrl =
-        process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-      await fetch(`${baseUrl}/api/conversations/${conversationId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: '__AI_GENERATE__', // sentinel value the messages endpoint can detect
-          sender: 'AI'
-        })
+      // Generate AI reply directly (no HTTP call needed — we're in the same process)
+      // Load ALL messages so AI has full conversation history & memory
+      const conversation2 = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        include: {
+          lead: true,
+          messages: {
+            orderBy: { timestamp: 'asc' }
+          }
+        }
       });
+
+      if (!conversation2) return;
+
+      // Full conversation history (already ordered asc)
+      const recentMessages = conversation2.messages;
+      const lastLeadMessage = recentMessages
+        .filter((m) => m.sender === 'LEAD')
+        .pop();
+
+      // Generate AI reply using the AI engine (Anthropic/OpenAI)
+      let aiReply: string;
+      const acctId = accountId || conversation2.lead.accountId;
+
+      console.log(`[ai-reply] Starting AI generation for account: ${acctId}`);
+      console.log(
+        `[ai-reply] ANTHROPIC_API_KEY set: ${!!process.env.ANTHROPIC_API_KEY}`
+      );
+      console.log(`[ai-reply] AI_PROVIDER: ${process.env.AI_PROVIDER}`);
+      console.log(`[ai-reply] Message count: ${recentMessages.length}`);
+
+      try {
+        const aiEngine = await import('@/lib/ai-engine');
+        const lead = conversation2.lead;
+        console.log(`[ai-reply] Calling generateReply for lead: ${lead.name}`);
+        const result = await aiEngine.generateReply(
+          acctId,
+          recentMessages as any,
+          {
+            leadName: lead.name ?? 'Unknown',
+            handle: lead.handle ?? '',
+            platform: lead.platform,
+            status: lead.status,
+            triggerType: lead.triggerType,
+            triggerSource: lead.triggerSource ?? null,
+            qualityScore: lead.qualityScore ?? 0,
+            leadId: lead.id
+          }
+        );
+        aiReply = result.reply;
+        console.log(
+          `[ai-reply] AI engine generated reply: "${aiReply.slice(0, 100)}"`
+        );
+
+        // Apply auto-tags from AI analysis (use array or fall back to single tag)
+        const tagsToApply =
+          result.suggestedTags && result.suggestedTags.length > 0
+            ? result.suggestedTags
+            : result.suggestedTag
+              ? [result.suggestedTag.toUpperCase().replace(/\s+/g, '_')]
+              : [];
+        if (tagsToApply.length > 0) {
+          console.log(
+            `[ai-reply] Applying auto-tags: ${tagsToApply.join(', ')}`
+          );
+          await applyAutoTags(acctId, lead.id, tagsToApply);
+        }
+
+        // Update lead quality score
+        if (result.qualityScore !== undefined) {
+          await prisma.lead.update({
+            where: { id: lead.id },
+            data: { qualityScore: result.qualityScore }
+          });
+          console.log(
+            `[ai-reply] Updated quality score: ${result.qualityScore}`
+          );
+        }
+
+        // Update lead status if AI suggests a stage change
+        if (result.stage) {
+          const stageToStatus: Record<string, string> = {
+            opening: 'NEW_LEAD',
+            qualifying: 'IN_QUALIFICATION',
+            building_rapport: 'IN_QUALIFICATION',
+            pitching: 'HOT_LEAD',
+            handling_objection: 'TRUST_OBJECTION',
+            booking: 'BOOKED',
+            booked: 'BOOKED',
+            closed: 'CLOSED',
+            lost: 'UNQUALIFIED',
+            ghosted: 'GHOSTED'
+          };
+          const newStatus = stageToStatus[result.stage.toLowerCase()];
+          if (newStatus && newStatus !== lead.status) {
+            await prisma.lead.update({
+              where: { id: lead.id },
+              data: { status: newStatus as any }
+            });
+            console.log(
+              `[ai-reply] Updated lead status: ${lead.status} → ${newStatus}`
+            );
+          }
+        }
+      } catch (aiError: any) {
+        console.error(
+          '[ai-reply] AI engine failed:',
+          aiError?.message || aiError
+        );
+        console.error(
+          '[ai-reply] Full error:',
+          JSON.stringify(aiError, Object.getOwnPropertyNames(aiError))
+        );
+        // NEVER send a generic fallback — it confuses the lead.
+        console.error('[ai-reply] Skipping reply to avoid generic message.');
+        return;
+      }
+
+      // Save AI message to DB
+      const aiMessage = await prisma.message.create({
+        data: {
+          conversationId,
+          sender: 'AI',
+          content: aiReply,
+          timestamp: new Date()
+        }
+      });
+
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { lastMessageAt: new Date() }
+      });
+
+      // Send the AI reply to the platform
+      const lead = conversation2.lead;
+      if (lead.platformUserId) {
+        try {
+          if (lead.platform === 'FACEBOOK') {
+            const { sendMessage } = await import('@/lib/facebook');
+            await sendMessage(lead.accountId, lead.platformUserId, aiReply);
+            console.log(
+              `[ai-reply] Facebook message sent to ${lead.platformUserId}: "${aiReply.slice(0, 50)}..."`
+            );
+          } else if (lead.platform === 'INSTAGRAM') {
+            const { sendDM } = await import('@/lib/instagram');
+            await sendDM(lead.accountId, lead.platformUserId, aiReply);
+            console.log(
+              `[ai-reply] Instagram DM sent to ${lead.platformUserId}: "${aiReply.slice(0, 50)}..."`
+            );
+          }
+        } catch (sendErr) {
+          console.error('[ai-reply] Failed to send to platform:', sendErr);
+        }
+      }
+
+      console.log(
+        `[ai-reply] Generated reply for conversation ${conversationId}: "${aiReply.slice(0, 80)}..."`
+      );
     } catch (err) {
       console.error(
         `[webhook-processor] Failed to schedule AI reply for conversation ${conversationId}:`,
         err
       );
+    } finally {
+      // Clear dedup guard so future messages can trigger new replies
+      pendingAIReplies.delete(conversationId);
     }
   }, delayMs);
 }
@@ -321,6 +487,25 @@ export async function processCommentTrigger(
 // Auto-Tagging — apply AI-suggested tags to leads after reply generation
 // ---------------------------------------------------------------------------
 
+// Tag color palette for auto-created tags
+const AUTO_TAG_COLORS: Record<string, string> = {
+  HIGH_INTENT: '#22c55e',
+  MONEY_OBJECTION: '#f59e0b',
+  GHOST_RISK: '#ef4444',
+  COLD: '#6b7280',
+  WARM: '#f97316',
+  HOT: '#ef4444',
+  BOOKED: '#3b82f6',
+  QUALIFIED: '#8b5cf6',
+  REACTIVATED: '#06b6d4',
+  OUTBOUND: '#6366f1',
+  TRUST_OBJECTION: '#eab308',
+  TIME_OBJECTION: '#a855f7',
+  INTERESTED: '#10b981',
+  NOT_INTERESTED: '#6b7280',
+  FOLLOW_UP: '#f59e0b'
+};
+
 export async function applyAutoTags(
   accountId: string,
   leadId: string,
@@ -329,9 +514,9 @@ export async function applyAutoTags(
   if (!suggestedTags.length) return;
 
   try {
-    // Get all auto-tags for this account
+    // Get ALL tags for this account (not just auto ones)
     const accountTags = await prisma.tag.findMany({
-      where: { accountId, isAuto: true },
+      where: { accountId },
       select: { id: true, name: true }
     });
 
@@ -339,26 +524,37 @@ export async function applyAutoTags(
 
     for (const tagName of suggestedTags) {
       const normalizedName = tagName.trim().toUpperCase().replace(/\s+/g, '_');
-      const tagId = tagMap.get(normalizedName);
+      let tagId = tagMap.get(normalizedName);
 
-      if (tagId) {
-        // Upsert to avoid duplicate errors
-        await prisma.leadTag.upsert({
-          where: { leadId_tagId: { leadId, tagId } },
-          update: { appliedBy: 'AI', confidence: 0.8 },
-          create: { leadId, tagId, appliedBy: 'AI', confidence: 0.8 }
+      // Auto-create the tag if it doesn't exist
+      if (!tagId) {
+        const color = AUTO_TAG_COLORS[normalizedName] || '#6366f1';
+        const newTag = await prisma.tag.create({
+          data: {
+            accountId,
+            name: normalizedName,
+            color,
+            isAuto: true
+          }
         });
+        tagId = newTag.id;
+        tagMap.set(normalizedName, tagId);
+        console.log(`[auto-tag] Created new tag: ${normalizedName} (${color})`);
       }
+
+      // Upsert to avoid duplicate errors
+      await prisma.leadTag.upsert({
+        where: { leadId_tagId: { leadId, tagId } },
+        update: { appliedBy: 'AI', confidence: 0.85 },
+        create: { leadId, tagId, appliedBy: 'AI', confidence: 0.85 }
+      });
     }
 
     console.log(
-      `[webhook-processor] Auto-tagged lead ${leadId} with: ${suggestedTags.join(', ')}`
+      `[auto-tag] Tagged lead ${leadId} with: ${suggestedTags.join(', ')}`
     );
   } catch (err) {
-    console.error(
-      `[webhook-processor] Failed to auto-tag lead ${leadId}:`,
-      err
-    );
+    console.error(`[auto-tag] Failed to tag lead ${leadId}:`, err);
   }
 }
 

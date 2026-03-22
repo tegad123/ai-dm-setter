@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { useState, useRef, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -30,6 +29,16 @@ export function ConversationThread({
 }: ConversationThreadProps) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop =
+        messagesContainerRef.current.scrollHeight;
+    }
+  }, [conversation.messages.length]);
 
   const handleSend = async () => {
     if (!message.trim() || !onSendMessage) return;
@@ -73,6 +82,24 @@ export function ConversationThread({
             </p>
           </div>
           <LeadStatusBadge status={conversation.status as LeadStatus} />
+          {/* Quality Score */}
+          {conversation.qualityScore !== undefined &&
+            conversation.qualityScore > 0 && (
+              <Badge
+                variant='outline'
+                className={cn(
+                  'text-[10px] font-semibold tabular-nums',
+                  conversation.qualityScore >= 70
+                    ? 'border-green-300 text-green-600 dark:border-green-700 dark:text-green-400'
+                    : conversation.qualityScore >= 40
+                      ? 'border-amber-300 text-amber-600 dark:border-amber-700 dark:text-amber-400'
+                      : 'border-red-300 text-red-600 dark:border-red-700 dark:text-red-400'
+                )}
+              >
+                {conversation.qualityScore}%
+              </Badge>
+            )}
+          {/* AI-generated tags */}
           {conversation.tags && conversation.tags.length > 0 && (
             <div className='flex flex-wrap gap-1'>
               {conversation.tags.map((tag) => (
@@ -100,97 +127,112 @@ export function ConversationThread({
         </div>
       </div>
 
-      {/* Messages */}
-      <ScrollArea className='flex-1 p-6'>
-        {loading ? (
-          <div className='space-y-4'>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'flex',
-                  i % 2 === 0 ? 'justify-start' : 'justify-end'
-                )}
-              >
-                <Skeleton className='h-12 w-[60%] rounded-2xl' />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className='space-y-4'>
-            {conversation.messages.map((msg) => {
-              const sender = msg.sender.toLowerCase();
-              const isLead = sender === 'lead';
-              const isAI = sender === 'ai';
-              const isHuman = sender === 'human';
-              return (
-                <div
-                  key={msg.id}
-                  className={cn(
-                    'flex',
-                    isLead ? 'justify-start' : 'justify-end'
-                  )}
-                >
+      {/* Conversation Panel */}
+      <div className='flex flex-1 flex-col overflow-hidden px-4 py-3'>
+        {/* Messages Box — fixed height, scrollable */}
+        <div
+          ref={messagesContainerRef}
+          className='bg-muted/20 flex-1 overflow-y-auto rounded-xl border shadow-inner'
+          style={{ maxHeight: 'calc(100vh - 220px)' }}
+        >
+          <div className='p-4 md:p-5'>
+            {loading ? (
+              <div className='space-y-4'>
+                {Array.from({ length: 4 }).map((_, i) => (
                   <div
+                    key={i}
                     className={cn(
-                      'max-w-[70%] rounded-2xl px-4 py-2.5',
-                      isLead && 'bg-muted text-foreground',
-                      isAI && 'bg-primary text-primary-foreground',
-                      isHuman && 'bg-emerald-600 text-white'
+                      'flex',
+                      i % 2 === 0 ? 'justify-start' : 'justify-end'
                     )}
                   >
-                    {msg.isVoiceNote && (
-                      <div className='mb-1 flex items-center gap-1 text-xs opacity-80'>
-                        <IconMicrophone className='h-3 w-3' /> Voice Note
-                      </div>
-                    )}
-                    <p className='text-sm'>{msg.content}</p>
-                    <div className='mt-1 flex items-center gap-1'>
-                      <p
+                    <Skeleton className='h-12 w-[60%] rounded-2xl' />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className='space-y-4'>
+                {conversation.messages.map((msg) => {
+                  const sender = msg.sender.toLowerCase();
+                  const isLead = sender === 'lead';
+                  const isAI = sender === 'ai';
+                  const isHuman = sender === 'human';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        'flex',
+                        isLead ? 'justify-start' : 'justify-end'
+                      )}
+                    >
+                      <div
                         className={cn(
-                          'text-[10px]',
-                          isLead ? 'text-muted-foreground' : 'opacity-60'
+                          'max-w-[70%] rounded-2xl px-4 py-2.5',
+                          isLead && 'bg-muted text-foreground',
+                          isAI && 'bg-primary text-primary-foreground',
+                          isHuman && 'bg-emerald-600 text-white'
                         )}
                       >
-                        {new Date(msg.timestamp).toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit'
-                        })}
-                      </p>
-                      {isAI && <IconRobot className='h-3 w-3 opacity-60' />}
-                      {isHuman && (
-                        <span className='text-[10px] opacity-60'>Manual</span>
-                      )}
+                        {msg.isVoiceNote && (
+                          <div className='mb-1 flex items-center gap-1 text-xs opacity-80'>
+                            <IconMicrophone className='h-3 w-3' /> Voice Note
+                          </div>
+                        )}
+                        <p className='text-sm'>{msg.content}</p>
+                        <div className='mt-1 flex items-center gap-1'>
+                          <p
+                            className={cn(
+                              'text-[10px]',
+                              isLead ? 'text-muted-foreground' : 'opacity-60'
+                            )}
+                          >
+                            {new Date(msg.timestamp).toLocaleTimeString(
+                              'en-US',
+                              {
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              }
+                            )}
+                          </p>
+                          {isAI && <IconRobot className='h-3 w-3 opacity-60' />}
+                          {isHuman && (
+                            <span className='text-[10px] opacity-60'>
+                              Manual
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
           </div>
-        )}
-      </ScrollArea>
+        </div>
 
-      {/* Input */}
-      <div className='border-t p-4'>
-        <div className='flex items-center gap-2'>
-          <Input
-            placeholder='Type a message...'
-            className='flex-1'
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={sending}
-          />
-          <Button size='icon' variant='ghost'>
-            <IconMicrophone className='h-5 w-5' />
-          </Button>
-          <Button
-            size='icon'
-            onClick={handleSend}
-            disabled={sending || !message.trim()}
-          >
-            <IconSend className='h-4 w-4' />
-          </Button>
+        {/* Input — sits below the messages box */}
+        <div className='mt-3 pb-2'>
+          <div className='flex items-center gap-2'>
+            <Input
+              placeholder='Type a message...'
+              className='flex-1'
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={sending}
+            />
+            <Button size='icon' variant='ghost'>
+              <IconMicrophone className='h-5 w-5' />
+            </Button>
+            <Button
+              size='icon'
+              onClick={handleSend}
+              disabled={sending || !message.trim()}
+            >
+              <IconSend className='h-4 w-4' />
+            </Button>
+          </div>
         </div>
       </div>
     </div>
