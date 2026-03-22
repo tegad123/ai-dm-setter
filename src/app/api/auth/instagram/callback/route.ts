@@ -143,7 +143,7 @@ export async function GET(req: NextRequest) {
         username,
         name,
         profilePicture,
-        followersCount
+        followersCount: String(followersCount)
       }
     );
 
