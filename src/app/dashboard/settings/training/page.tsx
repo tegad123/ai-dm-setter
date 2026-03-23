@@ -40,6 +40,16 @@ const CATEGORIES = [
   'OBJECTION_PRIOR_FAILURE',
   'CLOSING',
   'FOLLOW_UP',
+  'STALL_TIME',
+  'STALL_MONEY',
+  'STALL_THINK',
+  'STALL_PARTNER',
+  'GHOST_SEQUENCE',
+  'NO_SHOW',
+  'PRE_CALL_NURTURE',
+  'DOWNSELL',
+  'ORIGIN_STORY',
+  'PROOF_POINT',
   'GENERAL'
 ] as const;
 
@@ -58,6 +68,21 @@ const CATEGORY_COLORS: Record<Category, string> = {
     'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300',
   CLOSING: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
   FOLLOW_UP: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300',
+  STALL_TIME: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-300',
+  STALL_MONEY: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-300',
+  STALL_THINK:
+    'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300',
+  STALL_PARTNER:
+    'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300',
+  GHOST_SEQUENCE:
+    'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-300',
+  NO_SHOW: 'bg-zinc-100 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-300',
+  PRE_CALL_NURTURE:
+    'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300',
+  DOWNSELL:
+    'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-300',
+  ORIGIN_STORY: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-300',
+  PROOF_POINT: 'bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-300',
   GENERAL: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
 };
 
@@ -193,6 +218,79 @@ export default function TrainingDataPage() {
 
   function autoDetectCategory(leadMsg: string, response: string): Category {
     const combined = (leadMsg + ' ' + response).toLowerCase();
+    // Stall types (check before general objections)
+    if (
+      combined.includes('talk to my wife') ||
+      combined.includes('talk to my partner') ||
+      combined.includes('ask my wife') ||
+      combined.includes('ask my husband')
+    )
+      return 'STALL_PARTNER';
+    if (
+      combined.includes('let me think') ||
+      combined.includes('need to think') ||
+      combined.includes('think about it')
+    )
+      return 'STALL_THINK';
+    if (
+      combined.includes('text me later') ||
+      combined.includes('not a good time') ||
+      combined.includes('hit me up later') ||
+      combined.includes('reach out later')
+    )
+      return 'STALL_TIME';
+    if (
+      combined.includes('have money next') ||
+      combined.includes('get paid') ||
+      combined.includes('next paycheck') ||
+      combined.includes('money next week')
+    )
+      return 'STALL_MONEY';
+    // Ghost / No-show
+    if (
+      combined.includes('ghost') ||
+      combined.includes('no response') ||
+      combined.includes('stopped responding') ||
+      combined.includes('giving up')
+    )
+      return 'GHOST_SEQUENCE';
+    if (
+      combined.includes('no show') ||
+      combined.includes('no-show') ||
+      combined.includes("didn't show") ||
+      combined.includes('missed the call')
+    )
+      return 'NO_SHOW';
+    // Pre-call / Downsell / Story
+    if (
+      combined.includes('before the call') ||
+      combined.includes('pre-call') ||
+      combined.includes('reminder') ||
+      combined.includes('night before')
+    )
+      return 'PRE_CALL_NURTURE';
+    if (
+      combined.includes('downsell') ||
+      combined.includes('course') ||
+      combined.includes('lower price') ||
+      combined.includes('entry point')
+    )
+      return 'DOWNSELL';
+    if (
+      combined.includes('origin story') ||
+      combined.includes('my story') ||
+      combined.includes('how i started') ||
+      combined.includes('background')
+    )
+      return 'ORIGIN_STORY';
+    if (
+      combined.includes('proof') ||
+      combined.includes('testimonial') ||
+      combined.includes('student result') ||
+      combined.includes('success story')
+    )
+      return 'PROOF_POINT';
+    // Existing objection types
     if (
       combined.includes('how much') ||
       combined.includes('price') ||

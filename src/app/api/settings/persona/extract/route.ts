@@ -37,14 +37,15 @@ export async function POST(request: NextRequest) {
           role: 'user',
           content: `You are an AI assistant that extracts sales persona configuration from documents.
 
-Read the following document carefully and extract ALL relevant information to fill out a DM sales persona profile. The document may be a setter playbook, sales script, brand guide, onboarding doc, or any business document.
+Read the following document carefully and extract ALL relevant information to fill out a DM sales persona profile. The document may be a setter playbook, sales script, brand guide, onboarding doc, SOP, or any business document.
 
-Extract and return a JSON object with EXACTLY this structure. Fill in as much as possible from the document. Leave fields as empty strings "" if the information is not found:
+Extract and return a JSON object with EXACTLY this structure. Fill in as much as possible from the document. Leave fields as empty strings "" or empty arrays [] if the information is not found:
 
 {
   "fullName": "The person's full name or brand owner name",
   "companyName": "Brand or company name",
   "freeValueLink": "Any free resource URL mentioned",
+  "closerName": "Name of the person who handles sales calls (if different from the owner)",
   "objectionHandling": {
     "trust": "How to handle trust/skepticism objections - extract actual scripts or approaches",
     "priorFailure": "How to handle 'I've tried this before' objections",
@@ -61,6 +62,7 @@ Extract and return a JSON object with EXACTLY this structure. Fill in as much as
     "qualificationQuestions": "Questions used to qualify leads (numbered list)",
     "disqualificationCriteria": "When NOT to book a call / red flags",
     "disqualificationMessage": "What to say when disqualifying someone",
+    "urgencyQuestion": "The urgency question asked before pitching (e.g. 'Why is now the time to make this happen?')",
     "freeValueMessage": "How to introduce free resources",
     "freeValueFollowup": "What to say after sending a free resource",
     "callPitchMessage": "How to pitch booking a call",
@@ -68,8 +70,34 @@ Extract and return a JSON object with EXACTLY this structure. Fill in as much as
     "followupDay1": "24-hour follow-up message if lead goes quiet",
     "followupDay3": "3-day follow-up message",
     "followupDay7": "7-day final follow-up message",
+    "stallTimeScript": "How to handle 'text me later / not a good time' stalls",
+    "stallMoneyScript": "How to handle 'I'll have money next week' stalls",
+    "stallThinkScript": "How to handle 'let me think about it' stalls",
+    "stallPartnerScript": "How to handle 'I need to talk to my wife/partner' stalls",
     "customRules": "Any special rules, do's and don'ts, or instructions"
-  }
+  },
+  "financialWaterfall": [
+    {"label": "Level name", "question": "Question to ask at this level", "threshold": "Qualifying threshold", "passAction": "What happens if they qualify"}
+  ],
+  "downsellConfig": {
+    "productName": "Name of the lower-tier product",
+    "price": "Price of the downsell product",
+    "pitchMessage": "How to pitch the downsell product",
+    "link": "Payment or checkout link for the downsell"
+  },
+  "knowledgeAssets": [
+    {"title": "Asset name (e.g. Founder Origin Story)", "content": "The full narrative content", "deployTrigger": "When to use this (e.g. trust objection, rapport building)"}
+  ],
+  "proofPoints": [
+    {"name": "Student/client name", "result": "What they achieved", "deployContext": "When to deploy this proof point"}
+  ],
+  "noShowProtocol": {
+    "firstNoShow": "Message for first no-show — extend one reschedule",
+    "secondNoShow": "Message for second no-show — pull back and challenge commitment"
+  },
+  "preCallSequence": [
+    {"timing": "night_before|morning_of|1_hour_before|30_min_before", "message": "Message to send at this timing"}
+  ]
 }
 
 IMPORTANT:
@@ -77,6 +105,11 @@ IMPORTANT:
 - If the document contains example DMs or scripts, use those verbatim
 - Capture their unique voice, slang, emoji usage, and communication style
 - Be thorough — fill every field you can find relevant information for
+- For financialWaterfall, extract multi-level financial screening steps (e.g. capital → credit score → card limit)
+- For knowledgeAssets, extract founder stories, origin stories, or narrative content used for trust building
+- For proofPoints, extract specific student/client success stories with names and results
+- For preCallSequence, extract any timed reminder messages sent before scheduled calls
+- For stall scripts, extract specific responses for each type of stall (time delay, money delay, thinking, partner)
 
 DOCUMENT:
 ---

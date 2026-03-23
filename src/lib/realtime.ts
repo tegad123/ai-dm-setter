@@ -1,5 +1,5 @@
 /**
- * Real-time event system for AI DM Setter
+ * Real-time event system for DMsetter
  *
  * Uses an in-memory event emitter to broadcast events to connected SSE clients.
  * Supports: new messages, conversation updates, notification delivery, AI status changes.

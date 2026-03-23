@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { AnalyticsView } from '@/features/analytics/components/analytics-view';
 
 export const metadata = {
-  title: 'AI DM Setter — Analytics'
+  title: 'DMsetter — Analytics'
 };
 
 export default function AnalyticsPage() {

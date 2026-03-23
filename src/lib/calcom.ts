@@ -130,7 +130,7 @@ export async function bookCalcomAppointment(
         timeZone: 'America/New_York'
       },
       metadata: {
-        source: 'ai-dm-setter',
+        source: 'dmsetter',
         notes: params.notes ?? ''
       }
     })
@@ -164,7 +164,7 @@ export async function cancelCalcomBooking(
     method: 'POST',
     headers: await getHeaders(accountId),
     body: JSON.stringify({
-      cancellationReason: 'Cancelled via AI DM Setter'
+      cancellationReason: 'Cancelled via DMsetter'
     })
   });
 

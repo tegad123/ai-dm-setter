@@ -6,7 +6,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 
 export const metadata: Metadata = {
-  title: 'AI DM Setter — Dashboard',
+  title: 'DMsetter — Dashboard',
   description: 'AI-powered DM automation dashboard',
   robots: {
     index: false,

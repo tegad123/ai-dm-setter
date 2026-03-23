@@ -17,7 +17,7 @@ const META_THEME_COLORS = {
 };
 
 export const metadata: Metadata = {
-  title: 'AI DM Setter',
+  title: 'DMsetter',
   description: 'AI-powered DM automation dashboard'
 };
 

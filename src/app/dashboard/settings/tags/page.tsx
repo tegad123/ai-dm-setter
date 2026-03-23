@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { TagManager } from '@/features/tags/components/tag-manager';
 
 export const metadata = {
-  title: 'AI DM Setter — Tag Management'
+  title: 'DMsetter — Tag Management'
 };
 
 export default function TagsSettingsPage() {

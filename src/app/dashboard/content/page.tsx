@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { ContentTable } from '@/features/content/components/content-table';
 
 export const metadata = {
-  title: 'AI DM Setter — Content Attribution'
+  title: 'DMsetter — Content Attribution'
 };
 
 export default function ContentPage() {

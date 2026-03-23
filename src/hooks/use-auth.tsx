@@ -7,6 +7,7 @@ import {
   useState,
   ReactNode
 } from 'react';
+import { useClerk } from '@clerk/nextjs';
 
 interface UserData {
   id: string;
@@ -102,10 +103,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTokenState(newToken);
   }
 
+  const clerk = useClerk();
+
   function logout() {
     setToken(null);
     setUser(null);
     setAccount(null);
+    clerk.signOut({ redirectUrl: '/' });
   }
 
   return (

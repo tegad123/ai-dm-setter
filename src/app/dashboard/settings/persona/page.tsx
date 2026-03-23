@@ -15,13 +15,45 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Loader2, Upload, FileText, Sparkles } from 'lucide-react';
+import {
+  Loader2,
+  Upload,
+  FileText,
+  Sparkles,
+  Plus,
+  Trash2
+} from 'lucide-react';
 import { VoiceProfileDashboard } from '@/features/voice-profile/components/profile-dashboard';
+
+interface WaterfallStep {
+  label: string;
+  question: string;
+  threshold: string;
+  passAction: string;
+}
+
+interface KnowledgeAsset {
+  title: string;
+  content: string;
+  deployTrigger: string;
+}
+
+interface ProofPoint {
+  name: string;
+  result: string;
+  deployContext: string;
+}
+
+interface PreCallItem {
+  timing: string;
+  message: string;
+}
 
 interface PersonaData {
   fullName: string;
   companyName: string;
   freeValueLink: string;
+  closerName: string;
   objectionHandling: {
     trust: string;
     priorFailure: string;
@@ -38,6 +70,7 @@ interface PersonaData {
     qualificationQuestions: string;
     disqualificationCriteria: string;
     disqualificationMessage: string;
+    urgencyQuestion: string;
     freeValueMessage: string;
     freeValueFollowup: string;
     callPitchMessage: string;
@@ -45,14 +78,33 @@ interface PersonaData {
     followupDay1: string;
     followupDay3: string;
     followupDay7: string;
+    stallTimeScript: string;
+    stallMoneyScript: string;
+    stallThinkScript: string;
+    stallPartnerScript: string;
     customRules: string;
   };
+  financialWaterfall: WaterfallStep[];
+  downsellConfig: {
+    productName: string;
+    price: string;
+    pitchMessage: string;
+    link: string;
+  };
+  knowledgeAssets: KnowledgeAsset[];
+  proofPoints: ProofPoint[];
+  noShowProtocol: {
+    firstNoShow: string;
+    secondNoShow: string;
+  };
+  preCallSequence: PreCallItem[];
 }
 
 const defaultPersona: PersonaData = {
   fullName: '',
   companyName: '',
   freeValueLink: '',
+  closerName: '',
   objectionHandling: {
     trust: '',
     priorFailure: '',
@@ -69,6 +121,7 @@ const defaultPersona: PersonaData = {
     qualificationQuestions: '',
     disqualificationCriteria: '',
     disqualificationMessage: '',
+    urgencyQuestion: '',
     freeValueMessage: '',
     freeValueFollowup: '',
     callPitchMessage: '',
@@ -76,8 +129,18 @@ const defaultPersona: PersonaData = {
     followupDay1: '',
     followupDay3: '',
     followupDay7: '',
+    stallTimeScript: '',
+    stallMoneyScript: '',
+    stallThinkScript: '',
+    stallPartnerScript: '',
     customRules: ''
-  }
+  },
+  financialWaterfall: [],
+  downsellConfig: { productName: '', price: '', pitchMessage: '', link: '' },
+  knowledgeAssets: [],
+  proofPoints: [],
+  noShowProtocol: { firstNoShow: '', secondNoShow: '' },
+  preCallSequence: []
 };
 
 export default function PersonaSettingsPage() {
@@ -95,10 +158,13 @@ export default function PersonaSettingsPage() {
         if (data) {
           const pc = data.promptConfig || {};
           const oh = data.objectionHandling || {};
+          const dc = data.downsellConfig || {};
+          const ns = data.noShowProtocol || {};
           setPersona({
             fullName: data.fullName ?? '',
             companyName: data.companyName ?? '',
             freeValueLink: data.freeValueLink ?? '',
+            closerName: data.closerName ?? '',
             objectionHandling: {
               trust: oh.trust ?? '',
               priorFailure: oh.priorFailure ?? '',
@@ -115,6 +181,7 @@ export default function PersonaSettingsPage() {
               qualificationQuestions: pc.qualificationQuestions ?? '',
               disqualificationCriteria: pc.disqualificationCriteria ?? '',
               disqualificationMessage: pc.disqualificationMessage ?? '',
+              urgencyQuestion: pc.urgencyQuestion ?? '',
               freeValueMessage: pc.freeValueMessage ?? '',
               freeValueFollowup: pc.freeValueFollowup ?? '',
               callPitchMessage: pc.callPitchMessage ?? '',
@@ -122,8 +189,34 @@ export default function PersonaSettingsPage() {
               followupDay1: pc.followupDay1 ?? '',
               followupDay3: pc.followupDay3 ?? '',
               followupDay7: pc.followupDay7 ?? '',
+              stallTimeScript: pc.stallTimeScript ?? '',
+              stallMoneyScript: pc.stallMoneyScript ?? '',
+              stallThinkScript: pc.stallThinkScript ?? '',
+              stallPartnerScript: pc.stallPartnerScript ?? '',
               customRules: pc.customRules ?? ''
-            }
+            },
+            financialWaterfall: Array.isArray(data.financialWaterfall)
+              ? data.financialWaterfall
+              : [],
+            downsellConfig: {
+              productName: dc.productName ?? '',
+              price: dc.price ?? '',
+              pitchMessage: dc.pitchMessage ?? '',
+              link: dc.link ?? ''
+            },
+            knowledgeAssets: Array.isArray(data.knowledgeAssets)
+              ? data.knowledgeAssets
+              : [],
+            proofPoints: Array.isArray(data.proofPoints)
+              ? data.proofPoints
+              : [],
+            noShowProtocol: {
+              firstNoShow: ns.firstNoShow ?? '',
+              secondNoShow: ns.secondNoShow ?? ''
+            },
+            preCallSequence: Array.isArray(data.preCallSequence)
+              ? data.preCallSequence
+              : []
           });
         }
       } catch {
@@ -170,8 +263,31 @@ export default function PersonaSettingsPage() {
           companyName: persona.companyName,
           systemPrompt: 'MASTER_TEMPLATE',
           freeValueLink: persona.freeValueLink,
+          closerName: persona.closerName,
           objectionHandling: persona.objectionHandling,
-          promptConfig: persona.promptConfig
+          promptConfig: persona.promptConfig,
+          financialWaterfall:
+            persona.financialWaterfall.length > 0
+              ? persona.financialWaterfall
+              : undefined,
+          downsellConfig: persona.downsellConfig.productName
+            ? persona.downsellConfig
+            : undefined,
+          knowledgeAssets:
+            persona.knowledgeAssets.length > 0
+              ? persona.knowledgeAssets
+              : undefined,
+          proofPoints:
+            persona.proofPoints.length > 0 ? persona.proofPoints : undefined,
+          noShowProtocol:
+            persona.noShowProtocol.firstNoShow ||
+            persona.noShowProtocol.secondNoShow
+              ? persona.noShowProtocol
+              : undefined,
+          preCallSequence:
+            persona.preCallSequence.length > 0
+              ? persona.preCallSequence
+              : undefined
         })
       });
       toast.success('Persona saved');
@@ -221,72 +337,98 @@ export default function PersonaSettingsPage() {
 
       const data = res.extracted;
       if (data) {
-        setPersona({
-          fullName: data.fullName || persona.fullName,
-          companyName: data.companyName || persona.companyName,
-          freeValueLink: data.freeValueLink || persona.freeValueLink,
+        const epc = data.promptConfig || {};
+        const edc = data.downsellConfig || {};
+        const ens = data.noShowProtocol || {};
+        setPersona((prev) => ({
+          fullName: data.fullName || prev.fullName,
+          companyName: data.companyName || prev.companyName,
+          freeValueLink: data.freeValueLink || prev.freeValueLink,
+          closerName: data.closerName || prev.closerName,
           objectionHandling: {
             trust:
-              data.objectionHandling?.trust || persona.objectionHandling.trust,
+              data.objectionHandling?.trust || prev.objectionHandling.trust,
             priorFailure:
               data.objectionHandling?.priorFailure ||
-              persona.objectionHandling.priorFailure,
+              prev.objectionHandling.priorFailure,
             money:
-              data.objectionHandling?.money || persona.objectionHandling.money,
-            time: data.objectionHandling?.time || persona.objectionHandling.time
+              data.objectionHandling?.money || prev.objectionHandling.money,
+            time: data.objectionHandling?.time || prev.objectionHandling.time
           },
           promptConfig: {
-            whatYouSell:
-              data.promptConfig?.whatYouSell ||
-              persona.promptConfig.whatYouSell,
-            adminBio:
-              data.promptConfig?.adminBio || persona.promptConfig.adminBio,
+            whatYouSell: epc.whatYouSell || prev.promptConfig.whatYouSell,
+            adminBio: epc.adminBio || prev.promptConfig.adminBio,
             toneDescription:
-              data.promptConfig?.toneDescription ||
-              persona.promptConfig.toneDescription,
+              epc.toneDescription || prev.promptConfig.toneDescription,
             toneExamplesGood:
-              data.promptConfig?.toneExamplesGood ||
-              persona.promptConfig.toneExamplesGood,
+              epc.toneExamplesGood || prev.promptConfig.toneExamplesGood,
             toneExamplesBad:
-              data.promptConfig?.toneExamplesBad ||
-              persona.promptConfig.toneExamplesBad,
+              epc.toneExamplesBad || prev.promptConfig.toneExamplesBad,
             openingMessageStyle:
-              data.promptConfig?.openingMessageStyle ||
-              persona.promptConfig.openingMessageStyle,
+              epc.openingMessageStyle || prev.promptConfig.openingMessageStyle,
             qualificationQuestions:
-              data.promptConfig?.qualificationQuestions ||
-              persona.promptConfig.qualificationQuestions,
+              epc.qualificationQuestions ||
+              prev.promptConfig.qualificationQuestions,
             disqualificationCriteria:
-              data.promptConfig?.disqualificationCriteria ||
-              persona.promptConfig.disqualificationCriteria,
+              epc.disqualificationCriteria ||
+              prev.promptConfig.disqualificationCriteria,
             disqualificationMessage:
-              data.promptConfig?.disqualificationMessage ||
-              persona.promptConfig.disqualificationMessage,
+              epc.disqualificationMessage ||
+              prev.promptConfig.disqualificationMessage,
+            urgencyQuestion:
+              epc.urgencyQuestion || prev.promptConfig.urgencyQuestion,
             freeValueMessage:
-              data.promptConfig?.freeValueMessage ||
-              persona.promptConfig.freeValueMessage,
+              epc.freeValueMessage || prev.promptConfig.freeValueMessage,
             freeValueFollowup:
-              data.promptConfig?.freeValueFollowup ||
-              persona.promptConfig.freeValueFollowup,
+              epc.freeValueFollowup || prev.promptConfig.freeValueFollowup,
             callPitchMessage:
-              data.promptConfig?.callPitchMessage ||
-              persona.promptConfig.callPitchMessage,
+              epc.callPitchMessage || prev.promptConfig.callPitchMessage,
             bookingConfirmationMessage:
-              data.promptConfig?.bookingConfirmationMessage ||
-              persona.promptConfig.bookingConfirmationMessage,
-            followupDay1:
-              data.promptConfig?.followupDay1 ||
-              persona.promptConfig.followupDay1,
-            followupDay3:
-              data.promptConfig?.followupDay3 ||
-              persona.promptConfig.followupDay3,
-            followupDay7:
-              data.promptConfig?.followupDay7 ||
-              persona.promptConfig.followupDay7,
-            customRules:
-              data.promptConfig?.customRules || persona.promptConfig.customRules
-          }
-        });
+              epc.bookingConfirmationMessage ||
+              prev.promptConfig.bookingConfirmationMessage,
+            followupDay1: epc.followupDay1 || prev.promptConfig.followupDay1,
+            followupDay3: epc.followupDay3 || prev.promptConfig.followupDay3,
+            followupDay7: epc.followupDay7 || prev.promptConfig.followupDay7,
+            stallTimeScript:
+              epc.stallTimeScript || prev.promptConfig.stallTimeScript,
+            stallMoneyScript:
+              epc.stallMoneyScript || prev.promptConfig.stallMoneyScript,
+            stallThinkScript:
+              epc.stallThinkScript || prev.promptConfig.stallThinkScript,
+            stallPartnerScript:
+              epc.stallPartnerScript || prev.promptConfig.stallPartnerScript,
+            customRules: epc.customRules || prev.promptConfig.customRules
+          },
+          financialWaterfall:
+            Array.isArray(data.financialWaterfall) &&
+            data.financialWaterfall.length > 0
+              ? data.financialWaterfall
+              : prev.financialWaterfall,
+          downsellConfig: {
+            productName: edc.productName || prev.downsellConfig.productName,
+            price: edc.price || prev.downsellConfig.price,
+            pitchMessage: edc.pitchMessage || prev.downsellConfig.pitchMessage,
+            link: edc.link || prev.downsellConfig.link
+          },
+          knowledgeAssets:
+            Array.isArray(data.knowledgeAssets) &&
+            data.knowledgeAssets.length > 0
+              ? data.knowledgeAssets
+              : prev.knowledgeAssets,
+          proofPoints:
+            Array.isArray(data.proofPoints) && data.proofPoints.length > 0
+              ? data.proofPoints
+              : prev.proofPoints,
+          noShowProtocol: {
+            firstNoShow: ens.firstNoShow || prev.noShowProtocol.firstNoShow,
+            secondNoShow: ens.secondNoShow || prev.noShowProtocol.secondNoShow
+          },
+          preCallSequence:
+            Array.isArray(data.preCallSequence) &&
+            data.preCallSequence.length > 0
+              ? data.preCallSequence
+              : prev.preCallSequence
+        }));
         toast.success(
           `Persona auto-filled from "${file.name}"! Review the fields and click Save.`
         );
@@ -554,6 +696,46 @@ export default function PersonaSettingsPage() {
                 }
               />
             </div>
+            <div className='grid gap-2'>
+              <Label htmlFor='closerName'>Closer Name (for calls)</Label>
+              <Input
+                id='closerName'
+                placeholder='Name of the person who handles calls (e.g. Anthony)'
+                value={persona.closerName}
+                onChange={(e) => updateField('closerName', e.target.value)}
+              />
+              <p className='text-muted-foreground text-xs'>
+                If left empty, your name will be used.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: Urgency & Commitment */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Urgency & Commitment</CardTitle>
+            <CardDescription>
+              The mandatory urgency question that fires before every soft pitch
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid gap-2'>
+              <Label htmlFor='urgencyQuestion'>Urgency Question</Label>
+              <Textarea
+                id='urgencyQuestion'
+                placeholder='e.g. "I can see the hunger toward achieving [their goal]. But why is now so important to finally make this happen? Why now?"'
+                rows={4}
+                value={persona.promptConfig.urgencyQuestion}
+                onChange={(e) =>
+                  updatePromptConfig('urgencyQuestion', e.target.value)
+                }
+              />
+              <p className='text-muted-foreground text-xs'>
+                This question fires every time before pitching. Gets the lead to
+                verbalize their own urgency.
+              </p>
+            </div>
           </CardContent>
         </Card>
 
@@ -682,6 +864,536 @@ export default function PersonaSettingsPage() {
                 value={persona.objectionHandling.time}
                 onChange={(e) => updateObjection('time', e.target.value)}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: Financial Screening Waterfall */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Financial Screening Waterfall</CardTitle>
+            <CardDescription>
+              Multi-level financial qualification — the AI works through each
+              level in order
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            {persona.financialWaterfall.map((step, i) => (
+              <div key={i} className='space-y-3 rounded-lg border p-4'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-sm font-medium'>Level {i + 1}</span>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => {
+                      setPersona((prev) => ({
+                        ...prev,
+                        financialWaterfall: prev.financialWaterfall.filter(
+                          (_, idx) => idx !== i
+                        )
+                      }));
+                    }}
+                  >
+                    <Trash2 className='h-4 w-4' />
+                  </Button>
+                </div>
+                <div className='grid gap-2'>
+                  <Label>Label (e.g. "Capital", "Credit Score")</Label>
+                  <Input
+                    placeholder='e.g. Capital'
+                    value={step.label}
+                    onChange={(e) => {
+                      const updated = [...persona.financialWaterfall];
+                      updated[i] = { ...updated[i], label: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        financialWaterfall: updated
+                      }));
+                    }}
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>Question to ask</Label>
+                  <Textarea
+                    placeholder='e.g. "How much capital do you have set aside?"'
+                    rows={2}
+                    value={step.question}
+                    onChange={(e) => {
+                      const updated = [...persona.financialWaterfall];
+                      updated[i] = { ...updated[i], question: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        financialWaterfall: updated
+                      }));
+                    }}
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>Qualifying threshold (optional)</Label>
+                  <Input
+                    placeholder='e.g. "$5K+ limit"'
+                    value={step.threshold}
+                    onChange={(e) => {
+                      const updated = [...persona.financialWaterfall];
+                      updated[i] = { ...updated[i], threshold: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        financialWaterfall: updated
+                      }));
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+            <Button
+              variant='outline'
+              onClick={() => {
+                setPersona((prev) => ({
+                  ...prev,
+                  financialWaterfall: [
+                    ...prev.financialWaterfall,
+                    {
+                      label: '',
+                      question: '',
+                      threshold: '',
+                      passAction: 'proceed to booking'
+                    }
+                  ]
+                }));
+              }}
+            >
+              <Plus className='mr-2 h-4 w-4' />
+              Add Waterfall Level
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Section: Downsell Product */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Downsell Product</CardTitle>
+            <CardDescription>
+              A lower-tier product pitched when the main offer is out of reach —
+              not a consolation, but the right entry point
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid grid-cols-2 gap-4'>
+              <div className='grid gap-2'>
+                <Label>Product Name</Label>
+                <Input
+                  placeholder='e.g. Self-Paced Course'
+                  value={persona.downsellConfig.productName}
+                  onChange={(e) =>
+                    setPersona((prev) => ({
+                      ...prev,
+                      downsellConfig: {
+                        ...prev.downsellConfig,
+                        productName: e.target.value
+                      }
+                    }))
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>Price</Label>
+                <Input
+                  placeholder='e.g. $497'
+                  value={persona.downsellConfig.price}
+                  onChange={(e) =>
+                    setPersona((prev) => ({
+                      ...prev,
+                      downsellConfig: {
+                        ...prev.downsellConfig,
+                        price: e.target.value
+                      }
+                    }))
+                  }
+                />
+              </div>
+            </div>
+            <div className='grid gap-2'>
+              <Label>Pitch Message</Label>
+              <Textarea
+                placeholder='How should the AI pitch this product? Position it as the foundation, not lesser than the main offer.'
+                rows={4}
+                value={persona.downsellConfig.pitchMessage}
+                onChange={(e) =>
+                  setPersona((prev) => ({
+                    ...prev,
+                    downsellConfig: {
+                      ...prev.downsellConfig,
+                      pitchMessage: e.target.value
+                    }
+                  }))
+                }
+              />
+            </div>
+            <div className='grid gap-2'>
+              <Label>Payment Link</Label>
+              <Input
+                type='url'
+                placeholder='https://your-site.com/checkout'
+                value={persona.downsellConfig.link}
+                onChange={(e) =>
+                  setPersona((prev) => ({
+                    ...prev,
+                    downsellConfig: {
+                      ...prev.downsellConfig,
+                      link: e.target.value
+                    }
+                  }))
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: Knowledge Assets & Proof Points */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Knowledge Assets & Proof Points</CardTitle>
+            <CardDescription>
+              Stories and social proof the AI weaves into conversations
+              naturally
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-6'>
+            <div>
+              <h4 className='mb-3 text-sm font-medium'>
+                Knowledge Assets (Origin story, testimonials, etc.)
+              </h4>
+              {persona.knowledgeAssets.map((asset, i) => (
+                <div key={i} className='mb-3 space-y-2 rounded-lg border p-4'>
+                  <div className='flex items-center justify-between'>
+                    <Input
+                      placeholder='Title (e.g. "Founder Origin Story")'
+                      value={asset.title}
+                      onChange={(e) => {
+                        const updated = [...persona.knowledgeAssets];
+                        updated[i] = { ...updated[i], title: e.target.value };
+                        setPersona((prev) => ({
+                          ...prev,
+                          knowledgeAssets: updated
+                        }));
+                      }}
+                      className='mr-2 flex-1'
+                    />
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      onClick={() => {
+                        setPersona((prev) => ({
+                          ...prev,
+                          knowledgeAssets: prev.knowledgeAssets.filter(
+                            (_, idx) => idx !== i
+                          )
+                        }));
+                      }}
+                    >
+                      <Trash2 className='h-4 w-4' />
+                    </Button>
+                  </div>
+                  <Textarea
+                    placeholder='The story/content the AI can draw from...'
+                    rows={4}
+                    value={asset.content}
+                    onChange={(e) => {
+                      const updated = [...persona.knowledgeAssets];
+                      updated[i] = { ...updated[i], content: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        knowledgeAssets: updated
+                      }));
+                    }}
+                  />
+                  <Input
+                    placeholder='Deploy trigger (e.g. "trust objection", "rapport building")'
+                    value={asset.deployTrigger}
+                    onChange={(e) => {
+                      const updated = [...persona.knowledgeAssets];
+                      updated[i] = {
+                        ...updated[i],
+                        deployTrigger: e.target.value
+                      };
+                      setPersona((prev) => ({
+                        ...prev,
+                        knowledgeAssets: updated
+                      }));
+                    }}
+                  />
+                </div>
+              ))}
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  setPersona((prev) => ({
+                    ...prev,
+                    knowledgeAssets: [
+                      ...prev.knowledgeAssets,
+                      { title: '', content: '', deployTrigger: '' }
+                    ]
+                  }));
+                }}
+              >
+                <Plus className='mr-2 h-4 w-4' />
+                Add Knowledge Asset
+              </Button>
+            </div>
+
+            <Separator />
+
+            <div>
+              <h4 className='mb-3 text-sm font-medium'>
+                Proof Points (Student success stories)
+              </h4>
+              {persona.proofPoints.map((point, i) => (
+                <div key={i} className='mb-3 flex items-start gap-2'>
+                  <Input
+                    placeholder='Name (e.g. Carlos)'
+                    value={point.name}
+                    onChange={(e) => {
+                      const updated = [...persona.proofPoints];
+                      updated[i] = { ...updated[i], name: e.target.value };
+                      setPersona((prev) => ({ ...prev, proofPoints: updated }));
+                    }}
+                    className='w-32'
+                  />
+                  <Input
+                    placeholder='Result (e.g. "Profitable in 30 days")'
+                    value={point.result}
+                    onChange={(e) => {
+                      const updated = [...persona.proofPoints];
+                      updated[i] = { ...updated[i], result: e.target.value };
+                      setPersona((prev) => ({ ...prev, proofPoints: updated }));
+                    }}
+                    className='flex-1'
+                  />
+                  <Input
+                    placeholder='When to deploy'
+                    value={point.deployContext}
+                    onChange={(e) => {
+                      const updated = [...persona.proofPoints];
+                      updated[i] = {
+                        ...updated[i],
+                        deployContext: e.target.value
+                      };
+                      setPersona((prev) => ({ ...prev, proofPoints: updated }));
+                    }}
+                    className='w-48'
+                  />
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => {
+                      setPersona((prev) => ({
+                        ...prev,
+                        proofPoints: prev.proofPoints.filter(
+                          (_, idx) => idx !== i
+                        )
+                      }));
+                    }}
+                  >
+                    <Trash2 className='h-4 w-4' />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  setPersona((prev) => ({
+                    ...prev,
+                    proofPoints: [
+                      ...prev.proofPoints,
+                      { name: '', result: '', deployContext: '' }
+                    ]
+                  }));
+                }}
+              >
+                <Plus className='mr-2 h-4 w-4' />
+                Add Proof Point
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: Stall Handling */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Stall Handling Scripts</CardTitle>
+            <CardDescription>
+              How the AI handles different types of stalls — each stall type has
+              its own protocol
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid gap-2'>
+              <Label>&ldquo;Text me later / Not a good time&rdquo;</Label>
+              <Textarea
+                placeholder='How to handle leads who say "not now" — acknowledge, set expectation, follow up early'
+                rows={3}
+                value={persona.promptConfig.stallTimeScript}
+                onChange={(e) =>
+                  updatePromptConfig('stallTimeScript', e.target.value)
+                }
+              />
+            </div>
+            <div className='grid gap-2'>
+              <Label>&ldquo;I&apos;ll have money next week&rdquo;</Label>
+              <Textarea
+                placeholder='How to handle delayed money — probe what changes, lock the date'
+                rows={3}
+                value={persona.promptConfig.stallMoneyScript}
+                onChange={(e) =>
+                  updatePromptConfig('stallMoneyScript', e.target.value)
+                }
+              />
+            </div>
+            <div className='grid gap-2'>
+              <Label>&ldquo;Let me think about it&rdquo;</Label>
+              <Textarea
+                placeholder='How to handle "thinking" — find out what specifically they need to think through'
+                rows={3}
+                value={persona.promptConfig.stallThinkScript}
+                onChange={(e) =>
+                  updatePromptConfig('stallThinkScript', e.target.value)
+                }
+              />
+            </div>
+            <div className='grid gap-2'>
+              <Label>&ldquo;I need to talk to my wife / partner&rdquo;</Label>
+              <Textarea
+                placeholder='How to handle partner consultation — acknowledge, arm them for the conversation'
+                rows={3}
+                value={persona.promptConfig.stallPartnerScript}
+                onChange={(e) =>
+                  updatePromptConfig('stallPartnerScript', e.target.value)
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: No-Show & Pre-Call */}
+        <Card>
+          <CardHeader>
+            <CardTitle>No-Show & Pre-Call</CardTitle>
+            <CardDescription>
+              Handle no-shows and build anticipation before scheduled calls
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-6'>
+            <div className='space-y-4'>
+              <h4 className='text-sm font-medium'>No-Show Messages</h4>
+              <div className='grid gap-2'>
+                <Label>First No-Show Message</Label>
+                <Textarea
+                  placeholder='Warm but direct — extend one reschedule opportunity'
+                  rows={3}
+                  value={persona.noShowProtocol.firstNoShow}
+                  onChange={(e) =>
+                    setPersona((prev) => ({
+                      ...prev,
+                      noShowProtocol: {
+                        ...prev.noShowProtocol,
+                        firstNoShow: e.target.value
+                      }
+                    }))
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>Second No-Show Message (Pull Back)</Label>
+                <Textarea
+                  placeholder='Challenge their commitment — "Is NOW genuinely the time to make a change?"'
+                  rows={3}
+                  value={persona.noShowProtocol.secondNoShow}
+                  onChange={(e) =>
+                    setPersona((prev) => ({
+                      ...prev,
+                      noShowProtocol: {
+                        ...prev.noShowProtocol,
+                        secondNoShow: e.target.value
+                      }
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className='space-y-4'>
+              <h4 className='text-sm font-medium'>
+                Pre-Call Reminder Sequence
+              </h4>
+              {persona.preCallSequence.map((item, i) => (
+                <div key={i} className='flex items-start gap-2'>
+                  <select
+                    className='border-input bg-background h-10 rounded-md border px-3 text-sm'
+                    value={item.timing}
+                    onChange={(e) => {
+                      const updated = [...persona.preCallSequence];
+                      updated[i] = { ...updated[i], timing: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        preCallSequence: updated
+                      }));
+                    }}
+                  >
+                    <option value='night_before'>Night Before</option>
+                    <option value='morning_of'>Morning Of</option>
+                    <option value='1_hour_before'>1 Hour Before</option>
+                    <option value='30_min_before'>30 Min Before</option>
+                  </select>
+                  <Textarea
+                    placeholder='Message to send...'
+                    rows={2}
+                    value={item.message}
+                    onChange={(e) => {
+                      const updated = [...persona.preCallSequence];
+                      updated[i] = { ...updated[i], message: e.target.value };
+                      setPersona((prev) => ({
+                        ...prev,
+                        preCallSequence: updated
+                      }));
+                    }}
+                    className='flex-1'
+                  />
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => {
+                      setPersona((prev) => ({
+                        ...prev,
+                        preCallSequence: prev.preCallSequence.filter(
+                          (_, idx) => idx !== i
+                        )
+                      }));
+                    }}
+                  >
+                    <Trash2 className='h-4 w-4' />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  setPersona((prev) => ({
+                    ...prev,
+                    preCallSequence: [
+                      ...prev.preCallSequence,
+                      { timing: 'night_before', message: '' }
+                    ]
+                  }));
+                }}
+              >
+                <Plus className='mr-2 h-4 w-4' />
+                Add Reminder
+              </Button>
             </div>
           </CardContent>
         </Card>

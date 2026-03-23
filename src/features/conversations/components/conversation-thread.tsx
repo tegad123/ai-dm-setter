@@ -10,7 +10,13 @@ import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
-import { IconSend, IconMicrophone, IconRobot } from '@tabler/icons-react';
+import {
+  IconSend,
+  IconMicrophone,
+  IconRobot,
+  IconUserCheck,
+  IconBolt
+} from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import type { LeadStatus } from '@/features/shared/lead-status-badge';
 
@@ -108,22 +114,22 @@ export function ConversationThread({
             </div>
           )}
         </div>
-        <div className='flex items-center gap-2'>
-          <span className='text-muted-foreground text-xs'>AI Active</span>
-          <Switch
-            checked={conversation.aiActive}
-            onCheckedChange={handleToggle}
-          />
-          <Badge
-            variant='outline'
-            className={cn(
-              conversation.aiActive
-                ? 'border-blue-300 text-blue-600 dark:border-blue-700 dark:text-blue-400'
-                : 'border-green-300 text-green-600 dark:border-green-700 dark:text-green-400'
+        <div className='flex items-center gap-3'>
+          <div className='flex items-center gap-2 rounded-full border px-3 py-1.5'>
+            {conversation.aiActive ? (
+              <IconBolt className='h-4 w-4 text-blue-500' />
+            ) : (
+              <IconUserCheck className='h-4 w-4 text-green-500' />
             )}
-          >
-            {conversation.aiActive ? 'AI' : 'Human'}
-          </Badge>
+            <span className='text-xs font-medium'>
+              {conversation.aiActive ? 'AI' : 'Human'}
+            </span>
+            <Switch
+              checked={conversation.aiActive}
+              onCheckedChange={(checked) => handleToggle(checked)}
+              className='data-[state=checked]:bg-blue-500 data-[state=unchecked]:bg-green-500'
+            />
+          </div>
         </div>
       </div>
 

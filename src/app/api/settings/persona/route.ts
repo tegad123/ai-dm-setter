@@ -49,6 +49,13 @@ export async function PUT(req: NextRequest) {
       freeValueLink,
       customPhrases,
       promptConfig,
+      financialWaterfall,
+      downsellConfig,
+      knowledgeAssets,
+      proofPoints,
+      noShowProtocol,
+      preCallSequence,
+      closerName,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -82,7 +89,14 @@ export async function PUT(req: NextRequest) {
       qualityScoringPrompt: qualityScoringPrompt || null,
       freeValueLink: freeValueLink || null,
       customPhrases: customPhrases || undefined,
-      promptConfig: promptConfig || undefined
+      promptConfig: promptConfig || undefined,
+      financialWaterfall: financialWaterfall || undefined,
+      downsellConfig: downsellConfig || undefined,
+      knowledgeAssets: knowledgeAssets || undefined,
+      proofPoints: proofPoints || undefined,
+      noShowProtocol: noShowProtocol || undefined,
+      preCallSequence: preCallSequence || undefined,
+      closerName: closerName || null
     };
 
     // AI engine settings (optional, only set if provided)

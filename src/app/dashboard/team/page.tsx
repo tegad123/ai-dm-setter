@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { TeamView } from '@/features/team/components/team-view';
 
 export const metadata = {
-  title: 'AI DM Setter — Team'
+  title: 'DMsetter — Team'
 };
 
 export default function TeamPage() {

@@ -32,21 +32,13 @@ export async function GET(req: NextRequest) {
 
     const scopes = [
       'instagram_business_basic',
-      'instagram_business_manage_messages',
-      'instagram_business_manage_comments'
+      'instagram_business_manage_messages'
     ].join(',');
 
-    // Instagram's own OAuth dialog (NOT facebook.com)
-    const oauthUrl = new URL('https://www.instagram.com/oauth/authorize');
-    oauthUrl.searchParams.set('client_id', appId);
-    oauthUrl.searchParams.set('redirect_uri', redirectUri);
-    oauthUrl.searchParams.set('state', state);
-    oauthUrl.searchParams.set('scope', scopes);
-    oauthUrl.searchParams.set('response_type', 'code');
-    oauthUrl.searchParams.set('enable_fb_login', '0');
-    oauthUrl.searchParams.set('force_authentication', '1');
+    // Build URL manually to avoid encoding issues with redirect_uri
+    const oauthUrl = `https://www.instagram.com/oauth/authorize?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${scopes}&response_type=code`;
 
-    return NextResponse.redirect(oauthUrl.toString());
+    return NextResponse.redirect(oauthUrl);
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(
