@@ -306,32 +306,40 @@ export default function PersonaSettingsPage() {
     setUploadedFileName(file.name);
 
     try {
-      // Read the file content
-      let documentText = '';
+      toast.info('Reading document...');
 
-      if (file.type === 'application/pdf') {
-        // For PDFs, we'll read as array buffer and send to the API
-        // The API can handle raw text extraction
-        toast.info('Reading PDF...');
-        const text = await file.text();
-        documentText = text;
+      let body: Record<string, string>;
+
+      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        // Send PDF as base64 for server-side parsing with pdf-parse
+        const arrayBuffer = await file.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce(
+            (data, byte) => data + String.fromCharCode(byte),
+            ''
+          )
+        );
+        body = { pdfBase64: base64 };
       } else {
         // For .txt, .md, .doc, .docx — read as text
-        documentText = await file.text();
+        const documentText = await file.text();
+        if (!documentText.trim()) {
+          toast.error('Could not read file content. Try a .txt or .md file.');
+          return;
+        }
+        body = { documentText: documentText.slice(0, 100000) };
       }
 
-      if (!documentText.trim()) {
-        toast.error('Could not read file content. Try a .txt or .md file.');
-        return;
-      }
-
-      toast.info('AI is analyzing your document...', { duration: 10000 });
+      toast.info(
+        'AI is analyzing your document — this may take 30-60 seconds for large SOPs...',
+        { duration: 60000 }
+      );
 
       const res = await apiFetch<{ extracted: any }>(
         '/settings/persona/extract',
         {
           method: 'POST',
-          body: JSON.stringify({ documentText: documentText.slice(0, 50000) }) // Limit to 50k chars
+          body: JSON.stringify(body)
         }
       );
 

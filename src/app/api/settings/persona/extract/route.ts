@@ -4,17 +4,37 @@ import Anthropic from '@anthropic-ai/sdk';
 
 // ---------------------------------------------------------------------------
 // POST /api/settings/persona/extract
-// Takes raw document text and uses Claude to extract all persona fields
+// Takes raw document text OR a base64-encoded PDF and uses Claude to extract
+// all persona fields including SOP-specific content.
 // ---------------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
-    const { documentText } = await request.json();
+    const body = await request.json();
 
-    if (!documentText || typeof documentText !== 'string') {
+    let documentText: string;
+
+    if (body.pdfBase64) {
+      // Parse PDF server-side using dynamic import (required for Next.js)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pdfParseMod = (await import('pdf-parse')) as any;
+      const pdfParse = pdfParseMod.default || pdfParseMod;
+      const buffer = Buffer.from(body.pdfBase64, 'base64');
+      const parsed = await pdfParse(buffer);
+      documentText = parsed.text;
+    } else if (body.documentText && typeof body.documentText === 'string') {
+      documentText = body.documentText;
+    } else {
       return NextResponse.json(
-        { error: 'documentText is required' },
+        { error: 'documentText or pdfBase64 is required' },
+        { status: 400 }
+      );
+    }
+
+    if (!documentText.trim()) {
+      return NextResponse.json(
+        { error: 'Document appears to be empty after parsing' },
         { status: 400 }
       );
     }
@@ -29,94 +49,115 @@ export async function POST(request: NextRequest) {
 
     const client = new Anthropic({ apiKey });
 
+    // Truncate to ~100k chars to stay within context limits
+    const truncated = documentText.slice(0, 100000);
+
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      max_tokens: 16384,
       messages: [
         {
           role: 'user',
-          content: `You are an AI assistant that extracts sales persona configuration from documents.
+          content: `You are an expert at extracting sales persona configuration from SOPs, playbooks, and sales scripts.
 
-Read the following document carefully and extract ALL relevant information to fill out a DM sales persona profile. The document may be a setter playbook, sales script, brand guide, onboarding doc, SOP, or any business document.
+Read the following document VERY carefully — it may be a DM setter SOP, sales playbook, brand guide, or onboarding doc. Your job is to extract EVERY piece of actionable information and map it to the correct field in the JSON structure below.
 
-Extract and return a JSON object with EXACTLY this structure. Fill in as much as possible from the document. Leave fields as empty strings "" or empty arrays [] if the information is not found:
+## EXTRACTION RULES — READ THESE CAREFULLY
+
+1. **Extract ACTUAL scripts and messages VERBATIM** — do not summarize. If the document says "send this message: 'Hey bro...'" then put the exact message in the field.
+2. **Extract ALL content for each field** — if there are multiple scripts for one scenario (e.g. 3 follow-up attempts for no-shows), combine them all into that field.
+3. **Map document sections to fields carefully:**
+   - "No-Show" sections → noShowProtocol.firstNoShow and noShowProtocol.secondNoShow
+   - "Follow-up" or "Stall" sections → the specific stall type fields (stallTimeScript, stallMoneyScript, stallThinkScript, stallPartnerScript)
+   - "Ghost" sequences → followupDay1/Day3/Day7
+   - Financial screening steps (capital, credit, card limits) → financialWaterfall array
+   - Lower-tier product or course pitches → downsellConfig
+   - Founder/origin stories → knowledgeAssets
+   - Student/client success stories with names → proofPoints
+   - Pre-call reminders (night before, morning of, 1 hour before) → preCallSequence
+   - Tone rules, language rules, emoji usage → toneDescription
+   - "Never" rules, absolute rules → customRules
+   - Urgency questions → urgencyQuestion
+   - Booking flow scripts → bookingConfirmationMessage and callPitchMessage
+   - Trust/skepticism handling → objectionHandling.trust
+   - "I tried before" / "been burned" → objectionHandling.priorFailure
+   - Money/pricing objections → objectionHandling.money
+   - Time/busy objections → objectionHandling.time
+4. **For stall scripts:** Include the IMMEDIATE response AND all follow-up attempts (Attempt 1, 2, 3, and soft exit) as one complete block of text.
+5. **For no-show protocol:** Include the full first no-show message AND the second no-show pull-back message. Include any rules about max reschedules.
+6. **For pre-call sequence:** Extract each timed message. Use timing values: "night_before", "morning_of", "1_hour_before", "30_min_before".
+7. **For financial waterfall:** Extract each level as a separate object. Common levels: Capital, Credit Score, Credit Card Limit.
+8. **Never leave a field empty if the document has relevant content.** Search the ENTIRE document for each field.
+
+## OUTPUT JSON STRUCTURE
+
+Return a JSON object with EXACTLY this structure:
 
 {
-  "fullName": "The person's full name or brand owner name",
+  "fullName": "The person's full name or brand owner name found in the document",
   "companyName": "Brand or company name",
-  "freeValueLink": "Any free resource URL mentioned",
-  "closerName": "Name of the person who handles sales calls (if different from the owner)",
+  "freeValueLink": "Any free resource/video URL mentioned (may be a placeholder like [FREE VALUE VIDEO LINK])",
+  "closerName": "Name of the person who handles sales calls if mentioned (e.g. 'Anthony')",
   "objectionHandling": {
-    "trust": "How to handle trust/skepticism objections - extract actual scripts or approaches",
-    "priorFailure": "How to handle 'I've tried this before' objections",
-    "money": "How to handle money/pricing objections",
-    "time": "How to handle 'I don't have time' objections"
+    "trust": "FULL trust/skepticism objection handling script — include the complete response with all paragraphs",
+    "priorFailure": "FULL 'been burned before' / 'tried this before' objection script",
+    "money": "FULL money/pricing objection script",
+    "time": "FULL time/busy objection script"
   },
   "promptConfig": {
-    "whatYouSell": "Description of the offer/product/service",
-    "adminBio": "Bio, credibility, background, results achieved",
-    "toneDescription": "How they communicate - casual, professional, direct, etc.",
-    "toneExamplesGood": "Example messages that match their voice (paste actual examples if found)",
-    "toneExamplesBad": "Things they would NEVER say or styles to avoid",
-    "openingMessageStyle": "How they typically open conversations with new leads",
-    "qualificationQuestions": "Questions used to qualify leads (numbered list)",
-    "disqualificationCriteria": "When NOT to book a call / red flags",
-    "disqualificationMessage": "What to say when disqualifying someone",
-    "urgencyQuestion": "The urgency question asked before pitching (e.g. 'Why is now the time to make this happen?')",
-    "freeValueMessage": "How to introduce free resources",
-    "freeValueFollowup": "What to say after sending a free resource",
-    "callPitchMessage": "How to pitch booking a call",
-    "bookingConfirmationMessage": "What to say when a call is booked",
-    "followupDay1": "24-hour follow-up message if lead goes quiet",
-    "followupDay3": "3-day follow-up message",
-    "followupDay7": "7-day final follow-up message",
-    "stallTimeScript": "How to handle 'text me later / not a good time' stalls",
-    "stallMoneyScript": "How to handle 'I'll have money next week' stalls",
-    "stallThinkScript": "How to handle 'let me think about it' stalls",
-    "stallPartnerScript": "How to handle 'I need to talk to my wife/partner' stalls",
-    "customRules": "Any special rules, do's and don'ts, or instructions"
+    "whatYouSell": "Description of the offer/product/service — mentorship, course, coaching, etc.",
+    "adminBio": "Bio, credibility, background, origin story summary, results achieved",
+    "toneDescription": "How they communicate — include specific words they use ('bro', 'my G'), emoji rules, message length rules, what to never say",
+    "toneExamplesGood": "Actual example messages from the document that show the correct tone",
+    "toneExamplesBad": "Things they explicitly say to NEVER do or say",
+    "openingMessageStyle": "How to open conversations — include both inbound and outbound openers if available",
+    "qualificationQuestions": "All qualification/discovery questions from the document as a numbered list",
+    "disqualificationCriteria": "When to NOT book a call — all hard disqualifiers mentioned",
+    "disqualificationMessage": "What to say when disqualifying — the soft exit message",
+    "urgencyQuestion": "The exact urgency question that must fire before the pitch",
+    "freeValueMessage": "How to introduce the free resource",
+    "freeValueFollowup": "What to say after sending the free resource",
+    "callPitchMessage": "How to pitch the call — include beginner and intermediate versions if both exist",
+    "bookingConfirmationMessage": "The full booking confirmation script — timezone collection, time proposal, double-down, info collection, confirmation",
+    "followupDay1": "Day 1 ghost follow-up message (24hrs after last message)",
+    "followupDay3": "Day 2-3 ghost follow-up message",
+    "followupDay7": "Final ghost follow-up / ultimatum message",
+    "stallTimeScript": "COMPLETE 'text me later / not a good time' handling — immediate response + all 3 follow-up attempts + soft exit",
+    "stallMoneyScript": "COMPLETE 'I'll have money next week' handling — immediate response + all 3 follow-up attempts + soft exit",
+    "stallThinkScript": "COMPLETE 'let me think about it' handling — immediate response + all 3 follow-up attempts + soft exit",
+    "stallPartnerScript": "COMPLETE 'need to talk to wife/partner' handling — immediate response + all 3 follow-up attempts + soft exit",
+    "customRules": "ALL absolute rules, never-violate rules, and special instructions — combine into a numbered list"
   },
   "financialWaterfall": [
-    {"label": "Level name", "question": "Question to ask at this level", "threshold": "Qualifying threshold", "passAction": "What happens if they qualify"}
+    {"label": "Level name (e.g. Capital)", "question": "The exact question to ask", "threshold": "What qualifies (e.g. 'Has sufficient capital')", "passAction": "proceed to booking"}
   ],
   "downsellConfig": {
-    "productName": "Name of the lower-tier product",
-    "price": "Price of the downsell product",
-    "pitchMessage": "How to pitch the downsell product",
-    "link": "Payment or checkout link for the downsell"
+    "productName": "Name of the lower-tier product (e.g. 'Self-Paced Course')",
+    "price": "Price (e.g. '$497')",
+    "pitchMessage": "The FULL downsell pitch script — all steps combined",
+    "link": "Payment link if mentioned (may be placeholder)"
   },
   "knowledgeAssets": [
-    {"title": "Asset name (e.g. Founder Origin Story)", "content": "The full narrative content", "deployTrigger": "When to use this (e.g. trust objection, rapport building)"}
+    {"title": "Asset name", "content": "The FULL narrative content — include the complete story", "deployTrigger": "When to use this"}
   ],
   "proofPoints": [
-    {"name": "Student/client name", "result": "What they achieved", "deployContext": "When to deploy this proof point"}
+    {"name": "Person's name", "result": "What they achieved", "deployContext": "When to deploy this proof"}
   ],
   "noShowProtocol": {
-    "firstNoShow": "Message for first no-show — extend one reschedule",
-    "secondNoShow": "Message for second no-show — pull back and challenge commitment"
+    "firstNoShow": "The COMPLETE first no-show message and any rules about offering a reschedule",
+    "secondNoShow": "The COMPLETE second no-show pull-back message and any rules about stopping outreach"
   },
   "preCallSequence": [
-    {"timing": "night_before|morning_of|1_hour_before|30_min_before", "message": "Message to send at this timing"}
+    {"timing": "night_before|morning_of|1_hour_before", "message": "The exact message to send at this time"}
   ]
 }
 
-IMPORTANT:
-- Extract ACTUAL scripts, messages, and language from the document, not summaries
-- If the document contains example DMs or scripts, use those verbatim
-- Capture their unique voice, slang, emoji usage, and communication style
-- Be thorough — fill every field you can find relevant information for
-- For financialWaterfall, extract multi-level financial screening steps (e.g. capital → credit score → card limit)
-- For knowledgeAssets, extract founder stories, origin stories, or narrative content used for trust building
-- For proofPoints, extract specific student/client success stories with names and results
-- For preCallSequence, extract any timed reminder messages sent before scheduled calls
-- For stall scripts, extract specific responses for each type of stall (time delay, money delay, thinking, partner)
-
 DOCUMENT:
 ---
-${documentText}
+${truncated}
 ---
 
-Return ONLY the JSON object, no markdown formatting, no code blocks, no explanation.`
+Return ONLY valid JSON. No markdown code blocks. No explanation before or after. Just the JSON object.`
         }
       ]
     });
@@ -136,6 +177,10 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no explanat
       if (jsonMatch) {
         extracted = JSON.parse(jsonMatch[0]);
       } else {
+        console.error(
+          'Failed to parse extraction response:',
+          responseText.slice(0, 500)
+        );
         return NextResponse.json(
           { error: 'Failed to parse AI response' },
           { status: 500 }
