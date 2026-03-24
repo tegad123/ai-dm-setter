@@ -6,61 +6,12 @@ import Anthropic from '@anthropic-ai/sdk';
 // POST /api/settings/persona/extract
 // Takes raw document text OR a base64-encoded PDF and uses Claude to extract
 // all persona fields including SOP-specific content.
+// PDFs are sent directly to Claude as base64 documents (native PDF support).
 // ---------------------------------------------------------------------------
 
-export async function POST(request: NextRequest) {
-  try {
-    const auth = await requireAuth(request);
-    const body = await request.json();
+const EXTRACTION_PROMPT = `You are an expert at extracting sales persona configuration from SOPs, playbooks, and sales scripts.
 
-    let documentText: string;
-
-    if (body.pdfBase64) {
-      // Parse PDF server-side using dynamic import (required for Next.js)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pdfParseMod = (await import('pdf-parse')) as any;
-      const pdfParse = pdfParseMod.default || pdfParseMod;
-      const buffer = Buffer.from(body.pdfBase64, 'base64');
-      const parsed = await pdfParse(buffer);
-      documentText = parsed.text;
-    } else if (body.documentText && typeof body.documentText === 'string') {
-      documentText = body.documentText;
-    } else {
-      return NextResponse.json(
-        { error: 'documentText or pdfBase64 is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!documentText.trim()) {
-      return NextResponse.json(
-        { error: 'Document appears to be empty after parsing' },
-        { status: 400 }
-      );
-    }
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'Anthropic API key not configured' },
-        { status: 500 }
-      );
-    }
-
-    const client = new Anthropic({ apiKey });
-
-    // Truncate to ~100k chars to stay within context limits
-    const truncated = documentText.slice(0, 100000);
-
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16384,
-      messages: [
-        {
-          role: 'user',
-          content: `You are an expert at extracting sales persona configuration from SOPs, playbooks, and sales scripts.
-
-Read the following document VERY carefully — it may be a DM setter SOP, sales playbook, brand guide, or onboarding doc. Your job is to extract EVERY piece of actionable information and map it to the correct field in the JSON structure below.
+Read the document VERY carefully — it may be a DM setter SOP, sales playbook, brand guide, or onboarding doc. Your job is to extract EVERY piece of actionable information and map it to the correct field in the JSON structure below.
 
 ## EXTRACTION RULES — READ THESE CAREFULLY
 
@@ -152,12 +103,65 @@ Return a JSON object with EXACTLY this structure:
   ]
 }
 
-DOCUMENT:
----
-${truncated}
----
+Return ONLY valid JSON. No markdown code blocks. No explanation before or after. Just the JSON object.`;
 
-Return ONLY valid JSON. No markdown code blocks. No explanation before or after. Just the JSON object.`
+export async function POST(request: NextRequest) {
+  try {
+    const auth = await requireAuth(request);
+    const body = await request.json();
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'Anthropic API key not configured' },
+        { status: 500 }
+      );
+    }
+
+    const client = new Anthropic({ apiKey });
+
+    // Build the message content based on input type
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let messageContent: any[];
+
+    if (body.pdfBase64) {
+      // Send PDF directly to Claude using native PDF support (no parsing library needed)
+      messageContent = [
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: body.pdfBase64
+          }
+        },
+        {
+          type: 'text',
+          text: EXTRACTION_PROMPT
+        }
+      ];
+    } else if (body.documentText && typeof body.documentText === 'string') {
+      const truncated = body.documentText.slice(0, 100000);
+      messageContent = [
+        {
+          type: 'text',
+          text: `${EXTRACTION_PROMPT}\n\nDOCUMENT:\n---\n${truncated}\n---`
+        }
+      ];
+    } else {
+      return NextResponse.json(
+        { error: 'documentText or pdfBase64 is required' },
+        { status: 400 }
+      );
+    }
+
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [
+        {
+          role: 'user',
+          content: messageContent
         }
       ]
     });
