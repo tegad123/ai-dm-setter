@@ -365,14 +365,37 @@ export async function scheduleAIReply(
         }
       }
     } catch (aiError: any) {
+      const errMsg = aiError?.message || String(aiError);
+      const errStack =
+        aiError?.stack?.split('\n').slice(0, 3).join(' | ') || '';
       console.error(
-        '[ai-reply] AI engine failed:',
-        aiError?.message || aiError
+        `[ai-reply] AI ENGINE FAILED — Error: ${errMsg} — Stack: ${errStack}`
       );
-      console.error(
-        '[ai-reply] Full error:',
-        JSON.stringify(aiError, Object.getOwnPropertyNames(aiError))
-      );
+
+      // Detect missing API key and notify user
+      const isApiKeyError =
+        /no ai.*key|api key not configured|api.*key.*missing|no ai provider/i.test(
+          errMsg
+        ) || /invalid.*api.*key|authentication|unauthorized|401/i.test(errMsg);
+
+      if (isApiKeyError) {
+        try {
+          const { createNotification } = await import('@/lib/notifications');
+          await createNotification({
+            accountId: acctId,
+            type: 'SYSTEM',
+            title: 'AI Replies Paused — API Key Missing',
+            body: 'Your AI cannot respond to leads because no API key is configured. Go to Settings → Integrations to add your OpenAI or Anthropic API key.'
+          });
+          console.error('[ai-reply] Notified user about missing API key.');
+        } catch (notifErr) {
+          console.error(
+            '[ai-reply] Failed to create API key notification:',
+            notifErr
+          );
+        }
+      }
+
       // NEVER send a generic fallback — it confuses the lead.
       console.error('[ai-reply] Skipping reply to avoid generic message.');
       return;

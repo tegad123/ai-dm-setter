@@ -98,30 +98,39 @@ async function resolveAICredentials(
     };
   }
 
-  // Load .env with override to handle shell env vars that are set but empty
-  const dotenv = await import('dotenv');
-  const parsed = dotenv.config({ override: true }).parsed || {};
+  // Use process.env directly (Vercel injects env vars at runtime).
+  // Only load dotenv in local dev when .env file exists.
+  if (process.env.NODE_ENV === 'development') {
+    try {
+      const dotenv = await import('dotenv');
+      dotenv.config(); // don't override — let process.env win
+    } catch {
+      // dotenv not available, that's fine
+    }
+  }
 
   const envProvider = (
-    parsed.AI_PROVIDER ||
-    process.env.AI_PROVIDER ||
-    'openai'
+    process.env.AI_PROVIDER || 'anthropic'
   ).toLowerCase() as AIProvider;
   const envKey =
     envProvider === 'anthropic'
-      ? parsed.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
-      : parsed.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+      ? process.env.ANTHROPIC_API_KEY
+      : process.env.OPENAI_API_KEY;
+
+  console.log(
+    `[ai-creds] Resolved provider=${envProvider}, hasKey=${!!envKey}`
+  );
 
   if (!envKey) {
     throw new Error(
-      'No AI provider configured. Please add your OpenAI or Anthropic API key in Settings → Integrations.'
+      `No AI API key found. Provider=${envProvider}. Please set ${envProvider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'} in your environment variables.`
     );
   }
 
   return {
     provider: envProvider,
     apiKey: envKey,
-    model: parsed.AI_MODEL || process.env.AI_MODEL || undefined
+    model: process.env.AI_MODEL || undefined
   };
 }
 
