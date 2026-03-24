@@ -240,6 +240,65 @@ export async function scheduleAIReply(
   // Run AI reply inline (no setTimeout — Vercel serverless kills the context after response).
   // In production with a proper server, use a job queue (e.g. BullMQ, SQS) for delayed replies.
   try {
+    // ── Testing: "clear conversation history" command ─────────────
+    // Check if the latest message is requesting a history clear
+    const latestMsg = await prisma.message.findFirst({
+      where: { conversationId, sender: 'LEAD' },
+      orderBy: { timestamp: 'desc' }
+    });
+
+    if (latestMsg && /clear conversation history/i.test(latestMsg.content)) {
+      console.log(
+        `[ai-reply] Clearing conversation history for ${conversationId}`
+      );
+      await prisma.message.deleteMany({
+        where: { conversationId }
+      });
+
+      // Send a confirmation message back
+      await prisma.message.create({
+        data: {
+          conversationId,
+          sender: 'AI',
+          content: 'Conversation history cleared. Starting fresh!',
+          timestamp: new Date()
+        }
+      });
+
+      // Send confirmation back via the lead's platform
+      const convo = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        include: { lead: true }
+      });
+      if (convo?.lead?.platformUserId) {
+        try {
+          if (convo.lead.platform === 'FACEBOOK') {
+            const { sendMessage } = await import('@/lib/facebook');
+            await sendMessage(
+              convo.lead.accountId,
+              convo.lead.platformUserId,
+              'Conversation history cleared. Starting fresh!'
+            );
+          } else if (convo.lead.platform === 'INSTAGRAM') {
+            const { sendDM } = await import('@/lib/instagram');
+            await sendDM(
+              convo.lead.accountId,
+              convo.lead.platformUserId,
+              'Conversation history cleared. Starting fresh!'
+            );
+          }
+        } catch (sendErr) {
+          console.error(
+            '[ai-reply] Failed to send clear confirmation:',
+            sendErr
+          );
+        }
+      }
+
+      pendingAIReplies.delete(conversationId);
+      return;
+    }
+
     // Check if AI is still active for this conversation
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
