@@ -21,8 +21,10 @@ import {
   FileText,
   Sparkles,
   Plus,
-  Trash2
+  Trash2,
+  CheckCircle2
 } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
 import { VoiceProfileDashboard } from '@/features/voice-profile/components/profile-dashboard';
 
 interface WaterfallStep {
@@ -148,6 +150,9 @@ export default function PersonaSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [extractionProgress, setExtractionProgress] = useState(0);
+  const [extractionStage, setExtractionStage] = useState('');
+  const [extractionDone, setExtractionDone] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -303,15 +308,17 @@ export default function PersonaSettingsPage() {
     if (!file) return;
 
     setExtracting(true);
+    setExtractionDone(false);
+    setExtractionProgress(0);
+    setExtractionStage('Reading document...');
     setUploadedFileName(file.name);
 
     try {
-      toast.info('Reading document...');
-
       let body: Record<string, string>;
 
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        // Send PDF as base64 for server-side parsing with pdf-parse
+        setExtractionProgress(10);
+        setExtractionStage('Parsing PDF...');
         const arrayBuffer = await file.arrayBuffer();
         const base64 = btoa(
           new Uint8Array(arrayBuffer).reduce(
@@ -321,19 +328,45 @@ export default function PersonaSettingsPage() {
         );
         body = { pdfBase64: base64 };
       } else {
-        // For .txt, .md, .doc, .docx — read as text
         const documentText = await file.text();
         if (!documentText.trim()) {
           toast.error('Could not read file content. Try a .txt or .md file.');
+          setExtracting(false);
           return;
         }
         body = { documentText: documentText.slice(0, 100000) };
       }
 
-      toast.info(
-        'AI is analyzing your document — this may take 30-60 seconds for large SOPs...',
-        { duration: 60000 }
-      );
+      setExtractionProgress(20);
+      setExtractionStage('Uploading to AI...');
+
+      // Simulate progress while waiting for AI analysis
+      const progressInterval = setInterval(() => {
+        setExtractionProgress((prev) => {
+          if (prev >= 85) {
+            clearInterval(progressInterval);
+            return 85;
+          }
+          return prev + Math.random() * 8;
+        });
+        setExtractionStage((prev) => {
+          // Rotate through analysis stages
+          const stages = [
+            'AI is reading your document...',
+            'Extracting sales scripts...',
+            'Mapping objection handling...',
+            'Identifying follow-up sequences...',
+            'Extracting qualification questions...',
+            'Mapping stall scripts...',
+            'Processing no-show protocols...',
+            'Finalizing extraction...'
+          ];
+          const currentIdx = stages.indexOf(prev);
+          if (currentIdx < 0 || currentIdx >= stages.length - 1)
+            return stages[0];
+          return stages[currentIdx + 1];
+        });
+      }, 3000);
 
       const res = await apiFetch<{ extracted: any }>(
         '/settings/persona/extract',
@@ -342,6 +375,10 @@ export default function PersonaSettingsPage() {
           body: JSON.stringify(body)
         }
       );
+
+      clearInterval(progressInterval);
+      setExtractionProgress(95);
+      setExtractionStage('Filling in fields...');
 
       const data = res.extracted;
       if (data) {
@@ -437,13 +474,20 @@ export default function PersonaSettingsPage() {
               ? data.preCallSequence
               : prev.preCallSequence
         }));
+        setExtractionProgress(100);
+        setExtractionStage('Done! All fields have been filled.');
+        setExtractionDone(true);
         toast.success(
           `Persona auto-filled from "${file.name}"! Review the fields and click Save.`
         );
+        // Reset done state after 5 seconds
+        setTimeout(() => setExtractionDone(false), 5000);
       }
     } catch (err) {
       console.error('Document extraction error:', err);
       toast.error('Failed to extract persona from document');
+      setExtractionProgress(0);
+      setExtractionStage('');
     } finally {
       setExtracting(false);
       // Reset file input
@@ -475,58 +519,112 @@ export default function PersonaSettingsPage() {
       </div>
 
       {/* Document Upload — Auto-fill */}
-      <Card className='border-2 border-dashed border-blue-200 bg-blue-50/30 dark:border-blue-800 dark:bg-blue-950/20'>
-        <CardContent className='flex flex-col items-center gap-4 py-8 sm:flex-row sm:justify-between'>
-          <div className='flex items-center gap-3'>
-            <div className='flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900'>
-              <Sparkles className='h-6 w-6 text-blue-600 dark:text-blue-400' />
+      <Card
+        className={`border-2 border-dashed ${extractionDone ? 'border-green-300 bg-green-50/30 dark:border-green-800 dark:bg-green-950/20' : 'border-blue-200 bg-blue-50/30 dark:border-blue-800 dark:bg-blue-950/20'}`}
+      >
+        <CardContent className='flex flex-col gap-4 py-8'>
+          <div className='flex flex-col items-center gap-4 sm:flex-row sm:justify-between'>
+            <div className='flex items-center gap-3'>
+              <div
+                className={`flex h-12 w-12 items-center justify-center rounded-full ${extractionDone ? 'bg-green-100 dark:bg-green-900' : 'bg-blue-100 dark:bg-blue-900'}`}
+              >
+                {extractionDone ? (
+                  <CheckCircle2 className='h-6 w-6 text-green-600 dark:text-green-400' />
+                ) : (
+                  <Sparkles className='h-6 w-6 text-blue-600 dark:text-blue-400' />
+                )}
+              </div>
+              <div>
+                <h3 className='font-semibold'>
+                  {extractionDone
+                    ? 'Document Analyzed!'
+                    : 'Auto-Fill from Document'}
+                </h3>
+                <p className='text-muted-foreground text-sm'>
+                  {extractionDone
+                    ? 'All fields have been filled. Review them below and click Save.'
+                    : 'Upload your setter playbook, sales script, or brand guide — AI will extract everything and fill all fields automatically.'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className='font-semibold'>Auto-Fill from Document</h3>
-              <p className='text-muted-foreground text-sm'>
-                Upload your setter playbook, sales script, or brand guide — AI
-                will extract everything and fill all fields automatically.
+            <div className='flex items-center gap-3'>
+              {uploadedFileName && !extracting && (
+                <span className='text-muted-foreground flex items-center gap-1 text-sm'>
+                  <FileText className='h-4 w-4' />
+                  {uploadedFileName}
+                </span>
+              )}
+              <label htmlFor='doc-upload'>
+                <input
+                  id='doc-upload'
+                  type='file'
+                  accept='.txt,.md,.doc,.docx,.pdf'
+                  className='hidden'
+                  onChange={handleDocumentUpload}
+                  disabled={extracting}
+                />
+                <Button
+                  variant={extractionDone ? 'outline' : 'default'}
+                  disabled={extracting}
+                  className='cursor-pointer'
+                  asChild
+                >
+                  <span>
+                    {extracting ? (
+                      <>
+                        <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                        Analyzing...
+                      </>
+                    ) : extractionDone ? (
+                      <>
+                        <Upload className='mr-2 h-4 w-4' />
+                        Upload Another
+                      </>
+                    ) : (
+                      <>
+                        <Upload className='mr-2 h-4 w-4' />
+                        Upload Document
+                      </>
+                    )}
+                  </span>
+                </Button>
+              </label>
+            </div>
+          </div>
+
+          {/* Progress Bar — visible during extraction */}
+          {extracting && (
+            <div className='mt-2 space-y-2'>
+              <div className='flex items-center justify-between'>
+                <span className='text-sm font-medium text-blue-700 dark:text-blue-300'>
+                  {extractionStage}
+                </span>
+                <span className='text-sm font-medium text-blue-700 dark:text-blue-300'>
+                  {Math.round(extractionProgress)}%
+                </span>
+              </div>
+              <Progress value={extractionProgress} className='h-2' />
+              <p className='text-muted-foreground text-xs'>
+                This can take 30-60 seconds for large documents. Do not close
+                this page.
               </p>
             </div>
-          </div>
-          <div className='flex items-center gap-3'>
-            {uploadedFileName && !extracting && (
-              <span className='text-muted-foreground flex items-center gap-1 text-sm'>
-                <FileText className='h-4 w-4' />
-                {uploadedFileName}
-              </span>
-            )}
-            <label htmlFor='doc-upload'>
-              <input
-                id='doc-upload'
-                type='file'
-                accept='.txt,.md,.doc,.docx,.pdf'
-                className='hidden'
-                onChange={handleDocumentUpload}
-                disabled={extracting}
-              />
-              <Button
-                variant='default'
-                disabled={extracting}
-                className='cursor-pointer'
-                asChild
-              >
-                <span>
-                  {extracting ? (
-                    <>
-                      <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className='mr-2 h-4 w-4' />
-                      Upload Document
-                    </>
-                  )}
+          )}
+
+          {/* Done state — briefly shown after extraction completes */}
+          {!extracting && extractionDone && (
+            <div className='mt-2 space-y-2'>
+              <div className='flex items-center justify-between'>
+                <span className='text-sm font-medium text-green-700 dark:text-green-300'>
+                  ✓ Extraction complete — all fields populated
                 </span>
-              </Button>
-            </label>
-          </div>
+                <span className='text-sm font-medium text-green-700 dark:text-green-300'>
+                  100%
+                </span>
+              </div>
+              <Progress value={100} className='h-2' />
+            </div>
+          )}
         </CardContent>
       </Card>
 
