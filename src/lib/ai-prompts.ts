@@ -70,7 +70,7 @@ Never let a lead go until they are confirmed unqualified across ALL disqualifier
 **Hard Disqualifiers — The ONLY Valid Exit Triggers:**
 
 The AI exits a conversation ONLY when one of these conditions is fully confirmed:
-1. Lead has NO financial capacity across ALL options (capital, credit, cards — all confirmed insufficient) AND no downsell product is available or they declined it
+1. Lead has NO financial capacity across ALL options (capital, credit, cards — all confirmed insufficient)
 2. Lead has explicitly stated zero interest — not hesitation, not objection, but flat confirmed disinterest
 3. Lead has explicitly told you to stop messaging them
 
@@ -124,8 +124,7 @@ Your mission with every lead: find the right people who are genuinely ready for 
 6. Guide them through financial qualification naturally
 7. Handle any objections they raise — an objection is never an exit
 8. Book qualified leads onto your calendar
-9. Pitch the downsell product to warm leads who can't afford the main offer
-10. Tag and handle unqualified leads appropriately
+9. Tag and handle unqualified leads appropriately
 
 ---
 
@@ -220,13 +219,9 @@ Before moving to financial screening, confirm commitment: "Before I put together
 
 ### STAGE 6 — FINANCIAL SCREENING
 
-Work through each financial qualification level in order. Qualifying at ANY level means proceed directly to Stage 7 (Booking). Only after ALL levels are exhausted does the downsell pitch trigger.
+Work through each financial qualification level in order. Qualifying at ANY level means proceed directly to Stage 7 (Booking).
 
 {{FINANCIAL_WATERFALL}}
-
-**If ALL levels exhausted but lead is warm and committed → pitch downsell:**
-
-{{DOWNSELL_PITCH}}
 
 **If lead has no financial capacity at all → soft exit:**
 Send one warm closing message with the free value link. Leave the door open. Tag as appropriate.
@@ -631,7 +626,7 @@ function buildFinancialWaterfallBlock(waterfall: unknown): string {
     }
     block += `If qualified at this level → ${step.passAction || 'proceed to Stage 7 (Booking)'}. Otherwise → move to Level ${i + 2}.\n`;
   }
-  block += `\nIf ALL levels exhausted → pitch downsell product (if configured) or soft exit.`;
+  block += `\nIf ALL levels exhausted → soft exit with free value link. Leave the door open.`;
   return block;
 }
 
@@ -853,25 +848,6 @@ function buildFromPersona(
     /\{\{FINANCIAL_WATERFALL\}\}/g,
     buildFinancialWaterfallBlock(persona.financialWaterfall)
   );
-
-  // ── Replace downsell pitch ─────────────────────────────────────────────
-  const downsell = persona.downsellConfig as {
-    productName?: string;
-    price?: string;
-    pitchMessage?: string;
-    link?: string;
-  } | null;
-  if (downsell?.productName) {
-    prompt = prompt.replace(
-      /\{\{DOWNSELL_PITCH\}\}/g,
-      `**Downsell Product: ${downsell.productName}** (${downsell.price || 'price set by account'})\n\n${downsell.pitchMessage || 'Position this as the right entry point — not a lesser option. The foundation they need before the full program.'}\n\nNever frame the downsell as lesser than the main offer. Position it as the foundation. Always leave the door open to the full program with "when you're ready" energy.\n\n${downsell.link ? `Payment link: ${downsell.link}` : ''}`
-    );
-  } else {
-    prompt = prompt.replace(
-      /\{\{DOWNSELL_PITCH\}\}/g,
-      'No downsell product configured. If the lead cannot afford the main offer, soft exit with free value.'
-    );
-  }
 
   // ── Replace knowledge assets & proof points ────────────────────────────
   prompt = prompt.replace(

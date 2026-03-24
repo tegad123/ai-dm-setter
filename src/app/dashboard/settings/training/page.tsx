@@ -47,7 +47,6 @@ const CATEGORIES = [
   'GHOST_SEQUENCE',
   'NO_SHOW',
   'PRE_CALL_NURTURE',
-  'DOWNSELL',
   'ORIGIN_STORY',
   'PROOF_POINT',
   'GENERAL'
@@ -79,8 +78,6 @@ const CATEGORY_COLORS: Record<Category, string> = {
   NO_SHOW: 'bg-zinc-100 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-300',
   PRE_CALL_NURTURE:
     'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300',
-  DOWNSELL:
-    'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-300',
   ORIGIN_STORY: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-300',
   PROOF_POINT: 'bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-300',
   GENERAL: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
@@ -269,13 +266,6 @@ export default function TrainingDataPage() {
       combined.includes('night before')
     )
       return 'PRE_CALL_NURTURE';
-    if (
-      combined.includes('downsell') ||
-      combined.includes('course') ||
-      combined.includes('lower price') ||
-      combined.includes('entry point')
-    )
-      return 'DOWNSELL';
     if (
       combined.includes('origin story') ||
       combined.includes('my story') ||

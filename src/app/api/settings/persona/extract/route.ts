@@ -22,7 +22,6 @@ Read the document VERY carefully — it may be a DM setter SOP, sales playbook, 
    - "Follow-up" or "Stall" sections → the specific stall type fields (stallTimeScript, stallMoneyScript, stallThinkScript, stallPartnerScript)
    - "Ghost" sequences → followupDay1/Day3/Day7
    - Financial screening steps (capital, credit, card limits) → financialWaterfall array
-   - Lower-tier product or course pitches → downsellConfig
    - Founder/origin stories → knowledgeAssets
    - Student/client success stories with names → proofPoints
    - Pre-call reminders (night before, morning of, 1 hour before) → preCallSequence
@@ -82,12 +81,6 @@ Return a JSON object with EXACTLY this structure:
   "financialWaterfall": [
     {"label": "Level name (e.g. Capital)", "question": "The exact question to ask", "threshold": "What qualifies (e.g. 'Has sufficient capital')", "passAction": "proceed to booking"}
   ],
-  "downsellConfig": {
-    "productName": "Name of the lower-tier product (e.g. 'Self-Paced Course')",
-    "price": "Price (e.g. '$497')",
-    "pitchMessage": "The FULL downsell pitch script — all steps combined",
-    "link": "Payment link if mentioned (may be placeholder)"
-  },
   "knowledgeAssets": [
     {"title": "Asset name", "content": "The FULL narrative content — include the complete story", "deployTrigger": "When to use this"}
   ],

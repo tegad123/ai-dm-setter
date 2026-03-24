@@ -87,12 +87,6 @@ interface PersonaData {
     customRules: string;
   };
   financialWaterfall: WaterfallStep[];
-  downsellConfig: {
-    productName: string;
-    price: string;
-    pitchMessage: string;
-    link: string;
-  };
   knowledgeAssets: KnowledgeAsset[];
   proofPoints: ProofPoint[];
   noShowProtocol: {
@@ -138,7 +132,6 @@ const defaultPersona: PersonaData = {
     customRules: ''
   },
   financialWaterfall: [],
-  downsellConfig: { productName: '', price: '', pitchMessage: '', link: '' },
   knowledgeAssets: [],
   proofPoints: [],
   noShowProtocol: { firstNoShow: '', secondNoShow: '' },
@@ -163,7 +156,6 @@ export default function PersonaSettingsPage() {
         if (data) {
           const pc = data.promptConfig || {};
           const oh = data.objectionHandling || {};
-          const dc = data.downsellConfig || {};
           const ns = data.noShowProtocol || {};
           setPersona({
             fullName: data.fullName ?? '',
@@ -203,12 +195,6 @@ export default function PersonaSettingsPage() {
             financialWaterfall: Array.isArray(data.financialWaterfall)
               ? data.financialWaterfall
               : [],
-            downsellConfig: {
-              productName: dc.productName ?? '',
-              price: dc.price ?? '',
-              pitchMessage: dc.pitchMessage ?? '',
-              link: dc.link ?? ''
-            },
             knowledgeAssets: Array.isArray(data.knowledgeAssets)
               ? data.knowledgeAssets
               : [],
@@ -275,9 +261,6 @@ export default function PersonaSettingsPage() {
             persona.financialWaterfall.length > 0
               ? persona.financialWaterfall
               : undefined,
-          downsellConfig: persona.downsellConfig.productName
-            ? persona.downsellConfig
-            : undefined,
           knowledgeAssets:
             persona.knowledgeAssets.length > 0
               ? persona.knowledgeAssets
@@ -383,7 +366,6 @@ export default function PersonaSettingsPage() {
       const data = res.extracted;
       if (data) {
         const epc = data.promptConfig || {};
-        const edc = data.downsellConfig || {};
         const ens = data.noShowProtocol || {};
         setPersona((prev) => ({
           fullName: data.fullName || prev.fullName,
@@ -449,12 +431,6 @@ export default function PersonaSettingsPage() {
             data.financialWaterfall.length > 0
               ? data.financialWaterfall
               : prev.financialWaterfall,
-          downsellConfig: {
-            productName: edc.productName || prev.downsellConfig.productName,
-            price: edc.price || prev.downsellConfig.price,
-            pitchMessage: edc.pitchMessage || prev.downsellConfig.pitchMessage,
-            link: edc.link || prev.downsellConfig.link
-          },
           knowledgeAssets:
             Array.isArray(data.knowledgeAssets) &&
             data.knowledgeAssets.length > 0
@@ -1071,87 +1047,6 @@ export default function PersonaSettingsPage() {
               <Plus className='mr-2 h-4 w-4' />
               Add Waterfall Level
             </Button>
-          </CardContent>
-        </Card>
-
-        {/* Section: Downsell Product */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Downsell Product</CardTitle>
-            <CardDescription>
-              A lower-tier product pitched when the main offer is out of reach —
-              not a consolation, but the right entry point
-            </CardDescription>
-          </CardHeader>
-          <CardContent className='space-y-4'>
-            <div className='grid grid-cols-2 gap-4'>
-              <div className='grid gap-2'>
-                <Label>Product Name</Label>
-                <Input
-                  placeholder='e.g. Self-Paced Course'
-                  value={persona.downsellConfig.productName}
-                  onChange={(e) =>
-                    setPersona((prev) => ({
-                      ...prev,
-                      downsellConfig: {
-                        ...prev.downsellConfig,
-                        productName: e.target.value
-                      }
-                    }))
-                  }
-                />
-              </div>
-              <div className='grid gap-2'>
-                <Label>Price</Label>
-                <Input
-                  placeholder='e.g. $497'
-                  value={persona.downsellConfig.price}
-                  onChange={(e) =>
-                    setPersona((prev) => ({
-                      ...prev,
-                      downsellConfig: {
-                        ...prev.downsellConfig,
-                        price: e.target.value
-                      }
-                    }))
-                  }
-                />
-              </div>
-            </div>
-            <div className='grid gap-2'>
-              <Label>Pitch Message</Label>
-              <Textarea
-                placeholder='How should the AI pitch this product? Position it as the foundation, not lesser than the main offer.'
-                rows={4}
-                value={persona.downsellConfig.pitchMessage}
-                onChange={(e) =>
-                  setPersona((prev) => ({
-                    ...prev,
-                    downsellConfig: {
-                      ...prev.downsellConfig,
-                      pitchMessage: e.target.value
-                    }
-                  }))
-                }
-              />
-            </div>
-            <div className='grid gap-2'>
-              <Label>Payment Link</Label>
-              <Input
-                type='url'
-                placeholder='https://your-site.com/checkout'
-                value={persona.downsellConfig.link}
-                onChange={(e) =>
-                  setPersona((prev) => ({
-                    ...prev,
-                    downsellConfig: {
-                      ...prev.downsellConfig,
-                      link: e.target.value
-                    }
-                  }))
-                }
-              />
-            </div>
           </CardContent>
         </Card>
 
