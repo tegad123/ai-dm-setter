@@ -46,7 +46,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 
 export default function AppSidebar() {
   const pathname = usePathname();
-  const { user, account } = useAuth();
+  const { user, account, logout } = useAuth();
 
   return (
     <Sidebar collapsible='icon'>
@@ -205,7 +205,7 @@ export default function AppSidebar() {
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={logout}>
                   <IconLogout className='mr-2 h-4 w-4' />
                   Log out
                 </DropdownMenuItem>
