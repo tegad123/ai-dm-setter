@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       // Decrypt the access token
       let accessToken: string;
       try {
-        const decrypted = JSON.parse(decrypt(cred.encryptedCredentials));
+        const decrypted = JSON.parse(decrypt(cred.credentials as string));
         accessToken = decrypted.accessToken;
       } catch {
         results.push({ pageId, pageName, success: false, error: 'Failed to decrypt credentials' });
