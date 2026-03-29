@@ -30,16 +30,31 @@ export async function GET(req: NextRequest) {
       JSON.stringify({ accountId: auth.accountId, userId: auth.userId })
     ).toString('base64url');
 
-    // Facebook Login for Business uses config_id instead of individual scopes
-    // The configuration defines which permissions and assets are requested
-    const configId = process.env.META_LOGIN_CONFIG_ID || '1483740213164823';
+    // Try config_id first (Facebook Login for Business), fall back to scope
+    const configId = process.env.META_LOGIN_CONFIG_ID;
 
     const oauthUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');
     oauthUrl.searchParams.set('client_id', appId);
     oauthUrl.searchParams.set('redirect_uri', redirectUri);
     oauthUrl.searchParams.set('state', state);
-    oauthUrl.searchParams.set('config_id', configId);
     oauthUrl.searchParams.set('response_type', 'code');
+
+    if (configId) {
+      // Facebook Login for Business mode — use config_id (no scope)
+      oauthUrl.searchParams.set('config_id', configId);
+    } else {
+      // Standard mode — use scope parameter directly
+      // Only request permissions that have Advanced Access approved
+      const scopes = [
+        'instagram_business_basic',
+        'instagram_business_manage_messages',
+        'pages_messaging',
+        'pages_show_list',
+        'pages_read_engagement',
+        'pages_manage_metadata'
+      ].join(',');
+      oauthUrl.searchParams.set('scope', scopes);
+    }
 
     return NextResponse.redirect(oauthUrl.toString());
   } catch (error) {
