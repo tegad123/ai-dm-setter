@@ -50,14 +50,42 @@ export async function POST(request: NextRequest) {
 
     console.log(`[deauthorize] User ${userId} removed the app`);
 
-    // Deactivate all META and INSTAGRAM credentials for this user
-    await prisma.integrationCredential.updateMany({
+    // Deactivate only the credentials matching this specific Meta user ID
+    // Try matching by igUserId first, then by pageId
+    const byIgUser = await prisma.integrationCredential.updateMany({
       where: {
         provider: { in: ['META', 'INSTAGRAM'] },
-        isActive: true
+        isActive: true,
+        metadata: { path: ['igUserId'], equals: String(userId) }
       },
       data: { isActive: false }
     });
+
+    if (byIgUser.count === 0) {
+      // Try matching by pageId
+      const byPage = await prisma.integrationCredential.updateMany({
+        where: {
+          provider: { in: ['META', 'INSTAGRAM'] },
+          isActive: true,
+          metadata: { path: ['pageId'], equals: String(userId) }
+        },
+        data: { isActive: false }
+      });
+
+      if (byPage.count === 0) {
+        // Try matching by instagramAccountId
+        await prisma.integrationCredential.updateMany({
+          where: {
+            provider: { in: ['META', 'INSTAGRAM'] },
+            isActive: true,
+            metadata: { path: ['instagramAccountId'], equals: String(userId) }
+          },
+          data: { isActive: false }
+        });
+      }
+    }
+
+    console.log(`[deauthorize] Deactivated credentials for Meta user ${userId}`);
 
     return NextResponse.json({ success: true });
   } catch (err) {
