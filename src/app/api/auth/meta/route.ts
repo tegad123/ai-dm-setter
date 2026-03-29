@@ -30,11 +30,14 @@ export async function GET(req: NextRequest) {
       JSON.stringify({ accountId: auth.accountId, userId: auth.userId })
     ).toString('base64url');
 
+    // Use Instagram-approved scopes that work with Facebook Login for Business
+    // These cover both Instagram DMs and Facebook Messenger
     const scopes = [
+      'instagram_business_basic',
+      'instagram_business_manage_messages',
       'pages_messaging',
       'pages_read_engagement',
-      'pages_manage_metadata',
-      'business_management'
+      'pages_manage_metadata'
     ].join(',');
 
     const oauthUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');

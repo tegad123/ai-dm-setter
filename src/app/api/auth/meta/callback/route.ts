@@ -164,6 +164,26 @@ export async function GET(req: NextRequest) {
       }
     );
 
+    // Step 4c: Also save INSTAGRAM credential if IG account is linked
+    // This ensures the integrations page shows Instagram as "Connected" too
+    if (igAccountId) {
+      await saveCredentials(
+        state.accountId,
+        'INSTAGRAM',
+        { accessToken: pageAccessToken },
+        {
+          igUserId: igAccountId,
+          username: igUsername || '',
+          name: igUsername || '',
+          instagramAccountId: igAccountId,
+          connectedVia: 'META_OAUTH'
+        }
+      );
+      console.log(
+        `[meta-oauth] Also saved INSTAGRAM credential for @${igUsername} (${igAccountId})`
+      );
+    }
+
     console.log(
       `[meta-oauth] Successfully connected page "${pageName}" (${pageId}) for account ${state.accountId}`
     );

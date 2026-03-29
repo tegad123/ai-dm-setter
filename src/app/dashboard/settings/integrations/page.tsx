@@ -150,6 +150,40 @@ export default function IntegrationsPage() {
 
   useEffect(() => {
     fetchStatuses();
+
+    // Handle OAuth redirect query params
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const error = params.get('error');
+    const page = params.get('page');
+    const ig = params.get('ig');
+
+    if (connected === 'meta') {
+      toast.success(
+        `Facebook Page "${page || 'Connected'}" linked successfully!${ig ? ` Instagram @${ig} also connected.` : ''}`
+      );
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (connected === 'instagram') {
+      toast.success(`Instagram @${ig || 'account'} connected!`);
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (error) {
+      const errorMessages: Record<string, string> = {
+        meta_denied: 'Facebook login was cancelled',
+        instagram_denied: 'Instagram login was cancelled',
+        missing_params: 'OAuth callback missing parameters',
+        invalid_state: 'Invalid OAuth state — please try again',
+        platform_config: 'Platform not configured — contact support',
+        token_exchange: 'Failed to exchange token with Meta',
+        pages_fetch: 'Failed to fetch Facebook Pages',
+        no_pages: 'No Facebook Pages found on your account',
+        ig_token_exchange: 'Failed to exchange Instagram token',
+        ig_unknown: 'Instagram connection failed — please try again',
+        unknown: 'Connection failed — please try again'
+      };
+      toast.error(errorMessages[error] || `Connection error: ${error}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, [fetchStatuses]);
 
   // --------------------------------------------------
@@ -792,7 +826,9 @@ export default function IntegrationsPage() {
             ) : (
               <Button
                 onClick={() => {
-                  window.location.href = '/api/auth/instagram';
+                  // Use Meta OAuth flow — it connects both Facebook Page AND
+                  // linked Instagram account, which is required for DM webhooks
+                  window.location.href = '/api/auth/meta';
                 }}
               >
                 Connect Instagram
