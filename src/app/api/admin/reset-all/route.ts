@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
 
 // TEMPORARY: Wipe all accounts and data for a fresh start
 // DELETE THIS FILE AFTER USE
+const RESET_SECRET = 'dmsetter-reset-2026-temp';
+
 export async function POST(request: Request) {
   try {
-    const auth = await requireAuth(request);
+    const body = await request.json().catch(() => ({}));
+    const { secret } = body as { secret?: string };
 
-    if (auth.role !== 'ADMIN') {
+    if (secret !== RESET_SECRET) {
       return NextResponse.json(
-        { error: 'Admin access required' },
+        { error: 'Invalid secret' },
         { status: 403 }
       );
     }
@@ -68,12 +70,6 @@ export async function POST(request: Request) {
       deleted: results
     });
   } catch (error) {
-    if (error instanceof AuthError) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: error.status }
-      );
-    }
     console.error('POST /api/admin/reset-all error:', error);
     return NextResponse.json(
       { error: 'Failed to reset data' },
