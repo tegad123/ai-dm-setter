@@ -82,8 +82,16 @@ async function processInstagramEvents(payload: any): Promise<void> {
     // Match by META pageId OR INSTAGRAM igUserId
     const matchedCred = allCredentials.find((cred) => {
       const meta = cred.metadata as any;
-      return meta?.pageId === entryId || meta?.igUserId === entryId;
+      return (
+        meta?.pageId === entryId ||
+        meta?.igUserId === entryId ||
+        meta?.instagramAccountId === entryId
+      );
     });
+    console.log(
+      `[instagram-webhook] entryId=${entryId}, matchedCred=${matchedCred?.id ?? 'NONE'}, ` +
+      `allCreds=${allCredentials.map((c) => { const m = c.metadata as any; return `${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`; }).join(' | ')}`
+    );
 
     let accountId: string;
 
