@@ -110,25 +110,25 @@ export function NotesPanel({
               >
                 <div className='mb-1.5 flex items-center gap-2'>
                   <Avatar className='h-5 w-5'>
-                    <AvatarImage src={note.author.avatarUrl ?? undefined} />
+                    <AvatarImage src={note.author?.avatarUrl ?? undefined} />
                     <AvatarFallback className='text-[10px]'>
-                      {note.author.name
+                      {(note.author?.name || 'U')
                         .split(' ')
                         .map((n: string) => n[0])
                         .join('')}
                     </AvatarFallback>
                   </Avatar>
                   <span className='text-xs font-medium'>
-                    {note.author.name}
+                    {note.author?.name}
                   </span>
                   <Badge
                     variant='secondary'
                     className={cn(
                       'px-1 py-0 text-[9px]',
-                      roleBadgeColor(note.author.role)
+                      roleBadgeColor(note.author?.role ?? '')
                     )}
                   >
-                    {note.author.role}
+                    {note.author?.role}
                   </Badge>
                   <span className='text-muted-foreground ml-auto text-[10px]'>
                     {new Date(note.createdAt).toLocaleDateString('en-US', {

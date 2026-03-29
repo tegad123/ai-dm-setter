@@ -1,10 +1,12 @@
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 export interface TokenPayload {
   userId: string;
   email: string;
+  name: string;
   accountId: string;
   role: string;
 }
@@ -35,4 +37,21 @@ export function getTokenFromHeader(
 ): string | null {
   if (!authHeader?.startsWith('Bearer ')) return null;
   return authHeader.slice(7).trim() || null;
+}
+
+/**
+ * Hash a password using bcrypt.
+ */
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
+}
+
+/**
+ * Verify a password against a bcrypt hash.
+ */
+export async function verifyPassword(
+  password: string,
+  hash: string
+): Promise<boolean> {
+  return bcrypt.compare(password, hash);
 }

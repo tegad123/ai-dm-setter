@@ -1,5 +1,5 @@
 import type { DataTableConfig } from '@/config/data-table';
-import type { FilterItemSchema } from '@/lib/parsers';
+import type { FilterItem } from '@/lib/parsers';
 import type { ColumnSort, Row, RowData } from '@tanstack/react-table';
 
 declare module '@tanstack/react-table' {
@@ -30,7 +30,7 @@ export interface ExtendedColumnSort<TData> extends Omit<ColumnSort, 'id'> {
   id: Extract<keyof TData, string>;
 }
 
-export interface ExtendedColumnFilter<TData> extends FilterItemSchema {
+export interface ExtendedColumnFilter<TData> extends FilterItem {
   id: Extract<keyof TData, string>;
 }
 

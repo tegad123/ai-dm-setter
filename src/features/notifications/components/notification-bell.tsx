@@ -90,7 +90,7 @@ export function NotificationBell() {
             No notifications
           </div>
         ) : (
-          notifications.map((n) => (
+          notifications.map((n: any) => (
             <DropdownMenuItem
               key={n.id}
               className={`flex gap-3 p-3 ${!n.isRead ? 'bg-primary/5' : ''}`}

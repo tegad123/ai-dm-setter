@@ -27,7 +27,7 @@ class EventBus {
   }
 
   publish(event: RealtimeEvent): void {
-    for (const listener of this.listeners) {
+    for (const listener of Array.from(this.listeners)) {
       try {
         listener(event);
       } catch (err) {
@@ -69,6 +69,14 @@ export function broadcastAIStatusChange(data: {
   aiActive: boolean;
 }): void {
   eventBus.publish({ type: 'ai:status_changed', data });
+}
+
+export function broadcastLeadUpdate(data: Record<string, unknown>): void {
+  eventBus.publish({ type: 'lead:updated', data });
+}
+
+export function broadcastNotification(data: Record<string, unknown>): void {
+  eventBus.publish({ type: 'notification:new', data });
 }
 
 export function broadcastAISuggestion(data: {

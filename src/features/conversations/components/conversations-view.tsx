@@ -76,7 +76,7 @@ export function ConversationsView() {
     id: m.id,
     sender: m.sender as 'ai' | 'lead' | 'human',
     content: m.content,
-    timestamp: m.sentAt
+    timestamp: m.sentAt || m.timestamp || ''
   }));
 
   // Map conversations list

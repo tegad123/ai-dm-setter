@@ -113,6 +113,9 @@ export async function getCredentials(
 /**
  * Store encrypted credentials for a provider + account.
  */
+// Alias for backward compatibility
+export const saveCredentials = setCredentials;
+
 export async function setCredentials(
   accountId: string,
   provider: string,
@@ -153,6 +156,18 @@ export async function setCredentials(
       isActive: true,
       verifiedAt: new Date()
     }
+  });
+}
+
+/**
+ * Delete credentials for a provider + account.
+ */
+export async function deleteCredentials(
+  accountId: string,
+  provider: string
+): Promise<void> {
+  await prisma.integrationCredential.deleteMany({
+    where: { accountId, provider: provider as any }
   });
 }
 

@@ -97,7 +97,16 @@ export function useLeads(params?: {
   limit?: number;
 }) {
   const { data, loading, error, refetch } = useApiFetch(
-    () => getLeads(params),
+    () => {
+      const stringParams = params
+        ? Object.fromEntries(
+            Object.entries(params)
+              .filter(([, v]) => v !== undefined)
+              .map(([k, v]) => [k, String(v)])
+          )
+        : undefined;
+      return getLeads(stringParams);
+    },
     [
       params?.status,
       params?.platform,
@@ -132,7 +141,13 @@ export function useConversations(
     error,
     refetch
   } = useApiFetch(
-    () => getConversations(search, priority, unread),
+    () => {
+      const p: Record<string, string> = {};
+      if (search) p.search = search;
+      if (priority) p.priority = 'true';
+      if (unread) p.unread = 'true';
+      return getConversations(Object.keys(p).length ? p : undefined);
+    },
     [search, priority, unread]
   );
   // API returns { conversations: [...] } — unwrap
@@ -182,8 +197,11 @@ export function useMessages(
   } = useApiFetch(
     () =>
       conversationId
-        ? getMessages(conversationId, limit)
-        : Promise.resolve([] as Message[]),
+        ? getMessages(
+            conversationId,
+            limit ? { limit: String(limit) } : undefined
+          )
+        : Promise.resolve({ messages: [] as Message[] }),
     [conversationId, limit]
   );
   // API returns { messages: [...] } — unwrap and normalize field names
@@ -325,13 +343,18 @@ export function useTeam() {
 
 export function useNotifications(userId?: string) {
   const { data, loading, error, refetch } = useApiFetch(
-    () => getNotifications(userId),
+    () => getNotifications(),
     [userId]
   );
 
+  const notifications = Array.isArray(data)
+    ? data
+    : ((data as any)?.notifications ?? []);
+  const unreadCount = notifications.filter((n: any) => !n.isRead).length;
+
   return {
-    notifications: data?.notifications ?? ([] as Notification[]),
-    unreadCount: data?.unreadCount ?? 0,
+    notifications: notifications as Notification[],
+    unreadCount,
     loading,
     error,
     refetch
@@ -367,14 +390,16 @@ export function useTeamNotes(leadId: string | undefined, page?: number) {
   } = useApiFetch(
     () =>
       leadId
-        ? getTeamNotes(leadId, page)
-        : Promise.resolve({ notes: [], total: 0, page: 1, limit: 20 }),
+        ? getTeamNotes(leadId)
+        : Promise.resolve([] as TeamNote[]),
     [leadId, page]
   );
 
+  const notes = Array.isArray(raw) ? raw : ((raw as any)?.notes ?? []);
+
   return {
-    notes: (raw as any)?.notes ?? ([] as TeamNote[]),
-    total: (raw as any)?.total ?? 0,
+    notes: notes as TeamNote[],
+    total: notes.length,
     loading,
     error,
     refetch
@@ -393,7 +418,7 @@ export function useContentAttributions(params?: {
   limit?: number;
 }) {
   const { data, loading, error, refetch } = useApiFetch(
-    () => getContentAttributions(params),
+    () => getContentAttributions(),
     [
       params?.contentType,
       params?.platform,
@@ -419,7 +444,7 @@ export function useContentAttributions(params?: {
 
 export function useContentAnalytics(from?: string, to?: string) {
   const { data, loading, error } = useApiFetch(
-    () => getContentAnalytics(from, to),
+    () => getContentAnalytics(),
     [from, to]
   );
 
@@ -436,7 +461,7 @@ export function useContentAnalytics(from?: string, to?: string) {
 
 export function useTeamAnalytics(from?: string, to?: string) {
   const { data, loading, error } = useApiFetch(
-    () => getTeamAnalytics(from, to),
+    () => getTeamAnalytics(),
     [from, to]
   );
 

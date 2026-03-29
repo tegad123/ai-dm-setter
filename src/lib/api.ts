@@ -1,81 +1,38 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
-
 // ---------------------------------------------------------------------------
-// Core fetch wrapper
+// Client-side API helper — wraps fetch calls to the Next.js API routes
 // ---------------------------------------------------------------------------
 
-export async function apiFetch<T = unknown>(
-  path: string,
-  options: RequestInit = {}
+/**
+ * Base fetch wrapper with auth credentials.
+ */
+export async function apiFetch<T = any>(
+  url: string,
+  options?: RequestInit
 ): Promise<T> {
-  const headers: Record<string, string> = {
+  const token =
+    typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const headers: HeadersInit = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>)
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options?.headers || {})
   };
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(url, {
+    credentials: 'include',
     ...options,
-    headers,
-    credentials: 'include' // Send Clerk session cookies
+    headers
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const message =
-      (body as { detail?: string })?.detail ||
-      (body as { message?: string })?.message ||
-      res.statusText;
-    throw new ApiError(message, res.status, body);
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `API error: ${res.status}`);
   }
 
-  // 204 No Content
-  if (res.status === 204) return undefined as T;
-
-  return res.json() as Promise<T>;
-}
-
-export class ApiError extends Error {
-  status: number;
-  body: unknown;
-
-  constructor(message: string, status: number, body: unknown) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.body = body;
-  }
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-export async function login(email: string, password: string) {
-  return apiFetch<{ access_token: string; token_type: string }>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password })
-  });
-}
-
-export async function register(name: string, email: string, password: string) {
-  return apiFetch<{ id: string; name: string; email: string; role: string }>(
-    '/auth/register',
-    { method: 'POST', body: JSON.stringify({ name, email, password }) }
-  );
-}
-
-export async function getMe() {
-  return apiFetch<{
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-    avatar?: string;
-  }>('/auth/me');
-}
-
-// ---------------------------------------------------------------------------
-// Leads
+// Types
 // ---------------------------------------------------------------------------
 
 export interface Lead {
@@ -84,84 +41,14 @@ export interface Lead {
   handle: string;
   platform: string;
   status: string;
+  qualityScore: number;
   triggerType: string;
-  triggerSource?: string;
-  qualityScore?: number;
-  bookedAt?: string;
-  showedUp?: boolean;
-  closedAt?: string;
-  revenue?: number;
+  triggerSource?: string | null;
   createdAt: string;
   updatedAt: string;
+  conversation?: { id: string; aiActive: boolean; unreadCount: number } | null;
+  tags?: Array<{ tag: { id: string; name: string; color: string } }>;
 }
-
-export interface LeadsResponse {
-  leads: Lead[];
-  total: number;
-  page: number;
-  limit: number;
-}
-
-export async function getLeads(params?: {
-  status?: string;
-  platform?: string;
-  search?: string;
-  tag?: string;
-  page?: number;
-  limit?: number;
-}) {
-  const query = new URLSearchParams();
-  if (params?.status) query.set('status', params.status);
-  if (params?.platform) query.set('platform', params.platform);
-  if (params?.search) query.set('search', params.search);
-  if (params?.tag) query.set('tag', params.tag);
-  if (params?.page) query.set('page', String(params.page));
-  if (params?.limit) query.set('limit', String(params.limit));
-  const qs = query.toString();
-  return apiFetch<LeadsResponse>(`/leads${qs ? `?${qs}` : ''}`);
-}
-
-export async function getLead(id: string) {
-  return apiFetch<Lead>(`/leads/${id}`);
-}
-
-export async function createLead(data: {
-  name: string;
-  handle: string;
-  platform: string;
-  triggerType: string;
-  triggerSource?: string;
-}) {
-  return apiFetch<Lead>('/leads', {
-    method: 'POST',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function updateLead(
-  id: string,
-  data: Partial<{
-    status: string;
-    qualityScore: number;
-    bookedAt: string;
-    showedUp: boolean;
-    closedAt: string;
-    revenue: number;
-  }>
-) {
-  return apiFetch<Lead>(`/leads/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function deleteLead(id: string) {
-  return apiFetch<void>(`/leads/${id}`, { method: 'DELETE' });
-}
-
-// ---------------------------------------------------------------------------
-// Conversations
-// ---------------------------------------------------------------------------
 
 export interface Conversation {
   id: string;
@@ -171,71 +58,51 @@ export interface Conversation {
   platform: string;
   status: string;
   aiActive: boolean;
-  lastMessage?: string;
-  lastMessageAt?: string;
+  lastMessage: string;
+  lastMessageAt: string | null;
   unreadCount: number;
+  priorityScore: number;
+  qualityScore: number;
+  tags: Array<{ id: string; name: string; color: string }>;
   createdAt: string;
 }
 
 export interface Message {
   id: string;
   conversationId: string;
-  content: string;
   sender: string;
-  sentAt: string;
+  content: string;
+  isVoiceNote?: boolean;
+  voiceNoteUrl?: string | null;
+  timestamp?: string;
+  sentAt?: string;
+  stage?: string | null;
+  stageConfidence?: number | null;
+  sentimentScore?: number | null;
+  followUpAttemptNumber?: number | null;
+  systemPromptVersion?: string | null;
 }
-
-export async function getConversations(
-  search?: string,
-  priority?: boolean,
-  unread?: boolean
-) {
-  const query = new URLSearchParams();
-  if (search) query.set('search', search);
-  if (priority) query.set('priority', 'true');
-  if (unread) query.set('unread', 'true');
-  const qs = query.toString();
-  return apiFetch<Conversation[]>(`/conversations${qs ? `?${qs}` : ''}`);
-}
-
-export async function getConversation(id: string) {
-  return apiFetch<Conversation>(`/conversations/${id}`);
-}
-
-export async function getMessages(conversationId: string, limit?: number) {
-  const qs = limit ? `?limit=${limit}` : '';
-  return apiFetch<Message[]>(`/conversations/${conversationId}/messages${qs}`);
-}
-
-export async function sendMessage(
-  conversationId: string,
-  content: string,
-  sender?: string
-) {
-  return apiFetch<Message>(`/conversations/${conversationId}/messages`, {
-    method: 'POST',
-    body: JSON.stringify({ content, sender })
-  });
-}
-
-export async function toggleAI(conversationId: string, aiActive: boolean) {
-  return apiFetch<Conversation>(`/conversations/${conversationId}/ai-toggle`, {
-    method: 'PATCH',
-    body: JSON.stringify({ aiActive })
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Analytics
-// ---------------------------------------------------------------------------
 
 export interface OverviewStats {
   totalLeads: number;
   leadsToday: number;
+  leadsThisWeek: number;
+  activeConversations: number;
   callsBooked: number;
+  callsBookedThisWeek: number;
+  revenue: number;
+  revenueThisMonth: number;
+  conversionRate: number;
+  avgResponseTime: number;
+  aiReplyRate: number;
   showRate: number;
   closeRate: number;
-  revenue: number;
+  noShowRate: number;
+  qualifiedRate: number;
+  ghostRate: number;
+  avgMessagesToBook: number;
+  topTrigger: string;
+  topTriggerConversion: number;
 }
 
 export interface LeadVolumePoint {
@@ -250,448 +117,266 @@ export interface FunnelStep {
 }
 
 export interface TriggerPerformanceItem {
+  source: string;
   trigger: string;
   leads: number;
-  qualified: number;
   booked: number;
   conversionRate: number;
 }
 
 export interface RevenuePoint {
   date: string;
-  amount: number;
+  revenue: number;
   cumulative: number;
 }
-
-export async function getOverviewStats() {
-  return apiFetch<OverviewStats>('/analytics/overview');
-}
-
-export async function getLeadVolume() {
-  return apiFetch<LeadVolumePoint[]>('/analytics/lead-volume');
-}
-
-export async function getFunnel() {
-  return apiFetch<FunnelStep[]>('/analytics/funnel');
-}
-
-export async function getTriggerPerformance() {
-  return apiFetch<TriggerPerformanceItem[]>('/analytics/triggers');
-}
-
-export async function getRevenue() {
-  return apiFetch<RevenuePoint[]>('/analytics/revenue');
-}
-
-// ---------------------------------------------------------------------------
-// Team
-// ---------------------------------------------------------------------------
 
 export interface TeamMember {
   id: string;
   name: string;
   email: string;
   role: string;
-  isActive: boolean;
-  avatarUrl?: string;
+  avatarUrl?: string | null;
   leadsHandled: number;
   callsBooked: number;
   closeRate: number | null;
+  avgResponseTime: number | null;
+  totalCommission: number;
+  isActive: boolean;
   createdAt: string;
-  updatedAt: string;
 }
 
-export async function getTeam() {
-  return apiFetch<TeamMember[]>('/team');
+export interface TeamMemberStats extends TeamMember {
+  rank: number;
+  messagesSent: number;
+  conversionRate: number;
+  bookingRate: number;
+  score: number;
 }
-
-export async function createTeamMember(data: {
-  name: string;
-  email: string;
-  password: string;
-  role: string;
-}) {
-  return apiFetch<TeamMember>('/team', {
-    method: 'POST',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function updateTeamMember(
-  id: string,
-  data: Partial<{
-    name: string;
-    email: string;
-    role: string;
-    isActive: boolean;
-  }>
-) {
-  return apiFetch<TeamMember>(`/team/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function deleteTeamMember(id: string) {
-  return apiFetch<void>(`/team/${id}`, { method: 'DELETE' });
-}
-
-// ---------------------------------------------------------------------------
-// Notifications
-// ---------------------------------------------------------------------------
 
 export interface Notification {
   id: string;
-  userId?: string;
   type: string;
   title: string;
   body: string;
-  leadId?: string;
+  leadId?: string | null;
   isRead: boolean;
-  readAt?: string;
   createdAt: string;
-  lead?: { id: string; name: string } | null;
 }
-
-export interface NotificationsResponse {
-  notifications: Notification[];
-  unreadCount: number;
-}
-
-export async function getNotifications(userId?: string, unreadOnly?: boolean) {
-  const query = new URLSearchParams();
-  if (userId) query.set('userId', userId);
-  if (unreadOnly) query.set('unreadOnly', 'true');
-  const qs = query.toString();
-  return apiFetch<NotificationsResponse>(`/notifications${qs ? `?${qs}` : ''}`);
-}
-
-export async function markNotificationRead(id: string) {
-  return apiFetch<Notification>(`/notifications/${id}/read`, {
-    method: 'PATCH'
-  });
-}
-
-export async function markAllNotificationsRead(userId?: string) {
-  return apiFetch<{ count: number }>('/notifications/read-all', {
-    method: 'PATCH',
-    body: JSON.stringify(userId ? { userId } : {})
-  });
-}
-
-export async function createNotification(data: {
-  userId?: string;
-  type: string;
-  title: string;
-  body: string;
-  leadId?: string;
-}) {
-  return apiFetch<Notification>('/notifications', {
-    method: 'POST',
-    body: JSON.stringify(data)
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Tags
-// ---------------------------------------------------------------------------
 
 export interface Tag {
   id: string;
   name: string;
   color: string;
   isAuto: boolean;
-  leadsCount: number;
-  createdAt: string;
-  updatedAt: string;
+  leadsCount?: number;
+  createdAt?: string;
 }
-
-export interface LeadTagInfo {
-  id: string;
-  name: string;
-  color: string;
-}
-
-export async function getTags() {
-  return apiFetch<{ tags: Tag[] }>('/tags');
-}
-
-export async function createTag(data: {
-  name: string;
-  color?: string;
-  isAuto?: boolean;
-}) {
-  return apiFetch<Tag>('/tags', {
-    method: 'POST',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function updateTag(
-  id: string,
-  data: Partial<{ name: string; color: string; isAuto: boolean }>
-) {
-  return apiFetch<Tag>(`/tags/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data)
-  });
-}
-
-export async function deleteTag(id: string) {
-  return apiFetch<void>(`/tags/${id}`, { method: 'DELETE' });
-}
-
-export async function addTagToLead(
-  leadId: string,
-  tagId: string,
-  appliedBy?: string
-) {
-  return apiFetch(`/leads/${leadId}/tags`, {
-    method: 'POST',
-    body: JSON.stringify({ tagId, appliedBy })
-  });
-}
-
-export async function removeTagFromLead(leadId: string, tagId: string) {
-  return apiFetch<void>(`/leads/${leadId}/tags?tagId=${tagId}`, {
-    method: 'DELETE'
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Team Notes
-// ---------------------------------------------------------------------------
 
 export interface TeamNote {
   id: string;
   content: string;
   leadId: string;
   authorId: string;
-  author: {
-    id: string;
-    name: string;
-    role: string;
-    avatarUrl: string | null;
-  };
   createdAt: string;
-  updatedAt: string;
+  author?: { name: string; role: string; avatarUrl?: string | null };
 }
-
-export interface TeamNotesResponse {
-  notes: TeamNote[];
-  total: number;
-  page: number;
-  limit: number;
-}
-
-export async function getTeamNotes(leadId: string, page?: number) {
-  const qs = page ? `?page=${page}` : '';
-  return apiFetch<TeamNotesResponse>(`/leads/${leadId}/notes${qs}`);
-}
-
-export async function createTeamNote(leadId: string, content: string) {
-  return apiFetch<TeamNote>(`/leads/${leadId}/notes`, {
-    method: 'POST',
-    body: JSON.stringify({ content })
-  });
-}
-
-export async function updateTeamNote(
-  leadId: string,
-  noteId: string,
-  content: string
-) {
-  return apiFetch<TeamNote>(`/leads/${leadId}/notes/${noteId}`, {
-    method: 'PUT',
-    body: JSON.stringify({ content })
-  });
-}
-
-export async function deleteTeamNote(leadId: string, noteId: string) {
-  return apiFetch<void>(`/leads/${leadId}/notes/${noteId}`, {
-    method: 'DELETE'
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Content Attribution
-// ---------------------------------------------------------------------------
 
 export interface ContentAttribution {
   id: string;
   contentType: string;
-  contentId: string | null;
-  contentUrl: string | null;
-  caption: string | null;
+  contentId?: string | null;
+  contentUrl?: string | null;
+  caption?: string | null;
   platform: string;
   leadsCount: number;
-  actualLeadsCount: number;
   revenue: number;
   callsBooked: number;
   conversionRate: number;
-  postedAt: string | null;
+  showRate: number;
+  postedAt?: string | null;
   createdAt: string;
 }
 
-export interface ContentListResponse {
-  content: ContentAttribution[];
-  total: number;
-  page: number;
-  limit: number;
-  totals: {
+export interface ContentAnalytics {
+  attributions: ContentAttribution[];
+  summary: {
+    totalContent: number;
     totalLeads: number;
     totalRevenue: number;
     totalCallsBooked: number;
   };
 }
 
-export async function getContentAttributions(params?: {
-  contentType?: string;
-  platform?: string;
-  from?: string;
-  to?: string;
-  sortBy?: string;
-  order?: string;
-  page?: number;
-  limit?: number;
-}) {
-  const query = new URLSearchParams();
-  if (params?.contentType) query.set('contentType', params.contentType);
-  if (params?.platform) query.set('platform', params.platform);
-  if (params?.from) query.set('from', params.from);
-  if (params?.to) query.set('to', params.to);
-  if (params?.sortBy) query.set('sortBy', params.sortBy);
-  if (params?.order) query.set('order', params.order);
-  if (params?.page) query.set('page', String(params.page));
-  if (params?.limit) query.set('limit', String(params.limit));
-  const qs = query.toString();
-  return apiFetch<ContentListResponse>(`/content${qs ? `?${qs}` : ''}`);
-}
-
-export async function getContentAttribution(id: string) {
-  return apiFetch<{ content: ContentAttribution & { leads: Lead[] } }>(
-    `/content/${id}`
-  );
-}
-
-export interface ContentAnalytics {
-  topByLeads: ContentAttribution[];
-  topByRevenue: ContentAttribution[];
-  typeBreakdown: {
-    contentType: string;
-    contentCount: number;
-    leadsCount: number;
-    revenue: number;
-    callsBooked: number;
-  }[];
-  platformBreakdown: {
-    platform: string;
-    contentCount: number;
-    leadsCount: number;
-    revenue: number;
-    callsBooked: number;
-  }[];
-}
-
-// ---------------------------------------------------------------------------
-// Away Mode
-// ---------------------------------------------------------------------------
-
-export interface AwayModeState {
-  awayMode: boolean;
-  awayModeEnabledAt: string | null;
-}
-
-export async function getAwayMode() {
-  return apiFetch<AwayModeState>('/settings/away-mode');
-}
-
-export async function setAwayMode(awayMode: boolean) {
-  return apiFetch<AwayModeState>('/settings/away-mode', {
-    method: 'PUT',
-    body: JSON.stringify({ awayMode })
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Team Performance Analytics
-// ---------------------------------------------------------------------------
-
-export interface TeamMemberStats {
-  id: string;
-  name: string;
-  role: string;
-  avatarUrl: string | null;
-  leadsHandled: number;
-  callsBooked: number;
-  closeRate: number | null;
-  commissionRate: number | null;
-  totalCommission: number;
-  avgResponseTime: number | null;
-  messagesSent: number;
-  heatmap: Record<string, number>; // "dayOfWeek-hour" -> count
-}
-
 export interface TeamAnalytics {
   members: TeamMemberStats[];
-  teamHeatmap: Record<string, number>;
-  totalMessages: number;
-}
-
-export async function getTeamAnalytics(from?: string, to?: string) {
-  const query = new URLSearchParams();
-  if (from) query.set('from', from);
-  if (to) query.set('to', to);
-  const qs = query.toString();
-  return apiFetch<TeamAnalytics>(`/analytics/team${qs ? `?${qs}` : ''}`);
-}
-
-// ---------------------------------------------------------------------------
-// Commission Analytics
-// ---------------------------------------------------------------------------
-
-export interface CommissionMember {
-  id: string;
-  name: string;
-  role: string;
-  avatarUrl: string | null;
-  commissionRate: number | null;
-  totalCommission: number;
-  callsBooked: number;
-  leadsHandled: number;
-}
-
-export interface CommissionDeal {
-  id: string;
-  leadName: string;
-  revenue: number | null;
-  closedAt: string | null;
-}
-
-export interface CommissionAnalytics {
-  members: CommissionMember[];
-  recentDeals: CommissionDeal[];
-  totals: {
-    totalRevenue: number;
-    totalCommissions: number;
-    totalDeals: number;
+  summary: {
+    totalLeadsHandled: number;
+    totalCallsBooked: number;
+    avgCloseRate: number;
+    totalCommission: number;
   };
 }
 
-export async function getCommissionAnalytics(from?: string, to?: string) {
-  const query = new URLSearchParams();
-  if (from) query.set('from', from);
-  if (to) query.set('to', to);
-  const qs = query.toString();
-  return apiFetch<CommissionAnalytics>(
-    `/analytics/commissions${qs ? `?${qs}` : ''}`
-  );
+// ---------------------------------------------------------------------------
+// API Functions
+// ---------------------------------------------------------------------------
+
+export async function getLeads(params?: Record<string, string>): Promise<{
+  leads: Lead[];
+  total: number;
+}> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return apiFetch(`/api/leads${qs}`);
 }
 
-export async function getContentAnalytics(from?: string, to?: string) {
-  const query = new URLSearchParams();
-  if (from) query.set('from', from);
-  if (to) query.set('to', to);
-  const qs = query.toString();
-  return apiFetch<ContentAnalytics>(`/analytics/content${qs ? `?${qs}` : ''}`);
+export async function getConversations(
+  params?: Record<string, string>
+): Promise<{ conversations: Conversation[] }> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return apiFetch(`/api/conversations${qs}`);
+}
+
+export async function getConversation(
+  id: string
+): Promise<{ conversation: any }> {
+  return apiFetch(`/api/conversations/${id}`);
+}
+
+export async function getMessages(
+  conversationId: string,
+  params?: Record<string, string>
+): Promise<{ messages: Message[] }> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return apiFetch(`/api/conversations/${conversationId}/messages${qs}`);
+}
+
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  sender: string = 'HUMAN'
+): Promise<Message> {
+  return apiFetch(`/api/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content, sender })
+  });
+}
+
+export async function toggleAI(
+  conversationId: string,
+  aiActive: boolean
+): Promise<any> {
+  return apiFetch(`/api/conversations/${conversationId}/toggle-ai`, {
+    method: 'POST',
+    body: JSON.stringify({ aiActive })
+  });
+}
+
+export async function getOverviewStats(): Promise<OverviewStats> {
+  return apiFetch('/api/analytics/overview');
+}
+
+export async function getLeadVolume(
+  params?: Record<string, string>
+): Promise<LeadVolumePoint[]> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  const data = await apiFetch(`/api/analytics/lead-volume${qs}`);
+  return data.points || data;
+}
+
+export async function getFunnel(): Promise<FunnelStep[]> {
+  const data = await apiFetch('/api/analytics/funnel');
+  return data.steps || data;
+}
+
+export async function getTriggerPerformance(): Promise<
+  TriggerPerformanceItem[]
+> {
+  const data = await apiFetch('/api/analytics/triggers');
+  return data.triggers || data;
+}
+
+export async function getRevenue(
+  params?: Record<string, string>
+): Promise<RevenuePoint[]> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  const data = await apiFetch(`/api/analytics/revenue${qs}`);
+  return data.points || data;
+}
+
+export async function getTeam(): Promise<TeamMember[]> {
+  const data = await apiFetch('/api/team');
+  return data.members || data;
+}
+
+export async function getNotifications(): Promise<Notification[]> {
+  const data = await apiFetch('/api/notifications');
+  return data.notifications || data;
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  await apiFetch('/api/notifications/mark-read', { method: 'POST' });
+}
+
+export async function getTags(): Promise<Tag[]> {
+  const data = await apiFetch('/api/tags');
+  return data.tags || data;
+}
+
+export async function createTag(
+  nameOrObj: string | { name: string; color?: string },
+  color?: string
+): Promise<Tag> {
+  const payload =
+    typeof nameOrObj === 'string'
+      ? { name: nameOrObj, color }
+      : nameOrObj;
+  return apiFetch('/api/tags', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteTag(id: string): Promise<void> {
+  await apiFetch(`/api/tags/${id}`, { method: 'DELETE' });
+}
+
+export async function getTeamNotes(
+  leadId: string
+): Promise<TeamNote[]> {
+  const data = await apiFetch(`/api/leads/${leadId}/notes`);
+  return data.notes || data;
+}
+
+export async function createTeamNote(
+  leadId: string,
+  content: string
+): Promise<TeamNote> {
+  return apiFetch(`/api/leads/${leadId}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ content })
+  });
+}
+
+export async function deleteTeamNote(
+  leadId: string,
+  noteId: string
+): Promise<void> {
+  await apiFetch(`/api/leads/${leadId}/notes/${noteId}`, {
+    method: 'DELETE'
+  });
+}
+
+export async function getContentAttributions(): Promise<
+  ContentAttribution[]
+> {
+  const data = await apiFetch('/api/content');
+  return data.attributions || data;
+}
+
+export async function getContentAnalytics(): Promise<ContentAnalytics> {
+  return apiFetch('/api/analytics/content');
+}
+
+export async function getTeamAnalytics(): Promise<TeamAnalytics> {
+  return apiFetch('/api/analytics/team');
 }
