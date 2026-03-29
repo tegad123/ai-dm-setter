@@ -168,6 +168,71 @@ export async function GET(req: NextRequest) {
       `[meta-oauth] Successfully connected page "${pageName}" (${pageId}) for account ${state.accountId}`
     );
 
+    // Step 5: Subscribe the page to your app's webhooks so DMs are forwarded
+    // This is the critical step — without it, Meta won't send webhook events
+    try {
+      const subscribeRes = await fetch(
+        `${GRAPH_API}/${pageId}/subscribed_apps`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscribed_fields: [
+              'messages',
+              'messaging_postbacks',
+              'messaging_optins',
+              'message_deliveries',
+              'message_reads'
+            ].join(','),
+            access_token: pageAccessToken
+          })
+        }
+      );
+
+      if (subscribeRes.ok) {
+        const subData = await subscribeRes.json();
+        console.log(
+          `[meta-oauth] Subscribed page ${pageId} to webhooks:`,
+          subData
+        );
+      } else {
+        const subErr = await subscribeRes.text();
+        console.error(
+          `[meta-oauth] Failed to subscribe page ${pageId} to webhooks:`,
+          subErr
+        );
+      }
+    } catch (subError) {
+      console.error('[meta-oauth] Webhook subscription error:', subError);
+    }
+
+    // Step 5b: If Instagram is connected, also subscribe for Instagram messaging
+    if (igAccountId) {
+      try {
+        const igSubRes = await fetch(
+          `${GRAPH_API}/${pageId}/subscribed_apps`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscribed_fields: 'messages',
+              access_token: pageAccessToken
+            })
+          }
+        );
+        if (igSubRes.ok) {
+          console.log(
+            `[meta-oauth] Instagram messaging webhook subscribed for page ${pageId} (IG: ${igAccountId})`
+          );
+        } else {
+          const igSubErr = await igSubRes.text();
+          console.error('[meta-oauth] IG webhook subscribe failed:', igSubErr);
+        }
+      } catch (err) {
+        console.error('[meta-oauth] IG webhook subscription error:', err);
+      }
+    }
+
     return NextResponse.redirect(
       `${baseUrl}/dashboard/settings/integrations?connected=meta&page=${encodeURIComponent(pageName)}`
     );
