@@ -1,15 +1,27 @@
 import prisma from '@/lib/prisma';
-import type { Platform, TriggerType, ContentType } from '@prisma/client';
+import { generateReply } from '@/lib/ai-engine';
+import type { LeadContext } from '@/lib/ai-prompts';
+import { sendDM as sendInstagramDM } from '@/lib/instagram';
+import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
+import {
+  broadcastNewMessage,
+  broadcastConversationUpdate,
+  broadcastAIStatusChange,
+  broadcastAISuggestion
+} from '@/lib/realtime';
 import {
   updateConversationOutcome,
-  recordStageTimestamp
+  recordStageTimestamp,
+  backfillEffectivenessTracking
 } from '@/lib/conversation-state-machine';
+import { getMessages as getInstagramMessages } from '@/lib/instagram';
+import { getMessages as getFacebookMessages } from '@/lib/facebook';
 
 // ---------------------------------------------------------------------------
-// Shared webhook processing logic for Instagram & Facebook
+// Types
 // ---------------------------------------------------------------------------
 
-interface IncomingMessageParams {
+export interface IncomingMessageParams {
   accountId: string;
   platformUserId: string;
   platform: 'INSTAGRAM' | 'FACEBOOK';
@@ -18,22 +30,20 @@ interface IncomingMessageParams {
   messageText: string;
   triggerType: 'DM' | 'COMMENT';
   triggerSource?: string;
-  contentSource?: {
-    contentType: ContentType;
-    contentId?: string;
-    contentUrl?: string;
-    caption?: string;
-  };
 }
 
-interface ProcessResult {
+export interface ProcessResult {
   leadId: string;
   conversationId: string;
   messageId: string;
+  isNewLead: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// Process an incoming DM — find or create lead, conversation, and message
+// 1. Process Incoming Message
+// ---------------------------------------------------------------------------
+// Saves every inbound message to the database on webhook receipt.
+// Resolves or creates the lead + conversation automatically.
 // ---------------------------------------------------------------------------
 
 export async function processIncomingMessage(
@@ -47,475 +57,422 @@ export async function processIncomingMessage(
     senderHandle,
     messageText,
     triggerType,
-    triggerSource,
-    contentSource
+    triggerSource
   } = params;
 
-  // 1. Resolve content attribution (if content source provided)
-  let contentAttributionId: string | null = null;
+  console.log(
+    `[webhook-processor] Processing ${platform} ${triggerType} from ${senderHandle}: "${messageText.slice(0, 80)}"`
+  );
 
-  if (contentSource) {
-    const existingAttribution = contentSource.contentId
-      ? await prisma.contentAttribution.findUnique({
-          where: {
-            accountId_contentId_platform: {
-              accountId,
-              contentId: contentSource.contentId,
-              platform: platform as Platform
-            }
-          }
-        })
-      : null;
-
-    if (existingAttribution) {
-      contentAttributionId = existingAttribution.id;
-      await prisma.contentAttribution.update({
-        where: { id: existingAttribution.id },
-        data: { leadsCount: { increment: 1 } }
-      });
-    } else {
-      const attribution = await prisma.contentAttribution.create({
-        data: {
-          accountId,
-          contentType: contentSource.contentType,
-          contentId: contentSource.contentId ?? null,
-          contentUrl: contentSource.contentUrl ?? null,
-          caption: contentSource.caption ?? null,
-          platform: platform as Platform,
-          leadsCount: 1
-        }
-      });
-      contentAttributionId = attribution.id;
-    }
-  }
-
-  // 2. Find or create the lead (scoped to account)
+  // ── Step 1: Find or create the lead ────────────────────────────
   let lead = await prisma.lead.findFirst({
-    where: { platformUserId, platform: platform as Platform, accountId }
+    where: {
+      accountId,
+      platformUserId,
+      platform
+    },
+    include: {
+      conversation: true
+    }
   });
 
+  let isNewLead = false;
+
   if (!lead) {
+    // Create new lead + conversation in a transaction
     lead = await prisma.lead.create({
       data: {
         accountId,
         name: senderName,
         handle: senderHandle,
-        platform: platform as Platform,
-        status: 'NEW_LEAD',
-        triggerType: triggerType as TriggerType,
-        triggerSource: triggerSource ?? null,
+        platform,
         platformUserId,
-        contentAttributionId
+        triggerType,
+        triggerSource: triggerSource || null,
+        status: 'NEW_LEAD',
+        conversation: {
+          create: {
+            aiActive: true,
+            unreadCount: 1
+          }
+        }
+      },
+      include: {
+        conversation: true
       }
     });
-
-    // Fire a NEW_LEAD notification (team-wide, userId = null)
-    await prisma.notification.create({
-      data: {
-        accountId,
-        type: 'NEW_LEAD',
-        title: 'New Lead',
-        body: `${senderName} (@${senderHandle}) on ${platform}`,
-        leadId: lead.id
-      }
-    });
-  } else if (contentAttributionId && !lead.contentAttributionId) {
-    // Link existing lead to content if not already linked
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: { contentAttributionId }
-    });
+    isNewLead = true;
+    console.log(
+      `[webhook-processor] Created new lead: ${lead.id} (${senderHandle})`
+    );
   }
 
-  // 3. Find or create the conversation
-  let conversation = await prisma.conversation.findUnique({
-    where: { leadId: lead.id }
-  });
+  const conversationId = lead.conversation!.id;
 
-  if (!conversation) {
-    conversation = await prisma.conversation.create({
-      data: {
-        leadId: lead.id,
-        aiActive: true,
-        unreadCount: 1,
-        lastMessageAt: new Date()
-      }
-    });
-  } else {
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        unreadCount: { increment: 1 },
-        lastMessageAt: new Date()
-      }
-    });
-  }
-
-  // 4. Save the incoming message
+  // ── Step 2: Save the incoming message ──────────────────────────
+  const now = new Date();
   const message = await prisma.message.create({
     data: {
-      conversationId: conversation.id,
+      conversationId,
       sender: 'LEAD',
       content: messageText,
-      timestamp: new Date()
+      timestamp: now
     }
   });
 
-  // 5. Back-fill effectiveness tracking on the most recent AI message
-  const lastAIMessage = await prisma.message.findFirst({
-    where: { conversationId: conversation.id, sender: 'AI' },
-    orderBy: { timestamp: 'desc' }
+  // ── Step 3: Update conversation metadata ───────────────────────
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: {
+      lastMessageAt: now,
+      unreadCount: { increment: 1 }
+    }
   });
 
-  if (lastAIMessage && lastAIMessage.gotResponse === null) {
-    const responseTimeSec = Math.round(
-      (Date.now() - lastAIMessage.timestamp.getTime()) / 1000
-    );
-    await prisma.message.update({
-      where: { id: lastAIMessage.id },
-      data: {
-        gotResponse: true,
-        responseTimeSeconds: responseTimeSec
-      }
-    });
-  }
+  // ── Step 4: Back-fill effectiveness tracking on previous AI messages
+  await backfillEffectivenessTracking(conversationId).catch((err) =>
+    console.error('[webhook-processor] Effectiveness tracking error:', err)
+  );
 
-  // 6. Mark older AI messages as leadContinuedConversation
-  const olderAIMessages = await prisma.message.findMany({
-    where: {
-      conversationId: conversation.id,
-      sender: 'AI',
-      gotResponse: true,
-      leadContinuedConversation: null
-    },
-    orderBy: { timestamp: 'desc' },
-    take: 5
-  });
-
-  if (olderAIMessages.length > 0) {
-    await prisma.message.updateMany({
-      where: { id: { in: olderAIMessages.map((m) => m.id) } },
-      data: { leadContinuedConversation: true }
-    });
-  }
-
-  // 7. Re-engagement: if conversation was LEFT_ON_READ, reopen it
-  if (conversation.outcome === 'LEFT_ON_READ') {
+  // ── Step 5: Re-engage LEFT_ON_READ conversations ───────────────
+  const currentOutcome = lead.conversation?.outcome;
+  if (currentOutcome === 'LEFT_ON_READ') {
     await prisma.conversation.update({
-      where: { id: conversation.id },
+      where: { id: conversationId },
       data: { outcome: 'ONGOING' }
     });
+    console.log(
+      `[webhook-processor] Re-engaged LEFT_ON_READ conversation: ${conversationId}`
+    );
   }
 
-  // 8. Run state machine to evaluate outcome transitions
-  await updateConversationOutcome(conversation.id);
+  // ── Step 6: Broadcast real-time events ─────────────────────────
+  broadcastNewMessage({
+    id: message.id,
+    conversationId,
+    sender: 'LEAD',
+    content: messageText,
+    timestamp: now.toISOString()
+  });
+
+  broadcastConversationUpdate({
+    id: conversationId,
+    leadId: lead.id,
+    aiActive: lead.conversation!.aiActive,
+    unreadCount: (lead.conversation!.unreadCount || 0) + 1,
+    lastMessageAt: now.toISOString()
+  });
 
   return {
     leadId: lead.id,
-    conversationId: conversation.id,
-    messageId: message.id
+    conversationId,
+    messageId: message.id,
+    isNewLead
   };
 }
 
 // ---------------------------------------------------------------------------
-// Schedule an AI reply with a random 5–10 minute delay
+// 2. Schedule AI Reply (The Core Handoff Logic)
 // ---------------------------------------------------------------------------
-
-// Track pending AI replies to prevent duplicates
-const pendingAIReplies = new Set<string>();
+// This is the heart of the AI Conversation Handoff feature:
+// - Reads full conversation history (local DB first, Meta API fallback)
+// - Builds AI context with lead metadata + enrichment
+// - Generates reply continuing naturally from the last message
+// - Respects Human/AI toggle (auto-send vs suggestion only)
+// - Stores every AI message in the database
+// ---------------------------------------------------------------------------
 
 export async function scheduleAIReply(
   conversationId: string,
-  accountId?: string
+  accountId: string
 ): Promise<void> {
-  // Deduplication: if we already have a pending reply for this conversation, skip
-  if (pendingAIReplies.has(conversationId)) {
+  console.log(
+    `[webhook-processor] Scheduling AI reply for conversation: ${conversationId}`
+  );
+
+  // ── Step 1: Check AI active + away mode ────────────────────────
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      lead: {
+        include: {
+          tags: {
+            include: {
+              tag: { select: { name: true } }
+            }
+          }
+        }
+      },
+      messages: {
+        orderBy: { timestamp: 'asc' }
+      }
+    }
+  });
+
+  if (!conversation) {
+    console.warn(`[webhook-processor] Conversation ${conversationId} not found`);
+    return;
+  }
+
+  const { lead } = conversation;
+
+  // Check account-level away mode
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { awayMode: true }
+  });
+
+  // If AI is not active AND away mode is off, generate suggestion only
+  const aiActive = conversation.aiActive;
+  const awayMode = account?.awayMode ?? false;
+  const shouldAutoSend = aiActive || awayMode;
+
+  if (!shouldAutoSend) {
     console.log(
-      `[ai-reply] Skipping duplicate — reply already pending for ${conversationId}`
+      `[webhook-processor] AI paused for ${conversationId} (human override). Generating suggestion only.`
+    );
+  }
+
+  // ── Step 2: Build conversation history ─────────────────────────
+  // Local DB is primary source. If history seems incomplete, try Meta API fallback.
+  let messages = conversation.messages;
+
+  if (messages.length <= 1 && lead.platformUserId) {
+    // Only 1 message — might be missing history. Try Meta API backfill.
+    try {
+      const backfilledMessages = await backfillFromMetaAPI(
+        accountId,
+        conversationId,
+        lead.platform,
+        lead.platformUserId
+      );
+      if (backfilledMessages.length > messages.length) {
+        messages = backfilledMessages;
+        console.log(
+          `[webhook-processor] Back-filled ${backfilledMessages.length} messages from Meta API`
+        );
+      }
+    } catch (err) {
+      console.warn('[webhook-processor] Meta API backfill failed (using local only):', err);
+    }
+  }
+
+  // ── Step 3: Build lead context with enrichment ─────────────────
+  const leadContext: LeadContext = {
+    leadName: lead.name,
+    handle: lead.handle,
+    platform: lead.platform,
+    status: lead.status,
+    triggerType: lead.triggerType,
+    triggerSource: lead.triggerSource,
+    qualityScore: lead.qualityScore,
+    // Enrichment from conversation + lead metadata
+    intentTag: conversation.leadIntentTag || undefined,
+    tags: lead.tags.map((lt) => lt.tag.name),
+    leadScore: conversation.priorityScore || undefined,
+    source: conversation.leadSource || undefined,
+    experience: lead.experience || undefined,
+    incomeLevel: lead.incomeLevel || undefined,
+    geography: lead.geography || undefined,
+    timezone: lead.timezone || undefined
+  };
+
+  // ── Step 4: Generate AI reply ──────────────────────────────────
+  const formattedMessages = messages.map((m) => ({
+    id: m.id,
+    sender: m.sender,
+    content: m.content,
+    timestamp: m.timestamp,
+    isVoiceNote: m.isVoiceNote
+  }));
+
+  let result;
+  try {
+    result = await generateReply(accountId, formattedMessages, leadContext);
+  } catch (err) {
+    console.error(
+      `[webhook-processor] AI generation failed for ${conversationId}:`,
+      err
     );
     return;
   }
-  pendingAIReplies.add(conversationId);
 
-  // Run AI reply inline (no setTimeout — Vercel serverless kills the context after response).
-  // In production with a proper server, use a job queue (e.g. BullMQ, SQS) for delayed replies.
-  try {
-    // ── Testing: "clear conversation history" command ─────────────
-    // Check if the latest message is requesting a history clear
-    const latestMsg = await prisma.message.findFirst({
-      where: { conversationId, sender: 'LEAD' },
-      orderBy: { timestamp: 'desc' }
+  // ── Step 5: Handle auto-send vs suggestion mode ────────────────
+  if (!shouldAutoSend) {
+    // AI is paused — broadcast as a suggestion only, don't save or send
+    broadcastAISuggestion({
+      conversationId,
+      suggestedReply: result.reply,
+      stage: result.stage,
+      confidence: result.stageConfidence
     });
-
-    if (latestMsg && /clear conversation history/i.test(latestMsg.content)) {
-      console.log(
-        `[ai-reply] Clearing conversation history for ${conversationId}`
-      );
-      await prisma.message.deleteMany({
-        where: { conversationId }
-      });
-
-      // Send a confirmation message back
-      await prisma.message.create({
-        data: {
-          conversationId,
-          sender: 'AI',
-          content: 'Conversation history cleared. Starting fresh!',
-          timestamp: new Date()
-        }
-      });
-
-      // Send confirmation back via the lead's platform
-      const convo = await prisma.conversation.findUnique({
-        where: { id: conversationId },
-        include: { lead: true }
-      });
-      if (convo?.lead?.platformUserId) {
-        try {
-          if (convo.lead.platform === 'FACEBOOK') {
-            const { sendMessage } = await import('@/lib/facebook');
-            await sendMessage(
-              convo.lead.accountId,
-              convo.lead.platformUserId,
-              'Conversation history cleared. Starting fresh!'
-            );
-          } else if (convo.lead.platform === 'INSTAGRAM') {
-            const { sendDM } = await import('@/lib/instagram');
-            await sendDM(
-              convo.lead.accountId,
-              convo.lead.platformUserId,
-              'Conversation history cleared. Starting fresh!'
-            );
-          }
-        } catch (sendErr) {
-          console.error(
-            '[ai-reply] Failed to send clear confirmation:',
-            sendErr
-          );
-        }
-      }
-
-      pendingAIReplies.delete(conversationId);
-      return;
-    }
-
-    // Check if AI is still active for this conversation
-    const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      select: { aiActive: true, lead: { select: { accountId: true } } }
-    });
-
-    // Check per-conversation AI toggle
-    const aiActive = conversation?.aiActive ?? false;
-
-    // Check global away mode — if enabled, AI responds even if per-convo AI is off
-    // UNLESS the user explicitly turned AI off on this specific conversation
-    let awayModeActive = false;
-    if (accountId || conversation?.lead?.accountId) {
-      const resolvedAccountId = accountId || conversation!.lead.accountId;
-      const account = await prisma.account.findUnique({
-        where: { id: resolvedAccountId },
-        select: { awayMode: true }
-      });
-      awayModeActive = account?.awayMode ?? false;
-    }
-
-    // If neither per-convo AI nor away mode is active, skip
-    if (!aiActive && !awayModeActive) return;
-
-    // Generate AI reply directly (no HTTP call needed — we're in the same process)
-    // Load ALL messages so AI has full conversation history & memory
-    const conversation2 = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      include: {
-        lead: true,
-        messages: {
-          orderBy: { timestamp: 'asc' }
-        }
-      }
-    });
-
-    if (!conversation2) return;
-
-    // Full conversation history (already ordered asc)
-    const recentMessages = conversation2.messages;
-    const lastLeadMessage = recentMessages
-      .filter((m) => m.sender === 'LEAD')
-      .pop();
-
-    // Generate AI reply using the AI engine (Anthropic/OpenAI)
-    let aiReply: string;
-    const acctId = accountId || conversation2.lead.accountId;
-
-    console.log(`[ai-reply] Starting AI generation for account: ${acctId}`);
     console.log(
-      `[ai-reply] ANTHROPIC_API_KEY set: ${!!process.env.ANTHROPIC_API_KEY}`
+      `[webhook-processor] AI suggestion generated for ${conversationId} (not auto-sending)`
     );
-    console.log(`[ai-reply] AI_PROVIDER: ${process.env.AI_PROVIDER}`);
-    console.log(`[ai-reply] Message count: ${recentMessages.length}`);
-
-    try {
-      const aiEngine = await import('@/lib/ai-engine');
-      const lead = conversation2.lead;
-      console.log(`[ai-reply] Calling generateReply for lead: ${lead.name}`);
-      const result = await aiEngine.generateReply(
-        acctId,
-        recentMessages as any,
-        {
-          leadName: lead.name ?? 'Unknown',
-          handle: lead.handle ?? '',
-          platform: lead.platform,
-          status: lead.status,
-          triggerType: lead.triggerType,
-          triggerSource: lead.triggerSource ?? null,
-          qualityScore: lead.qualityScore ?? 0,
-          leadId: lead.id
-        }
-      );
-      aiReply = result.reply;
-      console.log(
-        `[ai-reply] AI engine generated reply: "${aiReply.slice(0, 100)}"`
-      );
-
-      // Apply auto-tags from AI analysis (use array or fall back to single tag)
-      const tagsToApply =
-        result.suggestedTags && result.suggestedTags.length > 0
-          ? result.suggestedTags
-          : result.suggestedTag
-            ? [result.suggestedTag.toUpperCase().replace(/\s+/g, '_')]
-            : [];
-      if (tagsToApply.length > 0) {
-        console.log(`[ai-reply] Applying auto-tags: ${tagsToApply.join(', ')}`);
-        await applyAutoTags(acctId, lead.id, tagsToApply);
-      }
-
-      // Update lead quality score
-      if (result.qualityScore !== undefined) {
-        await prisma.lead.update({
-          where: { id: lead.id },
-          data: { qualityScore: result.qualityScore }
-        });
-        console.log(`[ai-reply] Updated quality score: ${result.qualityScore}`);
-      }
-
-      // Update lead status if AI suggests a stage change
-      if (result.stage) {
-        const stageToStatus: Record<string, string> = {
-          opening: 'NEW_LEAD',
-          qualifying: 'IN_QUALIFICATION',
-          building_rapport: 'IN_QUALIFICATION',
-          pitching: 'HOT_LEAD',
-          handling_objection: 'TRUST_OBJECTION',
-          booking: 'BOOKED',
-          booked: 'BOOKED',
-          closed: 'CLOSED',
-          lost: 'UNQUALIFIED',
-          ghosted: 'GHOSTED'
-        };
-        const newStatus = stageToStatus[result.stage.toLowerCase()];
-        if (newStatus && newStatus !== lead.status) {
-          await prisma.lead.update({
-            where: { id: lead.id },
-            data: { status: newStatus as any }
-          });
-          console.log(
-            `[ai-reply] Updated lead status: ${lead.status} → ${newStatus}`
-          );
-        }
-      }
-    } catch (aiError: any) {
-      const errMsg = aiError?.message || String(aiError);
-      const errStack =
-        aiError?.stack?.split('\n').slice(0, 3).join(' | ') || '';
-      console.error(
-        `[ai-reply] AI ENGINE FAILED — Error: ${errMsg} — Stack: ${errStack}`
-      );
-
-      // Detect missing API key and notify user
-      const isApiKeyError =
-        /no ai.*key|api key not configured|api.*key.*missing|no ai provider/i.test(
-          errMsg
-        ) || /invalid.*api.*key|authentication|unauthorized|401/i.test(errMsg);
-
-      if (isApiKeyError) {
-        try {
-          const { createNotification } = await import('@/lib/notifications');
-          await createNotification({
-            accountId: acctId,
-            type: 'SYSTEM',
-            title: 'AI Replies Paused — API Key Missing',
-            body: 'Your AI cannot respond to leads because no API key is configured. Go to Settings → Integrations to add your OpenAI or Anthropic API key.'
-          });
-          console.error('[ai-reply] Notified user about missing API key.');
-        } catch (notifErr) {
-          console.error(
-            '[ai-reply] Failed to create API key notification:',
-            notifErr
-          );
-        }
-      }
-
-      // NEVER send a generic fallback — it confuses the lead.
-      console.error('[ai-reply] Skipping reply to avoid generic message.');
-      return;
-    }
-
-    // Save AI message to DB
-    const aiMessage = await prisma.message.create({
-      data: {
-        conversationId,
-        sender: 'AI',
-        content: aiReply,
-        timestamp: new Date()
-      }
-    });
-
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { lastMessageAt: new Date() }
-    });
-
-    // Send the AI reply to the platform
-    const lead = conversation2.lead;
-    if (lead.platformUserId) {
-      try {
-        if (lead.platform === 'FACEBOOK') {
-          const { sendMessage } = await import('@/lib/facebook');
-          await sendMessage(lead.accountId, lead.platformUserId, aiReply);
-          console.log(
-            `[ai-reply] Facebook message sent to ${lead.platformUserId}: "${aiReply.slice(0, 50)}..."`
-          );
-        } else if (lead.platform === 'INSTAGRAM') {
-          const { sendDM } = await import('@/lib/instagram');
-          await sendDM(lead.accountId, lead.platformUserId, aiReply);
-          console.log(
-            `[ai-reply] Instagram DM sent to ${lead.platformUserId}: "${aiReply.slice(0, 50)}..."`
-          );
-        }
-      } catch (sendErr) {
-        console.error('[ai-reply] Failed to send to platform:', sendErr);
-      }
-    }
-
-    console.log(
-      `[ai-reply] Generated reply for conversation ${conversationId}: "${aiReply.slice(0, 80)}..."`
-    );
-  } catch (err) {
-    console.error(
-      `[webhook-processor] Failed to schedule AI reply for conversation ${conversationId}:`,
-      err
-    );
-  } finally {
-    // Clear dedup guard so future messages can trigger new replies
-    pendingAIReplies.delete(conversationId);
+    return;
   }
+
+  // ── Step 6: Apply response delay ───────────────────────────────
+  // In production, this would use a job queue (Bull, Inngest, etc.)
+  // For now, we use setTimeout for simplicity
+  const delayMs = result.suggestedDelay * 1000;
+  console.log(
+    `[webhook-processor] Delaying AI reply by ${result.suggestedDelay}s for ${conversationId}`
+  );
+
+  setTimeout(async () => {
+    try {
+      await sendAIReply(conversationId, accountId, lead, result);
+    } catch (err) {
+      console.error(
+        `[webhook-processor] Failed to send delayed AI reply for ${conversationId}:`,
+        err
+      );
+    }
+  }, delayMs);
 }
 
 // ---------------------------------------------------------------------------
-// Process a comment trigger — create lead and initiate DM
+// 3. Send AI Reply (save to DB + deliver to platform)
 // ---------------------------------------------------------------------------
 
-interface CommentTriggerParams {
+async function sendAIReply(
+  conversationId: string,
+  accountId: string,
+  lead: {
+    id: string;
+    platform: string;
+    platformUserId: string | null;
+    accountId: string;
+    status: string;
+  },
+  result: {
+    reply: string;
+    stage: string;
+    stageConfidence: number;
+    sentimentScore: number;
+    suggestedTag: string;
+    suggestedTags: string[];
+    suggestedDelay: number;
+    systemPromptVersion: string;
+  }
+): Promise<void> {
+  // Re-check that AI is still active (human might have taken over during delay)
+  const convo = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { aiActive: true }
+  });
+
+  if (!convo?.aiActive) {
+    console.log(
+      `[webhook-processor] AI deactivated during delay for ${conversationId}, skipping send`
+    );
+    // Still broadcast as suggestion
+    broadcastAISuggestion({
+      conversationId,
+      suggestedReply: result.reply,
+      stage: result.stage,
+      confidence: result.stageConfidence
+    });
+    return;
+  }
+
+  const now = new Date();
+
+  // ── Save AI message to database ────────────────────────────────
+  const aiMessage = await prisma.message.create({
+    data: {
+      conversationId,
+      sender: 'AI',
+      content: result.reply,
+      timestamp: now,
+      stage: result.stage || null,
+      stageConfidence: result.stageConfidence,
+      sentimentScore: result.sentimentScore,
+      systemPromptVersion: result.systemPromptVersion
+    }
+  });
+
+  // Update conversation
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastMessageAt: now }
+  });
+
+  // ── Record stage timestamp ─────────────────────────────────────
+  if (result.stage) {
+    await recordStageTimestamp(conversationId, result.stage).catch((err) =>
+      console.error('[webhook-processor] Stage timestamp error:', err)
+    );
+  }
+
+  // ── Update conversation outcome ────────────────────────────────
+  await updateConversationOutcome(conversationId).catch((err) =>
+    console.error('[webhook-processor] Outcome update error:', err)
+  );
+
+  // ── Auto-apply suggested tags ──────────────────────────────────
+  if (result.suggestedTags?.length > 0) {
+    await applyAutoTags(
+      lead.accountId,
+      lead.id,
+      result.suggestedTags,
+      result.stageConfidence
+    ).catch((err) =>
+      console.error('[webhook-processor] Auto-tag error:', err)
+    );
+  }
+
+  // ── Update lead status based on stage ──────────────────────────
+  await updateLeadStatusFromStage(lead.id, lead.status, result.stage).catch(
+    (err) => console.error('[webhook-processor] Lead status update error:', err)
+  );
+
+  // ── Broadcast real-time events ─────────────────────────────────
+  broadcastNewMessage({
+    id: aiMessage.id,
+    conversationId,
+    sender: 'AI',
+    content: result.reply,
+    timestamp: now.toISOString()
+  });
+
+  // ── Send to platform (fire-and-forget) ─────────────────────────
+  if (lead.platformUserId) {
+    try {
+      if (lead.platform === 'INSTAGRAM') {
+        await sendInstagramDM(lead.accountId, lead.platformUserId, result.reply);
+        console.log(
+          `[webhook-processor] IG DM sent to ${lead.platformUserId}`
+        );
+      } else if (lead.platform === 'FACEBOOK') {
+        await sendFacebookMessage(
+          lead.accountId,
+          lead.platformUserId,
+          result.reply
+        );
+        console.log(
+          `[webhook-processor] FB message sent to ${lead.platformUserId}`
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[webhook-processor] Failed to deliver to ${lead.platform}:`,
+        err
+      );
+    }
+  }
+
+  console.log(
+    `[webhook-processor] AI reply sent for conversation ${conversationId} | stage: ${result.stage}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 4. Process Comment Trigger (auto-DM from comment)
+// ---------------------------------------------------------------------------
+
+export interface CommentTriggerParams {
   accountId: string;
   platformUserId: string;
   platform: 'INSTAGRAM' | 'FACEBOOK';
@@ -529,6 +486,7 @@ export async function processCommentTrigger(
   params: CommentTriggerParams
 ): Promise<void> {
   const {
+    accountId,
     platformUserId,
     platform,
     commenterName,
@@ -537,101 +495,317 @@ export async function processCommentTrigger(
     postId
   } = params;
 
-  // Process as incoming message with COMMENT trigger
+  console.log(
+    `[webhook-processor] Comment trigger from ${commenterHandle} on ${postId}: "${commentText.slice(0, 80)}"`
+  );
+
+  // Check if lead already exists
+  const existingLead = await prisma.lead.findFirst({
+    where: { accountId, platformUserId, platform }
+  });
+
+  if (existingLead) {
+    console.log(
+      `[webhook-processor] Lead already exists for ${commenterHandle}, skipping comment trigger`
+    );
+    return;
+  }
+
+  // Check for content attribution
+  let contentAttributionId: string | undefined;
+  const attribution = await prisma.contentAttribution.findFirst({
+    where: { accountId, contentId: postId, platform }
+  });
+  if (attribution) {
+    contentAttributionId = attribution.id;
+    // Increment lead count
+    await prisma.contentAttribution.update({
+      where: { id: attribution.id },
+      data: { leadsCount: { increment: 1 } }
+    });
+  }
+
+  // Create lead + conversation with comment context
   const result = await processIncomingMessage({
-    accountId: params.accountId,
+    accountId,
     platformUserId,
     platform,
     senderName: commenterName,
     senderHandle: commenterHandle,
-    messageText: commentText,
+    messageText: `[Commented on post: "${commentText}"]`,
     triggerType: 'COMMENT',
     triggerSource: postId
   });
 
-  // Schedule an AI-generated DM reply to the commenter
-  await scheduleAIReply(result.conversationId);
+  // Update content attribution if found
+  if (contentAttributionId) {
+    await prisma.lead.update({
+      where: { id: result.leadId },
+      data: { contentAttributionId }
+    });
+  }
+
+  // Schedule AI to send the first DM
+  await scheduleAIReply(result.conversationId, accountId);
 }
 
 // ---------------------------------------------------------------------------
-// Auto-Tagging — apply AI-suggested tags to leads after reply generation
+// 5. Human → AI Handoff (toggle AI back on)
+// ---------------------------------------------------------------------------
+// When a human operator re-enables AI on a conversation, the AI reads
+// the full history and generates a contextual continuation reply.
 // ---------------------------------------------------------------------------
 
-// Tag color palette for auto-created tags
-const AUTO_TAG_COLORS: Record<string, string> = {
-  HIGH_INTENT: '#22c55e',
-  MONEY_OBJECTION: '#f59e0b',
-  GHOST_RISK: '#ef4444',
-  COLD: '#6b7280',
-  WARM: '#f97316',
-  HOT: '#ef4444',
-  BOOKED: '#3b82f6',
-  QUALIFIED: '#8b5cf6',
-  REACTIVATED: '#06b6d4',
-  OUTBOUND: '#6366f1',
-  TRUST_OBJECTION: '#eab308',
-  TIME_OBJECTION: '#a855f7',
-  INTERESTED: '#10b981',
-  NOT_INTERESTED: '#6b7280',
-  FOLLOW_UP: '#f59e0b'
-};
-
-export async function applyAutoTags(
-  accountId: string,
-  leadId: string,
-  suggestedTags: string[]
+export async function handleAIHandoff(
+  conversationId: string,
+  accountId: string
 ): Promise<void> {
-  if (!suggestedTags.length) return;
+  console.log(
+    `[webhook-processor] AI handoff activated for conversation: ${conversationId}`
+  );
 
-  try {
-    // Get ALL tags for this account (not just auto ones)
-    const accountTags = await prisma.tag.findMany({
-      where: { accountId },
-      select: { id: true, name: true }
-    });
+  // Enable AI on the conversation
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { aiActive: true }
+  });
 
-    const tagMap = new Map(accountTags.map((t) => [t.name, t.id]));
+  // Broadcast the status change
+  broadcastAIStatusChange({ conversationId, aiActive: true });
 
-    for (const tagName of suggestedTags) {
-      const normalizedName = tagName.trim().toUpperCase().replace(/\s+/g, '_');
-      let tagId = tagMap.get(normalizedName);
+  // Check if the last message was from the lead (needs a reply)
+  const lastMessage = await prisma.message.findFirst({
+    where: { conversationId },
+    orderBy: { timestamp: 'desc' },
+    select: { sender: true }
+  });
 
-      // Auto-create the tag if it doesn't exist
-      if (!tagId) {
-        const color = AUTO_TAG_COLORS[normalizedName] || '#6366f1';
-        const newTag = await prisma.tag.create({
-          data: {
-            accountId,
-            name: normalizedName,
-            color,
-            isAuto: true
-          }
-        });
-        tagId = newTag.id;
-        tagMap.set(normalizedName, tagId);
-        console.log(`[auto-tag] Created new tag: ${normalizedName} (${color})`);
-      }
-
-      // Upsert to avoid duplicate errors
-      await prisma.leadTag.upsert({
-        where: { leadId_tagId: { leadId, tagId } },
-        update: { appliedBy: 'AI', confidence: 0.85 },
-        create: { leadId, tagId, appliedBy: 'AI', confidence: 0.85 }
-      });
-    }
-
+  if (lastMessage?.sender === 'LEAD') {
+    // Lead is waiting for a reply — generate one immediately
+    await scheduleAIReply(conversationId, accountId);
+  } else {
     console.log(
-      `[auto-tag] Tagged lead ${leadId} with: ${suggestedTags.join(', ')}`
+      `[webhook-processor] AI handoff: last message is from our side, waiting for lead reply`
     );
-  } catch (err) {
-    console.error(`[auto-tag] Failed to tag lead ${leadId}:`, err);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helper: Back-fill messages from Meta Graph API
 // ---------------------------------------------------------------------------
 
-function randomBetween(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+async function backfillFromMetaAPI(
+  accountId: string,
+  conversationId: string,
+  platform: string,
+  platformUserId: string
+): Promise<any[]> {
+  // Try to find the Meta conversation ID
+  // For now, we'll fetch messages using the platform-specific API
+  // and merge with our local database
+
+  let apiMessages: Array<{
+    id: string;
+    message: string;
+    from: { id: string; name?: string };
+    createdTime: string;
+  }> = [];
+
+  try {
+    if (platform === 'INSTAGRAM') {
+      // Instagram conversations use a different ID format
+      // We need to find the conversation by participant
+      const igConvos = await (await import('@/lib/instagram')).getConversations(accountId, 50);
+      const matchedConvo = igConvos.find((c) =>
+        c.participants.some((p) => p.id === platformUserId)
+      );
+
+      if (matchedConvo) {
+        apiMessages = await getInstagramMessages(accountId, matchedConvo.id, 50);
+      }
+    } else if (platform === 'FACEBOOK') {
+      const fbConvos = await (await import('@/lib/facebook')).getConversations(accountId, 50);
+      const matchedConvo = fbConvos.find((c) =>
+        c.participants.some((p) => p.id === platformUserId)
+      );
+
+      if (matchedConvo) {
+        apiMessages = await getFacebookMessages(accountId, matchedConvo.id, 50);
+      }
+    }
+  } catch (err) {
+    console.warn(`[webhook-processor] Meta API message fetch failed:`, err);
+    // Return local messages as fallback
+    return prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { timestamp: 'asc' }
+    });
+  }
+
+  if (apiMessages.length === 0) {
+    return prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { timestamp: 'asc' }
+    });
+  }
+
+  // Get the page ID to determine which messages are "ours" vs "theirs"
+  const { getMetaPageId } = await import('@/lib/credential-store');
+  const pageId = await getMetaPageId(accountId);
+
+  // Merge API messages with local DB (avoid duplicates)
+  const existingMessages = await prisma.message.findMany({
+    where: { conversationId },
+    select: { content: true, timestamp: true }
+  });
+
+  const existingSet = new Set(
+    existingMessages.map((m) => `${m.content}|${m.timestamp.getTime()}`)
+  );
+
+  const newMessages = [];
+  for (const apiMsg of apiMessages.reverse()) {
+    // Reverse to get chronological order
+    const timestamp = new Date(apiMsg.createdTime);
+    const key = `${apiMsg.message}|${timestamp.getTime()}`;
+
+    if (existingSet.has(key)) continue;
+    if (!apiMsg.message) continue;
+
+    const isOurMessage = apiMsg.from?.id === pageId;
+    const sender = isOurMessage ? 'AI' : 'LEAD';
+
+    const msg = await prisma.message.create({
+      data: {
+        conversationId,
+        sender: sender as any,
+        content: apiMsg.message,
+        timestamp
+      }
+    });
+    newMessages.push(msg);
+  }
+
+  // Return all messages in chronological order
+  return prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { timestamp: 'asc' }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Apply Auto Tags
+// ---------------------------------------------------------------------------
+
+async function applyAutoTags(
+  accountId: string,
+  leadId: string,
+  tagNames: string[],
+  confidence: number
+): Promise<void> {
+  for (const tagName of tagNames) {
+    if (!tagName) continue;
+
+    // Find or create the tag
+    let tag = await prisma.tag.findUnique({
+      where: { accountId_name: { accountId, name: tagName } }
+    });
+
+    if (!tag) {
+      tag = await prisma.tag.create({
+        data: {
+          accountId,
+          name: tagName,
+          isAuto: true,
+          color: getTagColor(tagName)
+        }
+      });
+    }
+
+    // Apply to lead (idempotent via unique constraint)
+    await prisma.leadTag
+      .create({
+        data: {
+          leadId,
+          tagId: tag.id,
+          appliedBy: 'AI',
+          confidence
+        }
+      })
+      .catch(() => {
+        // Already exists — ignore duplicate
+      });
+  }
+}
+
+function getTagColor(tagName: string): string {
+  const colorMap: Record<string, string> = {
+    HIGH_INTENT: '#22C55E',
+    RESISTANT: '#EF4444',
+    UNQUALIFIED: '#6B7280',
+    NEUTRAL: '#3B82F6',
+    GHOST_RISK: '#F59E0B',
+    PRICE_SENSITIVE: '#F97316',
+    READY_TO_BOOK: '#10B981',
+    NEEDS_NURTURE: '#8B5CF6'
+  };
+  return colorMap[tagName] || '#6B7280';
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Update Lead Status from AI Stage
+// ---------------------------------------------------------------------------
+
+async function updateLeadStatusFromStage(
+  leadId: string,
+  currentStatus: string,
+  stage: string
+): Promise<void> {
+  // Map AI stages to lead statuses (only upgrade, never downgrade)
+  const stageToStatus: Record<string, string> = {
+    QUALIFICATION: 'IN_QUALIFICATION',
+    VISION_BUILDING: 'IN_QUALIFICATION',
+    PAIN_IDENTIFICATION: 'IN_QUALIFICATION',
+    URGENCY: 'HOT_LEAD',
+    SOLUTION_OFFER: 'HOT_LEAD',
+    CAPITAL_QUALIFICATION: 'QUALIFIED',
+    GOAL_EMOTIONAL_WHY: 'QUALIFIED',
+    SOFT_PITCH_COMMITMENT: 'QUALIFIED',
+    FINANCIAL_SCREENING: 'QUALIFIED',
+    BOOKING: 'BOOKED'
+  };
+
+  const newStatus = stageToStatus[stage];
+  if (!newStatus) return;
+
+  // Status priority order (only upgrade)
+  const statusPriority: Record<string, number> = {
+    NEW_LEAD: 0,
+    IN_QUALIFICATION: 1,
+    HOT_LEAD: 2,
+    QUALIFIED: 3,
+    BOOKED: 4,
+    SHOWED_UP: 5,
+    CLOSED: 6,
+    // These are terminal/side statuses — don't override
+    SERIOUS_NOT_READY: 10,
+    MONEY_OBJECTION: 10,
+    TRUST_OBJECTION: 10,
+    GHOSTED: 10,
+    UNQUALIFIED: 10,
+    NO_SHOW: 10
+  };
+
+  const currentPriority = statusPriority[currentStatus] ?? 0;
+  const newPriority = statusPriority[newStatus] ?? 0;
+
+  if (newPriority > currentPriority && currentPriority < 10) {
+    await prisma.lead.update({
+      where: { id: leadId },
+      data: { status: newStatus as any }
+    });
+    console.log(
+      `[webhook-processor] Lead ${leadId} status: ${currentStatus} → ${newStatus}`
+    );
+  }
 }

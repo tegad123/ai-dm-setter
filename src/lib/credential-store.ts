@@ -2,100 +2,193 @@ import prisma from '@/lib/prisma';
 import crypto from 'crypto';
 
 const ENCRYPTION_KEY =
-  process.env.CREDENTIAL_ENCRYPTION_KEY || 'dev-key-change-in-production-32ch';
+  process.env.CREDENTIAL_ENCRYPTION_KEY ||
+  'dev-encryption-key-32-bytes-long!'; // Must be 32 bytes for AES-256
 
-// Ensure key is 32 bytes for AES-256
-function getKey(): Buffer {
+const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 16;
+const TAG_LENGTH = 16;
+
+// ---------------------------------------------------------------------------
+// Encrypt / Decrypt helpers (AES-256-GCM)
+// ---------------------------------------------------------------------------
+
+function getKeyBuffer(): Buffer {
   const key = ENCRYPTION_KEY;
-  if (key.length >= 32) return Buffer.from(key.slice(0, 32));
-  return Buffer.from(key.padEnd(32, '0'));
+  // Ensure exactly 32 bytes
+  if (key.length === 32) return Buffer.from(key, 'utf-8');
+  return crypto.createHash('sha256').update(key).digest();
 }
 
-export function encryptCredentials(data: Record<string, string>): string {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-gcm', getKey(), iv);
-  let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag().toString('hex');
-  return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+export function encrypt(plaintext: string): string {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, getKeyBuffer(), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(plaintext, 'utf-8'),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  // Return iv:tag:ciphertext as hex
+  return [
+    iv.toString('hex'),
+    tag.toString('hex'),
+    encrypted.toString('hex')
+  ].join(':');
 }
 
-export function decryptCredentials(encrypted: string): Record<string, string> {
-  const [ivHex, authTagHex, data] = encrypted.split(':');
+export function decrypt(ciphertext: string): string {
+  const [ivHex, tagHex, encryptedHex] = ciphertext.split(':');
+  if (!ivHex || !tagHex || !encryptedHex) {
+    throw new Error('Invalid ciphertext format');
+  }
   const iv = Buffer.from(ivHex, 'hex');
-  const authTag = Buffer.from(authTagHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', getKey(), iv);
-  decipher.setAuthTag(authTag);
-  let decrypted = decipher.update(data, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return JSON.parse(decrypted);
+  const tag = Buffer.from(tagHex, 'hex');
+  const encrypted = Buffer.from(encryptedHex, 'hex');
+  const decipher = crypto.createDecipheriv(ALGORITHM, getKeyBuffer(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final()
+  ]).toString('utf-8');
 }
 
-// IntegrationProvider type matches Prisma enum
-type Provider =
-  | 'META'
-  | 'INSTAGRAM'
-  | 'ELEVENLABS'
-  | 'LEADCONNECTOR'
-  | 'OPENAI'
-  | 'ANTHROPIC'
-  | 'CALENDLY'
-  | 'CALCOM';
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
+export interface CredentialData {
+  apiKey?: string;
+  accessToken?: string;
+  model?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Get decrypted credentials for a provider + account.
+ * Returns null if no credential exists or is inactive.
+ */
 export async function getCredentials(
   accountId: string,
-  provider: Provider
-): Promise<Record<string, string> | null> {
-  const cred = await prisma.integrationCredential.findFirst({
-    where: { accountId, provider, isActive: true }
+  provider: string
+): Promise<CredentialData | null> {
+  const record = await prisma.integrationCredential.findFirst({
+    where: {
+      accountId,
+      provider: provider as any,
+      isActive: true
+    }
   });
-  if (!cred) return null;
+
+  if (!record) return null;
+
   try {
-    const raw = cred.credentials as any;
-    // If it's a string, it's encrypted; if object, it was stored in dev mode
-    const decrypted =
-      typeof raw === 'string'
-        ? decryptCredentials(raw)
-        : (raw as Record<string, string>);
-    // Merge metadata fields so libs can access voiceId, model, pageId, etc.
-    const meta = (cred.metadata as Record<string, string>) || {};
-    return { ...meta, ...decrypted };
-  } catch {
+    const raw = record.credentials as any;
+    // If credentials are stored as an encrypted string
+    if (typeof raw === 'string') {
+      return JSON.parse(decrypt(raw));
+    }
+    // If stored as a JSON object with encrypted values
+    if (raw && typeof raw === 'object') {
+      const result: CredentialData = {};
+      for (const [key, value] of Object.entries(raw)) {
+        if (typeof value === 'string' && value.includes(':')) {
+          try {
+            result[key] = decrypt(value);
+          } catch {
+            result[key] = value; // Not encrypted, use as-is
+          }
+        } else {
+          result[key] = value as any;
+        }
+      }
+      return result;
+    }
+    return null;
+  } catch (err) {
+    console.error(`[credential-store] Failed to decrypt credentials for ${provider}:`, err);
     return null;
   }
 }
 
-export async function saveCredentials(
+/**
+ * Store encrypted credentials for a provider + account.
+ */
+export async function setCredentials(
   accountId: string,
-  provider: Provider,
-  credentials: Record<string, string>,
-  metadata?: Record<string, string>
+  provider: string,
+  credentials: CredentialData,
+  metadata?: Record<string, unknown>
 ): Promise<void> {
-  const encrypted = encryptCredentials(credentials);
+  // Encrypt sensitive fields
+  const encrypted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(credentials)) {
+    if (
+      typeof value === 'string' &&
+      (key === 'apiKey' || key === 'accessToken' || key === 'refreshToken')
+    ) {
+      encrypted[key] = encrypt(value);
+    } else {
+      encrypted[key] = value;
+    }
+  }
+
   await prisma.integrationCredential.upsert({
-    where: { accountId_provider: { accountId, provider } },
-    create: {
-      accountId,
-      provider,
-      credentials: encrypted as any,
-      metadata: metadata || {},
-      isActive: true,
-      verifiedAt: new Date()
+    where: {
+      accountId_provider: {
+        accountId,
+        provider: provider as any
+      }
     },
     update: {
       credentials: encrypted as any,
-      metadata: metadata ? metadata : undefined,
+      metadata: metadata as any ?? undefined,
+      isActive: true,
+      verifiedAt: new Date()
+    },
+    create: {
+      accountId,
+      provider: provider as any,
+      credentials: encrypted as any,
+      metadata: metadata as any ?? undefined,
       isActive: true,
       verifiedAt: new Date()
     }
   });
 }
 
-export async function deleteCredentials(
-  accountId: string,
-  provider: Provider
-): Promise<void> {
-  await prisma.integrationCredential.deleteMany({
-    where: { accountId, provider }
+/**
+ * Get the Meta (Facebook/Instagram) access token for an account.
+ * Checks per-account credentials first, then falls back to env vars.
+ */
+export async function getMetaAccessToken(accountId: string): Promise<string | null> {
+  // Try per-account META credentials first
+  const metaCreds = await getCredentials(accountId, 'META');
+  if (metaCreds?.accessToken) return metaCreds.accessToken as string;
+
+  // Try per-account INSTAGRAM credentials
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  if (igCreds?.accessToken) return igCreds.accessToken as string;
+
+  // Fallback to env var
+  return process.env.META_ACCESS_TOKEN || process.env.INSTAGRAM_ACCESS_TOKEN || null;
+}
+
+/**
+ * Get the Meta page ID for an account.
+ */
+export async function getMetaPageId(accountId: string): Promise<string | null> {
+  const record = await prisma.integrationCredential.findFirst({
+    where: {
+      accountId,
+      provider: { in: ['META', 'INSTAGRAM'] as any },
+      isActive: true
+    }
   });
+
+  if (record?.metadata) {
+    const meta = record.metadata as any;
+    return meta?.pageId || meta?.igUserId || null;
+  }
+
+  return process.env.FACEBOOK_PAGE_ID || process.env.INSTAGRAM_PAGE_ID || null;
 }

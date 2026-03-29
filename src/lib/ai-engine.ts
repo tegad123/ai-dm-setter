@@ -1,546 +1,296 @@
-// ─── AI Messaging Engine — Structured JSON Response (BYOK) ─────────────────
-// Core AI engine that generates replies using per-account AI personas.
-// The new master template instructs the AI to return structured JSON with
-// format, message, stage, and suggested_tag — one call instead of three.
-
-import type {
-  MessageSender,
-  LeadStatus,
-  Platform,
-  TriggerType
-} from '@prisma/client';
-import { createHash } from 'crypto';
-import {
-  buildDynamicSystemPrompt,
-  getQualityScoringPrompt
-} from '@/lib/ai-prompts';
-import { getCredentials } from '@/lib/credential-store';
-import { resolveMessageVariant } from '@/lib/ab-testing';
 import prisma from '@/lib/prisma';
+import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
+import type { LeadContext } from '@/lib/ai-prompts';
+import { getCredentials } from '@/lib/credential-store';
 
-// ─── Types ──────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-export interface Message {
+export interface ConversationMessage {
   id: string;
-  conversationId: string;
-  sender: MessageSender;
+  sender: string;  // 'LEAD' | 'AI' | 'HUMAN'
   content: string;
-  isVoiceNote: boolean;
-  voiceNoteUrl: string | null;
-  sentByUserId: string | null;
-  timestamp: Date;
+  timestamp: Date | string;
+  isVoiceNote?: boolean;
 }
 
-export interface LeadContext {
-  leadId?: string;
-  leadName: string;
-  handle: string;
-  platform: Platform;
-  status: LeadStatus;
-  triggerType: TriggerType;
-  triggerSource: string | null;
-  qualityScore: number;
-}
-
-export interface AIReplyResult {
+export interface GenerateReplyResult {
   reply: string;
+  format: 'text' | 'voice_note';
+  stage: string;
+  stageConfidence: number;
+  sentimentScore: number;
+  suggestedTag: string;
+  suggestedTags: string[];
   shouldVoiceNote: boolean;
   qualityScore: number;
-  suggestedDelay: number; // milliseconds
-  suggestedTag: string | null; // Lead status suggestion from AI
-  suggestedTags: string[]; // Multiple auto-tags (Phase 2)
-  stage: string | null; // Current conversation stage
-  stageConfidence: number | null; // 0-1 confidence in stage classification
-  sentimentScore: number | null; // -1 to 1 lead sentiment
-  systemPromptVersion: string | null; // Semver hash of rendered prompt
-  abTestId: string | null; // A/B test ID if variant was applied
-  abTestVariant: string | null; // "A" or "B" if variant was applied
+  suggestedDelay: number;
+  systemPromptVersion: string;
 }
 
-/** Structured response the AI returns per the master template */
-interface AIStructuredResponse {
-  format: 'text' | 'voice_note';
-  message: string;
-  stage: string;
-  suggested_tag: string;
-  suggested_tags: string[]; // Multiple auto-tags with Phase 2 tagging system
-  stage_confidence: number | null; // 0-1 confidence in stage classification
-  sentiment_score: number | null; // -1 to 1 lead sentiment
+// ---------------------------------------------------------------------------
+// Main Entry Point
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate an AI reply for a conversation.
+ *
+ * @param accountId - The account ID (for persona + credential lookup)
+ * @param conversationHistory - Full ordered message history
+ * @param leadContext - Lead metadata for prompt personalization
+ */
+export async function generateReply(
+  accountId: string,
+  conversationHistory: ConversationMessage[],
+  leadContext: LeadContext
+): Promise<GenerateReplyResult> {
+  // 1. Build the dynamic system prompt
+  const systemPrompt = await buildDynamicSystemPrompt(accountId, leadContext);
+
+  // 2. Resolve AI provider credentials (per-account BYOK → env fallback)
+  const { provider, apiKey, model } = await resolveAIProvider(accountId);
+
+  if (!apiKey) {
+    throw new Error(
+      'No AI provider configured. Please add your OpenAI or Anthropic API key in Settings → Integrations.'
+    );
+  }
+
+  // 3. Format conversation history for the LLM
+  const messages = formatConversationForLLM(conversationHistory);
+
+  // 4. Call the LLM
+  const rawResponse = await callLLM(provider, apiKey, model, systemPrompt, messages);
+
+  // 5. Parse the structured JSON response
+  const parsed = parseAIResponse(rawResponse);
+
+  // 6. Get response delay from persona config
+  const persona = await prisma.aIPersona.findFirst({
+    where: { accountId },
+    select: { responseDelayMin: true, responseDelayMax: true, voiceNotesEnabled: true }
+  });
+
+  const delayMin = persona?.responseDelayMin ?? 300;
+  const delayMax = persona?.responseDelayMax ?? 600;
+  const suggestedDelay = Math.floor(Math.random() * (delayMax - delayMin + 1)) + delayMin;
+
+  const shouldVoiceNote =
+    parsed.format === 'voice_note' && (persona?.voiceNotesEnabled ?? false);
+
+  // 7. Get prompt version for tracking
+  const systemPromptVersion = await getPromptVersion(accountId);
+
+  return {
+    reply: parsed.message,
+    format: parsed.format as 'text' | 'voice_note',
+    stage: parsed.stage,
+    stageConfidence: parsed.stageConfidence,
+    sentimentScore: parsed.sentimentScore,
+    suggestedTag: parsed.suggestedTag,
+    suggestedTags: parsed.suggestedTags,
+    shouldVoiceNote,
+    qualityScore: Math.round(parsed.stageConfidence * 100),
+    suggestedDelay,
+    systemPromptVersion
+  };
 }
 
-type AIProvider = 'openai' | 'anthropic';
+// ---------------------------------------------------------------------------
+// Provider Resolution (per-account BYOK with env fallback)
+// ---------------------------------------------------------------------------
 
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-// ─── Per-Account Credential Resolution ─────────────────
-
-async function resolveAICredentials(
-  accountId: string
-): Promise<{ provider: AIProvider; apiKey: string; model?: string }> {
+async function resolveAIProvider(accountId: string): Promise<{
+  provider: 'openai' | 'anthropic';
+  apiKey: string | undefined;
+  model: string;
+}> {
+  // Try per-account OpenAI
   const openaiCreds = await getCredentials(accountId, 'OPENAI');
   if (openaiCreds?.apiKey) {
     return {
       provider: 'openai',
-      apiKey: openaiCreds.apiKey,
-      model: openaiCreds.model || undefined
+      apiKey: openaiCreds.apiKey as string,
+      model: (openaiCreds.model as string) || 'gpt-4o'
     };
   }
 
+  // Try per-account Anthropic
   const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
   if (anthropicCreds?.apiKey) {
     return {
       provider: 'anthropic',
-      apiKey: anthropicCreds.apiKey,
-      model: anthropicCreds.model || undefined
+      apiKey: anthropicCreds.apiKey as string,
+      model: (anthropicCreds.model as string) || 'claude-sonnet-4-20250514'
     };
   }
 
-  // Use process.env directly (Vercel injects env vars at runtime).
-  // Only load dotenv in local dev when .env file exists.
-  if (process.env.NODE_ENV === 'development') {
-    try {
-      const dotenv = await import('dotenv');
-      dotenv.config(); // don't override — let process.env win
-    } catch {
-      // dotenv not available, that's fine
-    }
-  }
-
-  const envProvider = (
-    process.env.AI_PROVIDER || 'anthropic'
-  ).toLowerCase() as AIProvider;
-  const envKey =
-    envProvider === 'anthropic'
+  // Fallback to env vars
+  const envProvider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
+  const provider = envProvider === 'anthropic' ? 'anthropic' : 'openai';
+  const apiKey =
+    provider === 'anthropic'
       ? process.env.ANTHROPIC_API_KEY
       : process.env.OPENAI_API_KEY;
+  const model =
+    process.env.AI_MODEL ||
+    (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
 
-  console.log(
-    `[ai-creds] Resolved provider=${envProvider}, hasKey=${!!envKey}`
-  );
-
-  if (!envKey) {
-    throw new Error(
-      `No AI API key found. Provider=${envProvider}. Please set ${envProvider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY'} in your environment variables.`
-    );
-  }
-
-  return {
-    provider: envProvider,
-    apiKey: envKey,
-    model: process.env.AI_MODEL || undefined
-  };
+  return { provider: provider as 'openai' | 'anthropic', apiKey, model };
 }
 
-// ─── Provider Implementations ───────────────────────────
+// ---------------------------------------------------------------------------
+// Format Conversation History for LLM
+// ---------------------------------------------------------------------------
 
-async function callOpenAI(
-  systemPrompt: string,
-  messages: ChatMessage[],
+function formatConversationForLLM(
+  history: ConversationMessage[]
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return history.map((msg) => {
+    // LEAD messages → user role, AI/HUMAN messages → assistant role
+    if (msg.sender === 'LEAD') {
+      return { role: 'user' as const, content: msg.content };
+    }
+    // Both AI and HUMAN messages are "our side" of the conversation
+    const prefix = msg.sender === 'HUMAN' ? '[Human team member] ' : '';
+    return { role: 'assistant' as const, content: prefix + msg.content };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// LLM Call (OpenAI or Anthropic)
+// ---------------------------------------------------------------------------
+
+async function callLLM(
+  provider: 'openai' | 'anthropic',
   apiKey: string,
   model: string,
-  temperature: number = 0.85,
-  maxTokens: number = 500
-): Promise<string> {
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey });
-
-  const response = await client.chat.completions.create({
-    model,
-    temperature,
-    max_tokens: maxTokens,
-    messages: [{ role: 'system', content: systemPrompt }, ...messages]
-  });
-
-  return response.choices[0]?.message?.content?.trim() || '';
-}
-
-async function callAnthropic(
   systemPrompt: string,
-  messages: ChatMessage[],
-  apiKey: string,
-  model: string,
-  temperature: number = 0.85,
-  maxTokens: number = 500
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> {
-  const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  if (provider === 'openai') {
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ apiKey });
 
-  const anthropicMessages = messages.map((msg) => ({
-    role: msg.role as 'user' | 'assistant',
-    content: msg.content
-  }));
+    const response = await client.chat.completions.create({
+      model,
+      temperature: 0.85,
+      max_tokens: 500,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages
+      ]
+    });
 
-  const response = await client.messages.create({
-    model,
-    system: systemPrompt,
-    temperature,
-    max_tokens: maxTokens,
-    messages: anthropicMessages
-  });
+    return response.choices[0]?.message?.content?.trim() || '';
+  } else {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey });
 
-  const textBlock = response.content.find((block) => block.type === 'text');
-  return textBlock?.text?.trim() || '';
-}
+    // Anthropic requires messages to start with user role
+    // If first message is assistant, prepend a system-generated user message
+    let anthropicMessages = [...messages];
+    if (anthropicMessages.length > 0 && anthropicMessages[0].role === 'assistant') {
+      anthropicMessages = [
+        { role: 'user' as const, content: '[Conversation started by our team]' },
+        ...anthropicMessages
+      ];
+    }
 
-async function callAI(
-  accountId: string,
-  systemPrompt: string,
-  messages: ChatMessage[],
-  temperature: number = 0.85,
-  maxTokens: number = 500
-): Promise<string> {
-  const { provider, apiKey, model } = await resolveAICredentials(accountId);
-  const resolvedModel =
-    model || (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
+    // Anthropic also requires alternating roles — merge consecutive same-role messages
+    anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
 
-  if (provider === 'anthropic') {
-    return callAnthropic(
-      systemPrompt,
-      messages,
-      apiKey,
-      resolvedModel,
-      temperature,
-      maxTokens
+    const response = await client.messages.create({
+      model,
+      system: systemPrompt,
+      temperature: 0.85,
+      max_tokens: 500,
+      messages: anthropicMessages
+    });
+
+    const textBlock = response.content.find(
+      (block: any) => block.type === 'text'
     );
+    return (textBlock as any)?.text?.trim() || '';
   }
-  return callOpenAI(
-    systemPrompt,
-    messages,
-    apiKey,
-    resolvedModel,
-    temperature,
-    maxTokens
-  );
 }
-
-// ─── Response Parsing ───────────────────────────────────
 
 /**
- * Parse the AI's structured JSON response.
- * The master template instructs the AI to respond with:
- * { "format": "text|voice_note", "message": "...", "stage": "...", "suggested_tag": "..." }
- *
- * Falls back gracefully if the AI doesn't return valid JSON.
+ * Merge consecutive messages with the same role (required by Anthropic).
  */
-function parseStructuredResponse(raw: string): AIStructuredResponse {
-  // Try to extract JSON from the response (may be wrapped in markdown code blocks)
-  let jsonStr = raw;
+function mergeConsecutiveRoles(
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  if (messages.length === 0) return messages;
 
-  // Strip markdown code block wrapper if present
-  const jsonMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
+  const merged: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+  for (const msg of messages) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === msg.role) {
+      last.content += '\n' + msg.content;
+    } else {
+      merged.push({ ...msg });
+    }
   }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// Parse AI Response (structured JSON)
+// ---------------------------------------------------------------------------
+
+interface ParsedAIResponse {
+  format: string;
+  message: string;
+  stage: string;
+  stageConfidence: number;
+  sentimentScore: number;
+  suggestedTag: string;
+  suggestedTags: string[];
+}
+
+function parseAIResponse(raw: string): ParsedAIResponse {
+  const defaults: ParsedAIResponse = {
+    format: 'text',
+    message: raw,
+    stage: '',
+    stageConfidence: 0.5,
+    sentimentScore: 0,
+    suggestedTag: '',
+    suggestedTags: []
+  };
 
   try {
-    const parsed = JSON.parse(jsonStr);
+    let jsonStr = raw;
 
-    // Clamp stage_confidence to 0-1, default null
-    let stageConfidence: number | null = null;
-    if (
-      typeof parsed.stage_confidence === 'number' &&
-      !isNaN(parsed.stage_confidence)
-    ) {
-      stageConfidence = Math.max(0, Math.min(1, parsed.stage_confidence));
+    // Strip markdown code fences if present
+    const jsonMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
     }
 
-    // Clamp sentiment_score to -1 to 1, default null
-    let sentimentScore: number | null = null;
-    if (
-      typeof parsed.sentiment_score === 'number' &&
-      !isNaN(parsed.sentiment_score)
-    ) {
-      sentimentScore = Math.max(-1, Math.min(1, parsed.sentiment_score));
-    }
+    const obj = JSON.parse(jsonStr);
 
     return {
-      format: parsed.format === 'voice_note' ? 'voice_note' : 'text',
-      message: typeof parsed.message === 'string' ? parsed.message : raw,
-      stage: typeof parsed.stage === 'string' ? parsed.stage : '',
-      suggested_tag:
-        typeof parsed.suggested_tag === 'string' ? parsed.suggested_tag : '',
-      suggested_tags: Array.isArray(parsed.suggested_tags)
-        ? parsed.suggested_tags.filter(
-            (t: unknown) => typeof t === 'string' && t.length > 0
-          )
-        : [],
-      stage_confidence: stageConfidence,
-      sentiment_score: sentimentScore
+      format: obj.format || 'text',
+      message: obj.message || raw,
+      stage: obj.stage || '',
+      stageConfidence:
+        typeof obj.stage_confidence === 'number'
+          ? Math.max(0, Math.min(1, obj.stage_confidence))
+          : 0.5,
+      sentimentScore:
+        typeof obj.sentiment_score === 'number'
+          ? Math.max(-1, Math.min(1, obj.sentiment_score))
+          : 0,
+      suggestedTag: obj.suggested_tag || '',
+      suggestedTags: Array.isArray(obj.suggested_tags) ? obj.suggested_tags : []
     };
   } catch {
-    // AI didn't return valid JSON — treat the whole response as a text message
-    return {
-      format: 'text',
-      message: raw,
-      stage: '',
-      suggested_tag: '',
-      suggested_tags: [],
-      stage_confidence: null,
-      sentiment_score: null
-    };
+    // If JSON parsing fails, treat the whole response as a plain text message
+    return defaults;
   }
-}
-
-// ─── Conversation History Formatting ────────────────────
-
-function formatConversationHistory(messages: Message[]): ChatMessage[] {
-  return messages.map((msg) => ({
-    role: msg.sender === 'LEAD' ? ('user' as const) : ('assistant' as const),
-    content: msg.isVoiceNote ? `[Voice Note] ${msg.content}` : msg.content
-  }));
-}
-
-// ─── Response Delay Logic (per-account configurable) ────
-
-function calculateSuggestedDelay(
-  conversationHistory: Message[],
-  reply: string,
-  delayMinMs: number = 300 * 1000,
-  delayMaxMs: number = 600 * 1000
-): number {
-  const messageCount = conversationHistory.length;
-
-  // First reply: use the lower range of configured delay
-  if (messageCount <= 1) {
-    return randomBetween(delayMinMs, Math.round((delayMinMs + delayMaxMs) / 2));
-  }
-
-  // Active back-and-forth: check if lead is replying fast
-  const recentMessages = conversationHistory.slice(-4);
-  const timeDiffs = [];
-  for (let i = 1; i < recentMessages.length; i++) {
-    const diff =
-      new Date(recentMessages[i].timestamp).getTime() -
-      new Date(recentMessages[i - 1].timestamp).getTime();
-    timeDiffs.push(diff);
-  }
-  const avgResponseTime =
-    timeDiffs.length > 0
-      ? timeDiffs.reduce((a, b) => a + b, 0) / timeDiffs.length
-      : delayMaxMs;
-
-  // If lead is replying fast, use the lower end of the delay range
-  if (avgResponseTime < delayMinMs) {
-    return randomBetween(Math.round(delayMinMs * 0.5), delayMinMs);
-  }
-
-  // Normal flow: use configured range with typing simulation
-  const typingFactor = Math.min(reply.length / 100, 1);
-  const baseDelay = randomBetween(delayMinMs, delayMaxMs);
-  const typingDelay = Math.round(
-    typingFactor * (delayMaxMs - delayMinMs) * 0.3
-  );
-
-  return Math.round(baseDelay + typingDelay);
-}
-
-function randomBetween(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-// ─── Prompt Versioning ───────────────────────────────────
-
-/**
- * Resolve (or create) a semantic version for the rendered system prompt.
- * Strips lead-specific variables, hashes the remaining text, and looks up
- * or creates a PromptVersion record so we can trace which prompt version
- * produced each AI reply.
- */
-export async function resolvePromptVersion(
-  accountId: string,
-  promptText: string
-): Promise<string> {
-  // Strip lead-specific variables so the hash is stable across leads
-  const normalized = promptText
-    .replace(/Lead name:\s*\S+/gi, 'Lead name: __LEAD__')
-    .replace(/@[\w.]+/g, '@__HANDLE__')
-    .replace(
-      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
-      '__EMAIL__'
-    );
-
-  const hash = createHash('sha256')
-    .update(normalized)
-    .digest('hex')
-    .slice(0, 16);
-
-  // Check if a version with this hash already exists for the account
-  const existing = await prisma.promptVersion.findFirst({
-    where: { accountId, promptHash: hash }
-  });
-
-  if (existing) {
-    return existing.version;
-  }
-
-  // Find the latest version for this account to increment from
-  const latest = await prisma.promptVersion.findFirst({
-    where: { accountId },
-    orderBy: { createdAt: 'desc' }
-  });
-
-  let nextVersion: string;
-  if (latest?.version) {
-    const parts = latest.version.split('.').map(Number);
-    // Increment patch version: "1.0.2" → "1.0.3"
-    parts[2] = (parts[2] || 0) + 1;
-    nextVersion = parts.join('.');
-  } else {
-    nextVersion = '1.0.0';
-  }
-
-  // Create the new version record
-  await prisma.promptVersion.create({
-    data: {
-      accountId,
-      version: nextVersion,
-      promptHash: hash,
-      description: `Auto-detected prompt change (hash: ${hash})`
-    }
-  });
-
-  return nextVersion;
-}
-
-// ─── Exported Functions ─────────────────────────────────
-
-/**
- * Generate a reply using the account's AI persona and master prompt template.
- * Now returns structured data: the AI's response includes format (text/voice_note),
- * message, stage, and suggested_tag — all from a SINGLE AI call.
- * Quality score is still a separate lightweight call for analytics.
- */
-export async function generateReply(
-  accountId: string,
-  conversationHistory: Message[],
-  leadContext: LeadContext
-): Promise<AIReplyResult> {
-  // Fetch persona settings for delay config and voice note toggle
-  const persona = await prisma.aIPersona.findFirst({
-    where: { accountId, isActive: true },
-    select: {
-      responseDelayMin: true,
-      responseDelayMax: true,
-      voiceNotesEnabled: true
-    }
-  });
-
-  const delayMinMs = (persona?.responseDelayMin ?? 300) * 1000;
-  const delayMaxMs = (persona?.responseDelayMax ?? 600) * 1000;
-  const voiceNotesEnabled = persona?.voiceNotesEnabled ?? true;
-
-  const systemPrompt = await buildDynamicSystemPrompt(accountId, {
-    leadName: leadContext.leadName,
-    handle: leadContext.handle,
-    platform: leadContext.platform,
-    status: leadContext.status,
-    triggerType: leadContext.triggerType,
-    triggerSource: leadContext.triggerSource,
-    qualityScore: leadContext.qualityScore
-  });
-
-  const chatMessages = formatConversationHistory(conversationHistory);
-
-  // Skip quality scoring on cold leads (< 3 messages) to save API costs
-  const shouldScore = conversationHistory.length >= 3;
-
-  const [rawReply, qualityScore, promptVersion] = await Promise.all([
-    callAI(accountId, systemPrompt, chatMessages, 0.85, 500),
-    shouldScore
-      ? calculateLeadQualityScore(
-          accountId,
-          conversationHistory,
-          leadContext.status
-        )
-      : Promise.resolve(0),
-    resolvePromptVersion(accountId, systemPrompt)
-  ]);
-
-  // Parse structured response
-  const structured = parseStructuredResponse(rawReply);
-
-  // ── Phase 3: A/B Variant Resolution ───────────────────
-  // Check if there's an active A/B test for this conversation stage.
-  // If so, replace the AI-generated message with the test variant.
-  const variantResult = await resolveMessageVariant(
-    accountId,
-    leadContext.leadId || '',
-    structured.stage || '',
-    structured.message
-  );
-
-  const finalMessage = variantResult.message;
-  const abTestId = variantResult.testId;
-  const abTestVariant = variantResult.variant;
-
-  // Use per-account delay settings
-  const suggestedDelay = calculateSuggestedDelay(
-    conversationHistory,
-    finalMessage,
-    delayMinMs,
-    delayMaxMs
-  );
-
-  // Respect the voice notes toggle — if disabled, force text
-  const shouldVoiceNote =
-    voiceNotesEnabled && structured.format === 'voice_note';
-
-  return {
-    reply: finalMessage,
-    shouldVoiceNote,
-    qualityScore,
-    suggestedDelay,
-    suggestedTag: structured.suggested_tag || null,
-    suggestedTags: structured.suggested_tags || [],
-    stage: structured.stage || null,
-    stageConfidence: structured.stage_confidence,
-    sentimentScore: structured.sentiment_score,
-    systemPromptVersion: promptVersion,
-    abTestId,
-    abTestVariant
-  };
-}
-
-/**
- * Calculate a 0-100 quality score for the lead based on conversation signals.
- * This is still a separate call — used for analytics/scoring dashboards.
- */
-export async function calculateLeadQualityScore(
-  accountId: string,
-  conversationHistory: Message[],
-  leadStatus: LeadStatus | string
-): Promise<number> {
-  if (conversationHistory.length < 2) {
-    return 20;
-  }
-
-  const scoringPrompt = await getQualityScoringPrompt(accountId);
-  const chatMessages = formatConversationHistory(conversationHistory);
-
-  chatMessages.push({
-    role: 'user' as const,
-    content: `Score this lead. Their current status is: ${leadStatus}. Respond with ONLY a number 0-100.`
-  });
-
-  const result = await callAI(accountId, scoringPrompt, chatMessages, 0.2, 10);
-
-  const score = parseInt(result.replace(/\D/g, ''), 10);
-  if (isNaN(score)) return 30;
-  return Math.max(0, Math.min(100, score));
-}
-
-/**
- * @deprecated Use generateReply() which now includes voice note decisions.
- * Kept for backward compatibility.
- */
-export async function shouldSendVoiceNote(
-  _accountId: string,
-  _message: string,
-  conversationHistory: Message[]
-): Promise<boolean> {
-  if (conversationHistory.length < 4) return false;
-  return false; // Now handled by structured JSON response in generateReply
 }

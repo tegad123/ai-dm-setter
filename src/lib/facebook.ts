@@ -1,160 +1,191 @@
 import crypto from 'crypto';
-import { getCredentials } from '@/lib/credential-store';
-import prisma from '@/lib/prisma';
+import { getMetaAccessToken } from '@/lib/credential-store';
+
+const GRAPH_API_VERSION = 'v21.0';
+const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 // ---------------------------------------------------------------------------
-// Facebook Messenger API Client — Meta Graph API v21.0
+// Webhook Signature Verification
 // ---------------------------------------------------------------------------
 
-const GRAPH_API_BASE = 'https://graph.facebook.com/v21.0';
+/**
+ * Verify the X-Hub-Signature-256 header from Meta's webhook payload.
+ */
+export function verifyWebhookSignature(
+  rawBody: string,
+  signature: string
+): boolean {
+  const appSecret = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET;
+  if (!appSecret) {
+    console.warn('[facebook] No META_APP_SECRET set, cannot verify signature');
+    return false;
+  }
 
-function getAppSecret(): string {
-  const secret = process.env.META_APP_SECRET;
-  if (!secret) throw new Error('META_APP_SECRET is not set');
-  return secret;
+  const expectedSig =
+    'sha256=' +
+    crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(signature),
+    Buffer.from(expectedSig)
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Resolve per-account Meta credentials (Page Access Token + Page ID)
-// Falls back to env vars for backwards compatibility / dev usage
+// Send Message (Facebook Messenger)
 // ---------------------------------------------------------------------------
 
-async function resolveMetaCredentials(
-  accountId: string
-): Promise<{ accessToken: string; pageId: string }> {
-  // Try credential store first
-  const cred = await prisma.integrationCredential.findFirst({
-    where: { accountId, provider: 'META', isActive: true }
-  });
-
-  if (cred) {
-    const credentials = await getCredentials(accountId, 'META');
-    const accessToken = credentials?.accessToken;
-    const pageId = (cred.metadata as any)?.pageId;
-
-    if (accessToken && pageId) {
-      return { accessToken, pageId };
-    }
-  }
-
-  // Fallback to env vars
-  const accessToken = process.env.META_ACCESS_TOKEN;
-  const pageId = process.env.FACEBOOK_PAGE_ID;
-
-  if (!accessToken || !pageId) {
-    throw new Error(
-      `No Meta credentials found for account ${accountId}. ` +
-        'Provide credentials via the credential store or set META_ACCESS_TOKEN and FACEBOOK_PAGE_ID env vars.'
-    );
-  }
-
-  return { accessToken, pageId };
-}
-
-// ---------------------------------------------------------------------------
-// Send a text message via Facebook Messenger
-// ---------------------------------------------------------------------------
-
+/**
+ * Send a message to a Facebook Messenger user via the Graph API.
+ */
 export async function sendMessage(
   accountId: string,
   recipientId: string,
-  message: string
-): Promise<void> {
-  const { accessToken, pageId } = await resolveMetaCredentials(accountId);
+  messageText: string
+): Promise<{ messageId: string }> {
+  const accessToken = await getMetaAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error('No Meta access token configured for this account');
+  }
 
-  const res = await fetch(`${GRAPH_API_BASE}/${pageId}/messages`, {
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const url = `${GRAPH_API_BASE}/${pageId}/messages`;
+
+  const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`
+    },
     body: JSON.stringify({
       recipient: { id: recipientId },
-      message: { text: message },
-      access_token: accessToken
+      message: { text: messageText },
+      messaging_type: 'RESPONSE'
     })
   });
 
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(
-      `Facebook sendMessage failed (${res.status}): ${JSON.stringify(body)}`
-    );
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('[facebook] Send message failed:', error);
+    throw new Error(`Facebook send message failed: ${response.status} ${error}`);
   }
+
+  const data = await response.json();
+  return { messageId: data.message_id || data.id || '' };
 }
 
 // ---------------------------------------------------------------------------
-// Send a voice-note attachment via Facebook Messenger
+// Fetch User Profile
 // ---------------------------------------------------------------------------
 
-export async function sendVoiceNote(
-  accountId: string,
-  recipientId: string,
-  audioUrl: string
-): Promise<void> {
-  const { accessToken, pageId } = await resolveMetaCredentials(accountId);
-
-  const res = await fetch(`${GRAPH_API_BASE}/${pageId}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      message: {
-        attachment: {
-          type: 'audio',
-          payload: { url: audioUrl, is_reusable: true }
-        }
-      },
-      access_token: accessToken
-    })
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(
-      `Facebook sendVoiceNote failed (${res.status}): ${JSON.stringify(body)}`
-    );
-  }
+export interface FBUserProfile {
+  id: string;
+  name: string;
+  profilePicUrl?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Get a user's profile info from Facebook
-// ---------------------------------------------------------------------------
-
+/**
+ * Fetch a Facebook user's profile via the Graph API.
+ */
 export async function getUserProfile(
   accountId: string,
   userId: string
-): Promise<{ name: string; profilePic: string }> {
-  const { accessToken } = await resolveMetaCredentials(accountId);
-
-  const res = await fetch(
-    `${GRAPH_API_BASE}/${userId}?fields=name,profile_pic&access_token=${accessToken}`
-  );
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(
-      `Facebook getUserProfile failed (${res.status}): ${JSON.stringify(body)}`
-    );
+): Promise<FBUserProfile> {
+  const accessToken = await getMetaAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error('No Meta access token configured');
   }
 
-  const json = await res.json();
+  const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,profile_pic&access_token=${accessToken}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Facebook profile: ${response.status}`);
+  }
+
+  const data = await response.json();
   return {
-    name: json.name ?? '',
-    profilePic: json.profile_pic ?? ''
+    id: data.id,
+    name: data.name || userId,
+    profilePicUrl: data.profile_pic
   };
 }
 
 // ---------------------------------------------------------------------------
-// Verify Meta webhook signature (x-hub-signature-256)
-// Uses platform-level app secret — NOT per-account
+// Fetch Conversations (Facebook Messenger)
 // ---------------------------------------------------------------------------
 
-export function verifyWebhookSignature(
-  body: string,
-  signature: string
-): boolean {
-  const appSecret = getAppSecret();
-  const expected = crypto
-    .createHmac('sha256', appSecret)
-    .update(body, 'utf8')
-    .digest('hex');
-  return signature === `sha256=${expected}`;
+export interface FBConversation {
+  id: string;
+  participants: Array<{ id: string; name?: string }>;
+  updatedTime: string;
+}
+
+/**
+ * Fetch recent Messenger conversations via the Graph API.
+ */
+export async function getConversations(
+  accountId: string,
+  limit = 20
+): Promise<FBConversation[]> {
+  const accessToken = await getMetaAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error('No Meta access token configured');
+  }
+
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const url = `${GRAPH_API_BASE}/${pageId}/conversations?fields=participants,updated_time&limit=${limit}&access_token=${accessToken}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch FB conversations: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return (data.data || []).map((c: any) => ({
+    id: c.id,
+    participants: c.participants?.data || [],
+    updatedTime: c.updated_time
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Fetch Messages from a Conversation
+// ---------------------------------------------------------------------------
+
+export interface FBMessage {
+  id: string;
+  message: string;
+  from: { id: string; name?: string };
+  createdTime: string;
+}
+
+/**
+ * Fetch messages from a Facebook Messenger conversation via the Graph API.
+ * Used as a fallback to back-fill conversation history from Meta.
+ */
+export async function getMessages(
+  accountId: string,
+  conversationId: string,
+  limit = 50
+): Promise<FBMessage[]> {
+  const accessToken = await getMetaAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error('No Meta access token configured');
+  }
+
+  const url = `${GRAPH_API_BASE}/${conversationId}/messages?fields=id,message,from,created_time&limit=${limit}&access_token=${accessToken}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch FB messages: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return (data.data || []).map((m: any) => ({
+    id: m.id,
+    message: m.message || '',
+    from: m.from || {},
+    createdTime: m.created_time
+  }));
 }

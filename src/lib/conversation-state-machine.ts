@@ -1,186 +1,223 @@
 import prisma from '@/lib/prisma';
 
 // ---------------------------------------------------------------------------
-// Conversation State Machine — transition outcomes based on lead behaviour
+// Conversation Outcome Transitions
 // ---------------------------------------------------------------------------
 
-const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000;
-
 /**
- * Evaluate and update the outcome of a conversation.
+ * Evaluate and update the conversation outcome based on message patterns.
  *
- * Transition rules (only from ONGOING):
- *  - ONGOING → BOOKED:                   lead.status === 'BOOKED' or lead.bookedAt !== null
- *  - ONGOING → LEFT_ON_READ:             No lead message for 72+ hours after last AI message
- *  - ONGOING → UNQUALIFIED_REDIRECT:     lead.status === 'UNQUALIFIED'
- *  - ONGOING → RESISTANT_EXIT:           Last 2 lead messages have sentimentScore < -0.5
- *  - ONGOING → SOFT_OBJECTION:           lead.status is SERIOUS_NOT_READY and no response 72h
- *  - ONGOING → PRICE_QUESTION_DEFLECTED: lead.status is MONEY_OBJECTION and no response 72h
- *
- * Re-engagement (handled in webhook-processor when saving a LEAD message):
- *  - LEFT_ON_READ → ONGOING
+ * Called after each AI message is sent to determine if the conversation
+ * has transitioned to a new outcome (e.g., ONGOING → BOOKED).
  */
 export async function updateConversationOutcome(
   conversationId: string
-): Promise<void> {
+): Promise<string> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: {
-      lead: true,
       messages: {
         orderBy: { timestamp: 'desc' },
-        take: 10
+        take: 20,
+        select: {
+          sender: true,
+          content: true,
+          timestamp: true,
+          stage: true
+        }
+      },
+      lead: {
+        select: { status: true }
       }
     }
   });
 
-  if (!conversation) return;
+  if (!conversation) return 'ONGOING';
 
-  // Only transition from ONGOING
-  if (conversation.outcome !== 'ONGOING') return;
+  const { messages, lead } = conversation;
+  const currentOutcome = conversation.outcome;
 
-  const { lead, messages } = conversation;
-  const now = Date.now();
-
-  // --- BOOKED ---
-  if (lead.status === 'BOOKED' || lead.bookedAt !== null) {
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { outcome: 'BOOKED' }
-    });
-    return;
+  // Don't downgrade terminal outcomes
+  if (['BOOKED', 'UNQUALIFIED_REDIRECT'].includes(currentOutcome)) {
+    return currentOutcome;
   }
 
-  // --- UNQUALIFIED_REDIRECT ---
-  if (lead.status === 'UNQUALIFIED') {
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { outcome: 'UNQUALIFIED_REDIRECT' }
-    });
-    return;
+  let newOutcome = currentOutcome;
+
+  // Check for BOOKED — lead status or booking stage reached
+  if (
+    lead.status === 'BOOKED' ||
+    lead.status === 'SHOWED_UP' ||
+    lead.status === 'CLOSED'
+  ) {
+    newOutcome = 'BOOKED';
+  }
+  // Check for UNQUALIFIED — lead explicitly unqualified
+  else if (lead.status === 'UNQUALIFIED') {
+    newOutcome = 'UNQUALIFIED_REDIRECT';
+  }
+  // Check for LEFT_ON_READ — no lead response after 2+ AI messages
+  else if (messages.length >= 2) {
+    const recentSenders = messages.slice(0, 3).map((m) => m.sender);
+    const allAI = recentSenders.every((s) => s === 'AI' || s === 'HUMAN');
+    if (allAI) {
+      // Check time since last message
+      const lastMsg = messages[0];
+      const hoursSinceLastMsg =
+        (Date.now() - new Date(lastMsg.timestamp).getTime()) / (1000 * 60 * 60);
+
+      if (hoursSinceLastMsg > 48) {
+        newOutcome = 'LEFT_ON_READ';
+      }
+    }
+  }
+  // Check for objection-related outcomes
+  else {
+    const lastLeadMsg = messages.find((m) => m.sender === 'LEAD');
+    if (lastLeadMsg) {
+      const text = lastLeadMsg.content.toLowerCase();
+      if (
+        text.includes("can't afford") ||
+        text.includes('too expensive') ||
+        text.includes('not in my budget')
+      ) {
+        newOutcome = 'SOFT_OBJECTION';
+      } else if (
+        text.includes('how much') ||
+        text.includes('what does it cost') ||
+        text.includes('pricing')
+      ) {
+        newOutcome = 'PRICE_QUESTION_DEFLECTED';
+      } else if (
+        text.includes('not interested') ||
+        text.includes('no thanks') ||
+        text.includes('stop messaging')
+      ) {
+        newOutcome = 'RESISTANT_EXIT';
+      }
+    }
   }
 
-  // --- RESISTANT_EXIT: last 2 lead messages both have sentimentScore < -0.5 ---
-  const recentLeadMessages = messages.filter((m) => m.sender === 'LEAD');
-  if (recentLeadMessages.length >= 2) {
-    const lastTwo = recentLeadMessages.slice(0, 2);
-    const bothNegative = lastTwo.every(
-      (m) => m.sentimentScore !== null && m.sentimentScore < -0.5
+  // Update if changed
+  if (newOutcome !== currentOutcome) {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { outcome: newOutcome as any }
+    });
+    console.log(
+      `[state-machine] Conversation ${conversationId} outcome: ${currentOutcome} → ${newOutcome}`
     );
-    if (bothNegative) {
-      await prisma.conversation.update({
-        where: { id: conversationId },
-        data: { outcome: 'RESISTANT_EXIT' }
-      });
-      return;
-    }
   }
 
-  // --- Time-based transitions: check for 72h gap after last AI message ---
-  const lastAIMessage = messages.find((m) => m.sender === 'AI');
-  const lastLeadMessage = messages.find((m) => m.sender === 'LEAD');
-
-  if (lastAIMessage) {
-    const lastAITime = lastAIMessage.timestamp.getTime();
-    const lastLeadTime = lastLeadMessage
-      ? lastLeadMessage.timestamp.getTime()
-      : 0;
-
-    // Lead has NOT replied since the last AI message, and 72h has passed
-    const noReplyFor72h =
-      lastLeadTime < lastAITime && now - lastAITime >= SEVENTY_TWO_HOURS_MS;
-
-    if (noReplyFor72h) {
-      // --- SOFT_OBJECTION ---
-      if (lead.status === 'SERIOUS_NOT_READY') {
-        await prisma.conversation.update({
-          where: { id: conversationId },
-          data: { outcome: 'SOFT_OBJECTION' }
-        });
-        return;
-      }
-
-      // --- PRICE_QUESTION_DEFLECTED ---
-      if (lead.status === 'MONEY_OBJECTION') {
-        await prisma.conversation.update({
-          where: { id: conversationId },
-          data: { outcome: 'PRICE_QUESTION_DEFLECTED' }
-        });
-        return;
-      }
-
-      // --- LEFT_ON_READ (generic 72h no-reply) ---
-      await prisma.conversation.update({
-        where: { id: conversationId },
-        data: { outcome: 'LEFT_ON_READ' }
-      });
-      return;
-    }
-  }
+  return newOutcome;
 }
 
 // ---------------------------------------------------------------------------
-// Record the timestamp when a conversation first reaches a given stage
+// Stage Timestamp Recording
 // ---------------------------------------------------------------------------
 
-const STAGE_FIELD_MAP: Record<string, keyof typeof STAGE_FIELDS> = {};
-
-// We use a helper object so TypeScript knows the valid field names
-const STAGE_FIELDS = {
-  stageQualificationAt: true,
-  stageVisionBuildingAt: true,
-  stagePainIdentificationAt: true,
-  stageUrgencyAt: true,
-  stageSolutionOfferAt: true,
-  stageCapitalQualificationAt: true,
-  stageBookingAt: true
-} as const;
-
-type StageField = keyof typeof STAGE_FIELDS;
-
 /**
- * Maps an AI stage name (e.g. "Stage 2 — Qualification") to a conversation
- * timestamp field and sets it — but only if the field is currently null.
+ * Record the first time a conversation reaches a given stage.
+ * Only writes once per stage (idempotent).
  */
 export async function recordStageTimestamp(
   conversationId: string,
   stage: string
 ): Promise<void> {
-  const stageLower = stage.toLowerCase();
-  let field: StageField | null = null;
+  const stageFieldMap: Record<string, string> = {
+    QUALIFICATION: 'stageQualificationAt',
+    VISION_BUILDING: 'stageVisionBuildingAt',
+    PAIN_IDENTIFICATION: 'stagePainIdentificationAt',
+    URGENCY: 'stageUrgencyAt',
+    SOLUTION_OFFER: 'stageSolutionOfferAt',
+    CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt',
+    GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
+    SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
+    FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
+    BOOKING: 'stageBookingAt'
+  };
 
-  if (stageLower.includes('qualification') || stageLower.includes('stage 2')) {
-    field = 'stageQualificationAt';
-  } else if (stageLower.includes('vision')) {
-    field = 'stageVisionBuildingAt';
-  } else if (stageLower.includes('pain')) {
-    field = 'stagePainIdentificationAt';
-  } else if (stageLower.includes('urgency')) {
-    field = 'stageUrgencyAt';
-  } else if (
-    stageLower.includes('solution') ||
-    stageLower.includes('free value') ||
-    stageLower.includes('stage 3')
-  ) {
-    field = 'stageSolutionOfferAt';
-  } else if (stageLower.includes('capital')) {
-    field = 'stageCapitalQualificationAt';
-  } else if (stageLower.includes('booking') || stageLower.includes('stage 4')) {
-    field = 'stageBookingAt';
-  }
-
+  const field = stageFieldMap[stage];
   if (!field) return;
 
-  // Only set if currently null
-  const conversation = await prisma.conversation.findUnique({
+  // Only set if not already set
+  const convo = await prisma.conversation.findUnique({
     where: { id: conversationId },
     select: { [field]: true }
   });
 
-  if (!conversation || conversation[field] !== null) return;
+  if (convo && !(convo as any)[field]) {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { [field]: new Date() }
+    });
+    console.log(
+      `[state-machine] Conversation ${conversationId} first reached stage: ${stage}`
+    );
+  }
+}
 
-  await prisma.conversation.update({
-    where: { id: conversationId },
-    data: { [field]: new Date() }
+// ---------------------------------------------------------------------------
+// Back-fill Effectiveness Tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * After a LEAD message comes in, back-fill effectiveness metrics on the
+ * previous AI message(s) that preceded it.
+ *
+ * - gotResponse: true (the lead replied)
+ * - responseTimeSeconds: time between AI msg and lead reply
+ * - leadContinuedConversation: true if lead has sent 2+ messages since AI msg
+ */
+export async function backfillEffectivenessTracking(
+  conversationId: string
+): Promise<void> {
+  // Get the two most recent messages (the lead's new message + the AI message before it)
+  const recentMessages = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { timestamp: 'desc' },
+    take: 5,
+    select: {
+      id: true,
+      sender: true,
+      timestamp: true,
+      gotResponse: true
+    }
+  });
+
+  if (recentMessages.length < 2) return;
+
+  const leadMsg = recentMessages[0];
+  if (leadMsg.sender !== 'LEAD') return;
+
+  // Find the most recent AI message before this lead message
+  const aiMsg = recentMessages.find(
+    (m) => (m.sender === 'AI' || m.sender === 'HUMAN') && m.gotResponse === null
+  );
+
+  if (!aiMsg) return;
+
+  const responseTime = Math.round(
+    (new Date(leadMsg.timestamp).getTime() -
+      new Date(aiMsg.timestamp).getTime()) /
+      1000
+  );
+
+  // Count how many lead messages came after the AI message
+  const leadMsgCount = await prisma.message.count({
+    where: {
+      conversationId,
+      sender: 'LEAD',
+      timestamp: { gt: aiMsg.timestamp }
+    }
+  });
+
+  await prisma.message.update({
+    where: { id: aiMsg.id },
+    data: {
+      gotResponse: true,
+      responseTimeSeconds: Math.max(0, responseTime),
+      leadContinuedConversation: leadMsgCount >= 2
+    }
   });
 }
