@@ -35,34 +35,56 @@ export async function requireAuth(_request?: any): Promise<AuthContext> {
     select: { id: true, name: true, email: true, role: true, accountId: true }
   });
 
-  // Auto-provision: if no user exists, create account + user
+  // Auto-provision: if no user exists, create a fresh account + user
   if (!dbUser) {
-    // Check if there's an existing account we should attach to
-    // For now, find the first account (single-tenant dev mode)
-    let account = await prisma.account.findFirst({
-      select: { id: true }
-    });
+    // Generate a unique slug from the email prefix
+    const baseSlug = email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    let slug = baseSlug;
+    let slugSuffix = 0;
 
-    if (!account) {
-      // Create a new account
-      account = await prisma.account.create({
-        data: {
-          name: name + "'s Workspace",
-          slug: email.split('@')[0]
-        }
-      });
+    // Ensure slug uniqueness
+    while (await prisma.account.findUnique({ where: { slug } })) {
+      slugSuffix++;
+      slug = `${baseSlug}-${slugSuffix}`;
     }
 
-    dbUser = await prisma.user.create({
-      data: {
-        name,
-        email,
-        passwordHash: '', // Clerk manages passwords
-        role: 'ADMIN',
-        accountId: account.id
-      },
-      select: { id: true, name: true, email: true, role: true, accountId: true }
+    // Always create a new account — each user gets their own fresh workspace
+    const result = await prisma.$transaction(async (tx) => {
+      const account = await tx.account.create({
+        data: {
+          name: name + "'s Workspace",
+          slug
+        }
+      });
+
+      // Create a default AI persona for the new account
+      const systemPrompt = `You are ${name}. You're messaging a lead who showed interest in your services. Your job is to qualify them and book a call. Be conversational and authentic — talk like a real person, not a bot.`;
+
+      await tx.aIPersona.create({
+        data: {
+          accountId: account.id,
+          personaName: `Sales ${name.split(' ')[0]}`,
+          fullName: name,
+          tone: 'casual, direct, friendly',
+          systemPrompt
+        }
+      });
+
+      const user = await tx.user.create({
+        data: {
+          name,
+          email,
+          passwordHash: '', // Clerk manages passwords
+          role: 'ADMIN',
+          accountId: account.id
+        },
+        select: { id: true, name: true, email: true, role: true, accountId: true }
+      });
+
+      return user;
     });
+
+    dbUser = result;
   }
 
   return {
