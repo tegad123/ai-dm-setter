@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 
     // Facebook Login for Business uses config_id instead of individual scopes
     // The configuration defines which permissions and assets are requested
-    const configId = process.env.META_LOGIN_CONFIG_ID || '1260144938977163';
+    const configId = process.env.META_LOGIN_CONFIG_ID || '1483740213164823';
 
     const oauthUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');
     oauthUrl.searchParams.set('client_id', appId);
