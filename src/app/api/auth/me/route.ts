@@ -1,59 +1,93 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
+import { requireAuth, AuthError } from '@/lib/auth-guard';
 
 export async function GET(request: Request) {
   try {
+    // Strategy 1: Try JWT token from Authorization header
     const authHeader = request.headers.get('Authorization');
     const token = getTokenFromHeader(authHeader);
 
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Missing or invalid authorization header' },
-        { status: 401 }
-      );
-    }
+    if (token) {
+      const payload = verifyToken(token);
+      if (payload) {
+        const user = await prisma.user.findUnique({
+          where: { id: payload.userId },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            accountId: true,
+            avatarUrl: true
+          }
+        });
 
-    const payload = verifyToken(token);
+        if (user) {
+          const account = await prisma.account.findUnique({
+            where: { id: user.accountId },
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              logoUrl: true,
+              brandName: true,
+              primaryColor: true,
+              plan: true,
+              onboardingComplete: true
+            }
+          });
 
-    if (!payload) {
-      return NextResponse.json(
-        { error: 'Invalid or expired token' },
-        { status: 401 }
-      );
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        accountId: true,
-        avatarUrl: true
+          return NextResponse.json({ user, account });
+        }
       }
-    });
-
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const account = await prisma.account.findUnique({
-      where: { id: payload.accountId },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        logoUrl: true,
-        brandName: true,
-        primaryColor: true,
-        plan: true,
-        onboardingComplete: true
-      }
-    });
+    // Strategy 2: Try Clerk session (cookie-based auth)
+    try {
+      const auth = await requireAuth(request);
 
-    return NextResponse.json({ user, account });
+      const user = await prisma.user.findUnique({
+        where: { id: auth.userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          accountId: true,
+          avatarUrl: true
+        }
+      });
+
+      if (!user) {
+        return NextResponse.json(
+          { error: 'User not found' },
+          { status: 404 }
+        );
+      }
+
+      const account = await prisma.account.findUnique({
+        where: { id: user.accountId },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          logoUrl: true,
+          brandName: true,
+          primaryColor: true,
+          plan: true,
+          onboardingComplete: true
+        }
+      });
+
+      return NextResponse.json({ user, account });
+    } catch (e) {
+      if (e instanceof AuthError) {
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
   } catch (error) {
     console.error('GET /api/auth/me error:', error);
     return NextResponse.json(

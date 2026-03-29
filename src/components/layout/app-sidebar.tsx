@@ -47,6 +47,31 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 export default function AppSidebar() {
   const pathname = usePathname();
   const { user, account, logout } = useAuth();
+  const [unreadCount, setUnreadCount] = React.useState(0);
+
+  React.useEffect(() => {
+    async function fetchUnread() {
+      try {
+        const res = await fetch('/api/conversations?unread=true', {
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const count = (data.conversations || []).reduce(
+            (sum: number, c: { unreadCount?: number }) =>
+              sum + (c.unreadCount || 0),
+            0
+          );
+          setUnreadCount(count);
+        }
+      } catch {
+        // Silently fail
+      }
+    }
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <Sidebar collapsible='icon'>
@@ -128,9 +153,9 @@ export default function AppSidebar() {
                       <span>{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
-                  {isConversations && (
+                  {isConversations && unreadCount > 0 && (
                     <SidebarMenuBadge className='bg-primary text-primary-foreground rounded-full px-1.5 text-[10px]'>
-                      3
+                      {unreadCount}
                     </SidebarMenuBadge>
                   )}
                 </SidebarMenuItem>

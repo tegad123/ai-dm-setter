@@ -7,7 +7,7 @@ import {
   useState,
   ReactNode
 } from 'react';
-import { useClerk } from '@clerk/nextjs';
+import { useClerk, useUser } from '@clerk/nextjs';
 
 interface UserData {
   id: string;
@@ -51,39 +51,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<AccountData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [token, setTokenState] = useState<string | null>(null);
+  const { isSignedIn, isLoaded: clerkLoaded } = useUser();
 
+  // Try loading JWT token from localStorage
   useEffect(() => {
     const stored =
       typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     if (stored) {
       setTokenState(stored);
-    } else {
-      setIsLoading(false);
     }
   }, []);
 
+  // Fetch user data — try JWT first, then fall back to Clerk session cookies
   useEffect(() => {
-    if (!token) {
-      setUser(null);
-      setAccount(null);
-      setIsLoading(false);
-      return;
-    }
+    if (!clerkLoaded) return;
 
     async function fetchMe() {
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setUser(data.user);
-          setAccount(data.account);
-        } else {
-          // Token invalid
+        // If we have a JWT token, try that first
+        if (token) {
+          const res = await fetch('/api/auth/me', {
+            headers: { Authorization: `Bearer ${token}` },
+            credentials: 'include'
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setUser(data.user);
+            setAccount(data.account);
+            setIsLoading(false);
+            return;
+          }
+          // JWT invalid — clear it
           localStorage.removeItem('token');
           setTokenState(null);
         }
+
+        // Fall back to Clerk session-based auth (cookies)
+        if (isSignedIn) {
+          const res = await fetch('/api/auth/me', {
+            credentials: 'include'
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setUser(data.user);
+            setAccount(data.account);
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // No auth available
+        setUser(null);
+        setAccount(null);
       } catch {
         // Network error
       } finally {
@@ -92,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     fetchMe();
-  }, [token]);
+  }, [token, isSignedIn, clerkLoaded]);
 
   function setToken(newToken: string | null) {
     if (newToken) {
