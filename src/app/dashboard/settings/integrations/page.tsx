@@ -123,7 +123,7 @@ export default function IntegrationsPage() {
   const fetchStatuses = useCallback(async () => {
     try {
       const data = await apiFetch<{ integrations: IntegrationStatus[] }>(
-        '/settings/integrations'
+        '/api/settings/integrations'
       );
       const map: Record<string, boolean> = {};
       for (const i of data.integrations) {
@@ -163,7 +163,7 @@ export default function IntegrationsPage() {
     }
     setAiSaving(true);
     try {
-      await apiFetch(`/settings/integrations/${selectedAI}`, {
+      await apiFetch(`/api/settings/integrations/${selectedAI}`, {
         method: 'PUT',
         body: JSON.stringify({
           credentials: {
@@ -194,7 +194,7 @@ export default function IntegrationsPage() {
     }
     setElSaving(true);
     try {
-      await apiFetch('/settings/integrations/ELEVENLABS', {
+      await apiFetch('/api/settings/integrations/ELEVENLABS', {
         method: 'PUT',
         body: JSON.stringify({
           credentials: {
@@ -223,7 +223,7 @@ export default function IntegrationsPage() {
     }
     setLcSaving(true);
     try {
-      await apiFetch('/settings/integrations/LEADCONNECTOR', {
+      await apiFetch('/api/settings/integrations/LEADCONNECTOR', {
         method: 'PUT',
         body: JSON.stringify({
           credentials: {
@@ -284,7 +284,7 @@ export default function IntegrationsPage() {
         }
       }
 
-      await apiFetch('/settings/integrations/CALENDLY', {
+      await apiFetch('/api/settings/integrations/CALENDLY', {
         method: 'PUT',
         body: JSON.stringify({
           credentials: { apiKey: calApiKey.trim() },
@@ -312,7 +312,7 @@ export default function IntegrationsPage() {
 
   async function disconnectProvider(provider: Provider) {
     try {
-      await apiFetch(`/settings/integrations/${provider}`, {
+      await apiFetch(`/api/settings/integrations/${provider}`, {
         method: 'DELETE'
       });
       toast.success(`${provider} disconnected`);
