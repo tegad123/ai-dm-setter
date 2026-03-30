@@ -44,10 +44,11 @@ export async function GET(req: NextRequest) {
       oauthUrl.searchParams.set('config_id', configId);
     } else {
       // Standard mode — use scope parameter directly
-      // Only request permissions that have Advanced Access approved
+      // Use non-"business" scope names for facebook.com/dialog/oauth
+      // (instagram_business_* are for instagram.com/oauth/authorize only)
       const scopes = [
-        'instagram_business_basic',
-        'instagram_business_manage_messages',
+        'instagram_basic',
+        'instagram_manage_messages',
         'pages_messaging',
         'pages_show_list',
         'pages_read_engagement',
