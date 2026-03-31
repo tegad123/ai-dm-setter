@@ -7,7 +7,8 @@ import {
   broadcastNewMessage,
   broadcastConversationUpdate,
   broadcastAIStatusChange,
-  broadcastAISuggestion
+  broadcastAISuggestion,
+  broadcastNotification
 } from '@/lib/realtime';
 import {
   updateConversationOutcome,
@@ -343,28 +344,17 @@ export async function scheduleAIReply(
     return;
   }
 
-  // ── Step 6: Schedule delayed reply via database ────────────────
+  // ── Step 6: Schedule reply via database (cron picks up) ────────
+  // Always schedule via DB so the webhook handler returns fast.
+  // The cron job (every 60s) picks up PENDING replies and sends them.
   const delaySeconds = result.suggestedDelay || 0;
-
-  if (delaySeconds > 0) {
-    const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
-    await prisma.scheduledReply.create({
-      data: { conversationId, accountId, scheduledFor }
-    });
-    console.log(
-      `[webhook-processor] Scheduled AI reply for ${conversationId} at ${scheduledFor.toISOString()} (${delaySeconds}s delay)`
-    );
-  } else {
-    // No delay — send immediately
-    try {
-      await sendAIReply(conversationId, accountId, lead, result);
-    } catch (err) {
-      console.error(
-        `[webhook-processor] Failed to send AI reply for ${conversationId}:`,
-        err
-      );
-    }
-  }
+  const scheduledFor = new Date(Date.now() + Math.max(delaySeconds, 0) * 1000);
+  await prisma.scheduledReply.create({
+    data: { conversationId, accountId, scheduledFor }
+  });
+  console.log(
+    `[webhook-processor] Scheduled AI reply for ${conversationId} at ${scheduledFor.toISOString()} (${delaySeconds}s delay)`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -490,11 +480,30 @@ async function sendAIReply(
           `[webhook-processor] FB message sent to ${lead.platformUserId}`
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(
-        `[webhook-processor] Failed to deliver to ${lead.platform}:`,
+        `[webhook-processor] Failed to deliver to ${lead.platform} after retries:`,
         err
       );
+      // Create a notification so the account owner knows the message wasn't delivered
+      try {
+        await prisma.notification.create({
+          data: {
+            accountId: lead.accountId,
+            type: 'SYSTEM',
+            title: 'Message delivery failed',
+            body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(err?.message || 'Unknown error').slice(0, 200)}`,
+            leadId: lead.id
+          }
+        });
+        broadcastNotification({
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'Message delivery failed'
+        });
+      } catch (notifyErr) {
+        console.error('[webhook-processor] Failed to create failure notification:', notifyErr);
+      }
     }
   }
 

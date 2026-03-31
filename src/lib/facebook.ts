@@ -51,27 +51,44 @@ export async function sendMessage(
   const pageId = process.env.FACEBOOK_PAGE_ID;
   const url = `${GRAPH_API_BASE}/${pageId}/messages`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`
-    },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      message: { text: messageText },
-      messaging_type: 'RESPONSE'
-    })
-  });
+  const MAX_RETRIES = 3;
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const error = await response.text();
-    console.error('[facebook] Send message failed:', error);
-    throw new Error(`Facebook send message failed: ${response.status} ${error}`);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          recipient: { id: recipientId },
+          message: { text: messageText },
+          messaging_type: 'RESPONSE'
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Facebook send message failed: ${response.status} ${error}`);
+      }
+
+      const data = await response.json();
+      return { messageId: data.message_id || data.id || '' };
+    } catch (err: any) {
+      lastError = err;
+      console.error(
+        `[facebook] Send message attempt ${attempt}/${MAX_RETRIES} failed:`,
+        err.message
+      );
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt - 1) * 1000));
+      }
+    }
   }
 
-  const data = await response.json();
-  return { messageId: data.message_id || data.id || '' };
+  throw lastError || new Error('Facebook send message failed after retries');
 }
 
 // ---------------------------------------------------------------------------
