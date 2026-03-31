@@ -128,6 +128,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
 
       const senderId: string = event.sender?.id ?? '';
       const messageText: string = event.message?.text ?? '';
+      const platformMessageId: string = event.message?.mid ?? '';
 
       if (!senderId || !messageText) continue;
 
@@ -152,7 +153,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
           senderName,
           senderHandle,
           messageText,
-          triggerType: 'DM'
+          triggerType: 'DM',
+          platformMessageId: platformMessageId || undefined
         });
 
         // Only schedule AI reply if AI is active on this conversation

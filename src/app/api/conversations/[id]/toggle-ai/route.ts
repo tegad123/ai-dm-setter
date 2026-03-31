@@ -62,6 +62,12 @@ export async function POST(
         data: { aiActive: false }
       });
 
+      // Cancel any pending scheduled replies
+      await prisma.scheduledReply.updateMany({
+        where: { conversationId: id, status: 'PENDING' },
+        data: { status: 'CANCELLED' }
+      });
+
       broadcastAIStatusChange({ conversationId: id, aiActive: false });
 
       return NextResponse.json({

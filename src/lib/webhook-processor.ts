@@ -30,6 +30,7 @@ export interface IncomingMessageParams {
   messageText: string;
   triggerType: 'DM' | 'COMMENT';
   triggerSource?: string;
+  platformMessageId?: string; // Meta's event.message.mid for dedup
 }
 
 export interface ProcessResult {
@@ -109,16 +110,46 @@ export async function processIncomingMessage(
 
   const conversationId = lead.conversation!.id;
 
+  // ── Step 1b: Dedup — skip if we already processed this platform message
+  if (params.platformMessageId) {
+    const existing = await prisma.message.findFirst({
+      where: {
+        conversationId,
+        platformMessageId: params.platformMessageId
+      }
+    });
+    if (existing) {
+      console.log(
+        `[webhook-processor] Duplicate message skipped: ${params.platformMessageId}`
+      );
+      return { leadId: lead.id, conversationId, messageId: existing.id, isNewLead: false };
+    }
+  }
+
   // ── Step 2: Save the incoming message ──────────────────────────
   const now = new Date();
-  const message = await prisma.message.create({
-    data: {
-      conversationId,
-      sender: 'LEAD',
-      content: messageText,
-      timestamp: now
+  let message;
+  try {
+    message = await prisma.message.create({
+      data: {
+        conversationId,
+        sender: 'LEAD',
+        content: messageText,
+        timestamp: now,
+        platformMessageId: params.platformMessageId || null
+      }
+    });
+  } catch (err: any) {
+    // DB-level unique constraint catch (race condition safety net)
+    if (err?.code === 'P2002' && params.platformMessageId) {
+      console.log(`[webhook-processor] Duplicate caught by DB constraint: ${params.platformMessageId}`);
+      const existing = await prisma.message.findFirst({
+        where: { conversationId, platformMessageId: params.platformMessageId }
+      });
+      return { leadId: lead.id, conversationId, messageId: existing?.id || '', isNewLead: false };
     }
-  });
+    throw err;
+  }
 
   // ── Step 3: Update conversation metadata ───────────────────────
   await prisma.conversation.update({
@@ -312,24 +343,28 @@ export async function scheduleAIReply(
     return;
   }
 
-  // ── Step 6: Apply response delay ───────────────────────────────
-  // In production, this would use a job queue (Bull, Inngest, etc.)
-  // For now, we use setTimeout for simplicity
-  const delayMs = result.suggestedDelay * 1000;
-  console.log(
-    `[webhook-processor] Delaying AI reply by ${result.suggestedDelay}s for ${conversationId}`
-  );
+  // ── Step 6: Schedule delayed reply via database ────────────────
+  const delaySeconds = result.suggestedDelay || 0;
 
-  setTimeout(async () => {
+  if (delaySeconds > 0) {
+    const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
+    await prisma.scheduledReply.create({
+      data: { conversationId, accountId, scheduledFor }
+    });
+    console.log(
+      `[webhook-processor] Scheduled AI reply for ${conversationId} at ${scheduledFor.toISOString()} (${delaySeconds}s delay)`
+    );
+  } else {
+    // No delay — send immediately
     try {
       await sendAIReply(conversationId, accountId, lead, result);
     } catch (err) {
       console.error(
-        `[webhook-processor] Failed to send delayed AI reply for ${conversationId}:`,
+        `[webhook-processor] Failed to send AI reply for ${conversationId}:`,
         err
       );
     }
-  }, delayMs);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -808,4 +843,72 @@ async function updateLeadStatusFromStage(
       `[webhook-processor] Lead ${leadId} status: ${currentStatus} → ${newStatus}`
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Process Scheduled Reply (called by cron handler)
+// ---------------------------------------------------------------------------
+// Re-runs the full AI generation pipeline for a conversation that was
+// previously queued with a delay. Re-checks aiActive before sending.
+// ---------------------------------------------------------------------------
+
+export async function processScheduledReply(
+  conversationId: string,
+  accountId: string
+): Promise<void> {
+  // Re-check that AI is still active
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      lead: { include: { tags: { include: { tag: true } } } },
+      messages: { orderBy: { timestamp: 'asc' } }
+    }
+  });
+
+  if (!conversation) {
+    console.warn(`[scheduled-reply] Conversation ${conversationId} not found`);
+    return;
+  }
+
+  if (!conversation.aiActive) {
+    console.log(`[scheduled-reply] AI deactivated for ${conversationId}, skipping`);
+    return;
+  }
+
+  const lead = conversation.lead;
+  if (!lead) {
+    console.warn(`[scheduled-reply] No lead for conversation ${conversationId}`);
+    return;
+  }
+
+  // Build lead context
+  const leadContext: LeadContext = {
+    leadName: lead.name,
+    handle: lead.handle,
+    platform: lead.platform,
+    status: lead.status,
+    triggerType: lead.triggerType,
+    triggerSource: lead.triggerSource,
+    qualityScore: lead.qualityScore,
+    intentTag: conversation.leadIntentTag || undefined,
+    tags: lead.tags.map((lt) => lt.tag.name),
+    leadScore: conversation.priorityScore || undefined,
+    source: conversation.leadSource || undefined,
+    experience: lead.experience || undefined,
+    incomeLevel: lead.incomeLevel || undefined,
+    geography: lead.geography || undefined,
+    timezone: lead.timezone || undefined
+  };
+
+  const formattedMessages = conversation.messages.map((m) => ({
+    id: m.id,
+    sender: m.sender,
+    content: m.content,
+    timestamp: m.timestamp,
+    isVoiceNote: m.isVoiceNote
+  }));
+
+  const result = await generateReply(accountId, formattedMessages, leadContext);
+
+  await sendAIReply(conversationId, accountId, lead, result);
 }

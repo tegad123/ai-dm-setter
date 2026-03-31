@@ -121,6 +121,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
 
       const senderId: string = event.sender?.id ?? '';
       const messageText: string = event.message?.text ?? '';
+      const platformMessageId: string = event.message?.mid ?? '';
 
       if (!senderId || !messageText) continue;
 
@@ -143,7 +144,8 @@ async function processFacebookEvents(payload: any): Promise<void> {
           senderName,
           senderHandle: senderName, // Facebook doesn't have separate handles
           messageText,
-          triggerType: 'DM'
+          triggerType: 'DM',
+          platformMessageId: platformMessageId || undefined
         });
 
         // Only schedule AI reply if AI is active on this conversation
