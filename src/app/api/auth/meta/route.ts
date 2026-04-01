@@ -44,15 +44,12 @@ export async function GET(req: NextRequest) {
       oauthUrl.searchParams.set('config_id', configId);
     } else {
       // Standard mode — use scope parameter directly
-      // Use non-"business" scope names for facebook.com/dialog/oauth
-      // (instagram_business_* are for instagram.com/oauth/authorize only)
+      // Only request scopes that are approved in Meta App Review
       const scopes = [
         'instagram_basic',
         'instagram_manage_messages',
         'pages_messaging',
-        'pages_show_list',
-        'pages_read_engagement',
-        'pages_manage_metadata'
+        'pages_show_list'
       ].join(',');
       oauthUrl.searchParams.set('scope', scopes);
     }
