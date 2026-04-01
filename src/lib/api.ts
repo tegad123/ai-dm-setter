@@ -17,7 +17,9 @@ export async function apiFetch<T = any>(
     ...(options?.headers || {})
   };
 
-  const res = await fetch(url, {
+  const finalUrl = url.startsWith('/api/') || url.startsWith('http') ? url : `/api${url}`;
+
+  const res = await fetch(finalUrl, {
     credentials: 'include',
     ...options,
     headers
