@@ -94,6 +94,24 @@ export async function GET(req: NextRequest) {
       userToken = llData.access_token || shortLivedToken;
     }
 
+    // Step 2b: Check what permissions were actually granted
+    try {
+      const permsRes = await fetch(
+        `${GRAPH_API}/me/permissions?access_token=${userToken}`
+      );
+      if (permsRes.ok) {
+        const permsData = await permsRes.json();
+        console.log(
+          `[meta-oauth] Granted permissions:`,
+          JSON.stringify(
+            permsData.data?.map((p: any) => `${p.permission}:${p.status}`)
+          )
+        );
+      }
+    } catch (err) {
+      console.warn('[meta-oauth] Failed to check permissions:', err);
+    }
+
     // Step 3: Fetch user's pages (includes Instagram-connected pages)
     const pagesRes = await fetch(
       `${GRAPH_API}/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${userToken}`
@@ -108,12 +126,58 @@ export async function GET(req: NextRequest) {
     }
 
     const pagesData = await pagesRes.json();
+    console.log(
+      `[meta-oauth] /me/accounts response:`,
+      JSON.stringify(pagesData).slice(0, 500)
+    );
+
     const pages: Array<{
       id: string;
       name: string;
       access_token: string;
       instagram_business_account?: { id: string };
     }> = pagesData.data ?? [];
+
+    if (pages.length === 0) {
+      // Log the full response to diagnose why no pages were returned
+      console.error(
+        `[meta-oauth] No pages returned for account ${state.accountId}. Full response:`,
+        JSON.stringify(pagesData)
+      );
+      // Check if it's a pagination issue — Meta sometimes returns pages on subsequent pages
+      if (pagesData.paging?.next) {
+        console.log('[meta-oauth] Pagination detected — trying next page...');
+        const nextRes = await fetch(pagesData.paging.next);
+        if (nextRes.ok) {
+          const nextData = await nextRes.json();
+          console.log(
+            '[meta-oauth] Next page:',
+            JSON.stringify(nextData).slice(0, 500)
+          );
+          if (nextData.data?.length > 0) {
+            pages.push(...nextData.data);
+          }
+        }
+      }
+    }
+
+    if (pages.length === 0) {
+      // Also try with the short-lived token in case long-lived exchange changed scopes
+      console.log('[meta-oauth] Retrying with short-lived token...');
+      const retryRes = await fetch(
+        `${GRAPH_API}/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=${shortLivedToken}`
+      );
+      if (retryRes.ok) {
+        const retryData = await retryRes.json();
+        console.log(
+          '[meta-oauth] Retry response:',
+          JSON.stringify(retryData).slice(0, 500)
+        );
+        if (retryData.data?.length > 0) {
+          pages.push(...retryData.data);
+        }
+      }
+    }
 
     if (pages.length === 0) {
       return NextResponse.redirect(
@@ -232,17 +296,14 @@ export async function GET(req: NextRequest) {
     // Step 5b: If Instagram is connected, also subscribe for Instagram messaging
     if (igAccountId) {
       try {
-        const igSubRes = await fetch(
-          `${GRAPH_API}/${pageId}/subscribed_apps`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subscribed_fields: 'messages',
-              access_token: pageAccessToken
-            })
-          }
-        );
+        const igSubRes = await fetch(`${GRAPH_API}/${pageId}/subscribed_apps`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscribed_fields: 'messages',
+            access_token: pageAccessToken
+          })
+        });
         if (igSubRes.ok) {
           console.log(
             `[meta-oauth] Instagram messaging webhook subscribed for page ${pageId} (IG: ${igAccountId})`
