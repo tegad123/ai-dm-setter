@@ -293,6 +293,45 @@ export async function GET(req: NextRequest) {
           }
         );
 
+        // Subscribe the page to webhooks using the user token
+        try {
+          const subRes = await fetch(
+            `${GRAPH_API}/${discoveredPageId}/subscribed_apps`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                subscribed_fields: [
+                  'messages',
+                  'messaging_postbacks',
+                  'messaging_optins',
+                  'message_deliveries',
+                  'message_reads'
+                ].join(','),
+                access_token: userToken
+              })
+            }
+          );
+          if (subRes.ok) {
+            const subData = await subRes.json();
+            console.log(
+              `[meta-oauth] Subscribed page ${discoveredPageId} to webhooks (user token):`,
+              subData
+            );
+          } else {
+            const subErr = await subRes.text();
+            console.error(
+              `[meta-oauth] Failed to subscribe page ${discoveredPageId} to webhooks:`,
+              subErr
+            );
+          }
+        } catch (subError) {
+          console.error(
+            '[meta-oauth] Webhook subscription error (fallback):',
+            subError
+          );
+        }
+
         console.log(
           `[meta-oauth] Saved user token + page ID ${discoveredPageId} for account ${state.accountId}`
         );
