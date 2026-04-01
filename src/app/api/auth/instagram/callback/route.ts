@@ -133,13 +133,17 @@ export async function GET(req: NextRequest) {
       console.warn('[instagram-oauth] Profile fetch failed:', err);
     }
 
-    // Step 4: Save to credential store as INSTAGRAM provider
+    // Step 4: Save to credential store as INSTAGRAM provider.
+    // Store igUserId as instagramAccountId too — Instagram webhooks send the
+    // IG user/business-account ID as entry.id, so both fields must be present
+    // for webhook credential matching to succeed.
     await saveCredentials(
       state.accountId,
       'INSTAGRAM',
       { accessToken },
       {
         igUserId,
+        instagramAccountId: igUserId,
         username,
         name,
         profilePicture,
