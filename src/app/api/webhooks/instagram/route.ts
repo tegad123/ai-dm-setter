@@ -138,7 +138,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
         // Fallback 3: Single-account setup — if there's only one distinct account
         // across all credentials, use it. The entryId mismatch is likely due to
         // the Instagram Business Account ID not being stored during OAuth.
-        const uniqueAccountIds = [...new Set(allCredentials.map((c) => c.accountId))];
+        const uniqueAccountIds = Array.from(new Set(allCredentials.map((c) => c.accountId)));
         if (uniqueAccountIds.length === 1) {
           accountId = uniqueAccountIds[0];
           console.warn(

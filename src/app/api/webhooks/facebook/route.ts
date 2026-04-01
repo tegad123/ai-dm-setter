@@ -109,7 +109,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
         );
       } else {
         // Fallback 2: Single-account setup — if only one account has credentials, use it
-        const uniqueAccountIds = [...new Set(metaCredentials.map((c) => c.accountId))];
+        const uniqueAccountIds = Array.from(new Set(metaCredentials.map((c) => c.accountId)));
         if (uniqueAccountIds.length === 1) {
           accountId = uniqueAccountIds[0];
           console.warn(
