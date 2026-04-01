@@ -179,6 +179,78 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Fallback 2: Try /me?fields=accounts (different endpoint format)
+    if (pages.length === 0) {
+      console.log('[meta-oauth] Trying /me?fields=accounts...');
+      const meRes = await fetch(
+        `${GRAPH_API}/me?fields=accounts{id,name,access_token,instagram_business_account}&access_token=${userToken}`
+      );
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        console.log(
+          '[meta-oauth] /me?fields=accounts response:',
+          JSON.stringify(meData).slice(0, 500)
+        );
+        if (meData.accounts?.data?.length > 0) {
+          pages.push(...meData.accounts.data);
+        }
+      }
+    }
+
+    // Fallback 3: Debug the token to see what pages it has access to
+    if (pages.length === 0) {
+      console.log('[meta-oauth] Debugging token...');
+      const debugRes = await fetch(
+        `${GRAPH_API}/debug_token?input_token=${userToken}&access_token=${appId}|${appSecret}`
+      );
+      if (debugRes.ok) {
+        const debugData = await debugRes.json();
+        console.log(
+          '[meta-oauth] Token debug:',
+          JSON.stringify(debugData).slice(0, 1000)
+        );
+
+        // Check granular_scopes for page IDs
+        const granularScopes = debugData.data?.granular_scopes || [];
+        const pageScope = granularScopes.find(
+          (s: any) =>
+            s.scope === 'pages_show_list' || s.scope === 'pages_messaging'
+        );
+        if (pageScope?.target_ids?.length > 0) {
+          console.log(
+            '[meta-oauth] Found page IDs in granular_scopes:',
+            pageScope.target_ids
+          );
+          // Fetch each page directly
+          for (const pageId of pageScope.target_ids) {
+            try {
+              const pageRes = await fetch(
+                `${GRAPH_API}/${pageId}?fields=id,name,access_token,instagram_business_account&access_token=${userToken}`
+              );
+              if (pageRes.ok) {
+                const pageData = await pageRes.json();
+                console.log(
+                  '[meta-oauth] Direct page fetch:',
+                  JSON.stringify(pageData).slice(0, 300)
+                );
+                if (pageData.id && pageData.access_token) {
+                  pages.push(pageData);
+                }
+              } else {
+                const pageErr = await pageRes.text();
+                console.error(
+                  `[meta-oauth] Failed to fetch page ${pageId}:`,
+                  pageErr
+                );
+              }
+            } catch (err) {
+              console.error(`[meta-oauth] Error fetching page ${pageId}:`, err);
+            }
+          }
+        }
+      }
+    }
+
     if (pages.length === 0) {
       return NextResponse.redirect(
         `${baseUrl}/dashboard/settings/integrations?error=no_pages`
