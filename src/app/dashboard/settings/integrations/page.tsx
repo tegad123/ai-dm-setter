@@ -829,9 +829,7 @@ export default function IntegrationsPage() {
             ) : (
               <Button
                 onClick={() => {
-                  // Use Meta OAuth flow — it connects both Facebook Page AND
-                  // linked Instagram account, which is required for DM webhooks
-                  window.location.href = '/api/auth/meta';
+                  window.location.href = '/api/auth/instagram';
                 }}
               >
                 Connect Instagram
