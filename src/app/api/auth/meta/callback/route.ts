@@ -251,7 +251,57 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Fallback 4: If we found page IDs in granular_scopes but couldn't fetch
+    // page details (missing pages_read_engagement), save the user token + page ID.
+    // The user token with pages_messaging permission CAN send DMs via the page.
     if (pages.length === 0) {
+      // Check if we discovered page IDs from debug_token
+      let discoveredPageId: string | null = null;
+      try {
+        const debugRes2 = await fetch(
+          `${GRAPH_API}/debug_token?input_token=${userToken}&access_token=${appId}|${appSecret}`
+        );
+        if (debugRes2.ok) {
+          const debugData2 = await debugRes2.json();
+          const granularScopes2 = debugData2.data?.granular_scopes || [];
+          const pageScope2 = granularScopes2.find(
+            (s: any) =>
+              s.scope === 'pages_show_list' || s.scope === 'pages_messaging'
+          );
+          if (pageScope2?.target_ids?.length > 0) {
+            discoveredPageId = pageScope2.target_ids[0];
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      if (discoveredPageId) {
+        // Save what we have — user token + page ID from granular_scopes
+        console.log(
+          `[meta-oauth] Saving with user token fallback for page ${discoveredPageId}`
+        );
+
+        await saveCredentials(
+          state.accountId,
+          'META',
+          { accessToken: userToken },
+          {
+            pageId: discoveredPageId,
+            pageName: `Page ${discoveredPageId}`,
+            platform: 'FACEBOOK'
+          }
+        );
+
+        console.log(
+          `[meta-oauth] Saved user token + page ID ${discoveredPageId} for account ${state.accountId}`
+        );
+
+        return NextResponse.redirect(
+          `${baseUrl}/dashboard/settings/integrations?connected=meta&page=${encodeURIComponent(`Page ${discoveredPageId}`)}`
+        );
+      }
+
       return NextResponse.redirect(
         `${baseUrl}/dashboard/settings/integrations?error=no_pages`
       );
