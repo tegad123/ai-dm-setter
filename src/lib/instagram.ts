@@ -15,20 +15,35 @@ export function verifyWebhookSignature(
   rawBody: string,
   signature: string
 ): boolean {
-  const appSecret = process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET;
-  if (!appSecret) {
-    console.warn('[instagram] No META_APP_SECRET set, cannot verify signature');
+  // Try Instagram app secret first (for IG webhooks), then Meta app secret
+  const secrets = [
+    process.env.INSTAGRAM_APP_SECRET,
+    process.env.META_APP_SECRET
+  ].filter(Boolean) as string[];
+
+  if (secrets.length === 0) {
+    console.warn('[instagram] No INSTAGRAM_APP_SECRET or META_APP_SECRET set');
     return false;
   }
 
-  const expectedSig =
-    'sha256=' +
-    crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+  // Try each secret — IG webhooks use IG secret, FB webhooks use Meta secret
+  for (const secret of secrets) {
+    const expectedSig =
+      'sha256=' +
+      crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expectedSig)
-  );
+    try {
+      if (
+        crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))
+      ) {
+        return true;
+      }
+    } catch {
+      // Length mismatch — try next secret
+    }
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +89,9 @@ export async function sendDM(
 
       if (!response.ok) {
         const error = await response.text();
-        throw new Error(`Instagram send DM failed: ${response.status} ${error}`);
+        throw new Error(
+          `Instagram send DM failed: ${response.status} ${error}`
+        );
       }
 
       const data = await response.json();
@@ -87,7 +104,9 @@ export async function sendDM(
       );
       if (attempt < MAX_RETRIES) {
         // Exponential backoff: 1s, 2s, 4s
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt - 1) * 1000));
+        await new Promise((r) =>
+          setTimeout(r, Math.pow(2, attempt - 1) * 1000)
+        );
       }
     }
   }
