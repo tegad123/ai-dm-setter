@@ -176,12 +176,15 @@ export default function IntegrationsPage() {
         platform_config: 'Platform not configured — contact support',
         token_exchange: 'Failed to exchange token with Meta',
         pages_fetch: 'Failed to fetch Facebook Pages',
-        no_pages: 'No Facebook Pages found on your account',
+        no_pages:
+          'No Facebook Pages found. You need a Facebook Page to connect — create one at facebook.com/pages/create, then link your Instagram Business account to it.',
         ig_token_exchange: 'Failed to exchange Instagram token',
         ig_unknown: 'Instagram connection failed — please try again',
         unknown: 'Connection failed — please try again'
       };
-      toast.error(errorMessages[error] || `Connection error: ${error}`);
+      toast.error(errorMessages[error] || `Connection error: ${error}`, {
+        duration: error === 'no_pages' ? 15000 : 5000
+      });
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [fetchStatuses]);
