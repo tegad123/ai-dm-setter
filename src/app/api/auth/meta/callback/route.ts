@@ -151,6 +151,9 @@ export async function GET(req: NextRequest) {
     }
 
     // Step 4b: Save to credential store
+    console.log(
+      `[meta-oauth] Saving credentials for accountId=${state.accountId}, pageId=${pageId}, pageName=${pageName}`
+    );
     await saveCredentials(
       state.accountId,
       'META',
