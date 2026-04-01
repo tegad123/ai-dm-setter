@@ -79,7 +79,10 @@ async function processInstagramEvents(payload: any): Promise<void> {
   for (const entry of payload.entry ?? []) {
     // ── Resolve accountId from the entry ID in the webhook ────────
     const entryId: string = entry.id ?? '';
-    // Match by META pageId OR INSTAGRAM igUserId
+
+    // Match against all known ID fields across META and INSTAGRAM credentials.
+    // Instagram webhooks send the IG Business Account ID as entry.id, which
+    // may be stored as instagramAccountId (META provider) or igUserId (INSTAGRAM provider).
     const matchedCred = allCredentials.find((cred) => {
       const meta = cred.metadata as any;
       return (
@@ -88,6 +91,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
         meta?.instagramAccountId === entryId
       );
     });
+
     console.log(
       `[instagram-webhook] entryId=${entryId}, matchedCred=${matchedCred?.id ?? 'NONE'}, ` +
       `allCreds=${allCredentials.map((c) => { const m = c.metadata as any; return `${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`; }).join(' | ')}`
@@ -98,7 +102,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
     if (matchedCred) {
       accountId = matchedCred.accountId;
     } else {
-      // Fallback: match via env var INSTAGRAM_PAGE_ID or FACEBOOK_PAGE_ID → use first account
+      // Fallback 1: match via env var
       const envPageId =
         process.env.INSTAGRAM_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
       if (envPageId && envPageId === entryId) {
@@ -114,11 +118,42 @@ async function processInstagramEvents(payload: any): Promise<void> {
         console.log(
           `[instagram-webhook] Matched entryId=${entryId} via env var → account=${accountId}`
         );
-      } else {
+      } else if (allCredentials.length === 0) {
+        // Fallback 2: No credentials at all — use the first account if one exists.
+        // This handles setups where OAuth hasn't been completed yet but the
+        // webhook is already configured in Meta's dashboard.
+        const firstAccount = await prisma.account.findFirst({
+          orderBy: { createdAt: 'asc' },
+          select: { id: true }
+        });
+        if (!firstAccount) {
+          console.warn(`[instagram-webhook] No accounts in DB, skipping entry`);
+          continue;
+        }
+        accountId = firstAccount.id;
         console.warn(
-          `[instagram-webhook] No IntegrationCredential found for entryId=${entryId}, skipping entry`
+          `[instagram-webhook] No credentials found at all — falling back to first account=${accountId} for entryId=${entryId}`
         );
-        continue;
+      } else {
+        // Fallback 3: Single-account setup — if there's only one distinct account
+        // across all credentials, use it. The entryId mismatch is likely due to
+        // the Instagram Business Account ID not being stored during OAuth.
+        const uniqueAccountIds = Array.from(new Set(allCredentials.map((c) => c.accountId)));
+        if (uniqueAccountIds.length === 1) {
+          accountId = uniqueAccountIds[0];
+          console.warn(
+            `[instagram-webhook] entryId=${entryId} didn't match any stored IDs, ` +
+            `but only one account exists — using account=${accountId}. ` +
+            `Consider re-connecting Instagram to fix the ID mismatch.`
+          );
+        } else {
+          console.error(
+            `[instagram-webhook] No IntegrationCredential found for entryId=${entryId}. ` +
+            `Multiple accounts exist (${uniqueAccountIds.length}), cannot guess which one. ` +
+            `Stored credentials: ${allCredentials.map((c) => { const m = c.metadata as any; return `account=${c.accountId} ${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`; }).join(' | ')}`
+          );
+          continue;
+        }
       }
     }
 
