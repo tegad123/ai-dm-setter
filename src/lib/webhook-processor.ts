@@ -42,6 +42,123 @@ export interface ProcessResult {
 }
 
 // ---------------------------------------------------------------------------
+// Heuristic: does this message look like a mid-conversation reply?
+// ---------------------------------------------------------------------------
+
+const ONGOING_PHRASES = [
+  // Short affirmatives
+  'ok',
+  'okay',
+  'sounds good',
+  'bet',
+  'cool',
+  'yeah',
+  'yep',
+  'got it',
+  'for sure',
+  'fasho',
+  'facts',
+  'alright',
+  'sure',
+  'word',
+  'say less',
+  'perfect',
+  'less do it',
+  'lets do it',
+  'aight',
+  'copy',
+  'noted',
+  // Continuations
+  'also',
+  'and another thing',
+  'btw',
+  'one more thing',
+  'oh and',
+  // References to prior context
+  'as i mentioned',
+  'like i said',
+  'about what we discussed',
+  'following up',
+  'just checking in',
+  'any update',
+  'did you get',
+  'sent you',
+  'i sent',
+  'you said',
+  'we talked about',
+  // Mid-conversation replies
+  'thanks',
+  'thank you',
+  'appreciate it',
+  'will do',
+  'on it',
+  'let me check',
+  "i'll check",
+  'give me a sec',
+  'one sec',
+  "i'm good",
+  "nah i'm good",
+  'not right now',
+  'maybe later',
+  "i'll let you know",
+  "i'll think about it",
+  'need to talk to'
+];
+
+const NEW_LEAD_OPENERS = [
+  'hey',
+  'yo',
+  'hello',
+  'hi',
+  'sup',
+  "what's up",
+  'whats up',
+  'interested',
+  'how does this work',
+  'how much',
+  'tell me more',
+  'i saw your',
+  'i seen your',
+  'i want to',
+  'can you help',
+  'is this legit',
+  'what do you do',
+  "what's this about"
+];
+
+function looksLikeOngoingConversation(messageText: string): boolean {
+  const text = messageText.toLowerCase().trim();
+
+  // If it matches a known new-lead opener, it's NOT ongoing
+  for (const opener of NEW_LEAD_OPENERS) {
+    if (
+      text === opener ||
+      text.startsWith(opener + ' ') ||
+      text.startsWith(opener + ',')
+    ) {
+      return false;
+    }
+  }
+
+  // If it matches a known ongoing phrase, it IS ongoing
+  for (const phrase of ONGOING_PHRASES) {
+    if (
+      text === phrase ||
+      text.startsWith(phrase + ' ') ||
+      text.startsWith(phrase + ',') ||
+      text.startsWith(phrase + '.')
+    ) {
+      return true;
+    }
+  }
+
+  // Default: treat as a new lead (AI on). Only flag as ongoing if it
+  // explicitly matches an ongoing phrase above. Better to have the AI
+  // respond to an existing contact than to miss a real new lead.
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // 1. Process Incoming Message
 // ---------------------------------------------------------------------------
 // Saves every inbound message to the database on webhook receipt.
@@ -81,7 +198,21 @@ export async function processIncomingMessage(
   let isNewLead = false;
 
   if (!lead) {
-    // Create new lead + conversation in a transaction
+    // Check if this looks like a mid-conversation message (not a fresh opener)
+    const isOngoing = looksLikeOngoingConversation(messageText);
+
+    // Determine AI default based on away mode:
+    // - Away mode ON → AI handles new leads (aiActive: true)
+    // - Away mode OFF → Human handles new leads (aiActive: false), manually toggle AI on
+    // - Ongoing conversations always start with AI off
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { awayMode: true }
+    });
+    const awayMode = account?.awayMode ?? false;
+    const shouldEnableAI = isOngoing ? false : awayMode;
+
+    // Create new lead + conversation
     lead = await prisma.lead.create({
       data: {
         accountId,
@@ -94,7 +225,7 @@ export async function processIncomingMessage(
         status: 'NEW_LEAD',
         conversation: {
           create: {
-            aiActive: true,
+            aiActive: shouldEnableAI,
             unreadCount: 1
           }
         }
@@ -104,8 +235,30 @@ export async function processIncomingMessage(
       }
     });
     isNewLead = true;
+
+    if (isOngoing) {
+      console.log(
+        `[webhook-processor] Created lead as EXISTING_CONTACT (AI off): ${lead.id} (${senderHandle}) — message: "${messageText.slice(0, 50)}"`
+      );
+    } else {
+      console.log(
+        `[webhook-processor] Created new lead: ${lead.id} (${senderHandle}) — AI=${shouldEnableAI ? 'ON' : 'OFF'} (awayMode=${awayMode})`
+      );
+    }
+  }
+
+  // ── Step 1a: Update name if lead was saved with a numeric ID and we now have a real name
+  if (
+    !isNewLead &&
+    senderName !== lead.platformUserId &&
+    /^\d+$/.test(lead.name)
+  ) {
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { name: senderName, handle: senderHandle }
+    });
     console.log(
-      `[webhook-processor] Created new lead: ${lead.id} (${senderHandle})`
+      `[webhook-processor] Updated lead name: ${lead.name} → ${senderName} (@${senderHandle})`
     );
   }
 
@@ -123,7 +276,12 @@ export async function processIncomingMessage(
       console.log(
         `[webhook-processor] Duplicate message skipped: ${params.platformMessageId}`
       );
-      return { leadId: lead.id, conversationId, messageId: existing.id, isNewLead: false };
+      return {
+        leadId: lead.id,
+        conversationId,
+        messageId: existing.id,
+        isNewLead: false
+      };
     }
   }
 
@@ -143,11 +301,18 @@ export async function processIncomingMessage(
   } catch (err: any) {
     // DB-level unique constraint catch (race condition safety net)
     if (err?.code === 'P2002' && params.platformMessageId) {
-      console.log(`[webhook-processor] Duplicate caught by DB constraint: ${params.platformMessageId}`);
+      console.log(
+        `[webhook-processor] Duplicate caught by DB constraint: ${params.platformMessageId}`
+      );
       const existing = await prisma.message.findFirst({
         where: { conversationId, platformMessageId: params.platformMessageId }
       });
-      return { leadId: lead.id, conversationId, messageId: existing?.id || '', isNewLead: false };
+      return {
+        leadId: lead.id,
+        conversationId,
+        messageId: existing?.id || '',
+        isNewLead: false
+      };
     }
     throw err;
   }
@@ -242,7 +407,9 @@ export async function scheduleAIReply(
   });
 
   if (!conversation) {
-    console.warn(`[webhook-processor] Conversation ${conversationId} not found`);
+    console.warn(
+      `[webhook-processor] Conversation ${conversationId} not found`
+    );
     return;
   }
 
@@ -285,7 +452,10 @@ export async function scheduleAIReply(
         );
       }
     } catch (err) {
-      console.warn('[webhook-processor] Meta API backfill failed (using local only):', err);
+      console.warn(
+        '[webhook-processor] Meta API backfill failed (using local only):',
+        err
+      );
     }
   }
 
@@ -344,17 +514,12 @@ export async function scheduleAIReply(
     return;
   }
 
-  // ── Step 6: Schedule reply via database (cron picks up) ────────
-  // Always schedule via DB so the webhook handler returns fast.
-  // The cron job (every 60s) picks up PENDING replies and sends them.
-  const delaySeconds = result.suggestedDelay || 0;
-  const scheduledFor = new Date(Date.now() + Math.max(delaySeconds, 0) * 1000);
-  await prisma.scheduledReply.create({
-    data: { conversationId, accountId, scheduledFor }
-  });
+  // ── Step 6: Send reply immediately (no delay for now) ──────────
+  // TODO: Re-enable scheduled delays for production (use ScheduledReply table + cron)
   console.log(
-    `[webhook-processor] Scheduled AI reply for ${conversationId} at ${scheduledFor.toISOString()} (${delaySeconds}s delay)`
+    `[webhook-processor] Sending AI reply immediately for ${conversationId}`
   );
+  await sendAIReply(conversationId, accountId, lead, result);
 }
 
 // ---------------------------------------------------------------------------
@@ -443,9 +608,7 @@ async function sendAIReply(
       lead.id,
       result.suggestedTags,
       result.stageConfidence
-    ).catch((err) =>
-      console.error('[webhook-processor] Auto-tag error:', err)
-    );
+    ).catch((err) => console.error('[webhook-processor] Auto-tag error:', err));
   }
 
   // ── Update lead status based on stage ──────────────────────────
@@ -466,10 +629,12 @@ async function sendAIReply(
   if (lead.platformUserId) {
     try {
       if (lead.platform === 'INSTAGRAM') {
-        await sendInstagramDM(lead.accountId, lead.platformUserId, result.reply);
-        console.log(
-          `[webhook-processor] IG DM sent to ${lead.platformUserId}`
+        await sendInstagramDM(
+          lead.accountId,
+          lead.platformUserId,
+          result.reply
         );
+        console.log(`[webhook-processor] IG DM sent to ${lead.platformUserId}`);
       } else if (lead.platform === 'FACEBOOK') {
         await sendFacebookMessage(
           lead.accountId,
@@ -502,7 +667,10 @@ async function sendAIReply(
           title: 'Message delivery failed'
         });
       } catch (notifyErr) {
-        console.error('[webhook-processor] Failed to create failure notification:', notifyErr);
+        console.error(
+          '[webhook-processor] Failed to create failure notification:',
+          notifyErr
+        );
       }
     }
   }
@@ -659,16 +827,24 @@ async function backfillFromMetaAPI(
     if (platform === 'INSTAGRAM') {
       // Instagram conversations use a different ID format
       // We need to find the conversation by participant
-      const igConvos = await (await import('@/lib/instagram')).getConversations(accountId, 50);
+      const igConvos = await (
+        await import('@/lib/instagram')
+      ).getConversations(accountId, 50);
       const matchedConvo = igConvos.find((c) =>
         c.participants.some((p) => p.id === platformUserId)
       );
 
       if (matchedConvo) {
-        apiMessages = await getInstagramMessages(accountId, matchedConvo.id, 50);
+        apiMessages = await getInstagramMessages(
+          accountId,
+          matchedConvo.id,
+          50
+        );
       }
     } else if (platform === 'FACEBOOK') {
-      const fbConvos = await (await import('@/lib/facebook')).getConversations(accountId, 50);
+      const fbConvos = await (
+        await import('@/lib/facebook')
+      ).getConversations(accountId, 50);
       const matchedConvo = fbConvos.find((c) =>
         c.participants.some((p) => p.id === platformUserId)
       );
@@ -880,13 +1056,17 @@ export async function processScheduledReply(
   }
 
   if (!conversation.aiActive) {
-    console.log(`[scheduled-reply] AI deactivated for ${conversationId}, skipping`);
+    console.log(
+      `[scheduled-reply] AI deactivated for ${conversationId}, skipping`
+    );
     return;
   }
 
   const lead = conversation.lead;
   if (!lead) {
-    console.warn(`[scheduled-reply] No lead for conversation ${conversationId}`);
+    console.warn(
+      `[scheduled-reply] No lead for conversation ${conversationId}`
+    );
     return;
   }
 

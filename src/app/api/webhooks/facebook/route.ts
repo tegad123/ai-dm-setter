@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/facebook';
 import {
   processIncomingMessage,
-  scheduleAIReply,
-  processCommentTrigger
+  scheduleAIReply
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
+
+// Vercel Hobby defaults to 10s — AI generation + send needs more time
+export const maxDuration = 60;
 
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
@@ -109,12 +111,14 @@ async function processFacebookEvents(payload: any): Promise<void> {
         );
       } else {
         // Fallback 2: Single-account setup — if only one account has credentials, use it
-        const uniqueAccountIds = Array.from(new Set(metaCredentials.map((c) => c.accountId)));
+        const uniqueAccountIds = Array.from(
+          new Set(metaCredentials.map((c) => c.accountId))
+        );
         if (uniqueAccountIds.length === 1) {
           accountId = uniqueAccountIds[0];
           console.warn(
             `[facebook-webhook] pageId=${pageId} didn't match stored credentials, ` +
-            `but only one account exists — using account=${accountId}`
+              `but only one account exists — using account=${accountId}`
           );
         } else if (metaCredentials.length === 0) {
           const firstAccount = await prisma.account.findFirst({
@@ -122,7 +126,9 @@ async function processFacebookEvents(payload: any): Promise<void> {
             select: { id: true }
           });
           if (!firstAccount) {
-            console.warn(`[facebook-webhook] No accounts in DB, skipping entry`);
+            console.warn(
+              `[facebook-webhook] No accounts in DB, skipping entry`
+            );
             continue;
           }
           accountId = firstAccount.id;
@@ -132,7 +138,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
         } else {
           console.error(
             `[facebook-webhook] No IntegrationCredential found for pageId=${pageId}, ` +
-            `and multiple accounts exist — cannot determine which account to use`
+              `and multiple accounts exist — cannot determine which account to use`
           );
           continue;
         }
@@ -188,36 +194,6 @@ async function processFacebookEvents(payload: any): Promise<void> {
       }
     }
 
-    // ── Handle changes events (comments on posts) ──────────────────────
-    for (const change of entry.changes ?? []) {
-      if (change.field !== 'feed') continue;
-
-      const value = change.value;
-      if (!value || value.item !== 'comment') continue;
-
-      const commenterId: string = value.from?.id ?? '';
-      const commenterName: string = value.from?.name ?? commenterId;
-      const commentText: string = value.message ?? '';
-      const postId: string = value.post_id ?? '';
-
-      if (!commenterId || !commentText) continue;
-
-      try {
-        await processCommentTrigger({
-          accountId,
-          platformUserId: commenterId,
-          platform: 'FACEBOOK',
-          commenterName,
-          commenterHandle: commenterName,
-          commentText,
-          postId
-        });
-      } catch (err) {
-        console.error(
-          `[facebook-webhook] Failed to process comment from ${commenterId}:`,
-          err
-        );
-      }
-    }
+    // ── Comments: ignored for now (trigger-word feature coming later) ──
   }
 }
