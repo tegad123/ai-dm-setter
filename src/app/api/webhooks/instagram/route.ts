@@ -87,7 +87,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
       return (
         meta?.pageId === entryId ||
         meta?.igUserId === entryId ||
-        meta?.instagramAccountId === entryId
+        meta?.instagramAccountId === entryId ||
+        meta?.igBusinessAccountId === entryId
       );
     });
 
