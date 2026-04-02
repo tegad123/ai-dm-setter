@@ -68,6 +68,21 @@ export async function sendDM(
   const { getCredentials } = await import('@/lib/credential-store');
   const metaCreds = await getCredentials(accountId, 'META');
   const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+
+  // DIAGNOSTIC: Log what getCredentials returns to debug decryption
+  console.log(
+    `[instagram] DEBUG metaCreds keys: ${metaCreds ? Object.keys(metaCreds).join(',') : 'null'}`
+  );
+  console.log(
+    `[instagram] DEBUG metaCreds.instagramAccountId: ${(metaCreds as any)?.instagramAccountId}`
+  );
+  console.log(
+    `[instagram] DEBUG token starts: ${accessToken?.slice(0, 8)}... ends: ${accessToken?.slice(-6)}`
+  );
+  console.log(
+    `[instagram] DEBUG CREDENTIAL_ENCRYPTION_KEY: ${process.env.CREDENTIAL_ENCRYPTION_KEY?.slice(0, 10)}...`
+  );
+
   const igBusinessAccountId =
     (metaCreds as any)?.instagramAccountId ||
     (igCreds as any)?.igBusinessAccountId ||
