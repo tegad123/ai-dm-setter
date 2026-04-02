@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             handle: true,
+            platformUserId: true,
             platform: true,
             status: true,
             qualityScore: true,
@@ -69,8 +70,9 @@ export async function GET(request: NextRequest) {
     const conversations = rawConversations.map((c) => ({
       id: c.id,
       leadId: c.lead.id,
-      leadName: c.lead.name,
-      leadHandle: c.lead.handle,
+      leadName:
+        c.lead.name || c.lead.handle || c.lead.platformUserId || 'Unknown',
+      leadHandle: c.lead.handle || c.lead.platformUserId || '',
       platform: c.lead.platform.toLowerCase(),
       status: c.lead.status,
       aiActive: c.aiActive,
