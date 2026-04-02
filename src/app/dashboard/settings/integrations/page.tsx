@@ -36,6 +36,7 @@ interface IntegrationStatus {
   isConnected: boolean;
   verifiedAt: string | null;
   metadata: Record<string, any> | null;
+  maskedKey?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +135,14 @@ export default function IntegrationsPage() {
         if (i.provider === 'INSTAGRAM' && i.metadata) {
           setIgMetadata(i.metadata as any);
         }
+        // Store masked keys from API
+        if (i.maskedKey) {
+          if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC')
+            setAiSavedKey(i.maskedKey);
+          if (i.provider === 'ELEVENLABS') setElSavedKey(i.maskedKey);
+          if (i.provider === 'LEADCONNECTOR') setLcSavedKey(i.maskedKey);
+          if (i.provider === 'CALENDLY') setCalSavedKey(i.maskedKey);
+        }
       }
       setStatuses((prev) => ({ ...prev, ...map }));
 
@@ -213,7 +222,7 @@ export default function IntegrationsPage() {
       toast.success(
         `${selectedAI === 'OPENAI' ? 'OpenAI' : 'Anthropic'} credentials saved`
       );
-      setAiSavedKey(aiApiKey);
+      setAiSavedKey(maskKey(aiApiKey));
       setAiApiKey('');
       setAiModel('');
       setStatuses((prev) => ({ ...prev, [selectedAI]: true }));
@@ -242,7 +251,7 @@ export default function IntegrationsPage() {
         })
       });
       toast.success('ElevenLabs credentials saved');
-      setElSavedKey(elApiKey);
+      setElSavedKey(maskKey(elApiKey));
       setElApiKey('');
       setElVoiceId('');
       setStatuses((prev) => ({ ...prev, ELEVENLABS: true }));
@@ -271,7 +280,7 @@ export default function IntegrationsPage() {
         })
       });
       toast.success('LeadConnector credentials saved');
-      setLcSavedKey(lcApiKey);
+      setLcSavedKey(maskKey(lcApiKey));
       setLcApiKey('');
       setLcCalendarId('');
       setLcLocationId('');
@@ -332,7 +341,7 @@ export default function IntegrationsPage() {
         })
       });
       toast.success('Calendly connected successfully');
-      setCalSavedKey(calApiKey);
+      setCalSavedKey(maskKey(calApiKey));
       setCalApiKey('');
       setCalEventTypeUri('');
       setStatuses((prev) => ({ ...prev, CALENDLY: true }));
@@ -440,24 +449,57 @@ export default function IntegrationsPage() {
               </Button>
             </div>
 
-            {/* Saved key display */}
-            {aiConnected && aiSavedKey && (
-              <p className='text-muted-foreground text-sm'>
-                Current key: {maskKey(aiSavedKey)}
-              </p>
+            {/* Saved key display with lock */}
+            {aiConnected && aiSavedKey ? (
+              <div className='space-y-2'>
+                <Label>API Key</Label>
+                <div className='bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-2'>
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    width='16'
+                    height='16'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='shrink-0 text-green-600'
+                  >
+                    <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
+                    <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                  </svg>
+                  <span className='flex-1 font-mono text-sm'>{aiSavedKey}</span>
+                  <span className='text-xs font-medium text-green-600'>
+                    Saved
+                  </span>
+                </div>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground hover:text-foreground h-auto p-0 text-xs'
+                  onClick={() => {
+                    setAiSavedKey('');
+                    setAiApiKey('');
+                  }}
+                >
+                  Change key
+                </Button>
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                <Label htmlFor='ai-api-key'>API Key</Label>
+                <Input
+                  id='ai-api-key'
+                  type='password'
+                  placeholder={
+                    selectedAI === 'OPENAI' ? 'sk-...' : 'sk-ant-...'
+                  }
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
+                />
+              </div>
             )}
-
-            {/* API Key */}
-            <div className='space-y-2'>
-              <Label htmlFor='ai-api-key'>API Key</Label>
-              <Input
-                id='ai-api-key'
-                type='password'
-                placeholder={selectedAI === 'OPENAI' ? 'sk-...' : 'sk-ant-...'}
-                value={aiApiKey}
-                onChange={(e) => setAiApiKey(e.target.value)}
-              />
-            </div>
 
             {/* Model */}
             <div className='space-y-2'>
@@ -506,22 +548,54 @@ export default function IntegrationsPage() {
             </div>
           </CardHeader>
           <CardContent className='space-y-4'>
-            {statuses.ELEVENLABS && elSavedKey && (
-              <p className='text-muted-foreground text-sm'>
-                Current key: {maskKey(elSavedKey)}
-              </p>
+            {statuses.ELEVENLABS && elSavedKey ? (
+              <div className='space-y-2'>
+                <Label>API Key</Label>
+                <div className='bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-2'>
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    width='16'
+                    height='16'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='shrink-0 text-green-600'
+                  >
+                    <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
+                    <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                  </svg>
+                  <span className='flex-1 font-mono text-sm'>{elSavedKey}</span>
+                  <span className='text-xs font-medium text-green-600'>
+                    Saved
+                  </span>
+                </div>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground hover:text-foreground h-auto p-0 text-xs'
+                  onClick={() => {
+                    setElSavedKey('');
+                    setElApiKey('');
+                  }}
+                >
+                  Change key
+                </Button>
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                <Label htmlFor='el-api-key'>API Key</Label>
+                <Input
+                  id='el-api-key'
+                  type='password'
+                  placeholder='xi-...'
+                  value={elApiKey}
+                  onChange={(e) => setElApiKey(e.target.value)}
+                />
+              </div>
             )}
-
-            <div className='space-y-2'>
-              <Label htmlFor='el-api-key'>API Key</Label>
-              <Input
-                id='el-api-key'
-                type='password'
-                placeholder='xi-...'
-                value={elApiKey}
-                onChange={(e) => setElApiKey(e.target.value)}
-              />
-            </div>
 
             <div className='space-y-2'>
               <Label htmlFor='el-voice-id'>Voice ID</Label>
@@ -565,22 +639,54 @@ export default function IntegrationsPage() {
             </div>
           </CardHeader>
           <CardContent className='space-y-4'>
-            {statuses.LEADCONNECTOR && lcSavedKey && (
-              <p className='text-muted-foreground text-sm'>
-                Current key: {maskKey(lcSavedKey)}
-              </p>
+            {statuses.LEADCONNECTOR && lcSavedKey ? (
+              <div className='space-y-2'>
+                <Label>API Key</Label>
+                <div className='bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-2'>
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    width='16'
+                    height='16'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='shrink-0 text-green-600'
+                  >
+                    <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
+                    <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                  </svg>
+                  <span className='flex-1 font-mono text-sm'>{lcSavedKey}</span>
+                  <span className='text-xs font-medium text-green-600'>
+                    Saved
+                  </span>
+                </div>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground hover:text-foreground h-auto p-0 text-xs'
+                  onClick={() => {
+                    setLcSavedKey('');
+                    setLcApiKey('');
+                  }}
+                >
+                  Change key
+                </Button>
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                <Label htmlFor='lc-api-key'>API Key</Label>
+                <Input
+                  id='lc-api-key'
+                  type='password'
+                  placeholder='Your LeadConnector API key'
+                  value={lcApiKey}
+                  onChange={(e) => setLcApiKey(e.target.value)}
+                />
+              </div>
             )}
-
-            <div className='space-y-2'>
-              <Label htmlFor='lc-api-key'>API Key</Label>
-              <Input
-                id='lc-api-key'
-                type='password'
-                placeholder='Your LeadConnector API key'
-                value={lcApiKey}
-                onChange={(e) => setLcApiKey(e.target.value)}
-              />
-            </div>
 
             <div className='space-y-2'>
               <Label htmlFor='lc-calendar-id'>Calendar ID</Label>
@@ -635,34 +741,68 @@ export default function IntegrationsPage() {
             </div>
           </CardHeader>
           <CardContent className='space-y-4'>
-            {statuses.CALENDLY && calSavedKey && (
-              <p className='text-muted-foreground text-sm'>
-                Current key: {maskKey(calSavedKey)}
-              </p>
-            )}
-
-            <div className='space-y-2'>
-              <Label htmlFor='cal-api-key'>Personal Access Token</Label>
-              <Input
-                id='cal-api-key'
-                type='password'
-                placeholder='Get yours at calendly.com/integrations/api'
-                value={calApiKey}
-                onChange={(e) => setCalApiKey(e.target.value)}
-              />
-              <p className='text-muted-foreground text-xs'>
-                Go to{' '}
-                <a
-                  href='https://calendly.com/integrations/api_webhooks'
-                  target='_blank'
-                  rel='noopener noreferrer'
-                  className='underline'
+            {statuses.CALENDLY && calSavedKey ? (
+              <div className='space-y-2'>
+                <Label>Personal Access Token</Label>
+                <div className='bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-2'>
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    width='16'
+                    height='16'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='shrink-0 text-green-600'
+                  >
+                    <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
+                    <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                  </svg>
+                  <span className='flex-1 font-mono text-sm'>
+                    {calSavedKey}
+                  </span>
+                  <span className='text-xs font-medium text-green-600'>
+                    Saved
+                  </span>
+                </div>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground hover:text-foreground h-auto p-0 text-xs'
+                  onClick={() => {
+                    setCalSavedKey('');
+                    setCalApiKey('');
+                  }}
                 >
-                  Calendly API &amp; Webhooks
-                </a>{' '}
-                → Generate New Token
-              </p>
-            </div>
+                  Change key
+                </Button>
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                <Label htmlFor='cal-api-key'>Personal Access Token</Label>
+                <Input
+                  id='cal-api-key'
+                  type='password'
+                  placeholder='Get yours at calendly.com/integrations/api'
+                  value={calApiKey}
+                  onChange={(e) => setCalApiKey(e.target.value)}
+                />
+                <p className='text-muted-foreground text-xs'>
+                  Go to{' '}
+                  <a
+                    href='https://calendly.com/integrations/api_webhooks'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='underline'
+                  >
+                    Calendly API &amp; Webhooks
+                  </a>{' '}
+                  → Generate New Token
+                </p>
+              </div>
+            )}
 
             <div className='space-y-2'>
               <Label htmlFor='cal-event-type'>
