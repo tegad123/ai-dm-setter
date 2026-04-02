@@ -38,8 +38,6 @@ export async function GET(req: NextRequest) {
         const cred = credentials.find((c) => c.provider === provider);
         let maskedKey: string | null = null;
 
-        let rawKey: string | null = null;
-
         // For API key providers, decrypt and mask the key
         if (
           cred?.isActive &&
@@ -53,12 +51,10 @@ export async function GET(req: NextRequest) {
         ) {
           try {
             const decrypted = await getCredentials(auth.accountId, provider);
-            const fullKey =
+            maskedKey = maskApiKey(
               (decrypted?.apiKey as string) ||
-              (decrypted?.accessToken as string);
-            maskedKey = maskApiKey(fullKey);
-            // TEMPORARY: expose full key for debugging (remove after)
-            rawKey = fullKey || null;
+                (decrypted?.accessToken as string)
+            );
           } catch {
             // Can't decrypt — that's fine, just don't show masked key
           }
@@ -69,8 +65,7 @@ export async function GET(req: NextRequest) {
           isConnected: cred ? cred.isActive : false,
           verifiedAt: cred?.verifiedAt?.toISOString() || null,
           metadata: cred?.metadata ?? null,
-          maskedKey,
-          rawKey // TEMPORARY — remove after debugging
+          maskedKey
         };
       })
     );
