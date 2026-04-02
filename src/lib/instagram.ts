@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const IG_GRAPH_API_BASE = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 
 // ---------------------------------------------------------------------------
 // Webhook Signature Verification
@@ -101,26 +102,34 @@ export async function sendDM(
     throw new Error('No Instagram Business Account ID found for this account');
   }
 
+  // Instagram tokens (IGAA...) must use graph.instagram.com
+  // Facebook page tokens (EAA...) use graph.facebook.com
+  const isIGToken = accessToken.startsWith('IGAA');
+  const apiBase = isIGToken ? IG_GRAPH_API_BASE : GRAPH_API_BASE;
+  const url = `${apiBase}/${igBusinessAccountId}/messages`;
+
   console.log(
-    `[instagram] Sending DM via /${igBusinessAccountId}/messages to ${recipientId}`
+    `[instagram] Sending DM via ${isIGToken ? 'instagram' : 'facebook'} graph: /${igBusinessAccountId}/messages to ${recipientId}`
   );
-  const url = `${GRAPH_API_BASE}/${igBusinessAccountId}/messages`;
 
   const MAX_RETRIES = 3;
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      // IG tokens: pass access_token in body; FB tokens: use Authorization header
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`
+          ...(isIGToken ? {} : { Authorization: `Bearer ${accessToken}` })
         },
         body: JSON.stringify({
           recipient: { id: recipientId },
           message: { text: messageText },
-          messaging_type: 'RESPONSE'
+          ...(isIGToken
+            ? { access_token: accessToken }
+            : { messaging_type: 'RESPONSE' })
         })
       });
 
