@@ -201,6 +201,17 @@ export async function processIncomingMessage(
     // Check if this looks like a mid-conversation message (not a fresh opener)
     const isOngoing = looksLikeOngoingConversation(messageText);
 
+    // Determine AI default based on away mode:
+    // - Away mode ON → AI handles new leads (aiActive: true)
+    // - Away mode OFF → Human handles new leads (aiActive: false), manually toggle AI on
+    // - Ongoing conversations always start with AI off
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { awayMode: true }
+    });
+    const awayMode = account?.awayMode ?? false;
+    const shouldEnableAI = isOngoing ? false : awayMode;
+
     // Create new lead + conversation
     lead = await prisma.lead.create({
       data: {
@@ -214,9 +225,7 @@ export async function processIncomingMessage(
         status: 'NEW_LEAD',
         conversation: {
           create: {
-            // Don't auto-enable AI for ongoing conversations —
-            // the business owner is already talking to this person
-            aiActive: !isOngoing,
+            aiActive: shouldEnableAI,
             unreadCount: 1
           }
         }
@@ -233,7 +242,7 @@ export async function processIncomingMessage(
       );
     } else {
       console.log(
-        `[webhook-processor] Created new lead: ${lead.id} (${senderHandle})`
+        `[webhook-processor] Created new lead: ${lead.id} (${senderHandle}) — AI=${shouldEnableAI ? 'ON' : 'OFF'} (awayMode=${awayMode})`
       );
     }
   }
@@ -505,17 +514,12 @@ export async function scheduleAIReply(
     return;
   }
 
-  // ── Step 6: Schedule reply via database (cron picks up) ────────
-  // Always schedule via DB so the webhook handler returns fast.
-  // The cron job (every 60s) picks up PENDING replies and sends them.
-  const delaySeconds = result.suggestedDelay || 0;
-  const scheduledFor = new Date(Date.now() + Math.max(delaySeconds, 0) * 1000);
-  await prisma.scheduledReply.create({
-    data: { conversationId, accountId, scheduledFor }
-  });
+  // ── Step 6: Send reply immediately (no delay for now) ──────────
+  // TODO: Re-enable scheduled delays for production (use ScheduledReply table + cron)
   console.log(
-    `[webhook-processor] Scheduled AI reply for ${conversationId} at ${scheduledFor.toISOString()} (${delaySeconds}s delay)`
+    `[webhook-processor] Sending AI reply immediately for ${conversationId}`
   );
+  await sendAIReply(conversationId, accountId, lead, result);
 }
 
 // ---------------------------------------------------------------------------
