@@ -152,12 +152,9 @@ function looksLikeOngoingConversation(messageText: string): boolean {
     }
   }
 
-  // Very short messages (1-2 words) that aren't openers are likely ongoing
-  const wordCount = text.split(/\s+/).length;
-  if (wordCount <= 2 && text.length <= 15) {
-    return true;
-  }
-
+  // Default: treat as a new lead (AI on). Only flag as ongoing if it
+  // explicitly matches an ongoing phrase above. Better to have the AI
+  // respond to an existing contact than to miss a real new lead.
   return false;
 }
 
