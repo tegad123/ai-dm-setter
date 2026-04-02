@@ -94,23 +94,42 @@ export async function GET(req: NextRequest) {
     );
 
     // Step 2: Exchange for long-lived token (60-day)
-    const longLivedRes = await fetch(
+    console.log('[instagram-oauth] Starting long-lived token exchange...');
+    const llUrl =
       `${GRAPH_API}/access_token?` +
-        new URLSearchParams({
-          grant_type: 'ig_exchange_token',
-          client_secret: appSecret,
-          access_token: shortLivedToken
-        })
+      new URLSearchParams({
+        grant_type: 'ig_exchange_token',
+        client_secret: appSecret,
+        access_token: shortLivedToken
+      });
+    console.log(
+      `[instagram-oauth] Exchange URL: ${llUrl.split('access_token=')[0]}access_token=REDACTED`
     );
 
     let accessToken = shortLivedToken;
-    if (longLivedRes.ok) {
-      const llData = await longLivedRes.json();
-      accessToken = llData.access_token || shortLivedToken;
-      console.log('[instagram-oauth] Exchanged for long-lived token');
-    } else {
-      console.warn(
-        '[instagram-oauth] Long-lived token exchange failed, using short-lived'
+    try {
+      const longLivedRes = await fetch(llUrl);
+      const llBody = await longLivedRes.text();
+      console.log(
+        `[instagram-oauth] Long-lived exchange status: ${longLivedRes.status}, body: ${llBody.slice(0, 200)}`
+      );
+
+      if (longLivedRes.ok) {
+        const llData = JSON.parse(llBody);
+        accessToken = llData.access_token || shortLivedToken;
+        console.log(
+          `[instagram-oauth] Got long-lived token: ${accessToken.slice(0, 10)}... expires_in: ${llData.expires_in}`
+        );
+      } else {
+        console.error(
+          '[instagram-oauth] Long-lived token exchange failed:',
+          llBody.slice(0, 300)
+        );
+      }
+    } catch (llErr: any) {
+      console.error(
+        '[instagram-oauth] Long-lived exchange threw:',
+        llErr?.message || llErr
       );
     }
 
