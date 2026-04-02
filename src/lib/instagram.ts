@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getMetaAccessToken } from '@/lib/credential-store';
+import prisma from '@/lib/prisma';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -64,31 +65,29 @@ export async function sendDM(
     throw new Error('No Meta access token configured for this account');
   }
 
-  // Resolve the IG Business Account ID from stored credentials
-  const { getCredentials } = await import('@/lib/credential-store');
-  const metaCreds = await getCredentials(accountId, 'META');
-  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  // Resolve the IG Business Account ID from stored credential METADATA (not credentials)
+  const metaRecord = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'META' as any, isActive: true },
+    select: { metadata: true }
+  });
+  const igRecord = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'INSTAGRAM' as any, isActive: true },
+    select: { metadata: true }
+  });
 
-  // DIAGNOSTIC: Log what getCredentials returns to debug decryption
-  console.log(
-    `[instagram] DEBUG metaCreds keys: ${metaCreds ? Object.keys(metaCreds).join(',') : 'null'}`
-  );
-  console.log(
-    `[instagram] DEBUG metaCreds.instagramAccountId: ${(metaCreds as any)?.instagramAccountId}`
-  );
-  console.log(
-    `[instagram] DEBUG token starts: ${accessToken?.slice(0, 8)}... ends: ${accessToken?.slice(-6)}`
-  );
-  console.log(
-    `[instagram] DEBUG CREDENTIAL_ENCRYPTION_KEY: ${process.env.CREDENTIAL_ENCRYPTION_KEY?.slice(0, 10)}...`
-  );
+  const metaMeta = (metaRecord?.metadata as any) || {};
+  const igMeta = (igRecord?.metadata as any) || {};
 
   const igBusinessAccountId =
-    (metaCreds as any)?.instagramAccountId ||
-    (igCreds as any)?.igBusinessAccountId ||
-    (igCreds as any)?.igUserId ||
+    metaMeta.instagramAccountId ||
+    igMeta.igBusinessAccountId ||
+    igMeta.igUserId ||
     process.env.INSTAGRAM_PAGE_ID ||
     process.env.FACEBOOK_PAGE_ID;
+
+  console.log(
+    `[instagram] DEBUG token starts: ${accessToken?.slice(0, 8)}... igBusinessAccountId: ${igBusinessAccountId}`
+  );
 
   if (!igBusinessAccountId) {
     throw new Error('No Instagram Business Account ID found for this account');
@@ -222,11 +221,17 @@ export async function getUserProfile(
 
   // Strategy 3: Look up via Instagram conversations API
   try {
-    const { getCredentials } = await import('@/lib/credential-store');
-    const metaCreds = await getCredentials(accountId, 'META');
-    const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+    const metaRec = await prisma.integrationCredential.findFirst({
+      where: { accountId, provider: 'META' as any, isActive: true },
+      select: { metadata: true }
+    });
+    const igRec = await prisma.integrationCredential.findFirst({
+      where: { accountId, provider: 'INSTAGRAM' as any, isActive: true },
+      select: { metadata: true }
+    });
     const igAccountId =
-      (metaCreds as any)?.instagramAccountId || (igCreds as any)?.igUserId;
+      (metaRec?.metadata as any)?.instagramAccountId ||
+      (igRec?.metadata as any)?.igUserId;
 
     if (igAccountId) {
       const convUrl = `${GRAPH_API_BASE}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
