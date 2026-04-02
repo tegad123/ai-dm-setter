@@ -1,6 +1,9 @@
 import { saveCredentials } from '@/lib/credential-store';
 import { NextRequest, NextResponse } from 'next/server';
 
+// Instagram OAuth callback needs time for: token exchange + long-lived exchange + profile fetch + save
+export const maxDuration = 30;
+
 // ---------------------------------------------------------------------------
 // GET — Instagram OAuth Callback
 // Exchanges the code for a short-lived token, then a long-lived token,

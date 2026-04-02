@@ -1,6 +1,8 @@
 import { saveCredentials } from '@/lib/credential-store';
 import { NextRequest, NextResponse } from 'next/server';
 
+export const maxDuration = 30;
+
 // ---------------------------------------------------------------------------
 // GET — Meta OAuth Callback
 // Exchanges the authorization code for tokens, fetches the user's pages,
