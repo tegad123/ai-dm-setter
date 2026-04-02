@@ -82,6 +82,7 @@ export default function IntegrationsPage() {
   const [aiModel, setAiModel] = useState('');
   const [aiSaving, setAiSaving] = useState(false);
   const [aiSavedKey, setAiSavedKey] = useState('');
+  const [aiRawKey, setAiRawKey] = useState(''); // TEMPORARY debug
 
   // Form state -- ElevenLabs
   const [elApiKey, setElApiKey] = useState('');
@@ -137,8 +138,10 @@ export default function IntegrationsPage() {
         }
         // Store masked keys from API
         if (i.maskedKey) {
-          if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC')
+          if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC') {
             setAiSavedKey(i.maskedKey);
+            if ((i as any).rawKey) setAiRawKey((i as any).rawKey);
+          }
           if (i.provider === 'ELEVENLABS') setElSavedKey(i.maskedKey);
           if (i.provider === 'LEADCONNECTOR') setLcSavedKey(i.maskedKey);
           if (i.provider === 'CALENDLY') setCalSavedKey(i.maskedKey);
@@ -469,7 +472,14 @@ export default function IntegrationsPage() {
                     <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
                     <path d='M7 11V7a5 5 0 0 1 10 0v4' />
                   </svg>
-                  <span className='flex-1 font-mono text-sm'>{aiSavedKey}</span>
+                  <span className='flex-1 font-mono text-sm'>
+                    {aiSavedKey}
+                    {aiRawKey && (
+                      <span className='mt-1 block text-xs break-all text-orange-600'>
+                        Full key: {aiRawKey}
+                      </span>
+                    )}
+                  </span>
                   <span className='text-xs font-medium text-green-600'>
                     Saved
                   </span>
