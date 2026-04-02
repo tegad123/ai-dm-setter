@@ -141,6 +141,10 @@ export async function getUserProfile(
 
   const response = await fetch(url);
   if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    console.error(
+      `[instagram] Profile fetch failed for ${userId}: status=${response.status} body=${errBody.slice(0, 300)}`
+    );
     throw new Error(`Failed to fetch Instagram profile: ${response.status}`);
   }
 

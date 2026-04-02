@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/instagram';
 import {
   processIncomingMessage,
-  scheduleAIReply,
-  processCommentTrigger
+  scheduleAIReply
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
 
@@ -94,7 +93,12 @@ async function processInstagramEvents(payload: any): Promise<void> {
 
     console.log(
       `[instagram-webhook] entryId=${entryId}, matchedCred=${matchedCred?.id ?? 'NONE'}, ` +
-      `allCreds=${allCredentials.map((c) => { const m = c.metadata as any; return `${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`; }).join(' | ')}`
+        `allCreds=${allCredentials
+          .map((c) => {
+            const m = c.metadata as any;
+            return `${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`;
+          })
+          .join(' | ')}`
     );
 
     let accountId: string;
@@ -138,19 +142,26 @@ async function processInstagramEvents(payload: any): Promise<void> {
         // Fallback 3: Single-account setup — if there's only one distinct account
         // across all credentials, use it. The entryId mismatch is likely due to
         // the Instagram Business Account ID not being stored during OAuth.
-        const uniqueAccountIds = Array.from(new Set(allCredentials.map((c) => c.accountId)));
+        const uniqueAccountIds = Array.from(
+          new Set(allCredentials.map((c) => c.accountId))
+        );
         if (uniqueAccountIds.length === 1) {
           accountId = uniqueAccountIds[0];
           console.warn(
             `[instagram-webhook] entryId=${entryId} didn't match any stored IDs, ` +
-            `but only one account exists — using account=${accountId}. ` +
-            `Consider re-connecting Instagram to fix the ID mismatch.`
+              `but only one account exists — using account=${accountId}. ` +
+              `Consider re-connecting Instagram to fix the ID mismatch.`
           );
         } else {
           console.error(
             `[instagram-webhook] No IntegrationCredential found for entryId=${entryId}. ` +
-            `Multiple accounts exist (${uniqueAccountIds.length}), cannot guess which one. ` +
-            `Stored credentials: ${allCredentials.map((c) => { const m = c.metadata as any; return `account=${c.accountId} ${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`; }).join(' | ')}`
+              `Multiple accounts exist (${uniqueAccountIds.length}), cannot guess which one. ` +
+              `Stored credentials: ${allCredentials
+                .map((c) => {
+                  const m = c.metadata as any;
+                  return `account=${c.accountId} ${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`;
+                })
+                .join(' | ')}`
           );
           continue;
         }
@@ -177,8 +188,13 @@ async function processInstagramEvents(payload: any): Promise<void> {
           const profile = await getUserProfile(accountId, senderId);
           senderName = profile.name || senderId;
           senderHandle = profile.username || senderId;
-        } catch {
-          // Profile fetch can fail for privacy reasons — use ID as fallback
+          console.log(
+            `[instagram-webhook] Resolved profile: ${senderName} (@${senderHandle})`
+          );
+        } catch (profileErr: any) {
+          console.warn(
+            `[instagram-webhook] Profile fetch failed for ${senderId}: ${profileErr?.message || profileErr}`
+          );
         }
 
         const result = await processIncomingMessage({
@@ -208,37 +224,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
       }
     }
 
-    // ── Handle changes events (comments on posts) ──────────────────────
-    for (const change of entry.changes ?? []) {
-      if (change.field !== 'comments') continue;
-
-      const value = change.value;
-      if (!value) continue;
-
-      const commenterId: string = value.from?.id ?? '';
-      const commenterName: string =
-        value.from?.username ?? value.from?.name ?? commenterId;
-      const commentText: string = value.text ?? '';
-      const postId: string = value.media?.id ?? '';
-
-      if (!commenterId || !commentText) continue;
-
-      try {
-        await processCommentTrigger({
-          accountId,
-          platformUserId: commenterId,
-          platform: 'INSTAGRAM',
-          commenterName,
-          commenterHandle: commenterName,
-          commentText,
-          postId
-        });
-      } catch (err) {
-        console.error(
-          `[instagram-webhook] Failed to process comment from ${commenterId}:`,
-          err
-        );
-      }
-    }
+    // ── Comments: ignored for now (trigger-word feature coming later) ──
+    // Comments are received via entry.changes with field === 'comments'
+    // but we skip processing to avoid creating DM conversations from comments.
   }
 }

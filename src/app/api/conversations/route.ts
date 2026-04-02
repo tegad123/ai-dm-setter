@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
       leadId: c.lead.id,
       leadName: c.lead.name,
       leadHandle: c.lead.handle,
-      platform: c.lead.platform,
+      platform: c.lead.platform.toLowerCase(),
       status: c.lead.status,
       aiActive: c.aiActive,
       lastMessage: c.messages[0]?.content ?? '',
