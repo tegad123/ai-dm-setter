@@ -6,6 +6,9 @@ import {
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
 
+// Vercel Hobby defaults to 10s — AI generation + send needs more time
+export const maxDuration = 60;
+
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
 // ---------------------------------------------------------------------------
@@ -49,10 +52,11 @@ export async function POST(request: NextRequest) {
   }
 
   // Return 200 immediately — Meta requires a fast response.
-  // Process events asynchronously.
   const payload = JSON.parse(rawBody);
 
-  // Process synchronously for now (dev debugging) — switch to fire-and-forget in prod
+  // Process the events fully BEFORE returning 200.
+  // This ensures AI generation + Instagram send completes within the function lifecycle.
+  // Vercel keeps the function alive until we return the response.
   try {
     await processInstagramEvents(payload);
     console.log('[instagram-webhook] Processing complete');

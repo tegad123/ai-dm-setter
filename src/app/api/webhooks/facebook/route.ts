@@ -6,6 +6,9 @@ import {
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
 
+// Vercel Hobby defaults to 10s — AI generation + send needs more time
+export const maxDuration = 60;
+
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
 // ---------------------------------------------------------------------------
