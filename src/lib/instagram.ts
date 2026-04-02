@@ -60,9 +60,17 @@ export async function sendDM(
   recipientId: string,
   messageText: string
 ): Promise<{ messageId: string }> {
-  const accessToken = await getMetaAccessToken(accountId);
+  // For Instagram DMs, prefer the Instagram token (IGAA...) over the Facebook Page token
+  const { getCredentials } = await import('@/lib/credential-store');
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  const igToken = igCreds?.accessToken as string | undefined;
+  const metaToken = await getMetaAccessToken(accountId);
+  const accessToken = igToken || metaToken;
+
   if (!accessToken) {
-    throw new Error('No Meta access token configured for this account');
+    throw new Error(
+      'No Meta/Instagram access token configured for this account'
+    );
   }
 
   // Resolve the IG Business Account ID from stored credential METADATA (not credentials)
@@ -161,9 +169,15 @@ export async function getUserProfile(
   accountId: string,
   userId: string
 ): Promise<IGUserProfile> {
-  const accessToken = await getMetaAccessToken(accountId);
+  // Prefer Instagram token for profile lookups (has instagram_business_manage_messages)
+  const { getCredentials } = await import('@/lib/credential-store');
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  const igToken = igCreds?.accessToken as string | undefined;
+  const metaToken = await getMetaAccessToken(accountId);
+  const accessToken = igToken || metaToken;
+
   if (!accessToken) {
-    throw new Error('No Meta access token configured');
+    throw new Error('No Meta/Instagram access token configured');
   }
 
   // Instagram-Scoped IDs (IGSIDs) from the Messaging API require a different
