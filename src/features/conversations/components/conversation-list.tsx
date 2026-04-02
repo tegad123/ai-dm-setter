@@ -33,7 +33,7 @@ export function ConversationList({
   );
 
   return (
-    <div className='flex w-80 flex-col border-r'>
+    <div className='flex w-80 flex-col overflow-hidden border-r'>
       <div className='border-b p-4'>
         <h2 className='mb-3 text-lg font-semibold'>Conversations</h2>
 
