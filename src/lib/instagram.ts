@@ -137,24 +137,79 @@ export async function getUserProfile(
     throw new Error('No Meta access token configured');
   }
 
-  const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,username,profile_pic&access_token=${accessToken}`;
+  // Instagram-Scoped IDs (IGSIDs) from the Messaging API require a different
+  // approach — the standard Graph API /{user-id} doesn't work with them.
+  // Try multiple strategies:
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => '');
-    console.error(
-      `[instagram] Profile fetch failed for ${userId}: status=${response.status} body=${errBody.slice(0, 300)}`
-    );
-    throw new Error(`Failed to fetch Instagram profile: ${response.status}`);
+  // Strategy 1: Direct user lookup (works for some token types)
+  try {
+    const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,username,profile_pic&access_token=${accessToken}`;
+    const response = await fetch(url);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.username || data.name) {
+        console.log(
+          `[instagram] Profile resolved via direct lookup: ${data.username || data.name}`
+        );
+        return {
+          id: data.id,
+          name: data.name || data.username || userId,
+          username: data.username || userId,
+          profilePicUrl: data.profile_pic
+        };
+      }
+    }
+  } catch {
+    // Direct lookup failed — try next strategy
   }
 
-  const data = await response.json();
-  return {
-    id: data.id,
-    name: data.name || data.username || userId,
-    username: data.username || userId,
-    profilePicUrl: data.profile_pic
-  };
+  // Strategy 2: Look up via Instagram conversations API
+  // Get the IG business account ID from credentials
+  try {
+    const { getCredentials } = await import('@/lib/credential-store');
+    const metaCreds = await getCredentials(accountId, 'META');
+    const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+    const igAccountId =
+      (metaCreds as any)?.instagramAccountId || (igCreds as any)?.igUserId;
+
+    if (igAccountId) {
+      // Fetch conversations with this participant
+      const convUrl = `${GRAPH_API_BASE}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
+      const convResponse = await fetch(convUrl);
+      if (convResponse.ok) {
+        const convData = await convResponse.json();
+        const conversations = convData.data || [];
+        if (conversations.length > 0) {
+          const participants = conversations[0].participants?.data || [];
+          const sender = participants.find((p: any) => p.id === userId);
+          if (sender?.username) {
+            console.log(
+              `[instagram] Profile resolved via conversations API: @${sender.username}`
+            );
+            return {
+              id: userId,
+              name: sender.name || sender.username || userId,
+              username: sender.username || userId,
+              profilePicUrl: undefined
+            };
+          }
+        }
+      } else {
+        const errBody = await convResponse.text().catch(() => '');
+        console.warn(
+          `[instagram] Conversations API failed: ${convResponse.status} ${errBody.slice(0, 200)}`
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(`[instagram] Conversations API strategy failed:`, err);
+  }
+
+  // All strategies failed
+  console.warn(
+    `[instagram] Could not resolve profile for ${userId} — using ID as fallback`
+  );
+  throw new Error(`Failed to fetch Instagram profile for ${userId}`);
 }
 
 // ---------------------------------------------------------------------------
