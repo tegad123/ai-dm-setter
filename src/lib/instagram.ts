@@ -163,8 +163,34 @@ export async function getUserProfile(
     // Direct lookup failed — try next strategy
   }
 
-  // Strategy 2: Look up via Instagram conversations API
-  // Get the IG business account ID from credentials
+  // Strategy 2: User info with instagram_business_manage_messages fields
+  try {
+    const userInfoUrl = `${GRAPH_API_BASE}/${userId}?fields=name,username,follower_count&access_token=${accessToken}`;
+    const userInfoRes = await fetch(userInfoUrl);
+    if (userInfoRes.ok) {
+      const userData = await userInfoRes.json();
+      if (userData.username || userData.name) {
+        console.log(
+          `[instagram] Profile resolved via user info: ${userData.username || userData.name}`
+        );
+        return {
+          id: userId,
+          name: userData.name || userData.username || userId,
+          username: userData.username || userId,
+          profilePicUrl: undefined
+        };
+      }
+    } else {
+      const errBody = await userInfoRes.text().catch(() => '');
+      console.warn(
+        `[instagram] User info API failed: ${userInfoRes.status} ${errBody.slice(0, 200)}`
+      );
+    }
+  } catch (err) {
+    console.warn(`[instagram] User info strategy failed:`, err);
+  }
+
+  // Strategy 3: Look up via Instagram conversations API
   try {
     const { getCredentials } = await import('@/lib/credential-store');
     const metaCreds = await getCredentials(accountId, 'META');
@@ -173,7 +199,6 @@ export async function getUserProfile(
       (metaCreds as any)?.instagramAccountId || (igCreds as any)?.igUserId;
 
     if (igAccountId) {
-      // Fetch conversations with this participant
       const convUrl = `${GRAPH_API_BASE}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
       const convResponse = await fetch(convUrl);
       if (convResponse.ok) {
