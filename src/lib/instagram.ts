@@ -64,10 +64,25 @@ export async function sendDM(
     throw new Error('No Meta access token configured for this account');
   }
 
-  // Instagram uses the page-scoped user ID for messaging
-  const pageId = process.env.INSTAGRAM_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
+  // Resolve the IG Business Account ID from stored credentials
+  const { getCredentials } = await import('@/lib/credential-store');
+  const metaCreds = await getCredentials(accountId, 'META');
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  const igBusinessAccountId =
+    (metaCreds as any)?.instagramAccountId ||
+    (igCreds as any)?.igBusinessAccountId ||
+    (igCreds as any)?.igUserId ||
+    process.env.INSTAGRAM_PAGE_ID ||
+    process.env.FACEBOOK_PAGE_ID;
 
-  const url = `${GRAPH_API_BASE}/${pageId}/messages`;
+  if (!igBusinessAccountId) {
+    throw new Error('No Instagram Business Account ID found for this account');
+  }
+
+  console.log(
+    `[instagram] Sending DM via /${igBusinessAccountId}/messages to ${recipientId}`
+  );
+  const url = `${GRAPH_API_BASE}/${igBusinessAccountId}/messages`;
 
   const MAX_RETRIES = 3;
   let lastError: Error | null = null;
