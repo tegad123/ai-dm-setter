@@ -72,7 +72,15 @@ export async function POST(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 async function processInstagramEvents(payload: any): Promise<void> {
-  if (payload.object !== 'instagram') return;
+  console.log(
+    `[instagram-webhook] payload.object=${payload.object}, entries=${payload.entry?.length ?? 0}`
+  );
+  if (payload.object !== 'instagram') {
+    console.warn(
+      `[instagram-webhook] Ignoring payload.object="${payload.object}" (expected "instagram")`
+    );
+    return;
+  }
 
   // Fetch all active META and INSTAGRAM integration credentials for account lookup
   const allCredentials = await prisma.integrationCredential.findMany({
@@ -201,6 +209,12 @@ async function processInstagramEvents(payload: any): Promise<void> {
       // Meta sends message echoes when the page sends a message (is_echo=true)
       // Also detect by checking if senderId matches any known page/business IDs
       const isAdminMessage = isEcho || pageOwnIds.has(senderId);
+
+      console.log(
+        `[instagram-webhook] Message: sender=${senderId}, recipient=${recipientId}, ` +
+          `isEcho=${isEcho}, isAdmin=${isAdminMessage}, pageOwnIds=[${Array.from(pageOwnIds).join(',')}], ` +
+          `text="${messageText?.slice(0, 50)}"`
+      );
 
       if (isAdminMessage) {
         // This message was sent by the business/admin, not the lead

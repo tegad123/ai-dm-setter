@@ -166,6 +166,12 @@ async function processFacebookEvents(payload: any): Promise<void> {
       // ── Admin/page message detection ────────────────────────────────
       const isAdminMessage = isEcho || pageOwnIds.has(senderId);
 
+      console.log(
+        `[facebook-webhook] Message: sender=${senderId}, recipient=${recipientId}, ` +
+          `isEcho=${isEcho}, isAdmin=${isAdminMessage}, pageOwnIds=[${Array.from(pageOwnIds).join(',')}], ` +
+          `text="${messageText?.slice(0, 50)}"`
+      );
+
       if (isAdminMessage) {
         const leadPlatformUserId = isEcho
           ? recipientId
