@@ -9,7 +9,7 @@ import { getCredentials } from '@/lib/credential-store';
 
 export interface ConversationMessage {
   id: string;
-  sender: string;  // 'LEAD' | 'AI' | 'HUMAN'
+  sender: string; // 'LEAD' | 'AI' | 'HUMAN'
   content: string;
   timestamp: Date | string;
   isVoiceNote?: boolean;
@@ -19,8 +19,15 @@ export interface GenerateReplyResult {
   reply: string;
   format: 'text' | 'voice_note';
   stage: string;
+  subStage: string | null;
   stageConfidence: number;
   sentimentScore: number;
+  experiencePath: string | null;
+  objectionDetected: string | null;
+  stallType: string | null;
+  affirmationDetected: boolean;
+  followUpNumber: number | null;
+  softExit: boolean;
   suggestedTag: string;
   suggestedTags: string[];
   shouldVoiceNote: boolean;
@@ -61,7 +68,13 @@ export async function generateReply(
   const messages = formatConversationForLLM(conversationHistory);
 
   // 4. Call the LLM
-  const rawResponse = await callLLM(provider, apiKey, model, systemPrompt, messages);
+  const rawResponse = await callLLM(
+    provider,
+    apiKey,
+    model,
+    systemPrompt,
+    messages
+  );
 
   // 5. Parse the structured JSON response
   const parsed = parseAIResponse(rawResponse);
@@ -69,12 +82,17 @@ export async function generateReply(
   // 6. Get response delay from persona config
   const persona = await prisma.aIPersona.findFirst({
     where: { accountId },
-    select: { responseDelayMin: true, responseDelayMax: true, voiceNotesEnabled: true }
+    select: {
+      responseDelayMin: true,
+      responseDelayMax: true,
+      voiceNotesEnabled: true
+    }
   });
 
   const delayMin = persona?.responseDelayMin ?? 300;
   const delayMax = persona?.responseDelayMax ?? 600;
-  const suggestedDelay = Math.floor(Math.random() * (delayMax - delayMin + 1)) + delayMin;
+  const suggestedDelay =
+    Math.floor(Math.random() * (delayMax - delayMin + 1)) + delayMin;
 
   const shouldVoiceNote =
     parsed.format === 'voice_note' && (persona?.voiceNotesEnabled ?? false);
@@ -86,8 +104,15 @@ export async function generateReply(
     reply: parsed.message,
     format: parsed.format as 'text' | 'voice_note',
     stage: parsed.stage,
+    subStage: parsed.subStage,
     stageConfidence: parsed.stageConfidence,
     sentimentScore: parsed.sentimentScore,
+    experiencePath: parsed.experiencePath,
+    objectionDetected: parsed.objectionDetected,
+    stallType: parsed.stallType,
+    affirmationDetected: parsed.affirmationDetected,
+    followUpNumber: parsed.followUpNumber,
+    softExit: parsed.softExit,
     suggestedTag: parsed.suggestedTag,
     suggestedTags: parsed.suggestedTags,
     shouldVoiceNote,
@@ -177,10 +202,7 @@ async function callLLM(
       model,
       temperature: 0.85,
       max_tokens: 500,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages
-      ]
+      messages: [{ role: 'system', content: systemPrompt }, ...messages]
     });
 
     return response.choices[0]?.message?.content?.trim() || '';
@@ -191,9 +213,15 @@ async function callLLM(
     // Anthropic requires messages to start with user role
     // If first message is assistant, prepend a system-generated user message
     let anthropicMessages = [...messages];
-    if (anthropicMessages.length > 0 && anthropicMessages[0].role === 'assistant') {
+    if (
+      anthropicMessages.length > 0 &&
+      anthropicMessages[0].role === 'assistant'
+    ) {
       anthropicMessages = [
-        { role: 'user' as const, content: '[Conversation started by our team]' },
+        {
+          role: 'user' as const,
+          content: '[Conversation started by our team]'
+        },
         ...anthropicMessages
       ];
     }
@@ -246,8 +274,15 @@ interface ParsedAIResponse {
   format: string;
   message: string;
   stage: string;
+  subStage: string | null;
   stageConfidence: number;
   sentimentScore: number;
+  experiencePath: string | null;
+  objectionDetected: string | null;
+  stallType: string | null;
+  affirmationDetected: boolean;
+  followUpNumber: number | null;
+  softExit: boolean;
   suggestedTag: string;
   suggestedTags: string[];
 }
@@ -257,8 +292,15 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     format: 'text',
     message: raw,
     stage: '',
+    subStage: null,
     stageConfidence: 0.5,
     sentimentScore: 0,
+    experiencePath: null,
+    objectionDetected: null,
+    stallType: null,
+    affirmationDetected: false,
+    followUpNumber: null,
+    softExit: false,
     suggestedTag: '',
     suggestedTags: []
   };
@@ -278,6 +320,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       format: obj.format || 'text',
       message: obj.message || raw,
       stage: obj.stage || '',
+      subStage: obj.sub_stage || null,
       stageConfidence:
         typeof obj.stage_confidence === 'number'
           ? Math.max(0, Math.min(1, obj.stage_confidence))
@@ -286,6 +329,13 @@ function parseAIResponse(raw: string): ParsedAIResponse {
         typeof obj.sentiment_score === 'number'
           ? Math.max(-1, Math.min(1, obj.sentiment_score))
           : 0,
+      experiencePath: obj.experience_path || null,
+      objectionDetected: obj.objection_detected || null,
+      stallType: obj.stall_type || null,
+      affirmationDetected: obj.affirmation_detected === true,
+      followUpNumber:
+        typeof obj.follow_up_number === 'number' ? obj.follow_up_number : null,
+      softExit: obj.soft_exit === true,
       suggestedTag: obj.suggested_tag || '',
       suggestedTags: Array.isArray(obj.suggested_tags) ? obj.suggested_tags : []
     };

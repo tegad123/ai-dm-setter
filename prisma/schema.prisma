@@ -119,6 +119,7 @@ enum ConversationOutcome {
   RESISTANT_EXIT
   SOFT_OBJECTION
   PRICE_QUESTION_DEFLECTED
+  SOFT_EXIT
 }
 
 enum LeadIntentTag {
@@ -331,13 +332,17 @@ model Conversation {
   consentToLog    Boolean             @default(true)
 
   // Stage reached timestamps (set once, when first reached)
+  // Legacy stages (kept for historical data)
   stageQualificationAt         DateTime?
   stageVisionBuildingAt        DateTime?
   stagePainIdentificationAt    DateTime?
-  stageUrgencyAt               DateTime?
   stageSolutionOfferAt         DateTime?
   stageCapitalQualificationAt  DateTime?
+  // Current stages (7-stage SOP sequence)
+  stageOpeningAt               DateTime?
+  stageSituationDiscoveryAt    DateTime?
   stageGoalEmotionalWhyAt      DateTime?
+  stageUrgencyAt               DateTime?
   stageSoftPitchCommitmentAt   DateTime?
   stageFinancialScreeningAt    DateTime?
   stageBookingAt               DateTime?
@@ -364,8 +369,12 @@ model Message {
 
   // Self-Optimizing Layer: Effectiveness Tracking
   stage                      String?   // Conversation stage from AI response
+  subStage                   String?   // Sub-stage (PATH_A, PATH_B, WATERFALL_L1-L4, etc.)
   stageConfidence            Float?    // 0-1 confidence in stage classification
   sentimentScore             Float?    // -1 to 1 lead sentiment (secondary signal)
+  experiencePath             String?   // BEGINNER or EXPERIENCED (lead classification)
+  objectionType              String?   // Detected objection: TRUST, MONEY, TIME, PRIOR_FAILURE, PARTNER
+  stallType                  String?   // Detected stall: TIME_DELAY, MONEY_DELAY, THINKING, PARTNER, GHOST
   gotResponse                Boolean?  // Back-filled: did lead reply after this AI msg?
   leadContinuedConversation  Boolean?  // Back-filled: did lead send 2+ more msgs?
   responseTimeSeconds        Int?      // Back-filled: seconds until lead's next reply

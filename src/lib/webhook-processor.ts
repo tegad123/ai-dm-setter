@@ -539,8 +539,16 @@ async function sendAIReply(
   result: {
     reply: string;
     stage: string;
+    subStage?: string | null;
     stageConfidence: number;
     sentimentScore: number;
+    experiencePath?: string | null;
+    objectionDetected?: string | null;
+    stallType?: string | null;
+    affirmationDetected?: boolean;
+    followUpNumber?: number | null;
+    softExit?: boolean;
+    shouldVoiceNote?: boolean;
     suggestedTag: string;
     suggestedTags: string[];
     suggestedDelay: number;
@@ -569,6 +577,21 @@ async function sendAIReply(
 
   const now = new Date();
 
+  // ── Check for human message conflict (human sent while AI was generating) ──
+  const humanMessageDuringGeneration = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      sender: 'HUMAN',
+      timestamp: { gte: new Date(Date.now() - 30000) }
+    }
+  });
+  if (humanMessageDuringGeneration) {
+    console.log(
+      `[webhook-processor] Human message detected during AI generation, discarding AI reply for ${conversationId}`
+    );
+    return;
+  }
+
   // ── Save AI message to database ────────────────────────────────
   const aiMessage = await prisma.message.create({
     data: {
@@ -577,8 +600,13 @@ async function sendAIReply(
       content: result.reply,
       timestamp: now,
       stage: result.stage || null,
+      subStage: result.subStage || null,
       stageConfidence: result.stageConfidence,
       sentimentScore: result.sentimentScore,
+      experiencePath: result.experiencePath || null,
+      objectionType: result.objectionDetected || null,
+      stallType: result.stallType || null,
+      followUpAttemptNumber: result.followUpNumber ?? null,
       systemPromptVersion: result.systemPromptVersion
     }
   });
@@ -588,6 +616,17 @@ async function sendAIReply(
     where: { id: conversationId },
     data: { lastMessageAt: now }
   });
+
+  // ── Handle soft exit ──────────────────────────────────────────
+  if (result.softExit) {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { outcome: 'SOFT_EXIT', aiActive: false }
+    });
+    console.log(
+      `[webhook-processor] Soft exit triggered for ${conversationId}`
+    );
+  }
 
   // ── Record stage timestamp ─────────────────────────────────────
   if (result.stage) {
@@ -625,52 +664,92 @@ async function sendAIReply(
     timestamp: now.toISOString()
   });
 
-  // ── Send to platform (fire-and-forget) ─────────────────────────
+  // ── Send to platform ────────────────────────────────────────────
   if (lead.platformUserId) {
-    try {
-      if (lead.platform === 'INSTAGRAM') {
-        await sendInstagramDM(
-          lead.accountId,
-          lead.platformUserId,
-          result.reply
-        );
-        console.log(`[webhook-processor] IG DM sent to ${lead.platformUserId}`);
-      } else if (lead.platform === 'FACEBOOK') {
-        await sendFacebookMessage(
-          lead.accountId,
-          lead.platformUserId,
-          result.reply
-        );
-        console.log(
-          `[webhook-processor] FB message sent to ${lead.platformUserId}`
-        );
-      }
-    } catch (err: any) {
-      console.error(
-        `[webhook-processor] Failed to deliver to ${lead.platform} after retries:`,
-        err
-      );
-      // Create a notification so the account owner knows the message wasn't delivered
+    let voiceNoteSent = false;
+
+    // ── Voice note generation (if AI recommends it) ──────────────
+    if (result.shouldVoiceNote) {
       try {
-        await prisma.notification.create({
-          data: {
+        const { generateVoiceNote } = await import('@/lib/elevenlabs');
+        const { audioUrl } = await generateVoiceNote(accountId, result.reply);
+
+        // Update the message record with voice note data
+        await prisma.message.update({
+          where: { id: aiMessage.id },
+          data: { isVoiceNote: true, voiceNoteUrl: audioUrl }
+        });
+
+        // Send audio to platform
+        if (lead.platform === 'INSTAGRAM') {
+          const { sendAudioDM } = await import('@/lib/instagram');
+          await sendAudioDM(lead.accountId, lead.platformUserId, audioUrl);
+        } else if (lead.platform === 'FACEBOOK') {
+          const { sendAudioMessage } = await import('@/lib/facebook');
+          await sendAudioMessage(lead.accountId, lead.platformUserId, audioUrl);
+        }
+
+        voiceNoteSent = true;
+        console.log(
+          `[webhook-processor] Voice note sent to ${lead.platformUserId} on ${lead.platform}`
+        );
+      } catch (voiceErr: any) {
+        console.error(
+          '[webhook-processor] Voice note failed, falling back to text:',
+          voiceErr?.message || voiceErr
+        );
+        // Fall through to text send below
+      }
+    }
+
+    // ── Text message send (default, or fallback if voice failed) ──
+    if (!voiceNoteSent) {
+      try {
+        if (lead.platform === 'INSTAGRAM') {
+          await sendInstagramDM(
+            lead.accountId,
+            lead.platformUserId,
+            result.reply
+          );
+          console.log(
+            `[webhook-processor] IG DM sent to ${lead.platformUserId}`
+          );
+        } else if (lead.platform === 'FACEBOOK') {
+          await sendFacebookMessage(
+            lead.accountId,
+            lead.platformUserId,
+            result.reply
+          );
+          console.log(
+            `[webhook-processor] FB message sent to ${lead.platformUserId}`
+          );
+        }
+      } catch (err: any) {
+        console.error(
+          `[webhook-processor] Failed to deliver to ${lead.platform} after retries:`,
+          err
+        );
+        try {
+          await prisma.notification.create({
+            data: {
+              accountId: lead.accountId,
+              type: 'SYSTEM',
+              title: 'Message delivery failed',
+              body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(err?.message || 'Unknown error').slice(0, 200)}`,
+              leadId: lead.id
+            }
+          });
+          broadcastNotification({
             accountId: lead.accountId,
             type: 'SYSTEM',
-            title: 'Message delivery failed',
-            body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(err?.message || 'Unknown error').slice(0, 200)}`,
-            leadId: lead.id
-          }
-        });
-        broadcastNotification({
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'Message delivery failed'
-        });
-      } catch (notifyErr) {
-        console.error(
-          '[webhook-processor] Failed to create failure notification:',
-          notifyErr
-        );
+            title: 'Message delivery failed'
+          });
+        } catch (notifyErr) {
+          console.error(
+            '[webhook-processor] Failed to create failure notification:',
+            notifyErr
+          );
+        }
       }
     }
   }
@@ -681,7 +760,100 @@ async function sendAIReply(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Process Comment Trigger (auto-DM from comment)
+// 4. Process Admin/Human Message (from webhook echo or page-sent message)
+// ---------------------------------------------------------------------------
+
+export interface AdminMessageParams {
+  accountId: string;
+  platformUserId: string; // The lead's platform user ID (recipient of admin message)
+  platform: 'INSTAGRAM' | 'FACEBOOK';
+  messageText: string;
+  platformMessageId?: string;
+}
+
+/**
+ * Process a message sent by the business/admin (not the lead).
+ * Saves it as a HUMAN message, pauses AI, and cancels pending scheduled replies.
+ */
+export async function processAdminMessage(
+  params: AdminMessageParams
+): Promise<void> {
+  const {
+    accountId,
+    platformUserId,
+    platform,
+    messageText,
+    platformMessageId
+  } = params;
+
+  // Find existing lead by platformUserId
+  const lead = await prisma.lead.findFirst({
+    where: { accountId, platformUserId, platform: platform as any },
+    include: { conversation: true }
+  });
+
+  if (!lead?.conversation) {
+    console.log(
+      `[webhook-processor] Admin message for unknown lead ${platformUserId} — skipping`
+    );
+    return;
+  }
+
+  const conversationId = lead.conversation.id;
+
+  // Dedup check
+  if (platformMessageId) {
+    const existing = await prisma.message.findFirst({
+      where: { conversationId, platformMessageId }
+    });
+    if (existing) {
+      console.log(
+        `[webhook-processor] Admin message ${platformMessageId} already exists — skipping`
+      );
+      return;
+    }
+  }
+
+  // Save as HUMAN message
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      sender: 'HUMAN',
+      content: messageText,
+      timestamp: new Date(),
+      platformMessageId: platformMessageId || null
+    }
+  });
+
+  // Pause AI (human took over)
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { aiActive: false, lastMessageAt: new Date() }
+  });
+
+  // Cancel any pending scheduled replies for this conversation
+  await prisma.scheduledReply.updateMany({
+    where: { conversationId, status: 'PENDING' },
+    data: { status: 'CANCELLED' }
+  });
+
+  // Broadcast real-time events
+  broadcastNewMessage({
+    id: message.id,
+    conversationId,
+    sender: 'HUMAN',
+    content: messageText,
+    timestamp: new Date().toISOString()
+  });
+  broadcastAIStatusChange({ conversationId, aiActive: false });
+
+  console.log(
+    `[webhook-processor] Admin message saved for conversation ${conversationId}, AI paused`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 5. Process Comment Trigger (auto-DM from comment)
 // ---------------------------------------------------------------------------
 
 export interface CommentTriggerParams {
@@ -983,16 +1155,21 @@ async function updateLeadStatusFromStage(
 ): Promise<void> {
   // Map AI stages to lead statuses (only upgrade, never downgrade)
   const stageToStatus: Record<string, string> = {
+    // New 7-stage SOP sequence
+    OPENING: 'NEW_LEAD',
+    SITUATION_DISCOVERY: 'IN_QUALIFICATION',
+    GOAL_EMOTIONAL_WHY: 'IN_QUALIFICATION',
+    URGENCY: 'HOT_LEAD',
+    SOFT_PITCH_COMMITMENT: 'QUALIFIED',
+    FINANCIAL_SCREENING: 'QUALIFIED',
+    BOOKING: 'BOOKED',
+    // Legacy stage names (backward compat)
+    GREETING: 'NEW_LEAD',
     QUALIFICATION: 'IN_QUALIFICATION',
     VISION_BUILDING: 'IN_QUALIFICATION',
     PAIN_IDENTIFICATION: 'IN_QUALIFICATION',
-    URGENCY: 'HOT_LEAD',
     SOLUTION_OFFER: 'HOT_LEAD',
-    CAPITAL_QUALIFICATION: 'QUALIFIED',
-    GOAL_EMOTIONAL_WHY: 'QUALIFIED',
-    SOFT_PITCH_COMMITMENT: 'QUALIFIED',
-    FINANCIAL_SCREENING: 'QUALIFIED',
-    BOOKING: 'BOOKED'
+    CAPITAL_QUALIFICATION: 'QUALIFIED'
   };
 
   const newStatus = stageToStatus[stage];

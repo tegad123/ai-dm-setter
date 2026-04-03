@@ -429,6 +429,7 @@ export async function GET(req: NextRequest) {
           body: JSON.stringify({
             subscribed_fields: [
               'messages',
+              'message_echoes',
               'messaging_postbacks',
               'messaging_optins',
               'message_deliveries',

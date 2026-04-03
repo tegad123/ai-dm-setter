@@ -38,7 +38,9 @@ export async function updateConversationOutcome(
   const currentOutcome = conversation.outcome;
 
   // Don't downgrade terminal outcomes
-  if (['BOOKED', 'UNQUALIFIED_REDIRECT'].includes(currentOutcome)) {
+  if (
+    ['BOOKED', 'UNQUALIFIED_REDIRECT', 'SOFT_EXIT'].includes(currentOutcome)
+  ) {
     return currentOutcome;
   }
 
@@ -125,16 +127,21 @@ export async function recordStageTimestamp(
   stage: string
 ): Promise<void> {
   const stageFieldMap: Record<string, string> = {
+    // New 7-stage SOP sequence
+    OPENING: 'stageOpeningAt',
+    SITUATION_DISCOVERY: 'stageSituationDiscoveryAt',
+    GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
+    URGENCY: 'stageUrgencyAt',
+    SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
+    FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
+    BOOKING: 'stageBookingAt',
+    // Legacy stage names (backward compat)
+    GREETING: 'stageOpeningAt',
     QUALIFICATION: 'stageQualificationAt',
     VISION_BUILDING: 'stageVisionBuildingAt',
     PAIN_IDENTIFICATION: 'stagePainIdentificationAt',
-    URGENCY: 'stageUrgencyAt',
     SOLUTION_OFFER: 'stageSolutionOfferAt',
-    CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt',
-    GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
-    SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
-    FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
-    BOOKING: 'stageBookingAt'
+    CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt'
   };
 
   const field = stageFieldMap[stage];

@@ -161,6 +161,93 @@ export async function sendDM(
 }
 
 // ---------------------------------------------------------------------------
+// Send Audio DM (Instagram Voice Note)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send an audio message (voice note) to an Instagram user via the Graph API.
+ * The audioUrl must be a publicly accessible URL (e.g., from Vercel Blob).
+ */
+export async function sendAudioDM(
+  accountId: string,
+  recipientId: string,
+  audioUrl: string
+): Promise<{ messageId: string }> {
+  const { getCredentials } = await import('@/lib/credential-store');
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  const igToken = igCreds?.accessToken as string | undefined;
+  const metaToken = await getMetaAccessToken(accountId);
+  const accessToken = igToken || metaToken;
+
+  if (!accessToken) {
+    throw new Error(
+      'No Meta/Instagram access token configured for this account'
+    );
+  }
+
+  // Resolve IG Business Account ID
+  const metaRecord = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'META' as any, isActive: true },
+    select: { metadata: true }
+  });
+  const igRecord = await prisma.integrationCredential.findFirst({
+    where: { accountId, provider: 'INSTAGRAM' as any, isActive: true },
+    select: { metadata: true }
+  });
+
+  const metaMeta = (metaRecord?.metadata as any) || {};
+  const igMeta = (igRecord?.metadata as any) || {};
+  const igBusinessAccountId =
+    metaMeta.instagramAccountId ||
+    igMeta.igBusinessAccountId ||
+    igMeta.igUserId ||
+    process.env.INSTAGRAM_PAGE_ID ||
+    process.env.FACEBOOK_PAGE_ID;
+
+  if (!igBusinessAccountId) {
+    throw new Error('No Instagram Business Account ID found for this account');
+  }
+
+  const isIGToken = accessToken.startsWith('IGAA');
+  const apiBase = isIGToken ? IG_GRAPH_API_BASE : GRAPH_API_BASE;
+  const url = `${apiBase}/${igBusinessAccountId}/messages`;
+
+  console.log(
+    `[instagram] Sending audio DM to ${recipientId} via ${isIGToken ? 'instagram' : 'facebook'} graph`
+  );
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(isIGToken ? {} : { Authorization: `Bearer ${accessToken}` })
+    },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: 'audio',
+          payload: { url: audioUrl }
+        }
+      },
+      ...(isIGToken
+        ? { access_token: accessToken }
+        : { messaging_type: 'RESPONSE' })
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Instagram send audio DM failed: ${response.status} ${error}`
+    );
+  }
+
+  const data = await response.json();
+  return { messageId: data.message_id || data.id || '' };
+}
+
+// ---------------------------------------------------------------------------
 // Fetch User Profile
 // ---------------------------------------------------------------------------
 

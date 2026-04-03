@@ -145,15 +145,55 @@ async function processFacebookEvents(payload: any): Promise<void> {
       }
     }
 
+    // ── Resolve page ID for admin message detection ────────────────────
+    const credMeta = (matchedCred?.metadata as any) || {};
+    const pageOwnIds = new Set(
+      [pageId, credMeta.pageId, credMeta.instagramAccountId].filter(Boolean)
+    );
+
     // ── Handle messaging events (new Messenger DM received) ────────────
     for (const event of entry.messaging ?? []) {
       if (!event.message) continue;
 
       const senderId: string = event.sender?.id ?? '';
+      const recipientId: string = event.recipient?.id ?? '';
       const messageText: string = event.message?.text ?? '';
       const platformMessageId: string = event.message?.mid ?? '';
+      const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!senderId || !messageText) continue;
+      if (!messageText) continue;
+
+      // ── Admin/page message detection ────────────────────────────────
+      const isAdminMessage = isEcho || pageOwnIds.has(senderId);
+
+      if (isAdminMessage) {
+        const leadPlatformUserId = isEcho
+          ? recipientId
+          : recipientId || senderId;
+        console.log(
+          `[facebook-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}`
+        );
+        try {
+          const { processAdminMessage } = await import(
+            '@/lib/webhook-processor'
+          );
+          await processAdminMessage({
+            accountId,
+            platformUserId: leadPlatformUserId,
+            platform: 'FACEBOOK',
+            messageText,
+            platformMessageId: platformMessageId || undefined
+          });
+        } catch (adminErr) {
+          console.error(
+            `[facebook-webhook] Failed to process admin message:`,
+            adminErr
+          );
+        }
+        continue;
+      }
+
+      if (!senderId) continue;
 
       try {
         // Attempt to fetch the sender's profile

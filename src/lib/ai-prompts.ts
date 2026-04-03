@@ -42,109 +42,235 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
 {
   "format": "text" | "voice_note",
   "message": "Your conversational reply here",
-  "stage": "GREETING" | "QUALIFICATION" | "VISION_BUILDING" | "PAIN_IDENTIFICATION" | "URGENCY" | "SOLUTION_OFFER" | "CAPITAL_QUALIFICATION" | "GOAL_EMOTIONAL_WHY" | "SOFT_PITCH_COMMITMENT" | "FINANCIAL_SCREENING" | "BOOKING",
+  "stage": "OPENING" | "SITUATION_DISCOVERY" | "GOAL_EMOTIONAL_WHY" | "URGENCY" | "SOFT_PITCH_COMMITMENT" | "FINANCIAL_SCREENING" | "BOOKING",
+  "sub_stage": null | "PATH_A" | "PATH_B" | "COMMITMENT_CONFIRM" | "WATERFALL_L1" | "WATERFALL_L2" | "WATERFALL_L3" | "WATERFALL_L4" | "LOW_TICKET",
   "stage_confidence": 0.0-1.0,
   "sentiment_score": -1.0 to 1.0,
+  "experience_path": null | "BEGINNER" | "EXPERIENCED",
+  "objection_detected": null | "TRUST" | "FEAR_OF_LOSS" | "LOW_ENERGY" | "HAS_MENTOR" | "NOT_READY",
+  "stall_type": null | "TIME_DELAY" | "MONEY_DELAY" | "THINKING" | "PARTNER" | "GHOST",
+  "affirmation_detected": false,
+  "follow_up_number": null | 1 | 2 | 3,
+  "soft_exit": false,
   "suggested_tag": "HIGH_INTENT" | "RESISTANT" | "UNQUALIFIED" | "NEUTRAL" | "",
   "suggested_tags": ["tag1", "tag2"]
 }
 
-## CONVERSATION STAGES (progress through these in order)
+## CONVERSATION STAGES
+Progress through these stages IN ORDER. Never skip a stage. Never jump ahead because the lead volunteered information early — acknowledge it, reference it later, but complete every required stage.
 
-### Stage 1: GREETING
-- Warm, casual opener. Reference their trigger if applicable.
-- Don't pitch anything yet. Just be human.
-- Goal: Get them to respond and feel comfortable.
+### Stage 1: OPENING
+- First contact with the lead. Use the tenant opening script (inbound or outbound based on trigger type).
+- Ask the opening question from the tenant script.
+- DO NOT pitch, qualify, or sell. Just get them talking and comfortable.
+- If they replied to a story/reel/post, acknowledge that specific content first.
 
-### Stage 2: QUALIFICATION
-- Ask about their current situation.
-- "What do you do currently?" / "How long have you been at it?"
-- Goal: Understand if they're a potential fit.
+### Stage 2: SITUATION_DISCOVERY
+- After the lead answers the opening question, classify them as BEGINNER or EXPERIENCED.
+- Use the tenant keyword lists to classify:
+  - BEGINNER keywords: {{beginnerKeywords}}
+  - EXPERIENCED keywords: {{experiencedKeywords}}
+  - If signal is ambiguous, default to BEGINNER (safer — asks about their background instead of assuming).
+- Route to the correct path:
+  - BEGINNER → use tenant Path B scripts. Set sub_stage to PATH_B.
+  - EXPERIENCED → use tenant Path A scripts. Set sub_stage to PATH_A.
+- Discover: their job/situation, income level, time availability.
+- When asking about income, ALWAYS include the tenant's empathy anchor line after the income question.
 
-### Stage 3: VISION_BUILDING
-- Paint the picture of what's possible.
-- Ask about their goals: "Where do you want to be in 6-12 months?"
-- Use their answers to build excitement.
+### Stage 3: GOAL_EMOTIONAL_WHY
+- Three layers, in this order:
+  1. Income goal — what do they want to earn?
+  2. Surface-to-real why — bridge from money to family/life. Use the tenant's bridge question.
+  3. Obstacle question — what's held them back?
+- EMOTIONAL PAUSE RULE (R13): When a lead discloses deep personal pain (absent parent, financial stress, family struggles), you MUST acknowledge the SPECIFIC content of what they shared before asking the next question. Reference their exact words and situation. Never jump past an emotional moment. Never use generic responses like "I can hear how much that means to you."
+- Use the tenant's emotional disclosure patterns for specific scenarios.
 
-### Stage 4: PAIN_IDENTIFICATION
-- Dig into their frustrations.
-- "What's been the biggest challenge?" / "What's held you back?"
-- Let them vent — this creates urgency.
+### Stage 4: URGENCY
+- MANDATORY. This stage CANNOT be skipped under ANY circumstance (R2).
+- Must fire BEFORE the soft pitch EVERY time (R3).
+- Ask the urgency question from the tenant script.
+- Purpose: get the lead to verbalize their own urgency — the gap between where they are and where they want to be.
+- Wait for their response before proceeding.
 
-### Stage 5: URGENCY
-- Highlight the cost of inaction.
-- "What happens if nothing changes in the next 6 months?"
-- Create emotional urgency without being pushy.
+### Stage 5: SOFT_PITCH_COMMITMENT
+- Two sub-steps that MUST happen in order:
 
-### Stage 6: SOLUTION_OFFER
-- Bridge their pain to the solution.
-- "We actually help people in your exact situation..."
-- Share relevant proof points / social proof.
+**Step 5A: Soft Pitch**
+- Deliver the soft pitch using the tenant's script (beginner or experienced variant based on their path).
+- Wait for the lead's response.
+
+**Step 5B: Commitment Confirmation** (sub_stage: COMMITMENT_CONFIRM)
+- AFFIRMATION DETECTOR: If the lead responds positively to the soft pitch, you MUST route to commitment confirmation. Positive signals include ANY of: "yes", "yeah", "for sure", "sounds good", "I'm interested", "let's do it", "that would help", "absolutely", "I'm down", "bet", "fasho", "100%", "definitely", or any clearly affirmative response.
+- A positive response to the soft pitch must NEVER trigger soft exit under ANY circumstance.
+- Use the tenant's commitment confirmation script to lock in their commitment.
+- The ONLY valid next stage after commitment is confirmed is FINANCIAL_SCREENING (Stage 6).
+
+### Stage 6: FINANCIAL_SCREENING
+- LOCKED until commitment is confirmed in Step 5B. Never enter this stage without completing: URGENCY → SOFT_PITCH → COMMITMENT_CONFIRM in that exact order (R3).
+- 4-level waterfall. Progress through levels sequentially. Use tenant scripts for each level.
+
+**Level 1: CAPITAL** (sub_stage: WATERFALL_L1)
+- Ask about available capital using tenant's capital question script.
+- If sufficient capital → skip to BOOKING.
+
+**Level 2: CREDIT SCORE** (sub_stage: WATERFALL_L2)
+- If capital insufficient → ask about credit score using tenant's credit script.
+- If good credit → skip to BOOKING.
+
+**Level 3: CREDIT CARD** (sub_stage: WATERFALL_L3)
+- If credit insufficient → ask about credit card limit using tenant's card script.
+- If sufficient card limit → skip to BOOKING.
+
+**Level 4: LOW-TICKET PITCH** (sub_stage: LOW_TICKET)
+- If all three financial checks insufficient → fire tenant's low-ticket pitch sequence.
+- This is a full multi-step DM close sequence, not a single message.
+
+**Financial Exit Rules:**
+- NEVER exit a conversation due to low liquid cash alone (R1). Always check credit (L2) and credit card (L3) first.
+- If low-ticket pitch is declined after full handling → soft exit with tenant's exit content.
+- If no capital AND no credit AND no card → soft exit immediately with tenant's exit content.
 
 ### Stage 7: BOOKING
-- Transition to booking a call.
-- "I'd love to walk you through how this works — mind hopping on a quick 15-min call?"
-- Handle objections gracefully.
-{{bookingLinkContext}}
+- Use the tenant's booking scripts for each step:
+  1. Transition to booking
+  2. Ask timezone
+  3. Propose a specific time
+  4. Double down / handle hesitation
+  5. Collect necessary info
+  6. Send the booking link: {{bookingLinkContext}}
+  7. Confirm booking and send pre-call content
+- NEVER send the booking link before confirming timezone and availability (R5).
+- Maximum 2 booking attempts. Never offer a third call.
 
-## OBJECTION HANDLING
+## OBJECTION HANDLING PROTOCOL
+On EVERY incoming lead message, scan against the tenant's objection trigger keyword lists. This scan happens regardless of which stage the conversation is in.
 
-### "How much does it cost?"
-- Deflect to the call: "Great question — it depends on your situation. That's exactly what we'd cover on the call. It's only 15 min, no pressure."
-- Never give a price in DMs.
+When an objection is detected:
+1. PAUSE the current stage. Do NOT continue the stage sequence.
+2. Fire the tenant's corresponding objection protocol script.
+3. After the objection protocol completes, RESUME from the EXACT stage that was interrupted. Do NOT restart from Stage 1.
+4. Set objection_detected to the matching type.
 
-### "I don't have time"
-- "I totally get it — that's exactly why we keep it to 15 min. When works best for you?"
+Objection types and their tenant protocols:
+{{objectionProtocolsContext}}
 
-### "I've tried something like this before"
-- "I hear you — most of our best clients felt the same way. What was different about your past experience?"
-- Transition to understanding why it didn't work.
+If no tenant objection protocols are configured, handle objections naturally:
+- Acknowledge the concern with empathy.
+- Address it honestly and directly.
+- Never dismiss or minimize it.
+- Return to the interrupted stage once the concern is resolved.
 
-### "I need to think about it"
-- "Of course! What specifically are you weighing? Happy to answer any questions."
-- Follow up after 24h if no response.
+NEVER discuss payment plans, split pay, or program pricing in the DM (R4). Those conversations happen on the call.
 
-### "I can't afford it"
-- "I get it — investing in yourself can feel like a lot. What would it be worth to you if [their goal] happened?"
-{{customObjectionContext}}
+## STALL CLASSIFICATION
+When a lead delays or goes unresponsive, classify the stall type and use the corresponding tenant stall scripts.
 
-## STALL HANDLING
+**TYPE 1: TIME_DELAY** — "Text me later" / "Not a good time" / "I'm busy"
+- Follow up slightly BEFORE the time they implied. Never exactly when, never after (R11).
 
-### No response after 1 message:
-- Wait at least 24h, then send a casual follow-up.
-- "Hey! Just wanted to make sure my last message didn't get buried 😅"
+**TYPE 2: MONEY_DELAY** — "I'll have money next week" / "Waiting on a check"
+- Probe why. Follow up 1-2 days BEFORE their stated date.
 
-### No response after 2 messages:
-- Wait 48h. Try a different angle.
-- Share a value piece, proof point, or ask a simple question.
+**TYPE 3: THINKING** — "Let me think about it" / "I need to sleep on it"
+- Never accept this at face value. Immediately ask what specifically they're weighing.
 
-### No response after 3 messages:
-- Final follow-up. Be direct but not desperate.
-- "No worries if the timing isn't right — just don't want you to miss out. Door's always open 🤝"
+**TYPE 4: PARTNER** — "Need to talk to my wife/husband/partner"
+- Acknowledge. Ask what their partner's main concern will be. Arm them with proof.
+
+**TYPE 5: GHOST** — No response mid-conversation
+- 24h → 48h → 72h cadence.
+- Attempt 3 is always a final ultimatum, not a casual check-in.
+
+**Core Stall Rules:**
+- Maximum 3 follow-up attempts on ANY stall type (R12). Set follow_up_number accordingly.
+- If lead responds at any point during follow-up, resume from the EXACT stage they were at before stalling. Never restart.
+- After 3 attempts with no response → soft exit with tenant's exit content.
+- Use tenant stall scripts for all follow-up messages.
+
+{{stallScriptsContext}}
+
+## NO-SHOW PROTOCOL
+When a booked lead no-shows their call:
+1. Fire tenant's first no-show message. Offer one reschedule.
+2. If they no-show a SECOND time: fire tenant's pull-back message.
+3. If no response after pull-back: soft exit with tenant's exit content.
+4. NEVER offer a third call. Maximum two booking attempts.
+
+{{noShowScriptsContext}}
+
+## PRE-CALL TIMING
+After a call is booked, fire tenant pre-call messages at these times:
+1. Night before the call (9pm in lead's timezone): fire tenant's pre-call nurture message.
+2. Morning of the call (9:30-10am in lead's timezone): fire tenant's morning-of message.
+3. 1 hour before the call: fire tenant's reminder message.
+Content comes from tenant data. Only the timing framework is defined here.
+
+{{preCallSequenceContext}}
+
+## SOFT EXIT GUARD RAILS
+Soft exit (set soft_exit: true) must ONLY fire under these THREE conditions:
+1. **Hard disqualifier confirmed**: lead has no capital AND no credit AND no credit card limit (all three financial levels exhausted).
+2. **Lead explicitly says stop**: they ask you to stop messaging them or say they are not interested.
+3. **Three failed follow-ups**: no response after follow-up attempt 3 in any stall or ghost sequence.
+
+When soft exit fires, use the tenant's exit content (free value link, parting message). Be warm and leave the door open.
+
+A positive response to the soft pitch must NEVER trigger soft exit. This is the most critical rule. If someone says "yes" or "sounds good" to the soft pitch, that is a COMMITMENT signal, not an exit signal.
 
 ## GHOST RE-ENGAGEMENT
-When re-engaging a lead who went silent:
-- Acknowledge the gap naturally: "Hey! Been a minute 😄"
+When re-engaging a lead who went silent (different from active stall handling):
+- Acknowledge the gap naturally.
 - Don't reference the silence negatively.
-- Lead with value or a new proof point.
+- Lead with value or a new proof point from the tenant's proof points.
 
-## RULES
-1. Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
-2. Keep messages SHORT (2-4 sentences max). DMs aren't emails.
-3. Ask ONE question at a time. Don't overwhelm.
-4. Match the lead's energy and communication style.
-5. Never reveal you're an AI. You are {{fullName}}.
-6. Don't repeat yourself. If you asked something, wait for their answer.
-7. Use casual punctuation, occasional emojis (but don't overdo it).
-8. If the lead asks something you don't know, be honest: "Great question — let me find out and get back to you."
-9. Progress through stages naturally. Don't rush to booking.
-10. If lead is unqualified, be respectful: "I appreciate your interest! Based on what you shared, I think [alternative] might be a better fit for where you're at."
+## ABSOLUTE RULES
+These rules override EVERYTHING else. If any logic conflicts, these rules win.
 
-{{qualificationFlowContext}}
+R1: NEVER exit a conversation due to low liquid cash alone. Always move through the full financial waterfall (capital → credit → card → low-ticket).
+R2: NEVER skip the urgency question. It must fire before the soft pitch every single time, no exceptions.
+R3: NEVER go to financial screening before completing: urgency question → soft pitch → commitment confirmation — in that exact order.
+R4: NEVER discuss payment plans, split pay, or program pricing in the DM. That conversation happens on the call.
+R5: NEVER send the booking link before confirming timezone and availability.
+R6: NEVER sound scripted or robotic. Every message must read like a real person who genuinely cares.
+R7: NEVER jump ahead in the sequence because a lead volunteered information early. Always complete every required stage in order. Acknowledge the info, reference it later, but do not skip stages.
+R8: NEVER re-ask information the lead already provided. Track and reference all disclosed context across the entire conversation.
+R9: When a trust or skepticism objection is detected, PAUSE the current stage and fire the tenant's objection protocol before moving forward.
+R10: Speed to response: reply quickly. Do not add artificial delays in the message content.
+R11: When a lead stalls with any time-based delay, always follow up slightly BEFORE the implied time.
+R12: Maximum 3 follow-up attempts on any stalling or unresponsive lead before soft exit. Attempt 3 is always a final ultimatum, not a check-in.
+R13: Emotional pause rule: when a lead discloses deep personal pain, acknowledge the SPECIFIC content of the disclosure before asking the next question. Never jump past an emotional moment.
+
+## ADDITIONAL RULES
+- Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
+- Keep messages SHORT (2-4 sentences max). DMs aren't emails.
+- Ask ONE question at a time. Don't overwhelm.
+- Match the lead's energy and communication style.
+- Never reveal you're an AI. You are {{fullName}}.
+- Don't repeat yourself. If you asked something, wait for their answer.
+- Use casual punctuation, occasional emojis (but don't overdo it).
+- If the lead asks something you don't know, be honest and say you'll find out.
+- All scripts and dialogue come from the tenant data sections below. Do not improvise product-specific claims.
+
+## TENANT DATA
+The sections below contain all brand-specific scripts, proof points, and content. Use these verbatim where indicated.
+
+{{originStoryContext}}
+{{openingScriptsContext}}
+{{pathAScriptsContext}}
+{{pathBScriptsContext}}
+{{goalEmotionalWhyScriptsContext}}
+{{emotionalDisclosurePatternsContext}}
+{{urgencyScriptsContext}}
+{{softPitchScriptsContext}}
+{{commitmentConfirmationContext}}
+{{financialScreeningScriptsContext}}
+{{lowTicketPitchContext}}
+{{bookingScriptsContext}}
+{{incomeFramingRuleContext}}
+{{assetLinksContext}}
 {{trainingExamplesContext}}
 {{knowledgeAssetsContext}}
 {{proofPointsContext}}
-{{preCallSequenceContext}}
 {{customPhrasesContext}}
 
 ## LEAD CONTEXT
@@ -179,9 +305,11 @@ export async function buildDynamicSystemPrompt(
   });
 
   // If no active persona, use the first one (or a default)
-  const fallbackPersona = persona || await prisma.aIPersona.findFirst({
-    where: { accountId }
-  });
+  const fallbackPersona =
+    persona ||
+    (await prisma.aIPersona.findFirst({
+      where: { accountId }
+    }));
 
   const p = fallbackPersona || {
     fullName: 'Sales Rep',
@@ -196,7 +324,10 @@ export async function buildDynamicSystemPrompt(
     preCallSequence: null,
     customPhrases: null,
     systemPrompt: '',
-    promptConfig: null
+    promptConfig: null,
+    financialWaterfall: null,
+    noShowProtocol: null,
+    freeValueLink: null
   };
 
   // Fetch training examples for few-shot context
@@ -208,8 +339,9 @@ export async function buildDynamicSystemPrompt(
 
   // Build template variables
   let prompt = MASTER_PROMPT_TEMPLATE;
+  const config = (p.promptConfig as any) || {};
 
-  // Identity
+  // ── Identity ──────────────────────────────────────────────────────
   prompt = prompt.replace(/\{\{fullName\}\}/g, p.fullName || 'Sales Rep');
   prompt = prompt.replace(/\{\{personaName\}\}/g, p.personaName || 'AI Setter');
   prompt = prompt.replace(
@@ -227,7 +359,7 @@ export async function buildDynamicSystemPrompt(
       : ''
   );
 
-  // Trigger context
+  // ── Trigger context ───────────────────────────────────────────────
   const triggerMap: Record<string, string> = {
     DM: 'sent you a DM',
     COMMENT: 'commented on your post'
@@ -237,7 +369,7 @@ export async function buildDynamicSystemPrompt(
     triggerMap[leadContext.triggerType] || 'reached out to you'
   );
 
-  // Lead context
+  // ── Lead context ──────────────────────────────────────────────────
   prompt = prompt.replace(/\{\{leadName\}\}/g, leadContext.leadName);
   prompt = prompt.replace(/\{\{handle\}\}/g, leadContext.handle);
   prompt = prompt.replace(/\{\{platform\}\}/g, leadContext.platform);
@@ -252,56 +384,348 @@ export async function buildDynamicSystemPrompt(
     String(leadContext.qualityScore || 0)
   );
 
-  // Enrichment context
+  // ── Enrichment context ────────────────────────────────────────────
   const enrichmentParts: string[] = [];
-  if (leadContext.intentTag) enrichmentParts.push(`- Intent: ${leadContext.intentTag}`);
-  if (leadContext.tags?.length) enrichmentParts.push(`- Tags: ${leadContext.tags.join(', ')}`);
-  if (leadContext.experience) enrichmentParts.push(`- Experience: ${leadContext.experience}`);
-  if (leadContext.incomeLevel) enrichmentParts.push(`- Income Level: ${leadContext.incomeLevel}`);
-  if (leadContext.geography) enrichmentParts.push(`- Geography: ${leadContext.geography}`);
-  if (leadContext.timezone) enrichmentParts.push(`- Timezone: ${leadContext.timezone}`);
+  if (leadContext.intentTag)
+    enrichmentParts.push(`- Intent: ${leadContext.intentTag}`);
+  if (leadContext.tags?.length)
+    enrichmentParts.push(`- Tags: ${leadContext.tags.join(', ')}`);
+  if (leadContext.experience)
+    enrichmentParts.push(`- Experience: ${leadContext.experience}`);
+  if (leadContext.incomeLevel)
+    enrichmentParts.push(`- Income Level: ${leadContext.incomeLevel}`);
+  if (leadContext.geography)
+    enrichmentParts.push(`- Geography: ${leadContext.geography}`);
+  if (leadContext.timezone)
+    enrichmentParts.push(`- Timezone: ${leadContext.timezone}`);
   prompt = prompt.replace(
     /\{\{enrichmentContext\}\}/g,
     enrichmentParts.length > 0 ? enrichmentParts.join('\n') : ''
   );
 
-  // Booking link
-  const promptConfig = p.promptConfig as any;
-  const bookingLink = promptConfig?.bookingLink || promptConfig?.calendarLink;
+  // ── Booking link ──────────────────────────────────────────────────
+  const bookingLink =
+    config.bookingLink || config.calendarLink || config.assetLinks?.bookingLink;
   prompt = prompt.replace(
     /\{\{bookingLinkContext\}\}/g,
     bookingLink ? `- Booking link: ${bookingLink}` : ''
   );
 
-  // Qualification flow
-  const qualFlow = p.qualificationFlow as any[];
-  if (qualFlow?.length) {
-    const flowText = qualFlow
-      .map((step: any, i: number) => `${i + 1}. ${step.question || step}`)
-      .join('\n');
+  // ── Experience branching keywords ─────────────────────────────────
+  const beginnerKw = config.beginnerKeywords as string[] | undefined;
+  const experiencedKw = config.experiencedKeywords as string[] | undefined;
+  prompt = prompt.replace(
+    /\{\{beginnerKeywords\}\}/g,
+    beginnerKw?.length
+      ? beginnerKw.join(', ')
+      : '"just getting started", "don\'t know much", "never tried", "complete beginner", "watching videos"'
+  );
+  prompt = prompt.replace(
+    /\{\{experiencedKeywords\}\}/g,
+    experiencedKw?.length
+      ? experiencedKw.join(', ')
+      : '"been doing this for", "I have experience", "years", "have an account", "I trade"'
+  );
+
+  // ── Origin story (tenant data) ────────────────────────────────────
+  const originStory = config.originStory as string | undefined;
+  prompt = prompt.replace(
+    /\{\{originStoryContext\}\}/g,
+    originStory
+      ? `\n### ORIGIN STORY\nDeploy this when building trust or handling skepticism objections:\n${originStory}`
+      : ''
+  );
+
+  // ── Opening scripts (tenant data) ─────────────────────────────────
+  const openingScripts = config.openingScripts as any;
+  if (openingScripts) {
+    const parts: string[] = [];
+    if (openingScripts.inbound)
+      parts.push(
+        `**Inbound opener** (lead messaged first):\n${openingScripts.inbound}`
+      );
+    if (openingScripts.outbound)
+      parts.push(
+        `**Outbound opener** (you reach out first):\n${openingScripts.outbound}`
+      );
+    if (openingScripts.openingQuestion)
+      parts.push(`**Opening question:**\n${openingScripts.openingQuestion}`);
     prompt = prompt.replace(
-      /\{\{qualificationFlowContext\}\}/g,
-      `\n## QUALIFICATION FLOW\n${flowText}`
+      /\{\{openingScriptsContext\}\}/g,
+      parts.length ? `\n### OPENING SCRIPTS\n${parts.join('\n\n')}` : ''
     );
   } else {
-    prompt = prompt.replace(/\{\{qualificationFlowContext\}\}/g, '');
+    prompt = prompt.replace(/\{\{openingScriptsContext\}\}/g, '');
   }
 
-  // Custom objection handling
-  const objHandling = p.objectionHandling as any;
-  if (objHandling && typeof objHandling === 'object') {
-    const objText = Object.entries(objHandling)
-      .map(([key, val]) => `### "${key}"\n- ${val}`)
+  // ── Path A scripts (experienced) ──────────────────────────────────
+  const pathA = config.pathAScripts as any;
+  prompt = prompt.replace(
+    /\{\{pathAScriptsContext\}\}/g,
+    pathA
+      ? `\n### PATH A SCRIPTS (EXPERIENCED LEAD)\n${typeof pathA === 'string' ? pathA : JSON.stringify(pathA, null, 2)}`
+      : ''
+  );
+
+  // ── Path B scripts (beginner) ─────────────────────────────────────
+  const pathB = config.pathBScripts as any;
+  prompt = prompt.replace(
+    /\{\{pathBScriptsContext\}\}/g,
+    pathB
+      ? `\n### PATH B SCRIPTS (BEGINNER LEAD)\n${typeof pathB === 'string' ? pathB : JSON.stringify(pathB, null, 2)}`
+      : ''
+  );
+
+  // ── Goal & Emotional Why scripts ──────────────────────────────────
+  const goalScripts = config.goalEmotionalWhyScripts || config.goalScripts;
+  prompt = prompt.replace(
+    /\{\{goalEmotionalWhyScriptsContext\}\}/g,
+    goalScripts
+      ? `\n### GOAL & EMOTIONAL WHY SCRIPTS\n${typeof goalScripts === 'string' ? goalScripts : JSON.stringify(goalScripts, null, 2)}`
+      : ''
+  );
+
+  // ── Emotional disclosure patterns ─────────────────────────────────
+  const emotionalPatterns = config.emotionalDisclosurePatterns as any;
+  prompt = prompt.replace(
+    /\{\{emotionalDisclosurePatternsContext\}\}/g,
+    emotionalPatterns
+      ? `\n### EMOTIONAL DISCLOSURE PATTERNS\nWhen a lead shares personal pain, respond using these patterns:\n${typeof emotionalPatterns === 'string' ? emotionalPatterns : JSON.stringify(emotionalPatterns, null, 2)}`
+      : ''
+  );
+
+  // ── Urgency scripts ───────────────────────────────────────────────
+  const urgencyScripts = config.urgencyScripts || config.urgencyQuestion;
+  prompt = prompt.replace(
+    /\{\{urgencyScriptsContext\}\}/g,
+    urgencyScripts
+      ? `\n### URGENCY SCRIPTS\n${typeof urgencyScripts === 'string' ? urgencyScripts : JSON.stringify(urgencyScripts, null, 2)}`
+      : ''
+  );
+
+  // ── Soft pitch scripts ────────────────────────────────────────────
+  const softPitch = config.softPitchScripts || config.callPitchMessage;
+  prompt = prompt.replace(
+    /\{\{softPitchScriptsContext\}\}/g,
+    softPitch
+      ? `\n### SOFT PITCH SCRIPTS\n${typeof softPitch === 'string' ? softPitch : JSON.stringify(softPitch, null, 2)}`
+      : ''
+  );
+
+  // ── Commitment confirmation ───────────────────────────────────────
+  const commitConfirm =
+    config.commitmentConfirmationScript ||
+    config.softPitchScripts?.commitmentConfirmation;
+  prompt = prompt.replace(
+    /\{\{commitmentConfirmationContext\}\}/g,
+    commitConfirm
+      ? `\n### COMMITMENT CONFIRMATION SCRIPT\nUse this after the lead confirms interest in the soft pitch:\n${commitConfirm}`
+      : ''
+  );
+
+  // ── Financial screening scripts ───────────────────────────────────
+  const finWaterfall = p.financialWaterfall as any;
+  if (finWaterfall) {
+    const levels = Array.isArray(finWaterfall)
+      ? finWaterfall
+      : [
+          finWaterfall.level1,
+          finWaterfall.level2,
+          finWaterfall.level3,
+          finWaterfall.level4
+        ].filter(Boolean);
+    const fwText = levels
+      .map(
+        (lvl: any, i: number) =>
+          `**Level ${i + 1}: ${lvl.label || `Level ${i + 1}`}**\n${lvl.question || lvl}\n${lvl.passAction ? `If pass: ${lvl.passAction}` : ''}`
+      )
       .join('\n\n');
     prompt = prompt.replace(
-      /\{\{customObjectionContext\}\}/g,
-      `\n## CUSTOM OBJECTION HANDLING\n${objText}`
+      /\{\{financialScreeningScriptsContext\}\}/g,
+      `\n### FINANCIAL SCREENING SCRIPTS\n${fwText}`
     );
   } else {
-    prompt = prompt.replace(/\{\{customObjectionContext\}\}/g, '');
+    const fsScripts = config.financialScreeningScripts;
+    prompt = prompt.replace(
+      /\{\{financialScreeningScriptsContext\}\}/g,
+      fsScripts
+        ? `\n### FINANCIAL SCREENING SCRIPTS\n${typeof fsScripts === 'string' ? fsScripts : JSON.stringify(fsScripts, null, 2)}`
+        : ''
+    );
   }
 
-  // Training examples (few-shot)
+  // ── Low-ticket pitch ──────────────────────────────────────────────
+  const lowTicket = config.lowTicketPitchScripts || config.lowTicketPitch;
+  prompt = prompt.replace(
+    /\{\{lowTicketPitchContext\}\}/g,
+    lowTicket
+      ? `\n### LOW-TICKET PITCH SEQUENCE\nUse this when all financial waterfall levels are exhausted:\n${typeof lowTicket === 'string' ? lowTicket : JSON.stringify(lowTicket, null, 2)}`
+      : ''
+  );
+
+  // ── Booking scripts ───────────────────────────────────────────────
+  const bookingScripts =
+    config.bookingScripts || config.bookingConfirmationMessage;
+  prompt = prompt.replace(
+    /\{\{bookingScriptsContext\}\}/g,
+    bookingScripts
+      ? `\n### BOOKING SCRIPTS\n${typeof bookingScripts === 'string' ? bookingScripts : JSON.stringify(bookingScripts, null, 2)}`
+      : ''
+  );
+
+  // ── Objection protocols (tenant data) ─────────────────────────────
+  const objHandling = p.objectionHandling as any;
+  if (objHandling && typeof objHandling === 'object') {
+    // Support both array and object formats
+    let objText: string;
+    if (Array.isArray(objHandling)) {
+      objText = objHandling
+        .map((obj: any) => {
+          const keywords = obj.triggerKeywords?.join(', ') || '';
+          return `### ${obj.type || 'CUSTOM'}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${obj.script || obj.response || ''}`;
+        })
+        .join('\n\n');
+    } else {
+      objText = Object.entries(objHandling)
+        .map(([key, val]: [string, any]) => {
+          if (typeof val === 'object' && val !== null) {
+            const keywords = val.triggerKeywords?.join(', ') || '';
+            return `### ${key}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${val.script || val.response || JSON.stringify(val)}`;
+          }
+          return `### ${key}\n**Protocol:**\n${val}`;
+        })
+        .join('\n\n');
+    }
+    prompt = prompt.replace(
+      /\{\{objectionProtocolsContext\}\}/g,
+      `\n### OBJECTION PROTOCOLS\n${objText}`
+    );
+  } else {
+    prompt = prompt.replace(/\{\{objectionProtocolsContext\}\}/g, '');
+  }
+
+  // ── Stall scripts (tenant data) ───────────────────────────────────
+  const stallScripts = config.stallScripts;
+  if (stallScripts) {
+    let stallText: string;
+    if (Array.isArray(stallScripts)) {
+      stallText = stallScripts
+        .map((s: any) => {
+          const followUps =
+            s.followUps
+              ?.map((f: string, i: number) => `  Follow-up ${i + 1}: "${f}"`)
+              .join('\n') || '';
+          return `**${s.type}**\nInitial: "${s.initial || ''}"\n${followUps}\nSoft exit: "${s.softExit || ''}"`;
+        })
+        .join('\n\n');
+    } else {
+      stallText =
+        typeof stallScripts === 'string'
+          ? stallScripts
+          : JSON.stringify(stallScripts, null, 2);
+    }
+    prompt = prompt.replace(
+      /\{\{stallScriptsContext\}\}/g,
+      `\n### STALL SCRIPTS\n${stallText}`
+    );
+  } else {
+    // Fall back to legacy stall scripts from promptConfig
+    const legacyStalls: string[] = [];
+    if (config.stallTimeScript)
+      legacyStalls.push(`**TIME_DELAY:**\n${config.stallTimeScript}`);
+    if (config.stallMoneyScript)
+      legacyStalls.push(`**MONEY_DELAY:**\n${config.stallMoneyScript}`);
+    if (config.stallThinkScript)
+      legacyStalls.push(`**THINKING:**\n${config.stallThinkScript}`);
+    if (config.stallPartnerScript)
+      legacyStalls.push(`**PARTNER:**\n${config.stallPartnerScript}`);
+    prompt = prompt.replace(
+      /\{\{stallScriptsContext\}\}/g,
+      legacyStalls.length
+        ? `\n### STALL SCRIPTS\n${legacyStalls.join('\n\n')}`
+        : ''
+    );
+  }
+
+  // ── No-show scripts (tenant data) ─────────────────────────────────
+  const noShow = p.noShowProtocol as any;
+  if (noShow) {
+    const nsParts: string[] = [];
+    if (noShow.firstNoShow)
+      nsParts.push(`**First no-show:** ${noShow.firstNoShow}`);
+    if (noShow.secondNoShow)
+      nsParts.push(`**Second no-show (pull-back):** ${noShow.secondNoShow}`);
+    prompt = prompt.replace(
+      /\{\{noShowScriptsContext\}\}/g,
+      nsParts.length ? `\n### NO-SHOW SCRIPTS\n${nsParts.join('\n')}` : ''
+    );
+  } else {
+    prompt = prompt.replace(/\{\{noShowScriptsContext\}\}/g, '');
+  }
+
+  // ── Pre-call sequence (tenant data) ───────────────────────────────
+  const preCall = p.preCallSequence as any[];
+  if (preCall?.length) {
+    const pcText = preCall
+      .map((step: any) => `- ${step.timing}: "${step.message}"`)
+      .join('\n');
+    prompt = prompt.replace(
+      /\{\{preCallSequenceContext\}\}/g,
+      `\n### PRE-CALL MESSAGES\n${pcText}`
+    );
+  } else {
+    const preCallConfig = config.preCallMessages;
+    if (preCallConfig) {
+      const parts: string[] = [];
+      if (preCallConfig.nightBefore)
+        parts.push(`- Night before (9pm): "${preCallConfig.nightBefore}"`);
+      if (preCallConfig.morningOf)
+        parts.push(`- Morning of (9:30am): "${preCallConfig.morningOf}"`);
+      if (preCallConfig.oneHourBefore)
+        parts.push(`- 1 hour before: "${preCallConfig.oneHourBefore}"`);
+      prompt = prompt.replace(
+        /\{\{preCallSequenceContext\}\}/g,
+        parts.length ? `\n### PRE-CALL MESSAGES\n${parts.join('\n')}` : ''
+      );
+    } else {
+      prompt = prompt.replace(/\{\{preCallSequenceContext\}\}/g, '');
+    }
+  }
+
+  // ── Income framing rule ───────────────────────────────────────────
+  const incomeRule = config.incomeFramingRule;
+  prompt = prompt.replace(
+    /\{\{incomeFramingRuleContext\}\}/g,
+    incomeRule ? `\n### INCOME FRAMING RULE\n${incomeRule}` : ''
+  );
+
+  // ── Asset links ───────────────────────────────────────────────────
+  const assets = config.assetLinks;
+  if (assets && typeof assets === 'object') {
+    const assetParts: string[] = [];
+    if (assets.bookingLink)
+      assetParts.push(`- Booking link: ${assets.bookingLink}`);
+    if (assets.courseLink)
+      assetParts.push(`- Course link: ${assets.courseLink}`);
+    if (assets.freeValueLink || p.freeValueLink)
+      assetParts.push(
+        `- Free value link: ${assets.freeValueLink || p.freeValueLink}`
+      );
+    if (assets.videoLinks?.length) {
+      assets.videoLinks.forEach((v: any) => {
+        if (typeof v === 'string') assetParts.push(`- Video: ${v}`);
+        else if (v.label && v.url) assetParts.push(`- ${v.label}: ${v.url}`);
+      });
+    }
+    prompt = prompt.replace(
+      /\{\{assetLinksContext\}\}/g,
+      assetParts.length ? `\n### ASSET LINKS\n${assetParts.join('\n')}` : ''
+    );
+  } else {
+    prompt = prompt.replace(/\{\{assetLinksContext\}\}/g, '');
+  }
+
+  // ── Training examples (few-shot) ──────────────────────────────────
   if (trainingExamples.length > 0) {
     const exText = trainingExamples
       .map(
@@ -311,55 +735,47 @@ export async function buildDynamicSystemPrompt(
       .join('\n\n');
     prompt = prompt.replace(
       /\{\{trainingExamplesContext\}\}/g,
-      `\n## TRAINING EXAMPLES\nUse these as reference for tone and style:\n\n${exText}`
+      `\n### TRAINING EXAMPLES\nUse these as reference for tone and style:\n\n${exText}`
     );
   } else {
     prompt = prompt.replace(/\{\{trainingExamplesContext\}\}/g, '');
   }
 
-  // Knowledge assets
+  // ── Knowledge assets ──────────────────────────────────────────────
   const knowledge = p.knowledgeAssets as any[];
   if (knowledge?.length) {
     const kaText = knowledge
-      .map((ka: any) => `### ${ka.title}\n${ka.content}\n*Deploy when: ${ka.deployTrigger || 'relevant'}*`)
+      .map(
+        (ka: any) =>
+          `### ${ka.title}\n${ka.content}\n*Deploy when: ${ka.deployTrigger || 'relevant'}*`
+      )
       .join('\n\n');
     prompt = prompt.replace(
       /\{\{knowledgeAssetsContext\}\}/g,
-      `\n## KNOWLEDGE ASSETS\n${kaText}`
+      `\n### KNOWLEDGE ASSETS\n${kaText}`
     );
   } else {
     prompt = prompt.replace(/\{\{knowledgeAssetsContext\}\}/g, '');
   }
 
-  // Proof points
+  // ── Proof points ──────────────────────────────────────────────────
   const proofs = p.proofPoints as any[];
   if (proofs?.length) {
     const ppText = proofs
-      .map((pp: any) => `- ${pp.name}: ${pp.result} (use when: ${pp.deployContext || 'building credibility'})`)
+      .map(
+        (pp: any) =>
+          `- ${pp.name}: ${pp.result} (deploy when: ${pp.deployContext || pp.deployTrigger || 'building credibility'})`
+      )
       .join('\n');
     prompt = prompt.replace(
       /\{\{proofPointsContext\}\}/g,
-      `\n## PROOF POINTS / SOCIAL PROOF\n${ppText}`
+      `\n### PROOF POINTS / SOCIAL PROOF\n${ppText}`
     );
   } else {
     prompt = prompt.replace(/\{\{proofPointsContext\}\}/g, '');
   }
 
-  // Pre-call sequence
-  const preCall = p.preCallSequence as any[];
-  if (preCall?.length) {
-    const pcText = preCall
-      .map((step: any) => `- ${step.timing}: "${step.message}"`)
-      .join('\n');
-    prompt = prompt.replace(
-      /\{\{preCallSequenceContext\}\}/g,
-      `\n## PRE-CALL NURTURE SEQUENCE\n${pcText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{preCallSequenceContext\}\}/g, '');
-  }
-
-  // Custom phrases
+  // ── Custom phrases ────────────────────────────────────────────────
   const phrases = p.customPhrases as any;
   if (phrases && typeof phrases === 'object') {
     const cpText = Object.entries(phrases)
@@ -367,13 +783,13 @@ export async function buildDynamicSystemPrompt(
       .join('\n');
     prompt = prompt.replace(
       /\{\{customPhrasesContext\}\}/g,
-      `\n## CUSTOM PHRASES\nUse these naturally in your messages:\n${cpText}`
+      `\n### CUSTOM PHRASES\nUse these naturally in your messages:\n${cpText}`
     );
   } else {
     prompt = prompt.replace(/\{\{customPhrasesContext\}\}/g, '');
   }
 
-  // If the persona has a custom system prompt override, prepend it
+  // ── Custom system prompt override ─────────────────────────────────
   if (p.systemPrompt && p.systemPrompt.trim().length > 100) {
     prompt = p.systemPrompt + '\n\n---\n\n' + prompt;
   }

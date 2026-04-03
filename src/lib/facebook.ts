@@ -15,7 +15,8 @@ export function verifyWebhookSignature(
   rawBody: string,
   signature: string
 ): boolean {
-  const appSecret = process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET;
+  const appSecret =
+    process.env.META_APP_SECRET || process.env.FACEBOOK_APP_SECRET;
   if (!appSecret) {
     console.warn('[facebook] No META_APP_SECRET set, cannot verify signature');
     return false;
@@ -71,7 +72,9 @@ export async function sendMessage(
 
       if (!response.ok) {
         const error = await response.text();
-        throw new Error(`Facebook send message failed: ${response.status} ${error}`);
+        throw new Error(
+          `Facebook send message failed: ${response.status} ${error}`
+        );
       }
 
       const data = await response.json();
@@ -83,12 +86,64 @@ export async function sendMessage(
         err.message
       );
       if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt - 1) * 1000));
+        await new Promise((r) =>
+          setTimeout(r, Math.pow(2, attempt - 1) * 1000)
+        );
       }
     }
   }
 
   throw lastError || new Error('Facebook send message failed after retries');
+}
+
+// ---------------------------------------------------------------------------
+// Send Audio Message (Facebook Messenger Voice Note)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send an audio message to a Facebook Messenger user via the Graph API.
+ * The audioUrl must be a publicly accessible URL.
+ */
+export async function sendAudioMessage(
+  accountId: string,
+  recipientId: string,
+  audioUrl: string
+): Promise<{ messageId: string }> {
+  const accessToken = await getMetaAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error('No Meta access token configured for this account');
+  }
+
+  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const url = `${GRAPH_API_BASE}/${pageId}/messages`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`
+    },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: 'audio',
+          payload: { url: audioUrl }
+        }
+      },
+      messaging_type: 'RESPONSE'
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Facebook send audio message failed: ${response.status} ${error}`
+    );
+  }
+
+  const data = await response.json();
+  return { messageId: data.message_id || data.id || '' };
 }
 
 // ---------------------------------------------------------------------------

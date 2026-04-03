@@ -4,6 +4,7 @@ export interface Message {
   content: string;
   timestamp: string;
   isVoiceNote?: boolean;
+  voiceNoteUrl?: string;
 }
 
 export interface ConversationTag {

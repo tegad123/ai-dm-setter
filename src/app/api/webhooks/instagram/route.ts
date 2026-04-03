@@ -173,15 +173,64 @@ async function processInstagramEvents(payload: any): Promise<void> {
       }
     }
 
+    // ── Resolve page/business account ID for admin message detection ──
+    const credMeta = (matchedCred?.metadata as any) || {};
+    const pageOwnIds = new Set(
+      [
+        entryId,
+        credMeta.pageId,
+        credMeta.igUserId,
+        credMeta.instagramAccountId,
+        credMeta.igBusinessAccountId
+      ].filter(Boolean)
+    );
+
     // ── Handle messaging events (new DM received) ──────────────────────
     for (const event of entry.messaging ?? []) {
       if (!event.message) continue;
 
       const senderId: string = event.sender?.id ?? '';
+      const recipientId: string = event.recipient?.id ?? '';
       const messageText: string = event.message?.text ?? '';
       const platformMessageId: string = event.message?.mid ?? '';
+      const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!senderId || !messageText) continue;
+      if (!messageText) continue;
+
+      // ── Admin/page message detection ────────────────────────────────
+      // Meta sends message echoes when the page sends a message (is_echo=true)
+      // Also detect by checking if senderId matches any known page/business IDs
+      const isAdminMessage = isEcho || pageOwnIds.has(senderId);
+
+      if (isAdminMessage) {
+        // This message was sent by the business/admin, not the lead
+        const leadPlatformUserId = isEcho
+          ? recipientId
+          : recipientId || senderId;
+        console.log(
+          `[instagram-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}`
+        );
+        try {
+          const { processAdminMessage } = await import(
+            '@/lib/webhook-processor'
+          );
+          await processAdminMessage({
+            accountId,
+            platformUserId: leadPlatformUserId,
+            platform: 'INSTAGRAM',
+            messageText,
+            platformMessageId: platformMessageId || undefined
+          });
+        } catch (adminErr) {
+          console.error(
+            `[instagram-webhook] Failed to process admin message:`,
+            adminErr
+          );
+        }
+        continue; // Don't trigger AI reply for admin messages
+      }
+
+      if (!senderId) continue;
 
       try {
         // Attempt to fetch the sender's profile for name/handle

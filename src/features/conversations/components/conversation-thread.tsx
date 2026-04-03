@@ -172,40 +172,70 @@ export function ConversationThread({
                       )}
                     >
                       <div
-                        className={cn(
-                          'max-w-[70%] rounded-2xl px-4 py-2.5',
-                          isLead && 'bg-muted text-foreground',
-                          isAI && 'bg-primary text-primary-foreground',
-                          isHuman && 'bg-emerald-600 text-white'
-                        )}
+                        className={cn('max-w-[70%]', !isLead && 'text-right')}
                       >
-                        {msg.isVoiceNote && (
-                          <div className='mb-1 flex items-center gap-1 text-xs opacity-80'>
-                            <IconMicrophone className='h-3 w-3' /> Voice Note
-                          </div>
+                        {isAI && (
+                          <span className='mb-0.5 inline-block text-[10px] text-blue-400'>
+                            AI Setter
+                          </span>
                         )}
-                        <p className='text-sm'>{msg.content}</p>
-                        <div className='mt-1 flex items-center gap-1'>
-                          <p
-                            className={cn(
-                              'text-[10px]',
-                              isLead ? 'text-muted-foreground' : 'opacity-60'
-                            )}
-                          >
-                            {new Date(msg.timestamp).toLocaleTimeString(
-                              'en-US',
-                              {
-                                hour: 'numeric',
-                                minute: '2-digit'
-                              }
-                            )}
-                          </p>
-                          {isAI && <IconRobot className='h-3 w-3 opacity-60' />}
-                          {isHuman && (
-                            <span className='text-[10px] opacity-60'>
-                              Manual
-                            </span>
+                        {isHuman && (
+                          <span className='mb-0.5 inline-block text-[10px] text-emerald-400'>
+                            Human Setter
+                          </span>
+                        )}
+                        <div
+                          className={cn(
+                            'rounded-2xl px-4 py-2.5',
+                            isLead && 'bg-muted text-foreground',
+                            isAI && 'bg-primary text-primary-foreground',
+                            isHuman && 'bg-emerald-600 text-white'
                           )}
+                        >
+                          {msg.isVoiceNote && msg.voiceNoteUrl && (
+                            <div className='mb-2'>
+                              <audio
+                                controls
+                                preload='none'
+                                className='h-8 w-48'
+                              >
+                                <source
+                                  src={msg.voiceNoteUrl}
+                                  type='audio/mpeg'
+                                />
+                              </audio>
+                            </div>
+                          )}
+                          {msg.isVoiceNote && !msg.voiceNoteUrl && (
+                            <div className='mb-1 flex items-center gap-1 text-xs opacity-80'>
+                              <IconMicrophone className='h-3 w-3' /> Voice Note
+                            </div>
+                          )}
+                          <p className='text-sm'>{msg.content}</p>
+                          <div className='mt-1 flex items-center gap-1'>
+                            <p
+                              className={cn(
+                                'text-[10px]',
+                                isLead ? 'text-muted-foreground' : 'opacity-60'
+                              )}
+                            >
+                              {new Date(msg.timestamp).toLocaleTimeString(
+                                'en-US',
+                                {
+                                  hour: 'numeric',
+                                  minute: '2-digit'
+                                }
+                              )}
+                            </p>
+                            {isAI && (
+                              <IconRobot className='h-3 w-3 opacity-60' />
+                            )}
+                            {isHuman && (
+                              <span className='text-[10px] opacity-60'>
+                                Manual
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
