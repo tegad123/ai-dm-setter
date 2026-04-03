@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { decrypt } from '@/lib/credential-store';
+import { getCredentials } from '@/lib/credential-store';
 
 // ---------------------------------------------------------------------------
 // POST — Manually subscribe all connected pages to webhook events
@@ -11,67 +11,171 @@ const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 export async function POST(request: NextRequest) {
   try {
-    // Find all active META credentials
+    // Find all active META and INSTAGRAM credentials
     const credentials = await prisma.integrationCredential.findMany({
-      where: { provider: 'META', isActive: true }
+      where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
     });
 
     if (credentials.length === 0) {
       return NextResponse.json(
-        { error: 'No META credentials found. Connect via Meta OAuth first.' },
+        {
+          error: 'No META/INSTAGRAM credentials found. Connect via OAuth first.'
+        },
         { status: 404 }
       );
     }
 
     const results: Array<{
+      provider: string;
       pageId: string;
       pageName: string;
       success: boolean;
+      details?: string;
       error?: string;
     }> = [];
 
     for (const cred of credentials) {
-      const meta = cred.metadata as any;
-      const pageId = meta?.pageId;
-      const pageName = meta?.pageName || 'Unknown';
+      const meta = (cred.metadata as any) || {};
+      const pageName = meta.pageName || meta.username || 'Unknown';
 
-      if (!pageId) {
-        results.push({ pageId: 'N/A', pageName, success: false, error: 'No pageId in metadata' });
-        continue;
-      }
-
-      // Decrypt the access token
-      let accessToken: string;
-      try {
-        const decrypted = JSON.parse(decrypt(cred.credentials as string));
-        accessToken = decrypted.accessToken;
-      } catch {
-        results.push({ pageId, pageName, success: false, error: 'Failed to decrypt credentials' });
-        continue;
-      }
-
-      // Subscribe the page to webhooks
-      try {
-        const res = await fetch(`${GRAPH_API}/${pageId}/subscribed_apps`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscribed_fields: 'messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads',
-            access_token: accessToken
-          })
+      // Use getCredentials to properly handle encrypted data
+      const decrypted = await getCredentials(cred.accountId, cred.provider);
+      if (!decrypted?.accessToken) {
+        results.push({
+          provider: cred.provider,
+          pageId: 'N/A',
+          pageName,
+          success: false,
+          error: 'No access token found in credentials'
         });
+        continue;
+      }
 
-        if (res.ok) {
-          const data = await res.json();
-          console.log(`[webhook-subscribe] Page ${pageId} (${pageName}) subscribed:`, data);
-          results.push({ pageId, pageName, success: true });
-        } else {
-          const errText = await res.text();
-          console.error(`[webhook-subscribe] Page ${pageId} failed:`, errText);
-          results.push({ pageId, pageName, success: false, error: errText });
+      const accessToken = decrypted.accessToken as string;
+
+      // ── Subscribe Facebook Page (META provider) ──
+      if (cred.provider === 'META') {
+        const pageId = meta.pageId;
+        if (!pageId) {
+          results.push({
+            provider: 'META',
+            pageId: 'N/A',
+            pageName,
+            success: false,
+            error: 'No pageId in metadata'
+          });
+          continue;
         }
-      } catch (err) {
-        results.push({ pageId, pageName, success: false, error: String(err) });
+
+        try {
+          const res = await fetch(`${GRAPH_API}/${pageId}/subscribed_apps`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscribed_fields:
+                'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads',
+              access_token: accessToken
+            })
+          });
+
+          const body = await res.text();
+          if (res.ok) {
+            console.log(
+              `[webhook-subscribe] META page ${pageId} (${pageName}) subscribed:`,
+              body
+            );
+            results.push({
+              provider: 'META',
+              pageId,
+              pageName,
+              success: true,
+              details: body
+            });
+          } else {
+            console.error(
+              `[webhook-subscribe] META page ${pageId} failed:`,
+              body
+            );
+            results.push({
+              provider: 'META',
+              pageId,
+              pageName,
+              success: false,
+              error: body
+            });
+          }
+        } catch (err) {
+          results.push({
+            provider: 'META',
+            pageId,
+            pageName,
+            success: false,
+            error: String(err)
+          });
+        }
+
+        // Also subscribe the IG business account if available
+        const igAccountId = meta.instagramAccountId;
+        if (igAccountId) {
+          try {
+            const igRes = await fetch(
+              `${GRAPH_API}/${igAccountId}/subscribed_apps`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  subscribed_fields:
+                    'messages,messaging_postbacks,messaging_optins',
+                  access_token: accessToken
+                })
+              }
+            );
+            const igBody = await igRes.text();
+            console.log(
+              `[webhook-subscribe] IG account ${igAccountId} subscription:`,
+              igRes.status,
+              igBody
+            );
+            results.push({
+              provider: 'META/IG',
+              pageId: igAccountId,
+              pageName: meta.instagramUsername || pageName,
+              success: igRes.ok,
+              details: igRes.ok ? igBody : undefined,
+              error: igRes.ok ? undefined : igBody
+            });
+          } catch (err) {
+            console.log(
+              `[webhook-subscribe] IG account ${igAccountId} subscription failed:`,
+              err
+            );
+          }
+        }
+      }
+
+      // ── Subscribe Instagram account (INSTAGRAM provider) ──
+      if (cred.provider === 'INSTAGRAM') {
+        const igUserId =
+          meta.igUserId || meta.igBusinessAccountId || meta.instagramAccountId;
+        if (!igUserId) {
+          results.push({
+            provider: 'INSTAGRAM',
+            pageId: 'N/A',
+            pageName,
+            success: false,
+            error: 'No IG user ID in metadata'
+          });
+          continue;
+        }
+
+        // Log what we have for debugging
+        results.push({
+          provider: 'INSTAGRAM',
+          pageId: igUserId,
+          pageName,
+          success: true,
+          details: `IG credential found. Token starts: ${accessToken.slice(0, 8)}... metadata: ${JSON.stringify(meta).slice(0, 200)}`
+        });
       }
     }
 
