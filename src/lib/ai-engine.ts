@@ -50,10 +50,16 @@ export interface GenerateReplyResult {
 export async function generateReply(
   accountId: string,
   conversationHistory: ConversationMessage[],
-  leadContext: LeadContext
+  leadContext: LeadContext,
+  scoringContext?: string
 ): Promise<GenerateReplyResult> {
   // 1. Build the dynamic system prompt
-  const systemPrompt = await buildDynamicSystemPrompt(accountId, leadContext);
+  let systemPrompt = await buildDynamicSystemPrompt(accountId, leadContext);
+
+  // 1b. Append scoring intelligence if available
+  if (scoringContext) {
+    systemPrompt += '\n\n' + scoringContext;
+  }
 
   // 2. Resolve AI provider credentials (per-account BYOK → env fallback)
   const { provider, apiKey, model } = await resolveAIProvider(accountId);

@@ -15,6 +15,11 @@ import {
   recordStageTimestamp,
   backfillEffectivenessTracking
 } from '@/lib/conversation-state-machine';
+import {
+  runPostMessageScoring,
+  getScoringContextForPrompt,
+  runPostAIReplyScoring
+} from '@/lib/scoring-integration';
 import { getMessages as getInstagramMessages } from '@/lib/instagram';
 import { getMessages as getFacebookMessages } from '@/lib/facebook';
 
@@ -360,6 +365,11 @@ export async function processIncomingMessage(
     lastMessageAt: now.toISOString()
   });
 
+  // ── Step 7: Run lead scoring after every incoming lead message ──
+  runPostMessageScoring(conversationId, lead.id, accountId, now).catch((err) =>
+    console.error('[webhook-processor] Post-message scoring error:', err)
+  );
+
   return {
     leadId: lead.id,
     conversationId,
@@ -479,6 +489,21 @@ export async function scheduleAIReply(
     timezone: lead.timezone || undefined
   };
 
+  // ── Step 3b: Get scoring context to inject into AI prompt ──────
+  let scoringContext = '';
+  try {
+    scoringContext = await getScoringContextForPrompt(
+      conversationId,
+      lead.id,
+      accountId
+    );
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Scoring context generation failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 4: Generate AI reply ──────────────────────────────────
   const formattedMessages = messages.map((m) => ({
     id: m.id,
@@ -490,7 +515,12 @@ export async function scheduleAIReply(
 
   let result;
   try {
-    result = await generateReply(accountId, formattedMessages, leadContext);
+    result = await generateReply(
+      accountId,
+      formattedMessages,
+      leadContext,
+      scoringContext
+    );
   } catch (err) {
     console.error(
       `[webhook-processor] AI generation failed for ${conversationId}:`,
@@ -634,6 +664,11 @@ async function sendAIReply(
       console.error('[webhook-processor] Stage timestamp error:', err)
     );
   }
+
+  // ── Post-AI-reply scoring (record stage progression for velocity) ──
+  runPostAIReplyScoring(conversationId, result.stage).catch((err) =>
+    console.error('[webhook-processor] Post-AI-reply scoring error:', err)
+  );
 
   // ── Update conversation outcome ────────────────────────────────
   await updateConversationOutcome(conversationId).catch((err) =>
@@ -801,7 +836,7 @@ export async function processAdminMessage(
 
   const conversationId = lead.conversation.id;
 
-  // Dedup check
+  // Dedup check — by platformMessageId
   if (platformMessageId) {
     const existing = await prisma.message.findFirst({
       where: { conversationId, platformMessageId }
@@ -814,7 +849,38 @@ export async function processAdminMessage(
     }
   }
 
-  // Save as HUMAN message
+  // ── AI echo detection ─────────────────────────────────────────────
+  // When AI sends a reply via the Instagram API, Instagram echoes it back
+  // as an admin message (is_echo=true). The AI-saved message won't have a
+  // platformMessageId, so the dedup above won't catch it. Instead, check
+  // if a recent AI message with the same content exists — if so, this is
+  // just the echo of the AI's own message. Link the platformMessageId to
+  // the existing AI message and skip the "human took over" logic.
+  const recentAIMessage = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      sender: 'AI',
+      content: messageText,
+      timestamp: { gte: new Date(Date.now() - 60000) } // within last 60s
+    },
+    orderBy: { timestamp: 'desc' }
+  });
+
+  if (recentAIMessage) {
+    // Link the platform message ID to the existing AI message for future dedup
+    if (platformMessageId && !recentAIMessage.platformMessageId) {
+      await prisma.message.update({
+        where: { id: recentAIMessage.id },
+        data: { platformMessageId }
+      });
+    }
+    console.log(
+      `[webhook-processor] Admin message is echo of AI message ${recentAIMessage.id} — skipping, AI stays active`
+    );
+    return;
+  }
+
+  // Save as HUMAN message (genuinely sent by a human admin)
   const message = await prisma.message.create({
     data: {
       conversationId,
