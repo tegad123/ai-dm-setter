@@ -10,7 +10,7 @@ import type {
 } from '@/features/conversations/data/conversation-data';
 import { ConversationList } from './conversation-list';
 import { ConversationThread } from './conversation-thread';
-import { NotesPanel } from '@/features/team-notes/components/notes-panel';
+import { ConversationSidebar } from './conversation-sidebar';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /** Map API conversation shape to the local UI shape used by child components */
@@ -162,12 +162,25 @@ export function ConversationsView() {
         onSendMessage={handleSendMessage}
         onToggleAI={handleToggleAI}
       />
-      {/* Team Notes Panel */}
+      {/* Right Sidebar — Summary / Score / Notes */}
       {activeApiConvo && (
-        <div className='hidden w-80 border-l lg:flex lg:flex-col'>
-          <NotesPanel
+        <div className='hidden min-h-0 w-80 overflow-hidden border-l lg:flex lg:flex-col'>
+          <ConversationSidebar
+            conversationId={activeApiConvo.id}
             leadId={activeApiConvo.leadId}
             leadName={activeApiConvo.leadName}
+            leadHandle={activeApiConvo.leadHandle}
+            platform={activeApiConvo.platform}
+            status={activeApiConvo.status}
+            aiActive={activeApiConvo.aiActive}
+            qualityScore={activeApiConvo.qualityScore ?? 0}
+            priorityScore={activeApiConvo.priorityScore ?? 0}
+            tags={activeApiConvo.tags}
+            messages={apiMessages.map((m) => ({
+              ...m,
+              timestamp: m.sentAt || m.timestamp || ''
+            }))}
+            createdAt={activeApiConvo.createdAt}
           />
         </div>
       )}
