@@ -72,7 +72,7 @@ export function ConversationList({
           />
         </div>
       </div>
-      <ScrollArea className='flex-1'>
+      <ScrollArea className='min-h-0 flex-1 overflow-hidden'>
         {filtered.length === 0 ? (
           <div className='text-muted-foreground p-6 text-center text-sm'>
             {activeTab === 'priority'
