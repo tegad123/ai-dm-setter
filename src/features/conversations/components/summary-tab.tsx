@@ -149,7 +149,7 @@ export function SummaryTab({
   const latestStageMsg = [...messages].reverse().find((m) => m.stage);
 
   return (
-    <ScrollArea className='min-h-0 flex-1'>
+    <ScrollArea className='min-h-0 flex-1 overflow-hidden'>
       <div className='space-y-4 p-4'>
         {/* Lead Info Card */}
         <div className='rounded-lg border p-3'>

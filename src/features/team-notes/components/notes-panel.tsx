@@ -86,7 +86,7 @@ export function NotesPanel({
       </div>
 
       {/* Notes list */}
-      <ScrollArea className='flex-1 p-3'>
+      <ScrollArea className='min-h-0 flex-1 overflow-hidden p-3'>
         {loading ? (
           <div className='space-y-3'>
             {Array.from({ length: 3 }).map((_, i) => (

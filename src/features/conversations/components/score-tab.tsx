@@ -265,7 +265,7 @@ export function ScoreTab({
   const temperature = qualityScore || priorityScore || 0;
 
   return (
-    <ScrollArea className='min-h-0 flex-1'>
+    <ScrollArea className='min-h-0 flex-1 overflow-hidden'>
       <div className='space-y-4 p-4'>
         {/* Main Score Gauge */}
         <div
