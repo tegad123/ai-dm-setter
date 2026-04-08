@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
+import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
 import {
   IconMessages,
   IconRobot,
@@ -200,13 +201,25 @@ export function SummaryTab({
               </Badge>
             )}
           </div>
-          {tags && tags.length > 0 && (
-            <div className='mt-2 flex flex-wrap gap-1'>
-              {tags.map((tag) => (
-                <TagBadge key={tag.id} name={tag.name} color={tag.color} />
-              ))}
-            </div>
-          )}
+          {/* Deduped + capped — collapses HIGH_INTENT/high_intent variants
+              and prefers the colored (signal) version over gray (noise). */}
+          {(() => {
+            const summaryTags = selectDisplayTags(tags, 8);
+            const hidden = (tags?.length ?? 0) - summaryTags.length;
+            if (summaryTags.length === 0) return null;
+            return (
+              <div className='mt-2 flex flex-wrap gap-1'>
+                {summaryTags.map((tag) => (
+                  <TagBadge key={tag.id} name={tag.name} color={tag.color} />
+                ))}
+                {hidden > 0 && (
+                  <span className='text-muted-foreground self-center text-[10px]'>
+                    +{hidden} more
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Message Stats */}

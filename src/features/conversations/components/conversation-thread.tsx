@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
@@ -105,14 +106,25 @@ export function ConversationThread({
                 {conversation.qualityScore}%
               </Badge>
             )}
-          {/* AI-generated tags */}
-          {conversation.tags && conversation.tags.length > 0 && (
-            <div className='flex flex-wrap gap-1'>
-              {conversation.tags.map((tag) => (
-                <TagBadge key={tag.id} name={tag.name} color={tag.color} />
-              ))}
-            </div>
-          )}
+          {/* AI-generated tags — capped + deduped to keep header compact.
+              Full list lives in the right-hand Summary tab. */}
+          {(() => {
+            const headerTags = selectDisplayTags(conversation.tags, 4);
+            const hidden = (conversation.tags?.length ?? 0) - headerTags.length;
+            if (headerTags.length === 0) return null;
+            return (
+              <div className='flex items-center gap-1'>
+                {headerTags.map((tag) => (
+                  <TagBadge key={tag.id} name={tag.name} color={tag.color} />
+                ))}
+                {hidden > 0 && (
+                  <span className='text-muted-foreground text-[10px]'>
+                    +{hidden}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
         <div className='flex items-center gap-3'>
           <div className='flex items-center gap-2 rounded-full border px-3 py-1.5'>
