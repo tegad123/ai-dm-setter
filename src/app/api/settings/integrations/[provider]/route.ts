@@ -1,5 +1,9 @@
 import { requireAuth, AuthError } from '@/lib/auth-guard';
-import { saveCredentials, deleteCredentials } from '@/lib/credential-store';
+import {
+  getCredentials,
+  saveCredentials,
+  deleteCredentials
+} from '@/lib/credential-store';
 import { NextRequest, NextResponse } from 'next/server';
 
 const VALID_PROVIDERS = [
@@ -80,6 +84,49 @@ export async function DELETE(
         },
         { status: 400 }
       );
+    }
+
+    // For Meta/Instagram, revoke the grant on Facebook's side BEFORE deleting
+    // the local credential. Otherwise Meta will silently re-use the existing
+    // grant on the next OAuth attempt — even with auth_type=rerequest — and
+    // any newly-approved scopes will be silently dropped from the new token.
+    // The DELETE /me/permissions endpoint nukes the user's entire app
+    // authorization, forcing a fresh consent dialog next time.
+    if (provider === 'META' || provider === 'INSTAGRAM') {
+      try {
+        const existing = await getCredentials(auth.accountId, provider);
+        const token = existing?.accessToken;
+        if (token) {
+          // Use the right host: Instagram tokens (IGAA*) live on
+          // graph.instagram.com, Meta tokens (EAA*) on graph.facebook.com.
+          const host = String(token).startsWith('IGAA')
+            ? 'https://graph.instagram.com'
+            : 'https://graph.facebook.com';
+          const revokeRes = await fetch(
+            `${host}/v21.0/me/permissions?access_token=${token}`,
+            { method: 'DELETE' }
+          );
+          if (revokeRes.ok) {
+            const revokeData = await revokeRes.json();
+            console.log(
+              `[disconnect] Revoked ${provider} grant for account ${auth.accountId}:`,
+              revokeData
+            );
+          } else {
+            const errBody = await revokeRes.text();
+            console.warn(
+              `[disconnect] Failed to revoke ${provider} grant for account ${auth.accountId} (${revokeRes.status}):`,
+              errBody.slice(0, 300)
+            );
+            // Don't fail the disconnect — local cleanup still has value
+          }
+        }
+      } catch (revokeErr) {
+        console.warn(
+          `[disconnect] Error revoking ${provider} grant:`,
+          revokeErr
+        );
+      }
     }
 
     await deleteCredentials(auth.accountId, provider);

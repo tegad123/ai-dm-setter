@@ -38,9 +38,10 @@ export async function GET(req: NextRequest) {
     oauthUrl.searchParams.set('redirect_uri', redirectUri);
     oauthUrl.searchParams.set('state', state);
     oauthUrl.searchParams.set('response_type', 'code');
-    // Force Meta to re-prompt for previously declined scopes (e.g.
-    // instagram_basic). Without this, Meta silently skips any permission
-    // the user has declined in the past, even if we ask for it again.
+    // Force Meta to re-prompt for newly-approved scopes (e.g.
+    // pages_read_engagement, pages_manage_metadata). Without this, Meta
+    // silently re-uses the existing grant and any newly-approved scopes
+    // are dropped from the new token.
     // See https://developers.facebook.com/docs/facebook-login/guides/permissions/request-revoke#re-request-declined-permissions
     oauthUrl.searchParams.set('auth_type', 'rerequest');
 
@@ -48,11 +49,15 @@ export async function GET(req: NextRequest) {
       // Facebook Login for Business mode — use config_id (no scope)
       oauthUrl.searchParams.set('config_id', configId);
     } else {
-      // Standard mode — use scope parameter directly
-      // Only request scopes that are approved in Meta App Review
+      // Standard mode — use scope parameter directly.
+      //
+      // NOTE: Instagram messaging is handled by the SEPARATE Instagram Login
+      // flow at /api/auth/instagram (which uses instagram_business_basic and
+      // instagram_business_manage_messages on a different Instagram-specific
+      // app). Do NOT add instagram_* scopes here — they're not approved on
+      // this Facebook Login app and Meta will silently drop them, which can
+      // cause the entire grant to get into a weird state.
       const scopes = [
-        'instagram_basic',
-        'instagram_manage_messages',
         'pages_messaging',
         'pages_show_list',
         // Approved 2026-04-07: required to subscribe pages to webhooks
