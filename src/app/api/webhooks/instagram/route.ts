@@ -73,7 +73,8 @@ export async function POST(request: NextRequest) {
 
 async function processInstagramEvents(payload: any): Promise<void> {
   console.log(
-    `[instagram-webhook] payload.object=${payload.object}, entries=${payload.entry?.length ?? 0}`
+    `[instagram-webhook] payload.object=${payload.object}, entries=${payload.entry?.length ?? 0}, ` +
+      `payload=${JSON.stringify(payload).slice(0, 1000)}`
   );
   if (payload.object !== 'instagram') {
     console.warn(
@@ -83,11 +84,19 @@ async function processInstagramEvents(payload: any): Promise<void> {
   }
 
   // Fetch all active META and INSTAGRAM integration credentials for account lookup
+  console.log('[instagram-webhook] fetching credentials');
   const allCredentials = await prisma.integrationCredential.findMany({
     where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
   });
+  console.log(
+    `[instagram-webhook] credentials fetched: ${allCredentials.length}`
+  );
 
   for (const entry of payload.entry ?? []) {
+    console.log(
+      `[instagram-webhook] entry-loop: id=${entry.id} hasMessaging=${!!entry.messaging} ` +
+        `messagingLen=${entry.messaging?.length ?? 0} hasChanges=${!!entry.changes}`
+    );
     // ── Resolve accountId from the entry ID in the webhook ────────
     const entryId: string = entry.id ?? '';
 

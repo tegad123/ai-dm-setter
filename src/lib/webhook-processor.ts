@@ -493,14 +493,20 @@ export async function scheduleAIReply(
   accountId: string,
   options?: { skipDelayQueue?: boolean }
 ): Promise<void> {
-  console.log(
-    `[webhook-processor] Scheduling AI reply for conversation: ${conversationId}` +
-      (options?.skipDelayQueue
-        ? ' (cron picked up — bypassing delay queue)'
-        : '')
+  // Diagnostic checkpoint logging — every step prints a tag with the convo id
+  // so we can see exactly where the function silently exits in production logs.
+  const log = (tag: string, extra?: string) =>
+    console.log(
+      `[webhook-processor][${conversationId}] ${tag}${extra ? ' ' + extra : ''}`
+    );
+
+  log(
+    'sched.start',
+    options?.skipDelayQueue ? '(cron picked up)' : '(realtime)'
   );
 
   // ── Step 1: Check AI active + away mode ────────────────────────
+  log('sched.step1.findConversation');
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
     include: {
@@ -525,10 +531,15 @@ export async function scheduleAIReply(
     );
     return;
   }
+  log(
+    'sched.step1.foundConversation',
+    `messages=${conversation.messages.length}`
+  );
 
   const { lead } = conversation;
 
   // Check account-level away mode
+  log('sched.step1.findAccount');
   const account = await prisma.account.findUnique({
     where: { id: accountId },
     select: { awayMode: true }
@@ -538,6 +549,10 @@ export async function scheduleAIReply(
   const aiActive = conversation.aiActive;
   const awayMode = account?.awayMode ?? false;
   const shouldAutoSend = aiActive || awayMode;
+  log(
+    'sched.step1.aiActive',
+    `aiActive=${aiActive} awayMode=${awayMode} shouldAutoSend=${shouldAutoSend}`
+  );
 
   if (!shouldAutoSend) {
     console.log(
@@ -547,10 +562,12 @@ export async function scheduleAIReply(
 
   // ── Step 2: Build conversation history ─────────────────────────
   // Local DB is primary source. If history seems incomplete, try Meta API fallback.
+  log('sched.step2.history');
   let messages = conversation.messages;
 
   if (messages.length <= 1 && lead.platformUserId) {
     // Only 1 message — might be missing history. Try Meta API backfill.
+    log('sched.step2.backfillStart');
     try {
       const backfilledMessages = await backfillFromMetaAPI(
         accountId,
@@ -560,9 +577,9 @@ export async function scheduleAIReply(
       );
       if (backfilledMessages.length > messages.length) {
         messages = backfilledMessages;
-        console.log(
-          `[webhook-processor] Back-filled ${backfilledMessages.length} messages from Meta API`
-        );
+        log('sched.step2.backfillDone', `count=${backfilledMessages.length}`);
+      } else {
+        log('sched.step2.backfillNoop');
       }
     } catch (err) {
       console.warn(
@@ -713,6 +730,8 @@ export async function scheduleAIReply(
     );
   }
 
+  log('sched.step3.contextBuilt');
+
   // ── Step 3a: Inject booking state ───────────────────────────────
   // Fetch real calendar slots when ANY calendar integration is configured
   // AND we already know the lead's timezone. We deliberately skip the slot
@@ -725,20 +744,27 @@ export async function scheduleAIReply(
   // The prompt's "tz unknown" branch instructs the AI to ASK for the
   // timezone first; only after the next inbound message (with leadTimezone
   // persisted) do we start proposing real slots.
+  log('sched.step3a.bookingStart');
   try {
     // Check ALL providers, not just LeadConnector — any one of them
     // counts as a calendar integration.
+    log('sched.step3a.fetchCreds');
     const [lcCreds, calendlyCreds, calcomCreds] = await Promise.all([
       getCredentials(accountId, 'LEADCONNECTOR'),
       getCredentials(accountId, 'CALENDLY'),
       getCredentials(accountId, 'CALCOM')
     ]);
+    log('sched.step3a.credsDone');
     const hasCalendarIntegration = Boolean(
       (lcCreds?.apiKey && lcCreds?.calendarId) ||
         calendlyCreds?.apiKey ||
         calcomCreds?.apiKey
     );
 
+    log(
+      'sched.step3a.calendarCheck',
+      `hasIntegration=${hasCalendarIntegration} leadTz=${conversation.leadTimezone || 'null'}`
+    );
     let availableSlots: BookingSlot[] = [];
     if (hasCalendarIntegration && conversation.leadTimezone) {
       const now = new Date();
@@ -797,6 +823,7 @@ export async function scheduleAIReply(
   }
 
   // ── Step 3b: Get scoring context to inject into AI prompt ──────
+  log('sched.step3b.scoringStart');
   let scoringContext = '';
   try {
     scoringContext = await getScoringContextForPrompt(
@@ -804,6 +831,7 @@ export async function scheduleAIReply(
       lead.id,
       accountId
     );
+    log('sched.step3b.scoringDone');
   } catch (err) {
     console.error(
       '[webhook-processor] Scoring context generation failed (non-fatal):',
@@ -812,6 +840,7 @@ export async function scheduleAIReply(
   }
 
   // ── Step 4: Generate AI reply ──────────────────────────────────
+  log('sched.step4.generateStart');
   const formattedMessages = messages.map((m) => ({
     id: m.id,
     sender: m.sender,
@@ -828,6 +857,7 @@ export async function scheduleAIReply(
       leadContext,
       scoringContext
     );
+    log('sched.step4.generateDone', `stage=${result.stage}`);
   } catch (err) {
     console.error(
       `[webhook-processor] AI generation failed for ${conversationId}:`,

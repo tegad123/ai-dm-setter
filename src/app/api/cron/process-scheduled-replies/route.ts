@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    console.log('[cron] starting');
     const now = new Date();
 
     // Find pending replies that are due
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
       orderBy: { scheduledFor: 'asc' },
       take: 10
     });
+    console.log(`[cron] picked up ${pendingReplies.length} pending replies`);
 
     if (pendingReplies.length === 0) {
       return NextResponse.json({ processed: 0, failed: 0, total: 0 });
@@ -41,8 +43,12 @@ export async function GET(req: NextRequest) {
     let failed = 0;
 
     for (const reply of pendingReplies) {
+      console.log(
+        `[cron] processing reply ${reply.id} convo=${reply.conversationId}`
+      );
       try {
         await processScheduledReply(reply.conversationId, reply.accountId);
+        console.log(`[cron] processed reply ${reply.id} OK`);
 
         await prisma.scheduledReply.update({
           where: { id: reply.id },
