@@ -56,6 +56,11 @@ interface PersonaData {
   companyName: string;
   freeValueLink: string;
   closerName: string;
+  // Response delay range (seconds). The webhook-processor picks a random
+  // value between min and max and queues the AI reply for that long
+  // before sending. 0/0 = send immediately (legacy behavior).
+  responseDelayMin: number;
+  responseDelayMax: number;
   objectionHandling: {
     trust: string;
     priorFailure: string;
@@ -166,6 +171,10 @@ const defaultPersona: PersonaData = {
   companyName: '',
   freeValueLink: '',
   closerName: '',
+  // Default to 0/0 = no delay (immediate send). Users can opt in to
+  // a delay range from the Response Delay card on this page.
+  responseDelayMin: 0,
+  responseDelayMax: 0,
   objectionHandling: {
     trust: '',
     priorFailure: '',
@@ -317,6 +326,14 @@ export default function PersonaSettingsPage() {
             companyName: data.companyName ?? '',
             freeValueLink: data.freeValueLink ?? '',
             closerName: data.closerName ?? '',
+            responseDelayMin:
+              typeof data.responseDelayMin === 'number'
+                ? data.responseDelayMin
+                : 0,
+            responseDelayMax:
+              typeof data.responseDelayMax === 'number'
+                ? data.responseDelayMax
+                : 0,
             objectionHandling: {
               trust: oh.trust ?? '',
               priorFailure: oh.priorFailure ?? '',
@@ -648,6 +665,8 @@ export default function PersonaSettingsPage() {
           systemPrompt: 'MASTER_TEMPLATE',
           freeValueLink: persona.freeValueLink,
           closerName: persona.closerName,
+          responseDelayMin: persona.responseDelayMin,
+          responseDelayMax: persona.responseDelayMax,
           objectionHandling: persona.objectionHandling,
           promptConfig: promptConfigPayload,
           financialWaterfall:
@@ -770,6 +789,10 @@ export default function PersonaSettingsPage() {
           companyName: data.companyName || prev.companyName,
           freeValueLink: data.freeValueLink || prev.freeValueLink,
           closerName: data.closerName || prev.closerName,
+          // Document extraction never sets the response delay — preserve
+          // whatever the user had configured before the upload.
+          responseDelayMin: prev.responseDelayMin,
+          responseDelayMax: prev.responseDelayMax,
           objectionHandling: {
             trust:
               data.objectionHandling?.trust || prev.objectionHandling.trust,
@@ -1185,6 +1208,91 @@ export default function PersonaSettingsPage() {
                 value={persona.promptConfig.adminBio}
                 onChange={(e) => updatePromptConfig('adminBio', e.target.value)}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section: Response Delay (humanizes AI replies) */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Response Delay</CardTitle>
+            <CardDescription>
+              How long the AI waits before replying. The actual delay is picked
+              at random between the min and max so replies feel natural instead
+              of robotic. Set both to 0 to send immediately.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <div className='grid gap-2'>
+                <Label htmlFor='responseDelayMin'>
+                  Minimum delay (seconds)
+                </Label>
+                <Input
+                  id='responseDelayMin'
+                  type='number'
+                  min={0}
+                  max={1800}
+                  step={15}
+                  value={persona.responseDelayMin}
+                  onChange={(e) => {
+                    const v = Math.max(
+                      0,
+                      Math.min(1800, parseInt(e.target.value || '0', 10))
+                    );
+                    setPersona((prev) => ({
+                      ...prev,
+                      responseDelayMin: v,
+                      // Keep max >= min
+                      responseDelayMax: Math.max(prev.responseDelayMax, v)
+                    }));
+                  }}
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {persona.responseDelayMin === 0
+                    ? 'No minimum delay'
+                    : `~${Math.round(persona.responseDelayMin / 60)} min ${persona.responseDelayMin % 60}s`}
+                </p>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='responseDelayMax'>
+                  Maximum delay (seconds)
+                </Label>
+                <Input
+                  id='responseDelayMax'
+                  type='number'
+                  min={0}
+                  max={1800}
+                  step={15}
+                  value={persona.responseDelayMax}
+                  onChange={(e) => {
+                    const v = Math.max(
+                      0,
+                      Math.min(1800, parseInt(e.target.value || '0', 10))
+                    );
+                    setPersona((prev) => ({
+                      ...prev,
+                      responseDelayMax: v,
+                      // Keep min <= max
+                      responseDelayMin: Math.min(prev.responseDelayMin, v)
+                    }));
+                  }}
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {persona.responseDelayMax === 0
+                    ? 'No maximum delay'
+                    : `~${Math.round(persona.responseDelayMax / 60)} min ${persona.responseDelayMax % 60}s`}
+                </p>
+              </div>
+            </div>
+            <div className='bg-muted/40 text-muted-foreground rounded-md border p-3 text-xs'>
+              <strong className='text-foreground'>How it works:</strong> When a
+              lead messages you, the AI generates the reply at delivery time
+              (not trigger time), so if the lead sends another message during
+              the delay window, the reply will incorporate it. The
+              &quot;september 2002&quot; test trigger always bypasses the delay
+              so you can iterate fast. Maximum allowed: 1800 seconds (30
+              minutes).
             </div>
           </CardContent>
         </Card>

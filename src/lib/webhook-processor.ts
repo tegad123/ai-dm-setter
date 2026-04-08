@@ -490,10 +490,14 @@ export async function processIncomingMessage(
 
 export async function scheduleAIReply(
   conversationId: string,
-  accountId: string
+  accountId: string,
+  options?: { skipDelayQueue?: boolean }
 ): Promise<void> {
   console.log(
-    `[webhook-processor] Scheduling AI reply for conversation: ${conversationId}`
+    `[webhook-processor] Scheduling AI reply for conversation: ${conversationId}` +
+      (options?.skipDelayQueue
+        ? ' (cron picked up — bypassing delay queue)'
+        : '')
   );
 
   // ── Step 1: Check AI active + away mode ────────────────────────
@@ -652,6 +656,61 @@ export async function scheduleAIReply(
       }
       return m;
     });
+  }
+
+  // ── Step 3.5: Delayed-send queue check ──────────────────────────
+  // If the persona has a response delay configured, AND we're not in
+  // test mode, AND the cron hasn't already picked this up (skipDelayQueue
+  // flag), queue a ScheduledReply row and bail. The cron handler will
+  // re-run scheduleAIReply later with skipDelayQueue=true to actually
+  // generate and deliver the reply on the freshest conversation state.
+  //
+  // Bailing here (instead of generating now and delaying the send) means:
+  //   - We don't burn AI tokens on a reply we might throw away if the
+  //     lead sends another message during the delay window.
+  //   - The reply is generated against the most up-to-date conversation
+  //     state at delivery time, not at trigger time.
+  if (
+    !options?.skipDelayQueue &&
+    !leadContext.testModeSkipToBooking &&
+    shouldAutoSend
+  ) {
+    try {
+      const persona = await prisma.aIPersona.findFirst({
+        where: { accountId },
+        select: { responseDelayMin: true, responseDelayMax: true }
+      });
+      const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
+      const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
+
+      if (maxDelay > 0) {
+        const delaySeconds =
+          Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+        const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
+        await prisma.scheduledReply.create({
+          data: {
+            conversationId,
+            accountId,
+            scheduledFor,
+            status: 'PENDING'
+          }
+        });
+        console.log(
+          `[webhook-processor] AI reply queued for ${conversationId} ` +
+            `(delay: ${delaySeconds}s, range: ${minDelay}-${maxDelay}s, scheduledFor: ${scheduledFor.toISOString()})`
+        );
+        return;
+      }
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Delay-queue check failed (proceeding immediately):',
+        err
+      );
+    }
+  } else if (leadContext.testModeSkipToBooking) {
+    console.log(
+      `[webhook-processor] [TEST MODE] Bypassing response-delay queue for ${conversationId}`
+    );
   }
 
   // ── Step 3a: Inject booking state ───────────────────────────────
@@ -854,10 +913,16 @@ export async function scheduleAIReply(
     return;
   }
 
-  // ── Step 6: Send reply immediately (no delay for now) ──────────
-  // TODO: Re-enable scheduled delays for production (use ScheduledReply table + cron)
+  // ── Step 6: Send reply ─────────────────────────────────────────
+  // By the time we reach this point either:
+  //   - the persona has no response delay configured (Step 3.5 noop), or
+  //   - the cron handler picked up a queued reply and called us with
+  //     skipDelayQueue=true so the delay window has already elapsed, or
+  //   - we're in test mode and bypassing the delay queue.
+  // Either way, the reply ships now.
   console.log(
-    `[webhook-processor] Sending AI reply immediately for ${conversationId}`
+    `[webhook-processor] Sending AI reply for ${conversationId}` +
+      (options?.skipDelayQueue ? ' (delivered after scheduled delay)' : '')
   );
   await sendAIReply(conversationId, accountId, lead, result);
 }
@@ -1793,71 +1858,17 @@ async function updateLeadStatusFromStage(
 // ---------------------------------------------------------------------------
 // 8. Process Scheduled Reply (called by cron handler)
 // ---------------------------------------------------------------------------
-// Re-runs the full AI generation pipeline for a conversation that was
-// previously queued with a delay. Re-checks aiActive before sending.
+// Called by /api/cron/process-scheduled-replies when a queued ScheduledReply
+// row becomes due. Delegates straight back to scheduleAIReply with the
+// skipDelayQueue flag set, so the entire pipeline (Meta backfill, scoring
+// context, booking state injection, R16/R17 sanitization, booking trigger,
+// failure signaling) runs against the freshest conversation state — without
+// re-queueing into the delay buffer.
 // ---------------------------------------------------------------------------
 
 export async function processScheduledReply(
   conversationId: string,
   accountId: string
 ): Promise<void> {
-  // Re-check that AI is still active
-  const conversation = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    include: {
-      lead: { include: { tags: { include: { tag: true } } } },
-      messages: { orderBy: { timestamp: 'asc' } }
-    }
-  });
-
-  if (!conversation) {
-    console.warn(`[scheduled-reply] Conversation ${conversationId} not found`);
-    return;
-  }
-
-  if (!conversation.aiActive) {
-    console.log(
-      `[scheduled-reply] AI deactivated for ${conversationId}, skipping`
-    );
-    return;
-  }
-
-  const lead = conversation.lead;
-  if (!lead) {
-    console.warn(
-      `[scheduled-reply] No lead for conversation ${conversationId}`
-    );
-    return;
-  }
-
-  // Build lead context
-  const leadContext: LeadContext = {
-    leadName: lead.name,
-    handle: lead.handle,
-    platform: lead.platform,
-    status: lead.status,
-    triggerType: lead.triggerType,
-    triggerSource: lead.triggerSource,
-    qualityScore: lead.qualityScore,
-    intentTag: conversation.leadIntentTag || undefined,
-    tags: lead.tags.map((lt) => lt.tag.name),
-    leadScore: conversation.priorityScore || undefined,
-    source: conversation.leadSource || undefined,
-    experience: lead.experience || undefined,
-    incomeLevel: lead.incomeLevel || undefined,
-    geography: lead.geography || undefined,
-    timezone: lead.timezone || undefined
-  };
-
-  const formattedMessages = conversation.messages.map((m) => ({
-    id: m.id,
-    sender: m.sender,
-    content: m.content,
-    timestamp: m.timestamp,
-    isVoiceNote: m.isVoiceNote
-  }));
-
-  const result = await generateReply(accountId, formattedMessages, leadContext);
-
-  await sendAIReply(conversationId, accountId, lead, result);
+  await scheduleAIReply(conversationId, accountId, { skipDelayQueue: true });
 }
