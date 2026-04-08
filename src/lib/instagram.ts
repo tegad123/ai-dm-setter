@@ -260,6 +260,16 @@ export interface IGUserProfile {
 
 /**
  * Fetch an Instagram user's profile via the Graph API.
+ *
+ * IMPORTANT: Token-host routing matters here.
+ *   - IGAA* tokens (Instagram Login flow, instagram_business_*) →
+ *     graph.instagram.com — fields are `name,username,profile_picture_url`
+ *   - EAA* tokens (Facebook Login flow, instagram_basic) →
+ *     graph.facebook.com — fields are `name,username,profile_pic`
+ *
+ * Calling graph.facebook.com with an IGAA token returns IGApiException
+ * 100/33, which used to crash silently in the catch block and leave the
+ * lead saved with `name = senderId` (the numeric IGSID).
  */
 export async function getUserProfile(
   accountId: string,
@@ -276,60 +286,44 @@ export async function getUserProfile(
     throw new Error('No Meta/Instagram access token configured');
   }
 
-  // Instagram-Scoped IDs (IGSIDs) from the Messaging API require a different
-  // approach — the standard Graph API /{user-id} doesn't work with them.
-  // Try multiple strategies:
+  // Route to the right host based on token type. IGAA tokens go to
+  // graph.instagram.com, EAA tokens go to graph.facebook.com.
+  const isIGToken = String(accessToken).startsWith('IGAA');
+  const apiBase = isIGToken ? IG_GRAPH_API_BASE : GRAPH_API_BASE;
+  // Instagram Login API uses `profile_picture_url`, Facebook Login API
+  // uses `profile_pic`. The other field names (name, username) are the same.
+  const picField = isIGToken ? 'profile_picture_url' : 'profile_pic';
 
-  // Strategy 1: Direct user lookup (works for some token types)
+  // Strategy 1: Direct user lookup against the correct host
   try {
-    const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,username,profile_pic&access_token=${accessToken}`;
+    const url = `${apiBase}/${userId}?fields=name,username,${picField}&access_token=${accessToken}`;
     const response = await fetch(url);
     if (response.ok) {
       const data = await response.json();
       if (data.username || data.name) {
         console.log(
-          `[instagram] Profile resolved via direct lookup: ${data.username || data.name}`
+          `[instagram] Profile resolved via direct lookup (${isIGToken ? 'IG' : 'FB'} host): ${data.username || data.name}`
         );
         return {
-          id: data.id,
+          id: data.id || userId,
           name: data.name || data.username || userId,
           username: data.username || userId,
-          profilePicUrl: data.profile_pic
-        };
-      }
-    }
-  } catch {
-    // Direct lookup failed — try next strategy
-  }
-
-  // Strategy 2: User info with instagram_business_manage_messages fields
-  try {
-    const userInfoUrl = `${GRAPH_API_BASE}/${userId}?fields=name,username,follower_count&access_token=${accessToken}`;
-    const userInfoRes = await fetch(userInfoUrl);
-    if (userInfoRes.ok) {
-      const userData = await userInfoRes.json();
-      if (userData.username || userData.name) {
-        console.log(
-          `[instagram] Profile resolved via user info: ${userData.username || userData.name}`
-        );
-        return {
-          id: userId,
-          name: userData.name || userData.username || userId,
-          username: userData.username || userId,
-          profilePicUrl: undefined
+          profilePicUrl: data[picField]
         };
       }
     } else {
-      const errBody = await userInfoRes.text().catch(() => '');
+      const errBody = await response.text().catch(() => '');
       console.warn(
-        `[instagram] User info API failed: ${userInfoRes.status} ${errBody.slice(0, 200)}`
+        `[instagram] Direct lookup failed (${response.status}) on ${isIGToken ? 'IG' : 'FB'} host: ${errBody.slice(0, 200)}`
       );
     }
   } catch (err) {
-    console.warn(`[instagram] User info strategy failed:`, err);
+    console.warn(`[instagram] Direct lookup threw:`, err);
   }
 
-  // Strategy 3: Look up via Instagram conversations API
+  // Strategy 2: Conversations API — find the participant by ID
+  // This is the most reliable path for IGSIDs from incoming webhooks
+  // because Meta only exposes the username via the conversation context.
   try {
     const metaRec = await prisma.integrationCredential.findFirst({
       where: { accountId, provider: 'META' as any, isActive: true },
@@ -340,11 +334,13 @@ export async function getUserProfile(
       select: { metadata: true }
     });
     const igAccountId =
-      (metaRec?.metadata as any)?.instagramAccountId ||
-      (igRec?.metadata as any)?.igUserId;
+      (igRec?.metadata as any)?.igUserId ||
+      (metaRec?.metadata as any)?.instagramAccountId;
 
     if (igAccountId) {
-      const convUrl = `${GRAPH_API_BASE}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
+      // For IG Login flow, the conversations endpoint lives at
+      // graph.instagram.com/{ig-user-id}/conversations
+      const convUrl = `${apiBase}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
       const convResponse = await fetch(convUrl);
       if (convResponse.ok) {
         const convData = await convResponse.json();
@@ -352,9 +348,9 @@ export async function getUserProfile(
         if (conversations.length > 0) {
           const participants = conversations[0].participants?.data || [];
           const sender = participants.find((p: any) => p.id === userId);
-          if (sender?.username) {
+          if (sender?.username || sender?.name) {
             console.log(
-              `[instagram] Profile resolved via conversations API: @${sender.username}`
+              `[instagram] Profile resolved via conversations API: @${sender.username || sender.name}`
             );
             return {
               id: userId,
@@ -364,21 +360,25 @@ export async function getUserProfile(
             };
           }
         }
+        console.warn(
+          `[instagram] Conversations API returned no matching participant for ${userId}`
+        );
       } else {
         const errBody = await convResponse.text().catch(() => '');
         console.warn(
-          `[instagram] Conversations API failed: ${convResponse.status} ${errBody.slice(0, 200)}`
+          `[instagram] Conversations API failed (${convResponse.status}): ${errBody.slice(0, 200)}`
         );
       }
+    } else {
+      console.warn(
+        `[instagram] No igAccountId found in credentials — cannot use conversations API`
+      );
     }
   } catch (err) {
-    console.warn(`[instagram] Conversations API strategy failed:`, err);
+    console.warn(`[instagram] Conversations API strategy threw:`, err);
   }
 
-  // All strategies failed
-  console.warn(
-    `[instagram] Could not resolve profile for ${userId} — using ID as fallback`
-  );
+  // All strategies failed — caller will catch and use ID as fallback
   throw new Error(`Failed to fetch Instagram profile for ${userId}`);
 }
 
