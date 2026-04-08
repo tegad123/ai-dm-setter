@@ -49,7 +49,16 @@ export async function GET(req: NextRequest) {
         'instagram_basic',
         'instagram_manage_messages',
         'pages_messaging',
-        'pages_show_list'
+        'pages_show_list',
+        // Approved 2026-04-07: required to subscribe pages to webhooks
+        // (POST /{page-id}/subscribed_apps) — without this we can't receive
+        // DMs without a manual setup step.
+        'pages_manage_metadata',
+        // Approved 2026-04-07: required to fetch page details (name, IG link)
+        // via /{page-id}?fields=... and read post metadata for content
+        // attribution. Without this /me/accounts may return empty for some
+        // page setups.
+        'pages_read_engagement'
       ].join(',');
       oauthUrl.searchParams.set('scope', scopes);
     }
