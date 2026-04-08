@@ -802,6 +802,43 @@ export async function scheduleAIReply(
     );
   }
 
+  // ── Step 4c: Strip dashes (R17 enforcement) ─────────────────────
+  // Em-dashes (—) and en-dashes (–) are dead giveaways that text was
+  // written by an AI. The system prompt rule R17 tells the AI not to
+  // use them, but as a last line of defense we sanitize the reply
+  // before delivery:
+  //   - em-dash (—, U+2014)  → ", "  (parenthetical break becomes a comma)
+  //   - en-dash (–, U+2013)  → "-"   (range becomes a normal hyphen)
+  //   - " - " connector      → ", "  (hyphen-as-clause-connector becomes a comma)
+  // Hyphens inside compound words ("well-known", "9-5") are preserved.
+  try {
+    const before = result.reply;
+    const after = before
+      // Em-dash → comma + space (collapse any surrounding whitespace)
+      .replace(/\s*—\s*/g, ', ')
+      // En-dash → hyphen (preserves ranges like "9–5" → "9-5")
+      .replace(/–/g, '-')
+      // " - " used as a clause connector → ", " (must have spaces on both
+      // sides — this is the AI tell, not the legitimate compound-word use)
+      .replace(/\s+-\s+/g, ', ')
+      // Collapse any double-comma artifacts the replacements may create
+      .replace(/,\s*,/g, ',')
+      // Tidy double spaces
+      .replace(/ {2,}/g, ' ');
+
+    if (after !== before) {
+      console.warn(
+        `[webhook-processor] R17 violation for ${conversationId}: AI used em/en-dashes — sanitized before delivery.`
+      );
+      result.reply = after;
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Dash sanitization failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
   if (!shouldAutoSend) {
     // AI is paused — broadcast as a suggestion only, don't save or send
