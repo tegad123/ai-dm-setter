@@ -139,16 +139,21 @@ export async function runPostAIReplyScoring(
   try {
     // Map stage to conversation timestamp field
     const stageFieldMap: Record<string, string> = {
+      // New 7-stage SOP sequence
+      OPENING: 'stageOpeningAt',
+      SITUATION_DISCOVERY: 'stageSituationDiscoveryAt',
+      GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
+      URGENCY: 'stageUrgencyAt',
+      SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
+      FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
+      BOOKING: 'stageBookingAt',
+      // Legacy stage names (backward compat for historical data)
+      GREETING: 'stageOpeningAt',
       QUALIFICATION: 'stageQualificationAt',
       VISION_BUILDING: 'stageVisionBuildingAt',
       PAIN_IDENTIFICATION: 'stagePainIdentificationAt',
-      URGENCY: 'stageUrgencyAt',
       SOLUTION_OFFER: 'stageSolutionOfferAt',
-      CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt',
-      GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
-      SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
-      FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
-      BOOKING: 'stageBookingAt'
+      CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt'
     };
 
     const field = stageFieldMap[stage];

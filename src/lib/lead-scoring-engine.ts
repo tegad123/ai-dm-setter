@@ -53,17 +53,21 @@ export interface ScoringResult {
 // ---------------------------------------------------------------------------
 
 const STAGE_WEIGHTS: Record<string, number> = {
+  // New 7-stage SOP sequence (canonical)
+  OPENING: 3,
+  SITUATION_DISCOVERY: 7,
+  GOAL_EMOTIONAL_WHY: 12,
+  URGENCY: 16,
+  SOFT_PITCH_COMMITMENT: 20,
+  FINANCIAL_SCREENING: 23,
+  BOOKING: 25,
+  // Legacy stage names (backward compat for historical data)
   GREETING: 2,
   QUALIFICATION: 5,
   VISION_BUILDING: 8,
   PAIN_IDENTIFICATION: 11,
-  URGENCY: 14,
   SOLUTION_OFFER: 17,
-  CAPITAL_QUALIFICATION: 19,
-  GOAL_EMOTIONAL_WHY: 21,
-  SOFT_PITCH_COMMITMENT: 23,
-  FINANCIAL_SCREENING: 24,
-  BOOKING: 25
+  CAPITAL_QUALIFICATION: 19
 };
 
 // ---------------------------------------------------------------------------
@@ -380,6 +384,7 @@ function computeIntent(
     'BOOKING',
     'FINANCIAL_SCREENING',
     'SOFT_PITCH_COMMITMENT',
+    // Legacy stage (backward compat)
     'SOLUTION_OFFER'
   ];
   if (advancedStages.includes(latestStage)) {
@@ -420,15 +425,17 @@ function computeObjections(allLeadText: string, latestStage: string): number {
 
   // If conversation continued past objection to advanced stages = resolved (+6)
   const resolvedStages = [
-    'VISION_BUILDING',
-    'PAIN_IDENTIFICATION',
-    'URGENCY',
-    'SOLUTION_OFFER',
-    'CAPITAL_QUALIFICATION',
+    // New 7-stage SOP sequence
     'GOAL_EMOTIONAL_WHY',
+    'URGENCY',
     'SOFT_PITCH_COMMITMENT',
     'FINANCIAL_SCREENING',
-    'BOOKING'
+    'BOOKING',
+    // Legacy stages (backward compat)
+    'VISION_BUILDING',
+    'PAIN_IDENTIFICATION',
+    'SOLUTION_OFFER',
+    'CAPITAL_QUALIFICATION'
   ];
   if (resolvedStages.includes(latestStage)) {
     score += 6; // Resolved objections = very positive
@@ -548,9 +555,12 @@ function computePriority(
     'SOFT_PITCH_COMMITMENT'
   ];
   const importantStages = [
-    'SOLUTION_OFFER',
     'URGENCY',
-    'CAPITAL_QUALIFICATION'
+    'GOAL_EMOTIONAL_WHY',
+    // Legacy stages (backward compat for historical messages)
+    'SOLUTION_OFFER',
+    'CAPITAL_QUALIFICATION',
+    'PAIN_IDENTIFICATION'
   ];
   if (criticalStages.includes(latestStage)) {
     score += 15; // About to book — highest priority
@@ -607,6 +617,10 @@ function checkEscalationTriggers(
   now: Date
 ): { shouldEscalate: boolean; reason: string | null } {
   // Trigger 1: Lead explicitly asks to speak to a human
+  // Signals are niche-agnostic. Tenant-specific owner-name signals
+  // (e.g. "talk to <founder>") should be added via tenant config, not
+  // hardcoded here — otherwise "talk to daniel" leaks DAE into every
+  // tenant's escalation logic.
   const humanRequestSignals = [
     'talk to a real person',
     'speak to someone',
@@ -617,8 +631,9 @@ function checkEscalationTriggers(
     'is this ai',
     'are you ai',
     'this is automated',
-    'talk to daniel',
-    'speak to daniel'
+    'talk to the owner',
+    'talk to your manager',
+    'speak to the founder'
   ];
   const lastLeadMsg =
     leadMessages[leadMessages.length - 1]?.content?.toLowerCase() || '';
@@ -907,7 +922,7 @@ export function generateScoringContextForPrompt(result: ScoringResult): string {
       `Focus purely on building rapport. Ask casual questions about their situation.`
     );
     lines.push(
-      `Offer free value (bootcamp link, resource) to earn trust before any qualification.`
+      `If the tenant has a free value asset (e.g. bootcamp link, guide, case study) configured in promptConfig.assetLinks or knowledgeAssets, offer it to earn trust before any qualification. Otherwise focus on rapport only.`
     );
   }
 

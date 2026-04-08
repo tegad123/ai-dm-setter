@@ -1,6 +1,6 @@
 import prisma from '@/lib/prisma';
 import { generateReply } from '@/lib/ai-engine';
-import type { LeadContext } from '@/lib/ai-prompts';
+import type { LeadContext, BookingSlot } from '@/lib/ai-prompts';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import {
@@ -22,6 +22,105 @@ import {
 } from '@/lib/scoring-integration';
 import { getMessages as getInstagramMessages } from '@/lib/instagram';
 import { getMessages as getFacebookMessages } from '@/lib/facebook';
+import {
+  getUnifiedAvailability,
+  bookUnifiedAppointment
+} from '@/lib/calendar-adapter';
+import { getCredentials } from '@/lib/credential-store';
+
+// ---------------------------------------------------------------------------
+// URL hallucination guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the set of URLs the AI is allowed to send for a given account.
+ * Pulls from the persona's promptConfig (assetLinks, bookingLink,
+ * calendarLink, freeValueLink) and from the persona's freeValueLink column.
+ *
+ * Anything NOT in this set is considered hallucinated and will be stripped
+ * from the AI's reply before delivery.
+ */
+async function getAllowedUrls(accountId: string): Promise<Set<string>> {
+  const allowed = new Set<string>();
+  try {
+    const persona = await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      orderBy: { updatedAt: 'desc' }
+    });
+    if (!persona) return allowed;
+
+    if (persona.freeValueLink && /^https?:\/\//i.test(persona.freeValueLink)) {
+      allowed.add(persona.freeValueLink.trim());
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pc = (persona.promptConfig as any) || {};
+    const candidates: unknown[] = [
+      pc.bookingLink,
+      pc.calendarLink,
+      pc.freeValueLink,
+      pc.courseLink,
+      pc.assetLinks?.bookingLink,
+      pc.assetLinks?.courseLink,
+      pc.assetLinks?.freeValueLink
+    ];
+    for (const c of candidates) {
+      if (typeof c === 'string' && /^https?:\/\//i.test(c)) {
+        allowed.add(c.trim());
+      }
+    }
+    if (Array.isArray(pc.assetLinks?.videoLinks)) {
+      for (const v of pc.assetLinks.videoLinks) {
+        const url = (v &&
+          typeof v === 'object' &&
+          (v as { url?: unknown }).url) as unknown;
+        if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+          allowed.add(url.trim());
+        }
+      }
+    }
+    if (Array.isArray(pc.knowledgeAssets)) {
+      for (const k of pc.knowledgeAssets) {
+        const content =
+          k && typeof k === 'object' && (k as { content?: unknown }).content;
+        if (typeof content === 'string') {
+          const matches = content.match(/https?:\/\/[^\s)]+/g);
+          if (matches) for (const m of matches) allowed.add(m.trim());
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[webhook-processor] getAllowedUrls failed:', err);
+  }
+  return allowed;
+}
+
+/**
+ * Strip any URL from `text` that is not in the allow-list. Returns the
+ * sanitized text and a list of URLs that were removed (for logging).
+ *
+ * This is the last line of defense against URL hallucination (R16). The
+ * AI is also instructed not to invent URLs, but this guard ensures a
+ * fabricated `cal.com/...` link never reaches the lead even if the AI
+ * ignores the rule.
+ */
+function stripHallucinatedUrls(
+  text: string,
+  allowed: Set<string>
+): { sanitized: string; removed: string[] } {
+  const removed: string[] = [];
+  const urlRegex = /https?:\/\/[^\s<>"')]+/g;
+  const sanitized = text.replace(urlRegex, (match) => {
+    // Trim trailing punctuation that the regex might have included
+    const trimmed = match.replace(/[.,;:!?]+$/, '');
+    if (allowed.has(trimmed) || allowed.has(match)) {
+      return match;
+    }
+    removed.push(trimmed);
+    return '[link removed]';
+  });
+  return { sanitized, removed };
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -489,6 +588,84 @@ export async function scheduleAIReply(
     timezone: lead.timezone || undefined
   };
 
+  // ── Step 3a: Inject booking state ───────────────────────────────
+  // Always fetch real calendar slots when ANY calendar integration is
+  // configured. We used to gate this on `stageFinancialScreeningAt` /
+  // `stageBookingAt` to save API calls, but that gate created a race:
+  // the FIRST AI reply that decides to enter BOOKING is generated BEFORE
+  // those timestamps are recorded (recording happens AFTER generateReply
+  // returns), so the very first booking reply had no slots — and the AI
+  // hallucinated a fake calendar URL to fill the gap. Always-on slot
+  // injection costs 1 LC call per AI reply (~250ms) and prevents that.
+  try {
+    // Check ALL providers, not just LeadConnector — any one of them
+    // counts as a calendar integration.
+    const [lcCreds, calendlyCreds, calcomCreds] = await Promise.all([
+      getCredentials(accountId, 'LEADCONNECTOR'),
+      getCredentials(accountId, 'CALENDLY'),
+      getCredentials(accountId, 'CALCOM')
+    ]);
+    const hasCalendarIntegration = Boolean(
+      (lcCreds?.apiKey && lcCreds?.calendarId) ||
+        calendlyCreds?.apiKey ||
+        calcomCreds?.apiKey
+    );
+
+    let availableSlots: BookingSlot[] = [];
+    if (hasCalendarIntegration) {
+      const now = new Date();
+      const end = new Date(now);
+      end.setDate(end.getDate() + 7);
+      const avail = await getUnifiedAvailability(
+        accountId,
+        now.toISOString(),
+        end.toISOString(),
+        conversation.leadTimezone || undefined
+      );
+      // Filter to business hours 9am-7pm in the lead's tz (or UTC fallback)
+      availableSlots = (avail.slots || [])
+        .filter((s) => {
+          const d = new Date(s.start);
+          const hour = conversation.leadTimezone
+            ? Number(
+                new Intl.DateTimeFormat('en-US', {
+                  hour: 'numeric',
+                  hour12: false,
+                  timeZone: conversation.leadTimezone
+                }).format(d)
+              )
+            : d.getUTCHours();
+          return hour >= 9 && hour <= 19;
+        })
+        .slice(0, 12);
+
+      console.log(
+        `[webhook-processor] Fetched ${avail.slots?.length || 0} raw slots from ${avail.provider}, ${availableSlots.length} after business-hours filter (lead tz: ${conversation.leadTimezone || 'UTC fallback'})`
+      );
+    }
+
+    leadContext.booking = {
+      leadTimezone: conversation.leadTimezone,
+      leadEmail: conversation.leadEmail,
+      leadPhone: conversation.leadPhone,
+      availableSlots,
+      hasCalendarIntegration
+    };
+
+    // Persist the proposed slots so we can verify what the lead picks
+    if (availableSlots.length) {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { proposedSlots: availableSlots as any }
+      });
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Booking state injection failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 3b: Get scoring context to inject into AI prompt ──────
   let scoringContext = '';
   try {
@@ -529,6 +706,31 @@ export async function scheduleAIReply(
     return;
   }
 
+  // ── Step 4b: Strip hallucinated URLs (R16 enforcement) ─────────
+  // Last line of defense: even if the AI ignores R16 and fabricates a
+  // booking URL like "cal.com/foo/30min", strip it before delivery so
+  // the lead never receives a broken link. This was the root cause of
+  // the "AI dropped a fake calendar URL" bug.
+  try {
+    const allowedUrls = await getAllowedUrls(accountId);
+    const { sanitized, removed } = stripHallucinatedUrls(
+      result.reply,
+      allowedUrls
+    );
+    if (removed.length) {
+      console.warn(
+        `[webhook-processor] R16 violation for ${conversationId}: AI tried to send ${removed.length} unauthorized URL(s):`,
+        removed
+      );
+      result.reply = sanitized;
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] URL sanitization failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
   if (!shouldAutoSend) {
     // AI is paused — broadcast as a suggestion only, don't save or send
@@ -561,6 +763,8 @@ async function sendAIReply(
   accountId: string,
   lead: {
     id: string;
+    name: string;
+    handle: string;
     platform: string;
     platformUserId: string | null;
     accountId: string;
@@ -578,6 +782,10 @@ async function sendAIReply(
     affirmationDetected?: boolean;
     followUpNumber?: number | null;
     softExit?: boolean;
+    // Booking fields (Stage 7)
+    leadTimezone?: string | null;
+    selectedSlotIso?: string | null;
+    leadEmail?: string | null;
     shouldVoiceNote?: boolean;
     suggestedTag: string;
     suggestedTags: string[];
@@ -646,6 +854,107 @@ async function sendAIReply(
     where: { id: conversationId },
     data: { lastMessageAt: now }
   });
+
+  // ── Persist any booking-stage fields the AI extracted ──────────
+  const bookingUpdates: Record<string, any> = {};
+  if (result.leadTimezone) bookingUpdates.leadTimezone = result.leadTimezone;
+  if (result.leadEmail) bookingUpdates.leadEmail = result.leadEmail;
+  if (Object.keys(bookingUpdates).length) {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: bookingUpdates
+    });
+  }
+
+  // ── Trigger real booking when the AI confirms a slot selection ──
+  // This fires when sub_stage is BOOKING_CONFIRM AND we have the minimum
+  // data needed to book via LeadConnector (slot + email).
+  if (
+    result.subStage === 'BOOKING_CONFIRM' &&
+    result.selectedSlotIso &&
+    result.leadEmail
+  ) {
+    // Validate the selected slot matches one we actually proposed (prevents
+    // the AI from hallucinating times despite R14).
+    const convoForBooking = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { proposedSlots: true, leadTimezone: true }
+    });
+    const proposed =
+      (convoForBooking?.proposedSlots as BookingSlot[] | null) || [];
+    const matchedSlot = proposed.find(
+      (s) => s.start === result.selectedSlotIso
+    );
+
+    if (!matchedSlot) {
+      console.warn(
+        `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — skipping book.`
+      );
+    } else {
+      try {
+        const bookingResult = await bookUnifiedAppointment(accountId, {
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          leadEmail: result.leadEmail,
+          platform: lead.platform,
+          slotStart: matchedSlot.start,
+          slotEnd: matchedSlot.end,
+          timezone: convoForBooking?.leadTimezone || undefined,
+          notes: `Auto-booked via DMsetter AI. Platform: ${lead.platform}, handle: @${lead.handle}.`
+        });
+
+        if (bookingResult.success) {
+          await prisma.conversation.update({
+            where: { id: conversationId },
+            data: {
+              selectedSlot: matchedSlot as any,
+              bookingId: bookingResult.appointmentId || null,
+              bookingUrl: bookingResult.meetingUrl || null,
+              outcome: 'BOOKED'
+            }
+          });
+          await prisma.lead.update({
+            where: { id: lead.id },
+            data: { status: 'BOOKED', bookedAt: new Date() }
+          });
+          await prisma.notification.create({
+            data: {
+              accountId: lead.accountId,
+              type: 'CALL_BOOKED',
+              title: 'New Call Booked (AI)',
+              body: `${lead.name} (@${lead.handle}) booked a call for ${new Date(
+                matchedSlot.start
+              ).toLocaleString('en-US', {
+                dateStyle: 'medium',
+                timeStyle: 'short'
+              })} via ${bookingResult.provider}.`,
+              leadId: lead.id,
+              userId: null
+            }
+          });
+          console.log(
+            `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
+          );
+        } else {
+          console.error(
+            `[webhook-processor] Booking failed for ${conversationId}:`,
+            bookingResult.error
+          );
+          await prisma.notification.create({
+            data: {
+              accountId: lead.accountId,
+              type: 'SYSTEM',
+              title: 'Booking failed — needs human',
+              body: `AI tried to book ${lead.name} but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}`,
+              leadId: lead.id
+            }
+          });
+        }
+      } catch (bookErr: any) {
+        console.error('[webhook-processor] Unhandled booking error:', bookErr);
+      }
+    }
+  }
 
   // ── Handle soft exit ──────────────────────────────────────────
   if (result.softExit) {

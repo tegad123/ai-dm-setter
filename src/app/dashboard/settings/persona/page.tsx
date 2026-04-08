@@ -85,6 +85,71 @@ interface PersonaData {
     stallThinkScript: string;
     stallPartnerScript: string;
     customRules: string;
+    callHandoff: {
+      closerRelation: string;
+      closerRole: string;
+    };
+    // ── NEW SOP-aligned schema (required for v2 master prompt) ──
+    // These fields MUST be populated for the AI to run the new
+    // 7-stage flow correctly. The legacy fields above are kept for
+    // backward compat but the prompt engine prefers these.
+    originStory: string;
+    openingScripts: {
+      inbound: string;
+      outbound: string;
+      openingQuestion: string;
+    };
+    // beginnerKeywords / experiencedKeywords are stored as arrays in
+    // the database but kept as comma-separated strings in UI state so
+    // typing feels natural. The save handler converts string → array
+    // and the load handler converts array → string.
+    beginnerKeywords: string;
+    experiencedKeywords: string;
+    pathAScripts: {
+      opener: string;
+      followUp: string;
+      painPoint: string;
+      resultsCheck: string;
+    };
+    pathBScripts: {
+      opener: string;
+      followUp: string;
+      jobContext: string;
+      availabilityCheck: string;
+    };
+    goalEmotionalWhyScripts: {
+      incomeGoal: string;
+      empathyAnchor: string;
+      obstacleQuestion: string;
+      surfaceToRealBridge: string;
+    };
+    emotionalDisclosurePatterns: string;
+    urgencyScripts: {
+      primary: string;
+      followUpIfLow: string;
+      followUpIfHigh: string;
+    };
+    softPitchScripts: {
+      beginner: string;
+      experienced: string;
+    };
+    commitmentConfirmationScript: string;
+    financialScreeningScripts: {
+      level1Capital: string;
+      level2Credit: string;
+      level3CreditCard: string;
+      level4Transition: string;
+    };
+    lowTicketPitchScripts: string;
+    bookingScripts: {
+      transition: string;
+      proposeTime: string;
+      doubleDown: string;
+      collectInfo: string;
+      confirmBooking: string;
+      preCallContent: string;
+    };
+    incomeFramingRule: string;
   };
   financialWaterfall: WaterfallStep[];
   knowledgeAssets: KnowledgeAsset[];
@@ -129,7 +194,54 @@ const defaultPersona: PersonaData = {
     stallMoneyScript: '',
     stallThinkScript: '',
     stallPartnerScript: '',
-    customRules: ''
+    customRules: '',
+    callHandoff: {
+      closerRelation: '',
+      closerRole: ''
+    },
+    // SOP v2 defaults — empty so that validation gates the save
+    originStory: '',
+    openingScripts: { inbound: '', outbound: '', openingQuestion: '' },
+    beginnerKeywords: '',
+    experiencedKeywords: '',
+    pathAScripts: {
+      opener: '',
+      followUp: '',
+      painPoint: '',
+      resultsCheck: ''
+    },
+    pathBScripts: {
+      opener: '',
+      followUp: '',
+      jobContext: '',
+      availabilityCheck: ''
+    },
+    goalEmotionalWhyScripts: {
+      incomeGoal: '',
+      empathyAnchor: '',
+      obstacleQuestion: '',
+      surfaceToRealBridge: ''
+    },
+    emotionalDisclosurePatterns: '',
+    urgencyScripts: { primary: '', followUpIfLow: '', followUpIfHigh: '' },
+    softPitchScripts: { beginner: '', experienced: '' },
+    commitmentConfirmationScript: '',
+    financialScreeningScripts: {
+      level1Capital: '',
+      level2Credit: '',
+      level3CreditCard: '',
+      level4Transition: ''
+    },
+    lowTicketPitchScripts: '',
+    bookingScripts: {
+      transition: '',
+      proposeTime: '',
+      doubleDown: '',
+      collectInfo: '',
+      confirmBooking: '',
+      preCallContent: ''
+    },
+    incomeFramingRule: ''
   },
   financialWaterfall: [],
   knowledgeAssets: [],
@@ -137,6 +249,49 @@ const defaultPersona: PersonaData = {
   noShowProtocol: { firstNoShow: '', secondNoShow: '' },
   preCallSequence: []
 };
+
+// ─────────────────────────────────────────────────────────────────────
+// Helpers for the SOP v2 fields (keywords ↔ array conversion + safe
+// nested object hydration). These live at module scope so the load and
+// save handlers can share them.
+// ─────────────────────────────────────────────────────────────────────
+
+function keywordsToString(v: unknown): string {
+  if (Array.isArray(v)) return v.filter(Boolean).join(', ');
+  if (typeof v === 'string') return v;
+  return '';
+}
+
+function keywordsToArray(s: string): string[] {
+  return s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+// Hydrate a SOP nested object — if the stored value is an object,
+// merge known keys; if it's a plain string (the old fallback the prompt
+// engine accepts), drop it into the FIRST sub-field so the user can
+// see and edit it without losing data.
+function hydrateNested<K extends string>(
+  raw: unknown,
+  keys: readonly K[],
+  primaryKey: K
+): Record<K, string> {
+  const out = {} as Record<K, string>;
+  for (const k of keys) out[k] = '';
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === 'string') out[k] = v;
+      else if (v != null) out[k] = JSON.stringify(v);
+    }
+  } else if (typeof raw === 'string' && raw.trim()) {
+    out[primaryKey] = raw;
+  }
+  return out;
+}
 
 export default function PersonaSettingsPage() {
   const [persona, setPersona] = useState<PersonaData>(defaultPersona);
@@ -168,7 +323,12 @@ export default function PersonaSettingsPage() {
               money: oh.money ?? '',
               time: oh.time ?? ''
             },
+            // Spread `pc` first so any unknown extra keys stored in the DB
+            // survive the load round-trip. Then explicitly hydrate every UI
+            // field so inputs are never undefined and the SOP nested objects
+            // always have all their sub-keys present.
             promptConfig: {
+              ...pc,
               whatYouSell: pc.whatYouSell ?? '',
               adminBio: pc.adminBio ?? '',
               toneDescription: pc.toneDescription ?? '',
@@ -190,7 +350,92 @@ export default function PersonaSettingsPage() {
               stallMoneyScript: pc.stallMoneyScript ?? '',
               stallThinkScript: pc.stallThinkScript ?? '',
               stallPartnerScript: pc.stallPartnerScript ?? '',
-              customRules: pc.customRules ?? ''
+              customRules: pc.customRules ?? '',
+              callHandoff: {
+                closerRelation: pc.callHandoff?.closerRelation ?? '',
+                closerRole: pc.callHandoff?.closerRole ?? ''
+              },
+              // SOP v2 hydration
+              originStory: pc.originStory ?? '',
+              openingScripts: hydrateNested(
+                pc.openingScripts,
+                ['inbound', 'outbound', 'openingQuestion'] as const,
+                'inbound'
+              ),
+              beginnerKeywords: keywordsToString(pc.beginnerKeywords),
+              experiencedKeywords: keywordsToString(pc.experiencedKeywords),
+              pathAScripts: hydrateNested(
+                pc.pathAScripts,
+                ['opener', 'followUp', 'painPoint', 'resultsCheck'] as const,
+                'opener'
+              ),
+              pathBScripts: hydrateNested(
+                pc.pathBScripts,
+                [
+                  'opener',
+                  'followUp',
+                  'jobContext',
+                  'availabilityCheck'
+                ] as const,
+                'opener'
+              ),
+              goalEmotionalWhyScripts: hydrateNested(
+                pc.goalEmotionalWhyScripts,
+                [
+                  'incomeGoal',
+                  'empathyAnchor',
+                  'obstacleQuestion',
+                  'surfaceToRealBridge'
+                ] as const,
+                'incomeGoal'
+              ),
+              emotionalDisclosurePatterns:
+                typeof pc.emotionalDisclosurePatterns === 'string'
+                  ? pc.emotionalDisclosurePatterns
+                  : pc.emotionalDisclosurePatterns
+                    ? JSON.stringify(pc.emotionalDisclosurePatterns, null, 2)
+                    : '',
+              urgencyScripts: hydrateNested(
+                pc.urgencyScripts,
+                ['primary', 'followUpIfLow', 'followUpIfHigh'] as const,
+                'primary'
+              ),
+              softPitchScripts: hydrateNested(
+                pc.softPitchScripts,
+                ['beginner', 'experienced'] as const,
+                'beginner'
+              ),
+              commitmentConfirmationScript:
+                pc.commitmentConfirmationScript ?? '',
+              financialScreeningScripts: hydrateNested(
+                pc.financialScreeningScripts,
+                [
+                  'level1Capital',
+                  'level2Credit',
+                  'level3CreditCard',
+                  'level4Transition'
+                ] as const,
+                'level1Capital'
+              ),
+              lowTicketPitchScripts:
+                typeof pc.lowTicketPitchScripts === 'string'
+                  ? pc.lowTicketPitchScripts
+                  : pc.lowTicketPitchScripts
+                    ? JSON.stringify(pc.lowTicketPitchScripts, null, 2)
+                    : '',
+              bookingScripts: hydrateNested(
+                pc.bookingScripts,
+                [
+                  'transition',
+                  'proposeTime',
+                  'doubleDown',
+                  'collectInfo',
+                  'confirmBooking',
+                  'preCallContent'
+                ] as const,
+                'transition'
+              ),
+              incomeFramingRule: pc.incomeFramingRule ?? ''
             },
             financialWaterfall: Array.isArray(data.financialWaterfall)
               ? data.financialWaterfall
@@ -210,8 +455,16 @@ export default function PersonaSettingsPage() {
               : []
           });
         }
-      } catch {
-        // If no persona exists yet, keep defaults
+      } catch (err) {
+        // Log so we can actually see load failures in the console instead
+        // of silently falling back to defaults (which looks like "everything
+        // disappeared" to the user).
+        console.error('[persona] Failed to load persona:', err);
+        toast.error(
+          err instanceof Error
+            ? `Failed to load persona: ${err.message}`
+            : 'Failed to load persona'
+        );
       } finally {
         setLoading(false);
       }
@@ -233,6 +486,46 @@ export default function PersonaSettingsPage() {
     }));
   }
 
+  function updateCallHandoff(
+    field: keyof PersonaData['promptConfig']['callHandoff'],
+    value: string
+  ) {
+    setPersona((prev) => ({
+      ...prev,
+      promptConfig: {
+        ...prev.promptConfig,
+        callHandoff: { ...prev.promptConfig.callHandoff, [field]: value }
+      }
+    }));
+  }
+
+  // Generic helper for the SOP nested-object fields (openingScripts,
+  // pathAScripts, bookingScripts, etc.). Avoids writing one bespoke
+  // updater per object.
+  function updateNested<
+    K extends
+      | 'openingScripts'
+      | 'pathAScripts'
+      | 'pathBScripts'
+      | 'goalEmotionalWhyScripts'
+      | 'urgencyScripts'
+      | 'softPitchScripts'
+      | 'financialScreeningScripts'
+      | 'bookingScripts'
+  >(field: K, subField: string, value: string) {
+    setPersona((prev) => ({
+      ...prev,
+      promptConfig: {
+        ...prev.promptConfig,
+        [field]: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...((prev.promptConfig[field] as any) || {}),
+          [subField]: value
+        }
+      }
+    }));
+  }
+
   function updateObjection(
     field: keyof PersonaData['objectionHandling'],
     value: string
@@ -243,9 +536,109 @@ export default function PersonaSettingsPage() {
     }));
   }
 
+  // Validates that every SOP v2 required field is populated.
+  // Returns a list of missing field labels — empty list = OK to save.
+  function getMissingRequired(): string[] {
+    const missing: string[] = [];
+    const pc = persona.promptConfig;
+
+    if (!persona.fullName.trim()) missing.push('Your Full Name');
+
+    // Stage 1 — Opening
+    if (!pc.openingScripts.inbound.trim())
+      missing.push('Opening: Inbound opener');
+    if (!pc.openingScripts.outbound.trim())
+      missing.push('Opening: Outbound opener');
+    if (!pc.openingScripts.openingQuestion.trim())
+      missing.push('Opening: Opening question');
+
+    // Stage 2 — Experience branching
+    if (!pc.beginnerKeywords.trim())
+      missing.push('Experience: Beginner keywords');
+    if (!pc.experiencedKeywords.trim())
+      missing.push('Experience: Experienced keywords');
+    if (!pc.pathAScripts.opener.trim())
+      missing.push('Path A (Experienced): Opener');
+    if (!pc.pathAScripts.followUp.trim())
+      missing.push('Path A (Experienced): Follow-up');
+    if (!pc.pathAScripts.painPoint.trim())
+      missing.push('Path A (Experienced): Pain point');
+    if (!pc.pathBScripts.opener.trim())
+      missing.push('Path B (Beginner): Opener');
+    if (!pc.pathBScripts.followUp.trim())
+      missing.push('Path B (Beginner): Follow-up');
+
+    // Stage 3 — Goal & emotional why
+    if (!pc.goalEmotionalWhyScripts.incomeGoal.trim())
+      missing.push('Goal & Why: Income goal question');
+    if (!pc.goalEmotionalWhyScripts.empathyAnchor.trim())
+      missing.push('Goal & Why: Empathy anchor');
+    if (!pc.goalEmotionalWhyScripts.obstacleQuestion.trim())
+      missing.push('Goal & Why: Obstacle question');
+
+    // Stage 4 — Urgency (mandatory)
+    if (!pc.urgencyScripts.primary.trim())
+      missing.push('Urgency: Primary question');
+
+    // Stage 5 — Soft pitch + commitment
+    if (!pc.softPitchScripts.beginner.trim())
+      missing.push('Soft Pitch: Beginner');
+    if (!pc.softPitchScripts.experienced.trim())
+      missing.push('Soft Pitch: Experienced');
+    if (!pc.commitmentConfirmationScript.trim())
+      missing.push('Commitment Confirmation Script');
+
+    // Stage 6 — Financial screening waterfall
+    if (!pc.financialScreeningScripts.level1Capital.trim())
+      missing.push('Financial: Level 1 (Capital)');
+    if (!pc.financialScreeningScripts.level2Credit.trim())
+      missing.push('Financial: Level 2 (Credit Score)');
+    if (!pc.financialScreeningScripts.level3CreditCard.trim())
+      missing.push('Financial: Level 3 (Credit Card)');
+    if (!pc.financialScreeningScripts.level4Transition.trim())
+      missing.push('Financial: Level 4 (Low-ticket Transition)');
+
+    // Stage 7 — Booking
+    if (!pc.bookingScripts.transition.trim())
+      missing.push('Booking: Transition');
+    if (!pc.bookingScripts.proposeTime.trim())
+      missing.push('Booking: Propose time');
+    if (!pc.bookingScripts.doubleDown.trim())
+      missing.push('Booking: Double down');
+    if (!pc.bookingScripts.collectInfo.trim())
+      missing.push('Booking: Collect info');
+    if (!pc.bookingScripts.confirmBooking.trim())
+      missing.push('Booking: Confirm booking');
+
+    return missing;
+  }
+
   async function handleSave() {
+    // ── Required-field validation (SOP v2) ──────────────────────────
+    const missing = getMissingRequired();
+    if (missing.length > 0) {
+      const preview = missing.slice(0, 6).join(', ');
+      const more = missing.length > 6 ? ` (+${missing.length - 6} more)` : '';
+      toast.error(
+        `Missing required fields: ${preview}${more}. Scroll to the SOP Sales Flow card or upload your playbook to auto-fill.`
+      );
+      return;
+    }
+
     setSaving(true);
     try {
+      // Build the promptConfig payload — convert keyword strings back
+      // to arrays so the AI engine can use them as-is.
+      const promptConfigPayload = {
+        ...persona.promptConfig,
+        beginnerKeywords: keywordsToArray(
+          persona.promptConfig.beginnerKeywords
+        ),
+        experiencedKeywords: keywordsToArray(
+          persona.promptConfig.experiencedKeywords
+        )
+      };
+
       await apiFetch('/settings/persona', {
         method: 'PUT',
         body: JSON.stringify({
@@ -256,7 +649,7 @@ export default function PersonaSettingsPage() {
           freeValueLink: persona.freeValueLink,
           closerName: persona.closerName,
           objectionHandling: persona.objectionHandling,
-          promptConfig: persona.promptConfig,
+          promptConfig: promptConfigPayload,
           financialWaterfall:
             persona.financialWaterfall.length > 0
               ? persona.financialWaterfall
@@ -279,8 +672,13 @@ export default function PersonaSettingsPage() {
         })
       });
       toast.success('Persona saved');
-    } catch {
-      toast.error('Failed to save');
+    } catch (err) {
+      console.error('[persona] Failed to save persona:', err);
+      toast.error(
+        err instanceof Error
+          ? `Failed to save: ${err.message}`
+          : 'Failed to save'
+      );
     } finally {
       setSaving(false);
     }
@@ -382,7 +780,13 @@ export default function PersonaSettingsPage() {
               data.objectionHandling?.money || prev.objectionHandling.money,
             time: data.objectionHandling?.time || prev.objectionHandling.time
           },
+          // Spread-merge promptConfig: first preserve prev, then overlay extracted.
+          // Legacy flat fields fall back to prev. The SOP v2 nested objects use
+          // hydrateNested so any partial extractor output keeps the rest of
+          // prev intact (never blanking a sub-field the user already filled).
           promptConfig: {
+            ...prev.promptConfig,
+            ...epc,
             whatYouSell: epc.whatYouSell || prev.promptConfig.whatYouSell,
             adminBio: epc.adminBio || prev.promptConfig.adminBio,
             toneDescription:
@@ -424,7 +828,127 @@ export default function PersonaSettingsPage() {
               epc.stallThinkScript || prev.promptConfig.stallThinkScript,
             stallPartnerScript:
               epc.stallPartnerScript || prev.promptConfig.stallPartnerScript,
-            customRules: epc.customRules || prev.promptConfig.customRules
+            customRules: epc.customRules || prev.promptConfig.customRules,
+            callHandoff: {
+              closerRelation:
+                epc.callHandoff?.closerRelation ||
+                prev.promptConfig.callHandoff.closerRelation,
+              closerRole:
+                epc.callHandoff?.closerRole ||
+                prev.promptConfig.callHandoff.closerRole
+            },
+            // ── SOP v2 hydration ────────────────────────────────────
+            originStory: epc.originStory || prev.promptConfig.originStory,
+            openingScripts: {
+              ...prev.promptConfig.openingScripts,
+              ...hydrateNested(
+                epc.openingScripts,
+                ['inbound', 'outbound', 'openingQuestion'] as const,
+                'inbound'
+              )
+            },
+            beginnerKeywords:
+              keywordsToString(epc.beginnerKeywords) ||
+              prev.promptConfig.beginnerKeywords,
+            experiencedKeywords:
+              keywordsToString(epc.experiencedKeywords) ||
+              prev.promptConfig.experiencedKeywords,
+            pathAScripts: {
+              ...prev.promptConfig.pathAScripts,
+              ...hydrateNested(
+                epc.pathAScripts,
+                ['opener', 'followUp', 'painPoint', 'resultsCheck'] as const,
+                'opener'
+              )
+            },
+            pathBScripts: {
+              ...prev.promptConfig.pathBScripts,
+              ...hydrateNested(
+                epc.pathBScripts,
+                [
+                  'opener',
+                  'followUp',
+                  'jobContext',
+                  'availabilityCheck'
+                ] as const,
+                'opener'
+              )
+            },
+            goalEmotionalWhyScripts: {
+              ...prev.promptConfig.goalEmotionalWhyScripts,
+              ...hydrateNested(
+                epc.goalEmotionalWhyScripts,
+                [
+                  'incomeGoal',
+                  'empathyAnchor',
+                  'obstacleQuestion',
+                  'surfaceToRealBridge'
+                ] as const,
+                'incomeGoal'
+              )
+            },
+            emotionalDisclosurePatterns:
+              (typeof epc.emotionalDisclosurePatterns === 'string'
+                ? epc.emotionalDisclosurePatterns
+                : epc.emotionalDisclosurePatterns
+                  ? JSON.stringify(epc.emotionalDisclosurePatterns, null, 2)
+                  : '') || prev.promptConfig.emotionalDisclosurePatterns,
+            urgencyScripts: {
+              ...prev.promptConfig.urgencyScripts,
+              ...hydrateNested(
+                epc.urgencyScripts,
+                ['primary', 'followUpIfLow', 'followUpIfHigh'] as const,
+                'primary'
+              )
+            },
+            softPitchScripts: {
+              ...prev.promptConfig.softPitchScripts,
+              ...hydrateNested(
+                epc.softPitchScripts,
+                ['beginner', 'experienced'] as const,
+                'beginner'
+              )
+            },
+            commitmentConfirmationScript:
+              epc.commitmentConfirmationScript ||
+              epc.softPitchScripts?.commitmentConfirmation ||
+              prev.promptConfig.commitmentConfirmationScript,
+            financialScreeningScripts: {
+              ...prev.promptConfig.financialScreeningScripts,
+              ...hydrateNested(
+                epc.financialScreeningScripts,
+                [
+                  'level1Capital',
+                  'level2Credit',
+                  'level3CreditCard',
+                  'level4Transition'
+                ] as const,
+                'level1Capital'
+              )
+            },
+            lowTicketPitchScripts:
+              (typeof epc.lowTicketPitchScripts === 'string'
+                ? epc.lowTicketPitchScripts
+                : epc.lowTicketPitchScripts
+                  ? JSON.stringify(epc.lowTicketPitchScripts, null, 2)
+                  : '') || prev.promptConfig.lowTicketPitchScripts,
+            bookingScripts: {
+              ...prev.promptConfig.bookingScripts,
+              ...hydrateNested(
+                epc.bookingScripts,
+                [
+                  'transition',
+                  'proposeTime',
+                  'doubleDown',
+                  'collectInfo',
+                  'confirmBooking',
+                  'preCallContent'
+                ] as const,
+                'transition'
+              )
+            },
+            incomeFramingRule:
+              epc.incomeFramingRule || prev.promptConfig.incomeFramingRule
           },
           financialWaterfall:
             Array.isArray(data.financialWaterfall) &&
@@ -665,6 +1189,763 @@ export default function PersonaSettingsPage() {
           </CardContent>
         </Card>
 
+        {/* Section: SOP Sales Flow Scripts (REQUIRED for v2 prompt) */}
+        <Card className='border-amber-300 bg-amber-50/40 dark:border-amber-900 dark:bg-amber-950/20'>
+          <CardHeader>
+            <CardTitle>
+              SOP Sales Flow Scripts <span className='text-destructive'>*</span>
+            </CardTitle>
+            <CardDescription>
+              The structured 7-stage flow the AI runs end-to-end. Every field
+              marked with <span className='text-destructive'>*</span> is
+              required — the save will be blocked until they&apos;re filled.
+              Tip: upload your sales playbook above and the AI will auto-fill
+              everything in this card.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-8'>
+            {/* Stage 1: Opening */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 1: Opening
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Inbound opener <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What you say when a lead messages you first'
+                  value={persona.promptConfig.openingScripts.inbound}
+                  onChange={(e) =>
+                    updateNested('openingScripts', 'inbound', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Outbound opener <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What you say when you DM a lead first'
+                  value={persona.promptConfig.openingScripts.outbound}
+                  onChange={(e) =>
+                    updateNested('openingScripts', 'outbound', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Opening question <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='The question that gets the lead talking and triggers experience-level branching'
+                  value={persona.promptConfig.openingScripts.openingQuestion}
+                  onChange={(e) =>
+                    updateNested(
+                      'openingScripts',
+                      'openingQuestion',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 2: Experience Branching */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 2: Experience-Level Branching
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Beginner keywords <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='Comma-separated list, e.g. just starting, never traded, complete beginner, just curious'
+                  value={persona.promptConfig.beginnerKeywords}
+                  onChange={(e) =>
+                    updatePromptConfig('beginnerKeywords', e.target.value)
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  When a lead uses any of these phrases, the AI routes them to
+                  Path B (Beginner).
+                </p>
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Experienced keywords{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='Comma-separated list, e.g. been trading, years, prop firm, my strategy, my setups'
+                  value={persona.promptConfig.experiencedKeywords}
+                  onChange={(e) =>
+                    updatePromptConfig('experiencedKeywords', e.target.value)
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  When a lead uses any of these phrases, the AI routes them to
+                  Path A (Experienced).
+                </p>
+              </div>
+
+              <div className='bg-background/50 space-y-3 rounded-md border p-3'>
+                <h5 className='text-muted-foreground text-xs font-semibold uppercase'>
+                  Path A: Experienced Lead
+                </h5>
+                <div className='grid gap-2'>
+                  <Label>
+                    Opener <span className='text-destructive'>*</span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Your first response to an experienced lead after they reveal their experience level'
+                    value={persona.promptConfig.pathAScripts.opener}
+                    onChange={(e) =>
+                      updateNested('pathAScripts', 'opener', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Follow-up question{' '}
+                    <span className='text-destructive'>*</span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Discovery question to dig into their current setup'
+                    value={persona.promptConfig.pathAScripts.followUp}
+                    onChange={(e) =>
+                      updateNested('pathAScripts', 'followUp', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Pain point question{' '}
+                    <span className='text-destructive'>*</span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder="Question that surfaces what's currently NOT working for them"
+                    value={persona.promptConfig.pathAScripts.painPoint}
+                    onChange={(e) =>
+                      updateNested('pathAScripts', 'painPoint', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Results check{' '}
+                    <span className='text-muted-foreground text-xs font-normal'>
+                      (optional)
+                    </span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Question that validates how their current results actually look'
+                    value={persona.promptConfig.pathAScripts.resultsCheck}
+                    onChange={(e) =>
+                      updateNested(
+                        'pathAScripts',
+                        'resultsCheck',
+                        e.target.value
+                      )
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className='bg-background/50 space-y-3 rounded-md border p-3'>
+                <h5 className='text-muted-foreground text-xs font-semibold uppercase'>
+                  Path B: Beginner Lead
+                </h5>
+                <div className='grid gap-2'>
+                  <Label>
+                    Opener <span className='text-destructive'>*</span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Your first response to a beginner lead — encouraging and curious, never condescending'
+                    value={persona.promptConfig.pathBScripts.opener}
+                    onChange={(e) =>
+                      updateNested('pathBScripts', 'opener', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Follow-up question{' '}
+                    <span className='text-destructive'>*</span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Discovery question — what got them interested, what they have tried'
+                    value={persona.promptConfig.pathBScripts.followUp}
+                    onChange={(e) =>
+                      updateNested('pathBScripts', 'followUp', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Job context question{' '}
+                    <span className='text-muted-foreground text-xs font-normal'>
+                      (optional)
+                    </span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Question about their current job/income situation'
+                    value={persona.promptConfig.pathBScripts.jobContext}
+                    onChange={(e) =>
+                      updateNested('pathBScripts', 'jobContext', e.target.value)
+                    }
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <Label>
+                    Availability check{' '}
+                    <span className='text-muted-foreground text-xs font-normal'>
+                      (optional)
+                    </span>
+                  </Label>
+                  <Textarea
+                    rows={2}
+                    placeholder='Question about how much time they can commit'
+                    value={persona.promptConfig.pathBScripts.availabilityCheck}
+                    onChange={(e) =>
+                      updateNested(
+                        'pathBScripts',
+                        'availabilityCheck',
+                        e.target.value
+                      )
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 3: Goal & Emotional Why */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 3: Goal & Emotional Why
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Income goal question{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='Question that surfaces the income/result they want'
+                  value={
+                    persona.promptConfig.goalEmotionalWhyScripts.incomeGoal
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'goalEmotionalWhyScripts',
+                      'incomeGoal',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Empathy anchor line{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='The empathy line attached to the income question (e.g. "asking since I used to work jobs similar to that")'
+                  value={
+                    persona.promptConfig.goalEmotionalWhyScripts.empathyAnchor
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'goalEmotionalWhyScripts',
+                      'empathyAnchor',
+                      e.target.value
+                    )
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  Bug 04 fix: this line MUST follow the income question every
+                  time so the lead doesn&apos;t feel judged.
+                </p>
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Obstacle question <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder="Question that uncovers what's stopping them from hitting their goal"
+                  value={
+                    persona.promptConfig.goalEmotionalWhyScripts
+                      .obstacleQuestion
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'goalEmotionalWhyScripts',
+                      'obstacleQuestion',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Surface-to-real bridge{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='Bridge from surface answer to deeper why (family, freedom, etc.)'
+                  value={
+                    persona.promptConfig.goalEmotionalWhyScripts
+                      .surfaceToRealBridge
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'goalEmotionalWhyScripts',
+                      'surfaceToRealBridge',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Emotional disclosure response patterns{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={4}
+                  placeholder='How to acknowledge deep personal disclosures (absent parent, financial stress, etc.). Reference specific details — never generic.'
+                  value={persona.promptConfig.emotionalDisclosurePatterns}
+                  onChange={(e) =>
+                    updatePromptConfig(
+                      'emotionalDisclosurePatterns',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 4: Urgency */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 4: Urgency (mandatory)
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Primary urgency question{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='e.g. "scale of 1-10, how bad do you actually want this? if nothing changes in 12 months — are you good with that?"'
+                  value={persona.promptConfig.urgencyScripts.primary}
+                  onChange={(e) =>
+                    updateNested('urgencyScripts', 'primary', e.target.value)
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  Cannot be skipped. Fires before every soft pitch.
+                </p>
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Follow-up if urgency is LOW{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What to say if they answer 1-5 — try to surface a bigger emotional driver'
+                  value={persona.promptConfig.urgencyScripts.followUpIfLow}
+                  onChange={(e) =>
+                    updateNested(
+                      'urgencyScripts',
+                      'followUpIfLow',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Follow-up if urgency is HIGH{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What to say if they answer 8-10 — validate and proceed to soft pitch'
+                  value={persona.promptConfig.urgencyScripts.followUpIfHigh}
+                  onChange={(e) =>
+                    updateNested(
+                      'urgencyScripts',
+                      'followUpIfHigh',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 5: Soft Pitch + Commitment */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 5: Soft Pitch & Commitment Confirmation
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Soft pitch — beginner version{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={4}
+                  placeholder='How you pitch the call/program to a beginner lead — soft, no hard close'
+                  value={persona.promptConfig.softPitchScripts.beginner}
+                  onChange={(e) =>
+                    updateNested('softPitchScripts', 'beginner', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Soft pitch — experienced version{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={4}
+                  placeholder='How you pitch the call/program to an experienced lead — focus on what they are missing'
+                  value={persona.promptConfig.softPitchScripts.experienced}
+                  onChange={(e) =>
+                    updateNested(
+                      'softPitchScripts',
+                      'experienced',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Commitment confirmation script{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='What you say AFTER they react positively to the soft pitch — locks in commitment before financial screening'
+                  value={persona.promptConfig.commitmentConfirmationScript}
+                  onChange={(e) =>
+                    updatePromptConfig(
+                      'commitmentConfirmationScript',
+                      e.target.value
+                    )
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  Bug 01 fix: positive responses to the soft pitch route HERE,
+                  not to a soft exit.
+                </p>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 6: Financial Screening */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 6: Financial Screening Waterfall
+              </h4>
+              <p className='text-muted-foreground text-xs'>
+                4 levels in order. The AI moves to the next level only if the
+                current one fails. Even Level 4 fail = soft exit.
+              </p>
+              <div className='grid gap-2'>
+                <Label>
+                  Level 1 — Liquid capital{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='Question + framing for liquid capital availability'
+                  value={
+                    persona.promptConfig.financialScreeningScripts.level1Capital
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'financialScreeningScripts',
+                      'level1Capital',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Level 2 — Credit score{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='Question + framing for credit score (fires if Level 1 fails)'
+                  value={
+                    persona.promptConfig.financialScreeningScripts.level2Credit
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'financialScreeningScripts',
+                      'level2Credit',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Level 3 — Credit card limit{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='Question + framing for credit card availability (fires if Level 2 fails)'
+                  value={
+                    persona.promptConfig.financialScreeningScripts
+                      .level3CreditCard
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'financialScreeningScripts',
+                      'level3CreditCard',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Level 4 — Low-ticket transition{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='How you transition into the low-ticket pitch (fires if Level 3 fails)'
+                  value={
+                    persona.promptConfig.financialScreeningScripts
+                      .level4Transition
+                  }
+                  onChange={(e) =>
+                    updateNested(
+                      'financialScreeningScripts',
+                      'level4Transition',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Low-ticket pitch sequence{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={4}
+                  placeholder='The full multi-message sequence for pitching your low-ticket offer (e.g. $497 course)'
+                  value={persona.promptConfig.lowTicketPitchScripts}
+                  onChange={(e) =>
+                    updatePromptConfig('lowTicketPitchScripts', e.target.value)
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Stage 7: Booking */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Stage 7: Booking Flow
+              </h4>
+              <p className='text-muted-foreground text-xs'>
+                The booking link / available slots come from your calendar
+                integration (Settings → Integrations). Don&apos;t paste any URLs
+                into these scripts — the AI fills them in automatically.
+              </p>
+              <div className='grid gap-2'>
+                <Label>
+                  Transition into booking{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='How you move from financial screening pass into booking the call'
+                  value={persona.promptConfig.bookingScripts.transition}
+                  onChange={(e) =>
+                    updateNested('bookingScripts', 'transition', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Propose times script{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='How you offer specific calendar slots — the AI will inject real times here'
+                  value={persona.promptConfig.bookingScripts.proposeTime}
+                  onChange={(e) =>
+                    updateNested(
+                      'bookingScripts',
+                      'proposeTime',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Double-down script <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='What you say if they hesitate after seeing the times — reinforce why this matters'
+                  value={persona.promptConfig.bookingScripts.doubleDown}
+                  onChange={(e) =>
+                    updateNested('bookingScripts', 'doubleDown', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Collect-info script{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What you ask for after they pick a time (name, email, phone)'
+                  value={persona.promptConfig.bookingScripts.collectInfo}
+                  onChange={(e) =>
+                    updateNested(
+                      'bookingScripts',
+                      'collectInfo',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Confirm booking script{' '}
+                  <span className='text-destructive'>*</span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='Confirmation message after the appointment is created'
+                  value={persona.promptConfig.bookingScripts.confirmBooking}
+                  onChange={(e) =>
+                    updateNested(
+                      'bookingScripts',
+                      'confirmBooking',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Pre-call content message{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={2}
+                  placeholder='What you send right after booking — videos to watch, what to prepare, etc.'
+                  value={persona.promptConfig.bookingScripts.preCallContent}
+                  onChange={(e) =>
+                    updateNested(
+                      'bookingScripts',
+                      'preCallContent',
+                      e.target.value
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Optional: Origin Story + Income Framing */}
+            <div className='space-y-4'>
+              <h4 className='border-b pb-1 text-sm font-semibold'>
+                Optional: Origin Story & Income Framing
+              </h4>
+              <div className='grid gap-2'>
+                <Label>
+                  Full origin story{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional but recommended)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={5}
+                  placeholder='The full first-person story of how you got started, the struggles, the breakthrough — used during trust objections'
+                  value={persona.promptConfig.originStory}
+                  onChange={(e) =>
+                    updatePromptConfig('originStory', e.target.value)
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label>
+                  Income framing rule{' '}
+                  <span className='text-muted-foreground text-xs font-normal'>
+                    (optional)
+                  </span>
+                </Label>
+                <Textarea
+                  rows={3}
+                  placeholder='Standing instruction for how to frame any income/financial question — non-judgmental, empathetic'
+                  value={persona.promptConfig.incomeFramingRule}
+                  onChange={(e) =>
+                    updatePromptConfig('incomeFramingRule', e.target.value)
+                  }
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Section 2: Tone & Style */}
         <Card>
           <CardHeader>
@@ -787,7 +2068,52 @@ export default function PersonaSettingsPage() {
                 onChange={(e) => updateField('closerName', e.target.value)}
               />
               <p className='text-muted-foreground text-xs'>
-                If left empty, your name will be used.
+                If the person taking the call is different from the DM persona,
+                enter their name here. Leave empty if you take the calls
+                yourself.
+              </p>
+            </div>
+            <div className='grid gap-2'>
+              <Label htmlFor='closerRelation'>
+                Closer Relationship{' '}
+                <span className='text-muted-foreground text-xs font-normal'>
+                  (optional — only if closer is set)
+                </span>
+              </Label>
+              <Input
+                id='closerRelation'
+                placeholder='e.g. my partner, my co-founder, my business partner'
+                value={persona.promptConfig.callHandoff.closerRelation}
+                onChange={(e) =>
+                  updateCallHandoff('closerRelation', e.target.value)
+                }
+              />
+              <p className='text-muted-foreground text-xs'>
+                How you naturally describe your relationship. The AI will say
+                things like &ldquo;I&rsquo;d love to get you on a quick call
+                with <em>my partner</em> {persona.closerName || '[closer]'}
+                &rdquo;. Write it the way you&rsquo;d say it out loud.
+              </p>
+            </div>
+            <div className='grid gap-2'>
+              <Label htmlFor='closerRole'>
+                Closer Role{' '}
+                <span className='text-muted-foreground text-xs font-normal'>
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id='closerRole'
+                placeholder='e.g. runs all our strategy calls, handles new clients, closes deals'
+                value={persona.promptConfig.callHandoff.closerRole}
+                onChange={(e) =>
+                  updateCallHandoff('closerRole', e.target.value)
+                }
+              />
+              <p className='text-muted-foreground text-xs'>
+                What they do on the call. Used to introduce them naturally when
+                pitching the call. Leave blank if just the name + relation is
+                enough.
               </p>
             </div>
           </CardContent>

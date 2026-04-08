@@ -3,12 +3,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 
-// Stage timestamp fields in order for determining current stage
+// Stage timestamp fields in order for determining current stage.
+// Listed in reverse funnel order (latest stage first) so `getCurrentStage`
+// returns the deepest stage reached.
 const STAGE_FIELDS = [
+  // New 7-stage SOP sequence
   { stage: 'booking', field: 'stageBookingAt' },
+  { stage: 'financial_screening', field: 'stageFinancialScreeningAt' },
+  { stage: 'soft_pitch_commitment', field: 'stageSoftPitchCommitmentAt' },
+  { stage: 'urgency', field: 'stageUrgencyAt' },
+  { stage: 'goal_emotional_why', field: 'stageGoalEmotionalWhyAt' },
+  { stage: 'situation_discovery', field: 'stageSituationDiscoveryAt' },
+  { stage: 'opening', field: 'stageOpeningAt' },
+  // Legacy fields (backward compat for historical conversations)
   { stage: 'capital_qualification', field: 'stageCapitalQualificationAt' },
   { stage: 'solution_offer', field: 'stageSolutionOfferAt' },
-  { stage: 'urgency', field: 'stageUrgencyAt' },
   { stage: 'pain_identification', field: 'stagePainIdentificationAt' },
   { stage: 'vision_building', field: 'stageVisionBuildingAt' },
   { stage: 'qualification', field: 'stageQualificationAt' }
@@ -19,13 +28,20 @@ type ConversationWithStages = {
   leadId: string;
   createdAt: Date;
   leadIntentTag: string;
+  // New 7-stage SOP sequence
+  stageOpeningAt: Date | null;
+  stageSituationDiscoveryAt: Date | null;
+  stageGoalEmotionalWhyAt: Date | null;
+  stageUrgencyAt: Date | null;
+  stageSoftPitchCommitmentAt: Date | null;
+  stageFinancialScreeningAt: Date | null;
+  stageBookingAt: Date | null;
+  // Legacy fields
   stageQualificationAt: Date | null;
   stageVisionBuildingAt: Date | null;
   stagePainIdentificationAt: Date | null;
-  stageUrgencyAt: Date | null;
   stageSolutionOfferAt: Date | null;
   stageCapitalQualificationAt: Date | null;
-  stageBookingAt: Date | null;
   lead: {
     id: string;
     platform: string;

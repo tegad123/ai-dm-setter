@@ -4,13 +4,14 @@ import { checkColdStart, DATA_THRESHOLDS } from '@/lib/cold-start';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Ordered conversation stages with their timestamp fields
+// New 7-stage SOP sequence — used for current velocity analysis.
 const STAGE_FIELDS = [
-  { stage: 'qualification', field: 'stageQualificationAt' },
-  { stage: 'vision_building', field: 'stageVisionBuildingAt' },
-  { stage: 'pain_identification', field: 'stagePainIdentificationAt' },
+  { stage: 'opening', field: 'stageOpeningAt' },
+  { stage: 'situation_discovery', field: 'stageSituationDiscoveryAt' },
+  { stage: 'goal_emotional_why', field: 'stageGoalEmotionalWhyAt' },
   { stage: 'urgency', field: 'stageUrgencyAt' },
-  { stage: 'solution_offer', field: 'stageSolutionOfferAt' },
-  { stage: 'capital_qualification', field: 'stageCapitalQualificationAt' },
+  { stage: 'soft_pitch_commitment', field: 'stageSoftPitchCommitmentAt' },
+  { stage: 'financial_screening', field: 'stageFinancialScreeningAt' },
   { stage: 'booking', field: 'stageBookingAt' }
 ] as const;
 
@@ -18,12 +19,12 @@ type StageField = (typeof STAGE_FIELDS)[number]['field'];
 
 interface ConversationRow {
   outcome: string;
-  stageQualificationAt: Date | null;
-  stageVisionBuildingAt: Date | null;
-  stagePainIdentificationAt: Date | null;
+  stageOpeningAt: Date | null;
+  stageSituationDiscoveryAt: Date | null;
+  stageGoalEmotionalWhyAt: Date | null;
   stageUrgencyAt: Date | null;
-  stageSolutionOfferAt: Date | null;
-  stageCapitalQualificationAt: Date | null;
+  stageSoftPitchCommitmentAt: Date | null;
+  stageFinancialScreeningAt: Date | null;
   stageBookingAt: Date | null;
 }
 
@@ -60,12 +61,12 @@ export async function GET(request: NextRequest) {
       },
       select: {
         outcome: true,
-        stageQualificationAt: true,
-        stageVisionBuildingAt: true,
-        stagePainIdentificationAt: true,
+        stageOpeningAt: true,
+        stageSituationDiscoveryAt: true,
+        stageGoalEmotionalWhyAt: true,
         stageUrgencyAt: true,
-        stageSolutionOfferAt: true,
-        stageCapitalQualificationAt: true,
+        stageSoftPitchCommitmentAt: true,
+        stageFinancialScreeningAt: true,
         stageBookingAt: true
       }
     })) as ConversationRow[];

@@ -28,6 +28,10 @@ export interface GenerateReplyResult {
   affirmationDetected: boolean;
   followUpNumber: number | null;
   softExit: boolean;
+  // Booking-stage extracted fields (Stage 7)
+  leadTimezone: string | null;
+  selectedSlotIso: string | null;
+  leadEmail: string | null;
   suggestedTag: string;
   suggestedTags: string[];
   shouldVoiceNote: boolean;
@@ -119,6 +123,9 @@ export async function generateReply(
     affirmationDetected: parsed.affirmationDetected,
     followUpNumber: parsed.followUpNumber,
     softExit: parsed.softExit,
+    leadTimezone: parsed.leadTimezone,
+    selectedSlotIso: parsed.selectedSlotIso,
+    leadEmail: parsed.leadEmail,
     suggestedTag: parsed.suggestedTag,
     suggestedTags: parsed.suggestedTags,
     shouldVoiceNote,
@@ -289,6 +296,9 @@ interface ParsedAIResponse {
   affirmationDetected: boolean;
   followUpNumber: number | null;
   softExit: boolean;
+  leadTimezone: string | null;
+  selectedSlotIso: string | null;
+  leadEmail: string | null;
   suggestedTag: string;
   suggestedTags: string[];
 }
@@ -307,6 +317,9 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     affirmationDetected: false,
     followUpNumber: null,
     softExit: false,
+    leadTimezone: null,
+    selectedSlotIso: null,
+    leadEmail: null,
     suggestedTag: '',
     suggestedTags: []
   };
@@ -342,6 +355,19 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       followUpNumber:
         typeof obj.follow_up_number === 'number' ? obj.follow_up_number : null,
       softExit: obj.soft_exit === true,
+      leadTimezone:
+        typeof obj.lead_timezone === 'string' && obj.lead_timezone.trim()
+          ? obj.lead_timezone.trim()
+          : null,
+      selectedSlotIso:
+        typeof obj.selected_slot_iso === 'string' &&
+        obj.selected_slot_iso.trim()
+          ? obj.selected_slot_iso.trim()
+          : null,
+      leadEmail:
+        typeof obj.lead_email === 'string' && obj.lead_email.trim()
+          ? obj.lead_email.trim()
+          : null,
       suggestedTag: obj.suggested_tag || '',
       suggestedTags: Array.isArray(obj.suggested_tags) ? obj.suggested_tags : []
     };

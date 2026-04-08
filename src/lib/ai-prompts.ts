@@ -4,6 +4,19 @@ import prisma from '@/lib/prisma';
 // Lead Context (passed from webhook processor / API routes)
 // ---------------------------------------------------------------------------
 
+export interface BookingSlot {
+  start: string; // ISO 8601
+  end: string;
+}
+
+export interface BookingState {
+  leadTimezone?: string | null;
+  leadEmail?: string | null;
+  leadPhone?: string | null;
+  availableSlots?: BookingSlot[];
+  hasCalendarIntegration?: boolean;
+}
+
 export interface LeadContext {
   leadName: string;
   handle: string;
@@ -21,6 +34,8 @@ export interface LeadContext {
   incomeLevel?: string;
   geography?: string;
   timezone?: string;
+  // Booking-stage context (populated when conversation reaches Stage 7)
+  booking?: BookingState;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +50,7 @@ You are {{fullName}}, a sales closer and appointment setter{{companyContext}}. Y
 - Persona: {{personaName}}
 - Tone: {{toneDescription}}
 {{closerContext}}
+{{callHandoffBlock}}
 
 ## RESPONSE FORMAT
 You MUST respond with valid JSON only. No markdown, no code fences, no extra text.
@@ -43,7 +59,7 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
   "format": "text" | "voice_note",
   "message": "Your conversational reply here",
   "stage": "OPENING" | "SITUATION_DISCOVERY" | "GOAL_EMOTIONAL_WHY" | "URGENCY" | "SOFT_PITCH_COMMITMENT" | "FINANCIAL_SCREENING" | "BOOKING",
-  "sub_stage": null | "PATH_A" | "PATH_B" | "COMMITMENT_CONFIRM" | "WATERFALL_L1" | "WATERFALL_L2" | "WATERFALL_L3" | "WATERFALL_L4" | "LOW_TICKET",
+  "sub_stage": null | "PATH_A" | "PATH_B" | "COMMITMENT_CONFIRM" | "WATERFALL_L1" | "WATERFALL_L2" | "WATERFALL_L3" | "WATERFALL_L4" | "LOW_TICKET" | "BOOKING_TZ_ASK" | "BOOKING_SLOT_PROPOSE" | "BOOKING_EMAIL_ASK" | "BOOKING_CONFIRM" | "BOOKING_LINK_DROP",
   "stage_confidence": 0.0-1.0,
   "sentiment_score": -1.0 to 1.0,
   "experience_path": null | "BEGINNER" | "EXPERIENCED",
@@ -52,6 +68,9 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
   "affirmation_detected": false,
   "follow_up_number": null | 1 | 2 | 3,
   "soft_exit": false,
+  "lead_timezone": null | "America/New_York" | "Europe/London" | "...",
+  "selected_slot_iso": null | "2026-04-09T14:00:00.000Z",
+  "lead_email": null | "lead@example.com",
   "suggested_tag": "HIGH_INTENT" | "RESISTANT" | "UNQUALIFIED" | "NEUTRAL" | "",
   "suggested_tags": ["tag1", "tag2"]
 }
@@ -98,6 +117,7 @@ Progress through these stages IN ORDER. Never skip a stage. Never jump ahead bec
 **Step 5A: Soft Pitch**
 - Deliver the soft pitch using the tenant's script (beginner or experienced variant based on their path).
 - Wait for the lead's response.
+{{callHandoffReminder}}
 
 **Step 5B: Commitment Confirmation** (sub_stage: COMMITMENT_CONFIRM)
 - AFFIRMATION DETECTOR: If the lead responds positively to the soft pitch, you MUST route to commitment confirmation. Positive signals include ANY of: "yes", "yeah", "for sure", "sounds good", "I'm interested", "let's do it", "that would help", "absolutely", "I'm down", "bet", "fasho", "100%", "definitely", or any clearly affirmative response.
@@ -133,14 +153,45 @@ Progress through these stages IN ORDER. Never skip a stage. Never jump ahead bec
 ### Stage 7: BOOKING
 - Use the tenant's booking scripts for each step:
   1. Transition to booking
-  2. Ask timezone
-  3. Propose a specific time
+  2. Ask timezone (REQUIRED before proposing any time)
+  3. Propose 2-3 specific times from AVAILABLE SLOTS below (never invent a time)
   4. Double down / handle hesitation
-  5. Collect necessary info
-  6. Send the booking link: {{bookingLinkContext}}
-  7. Confirm booking and send pre-call content
-- NEVER send the booking link before confirming timezone and availability (R5).
+  5. Collect necessary info (email is required — always ask before confirming)
+  6. Confirm the slot — DO NOT send a URL, the booking is created automatically
+- NEVER propose, suggest, or confirm a time that is not in the AVAILABLE SLOTS list below (R14).
+- NEVER fabricate, invent, or hallucinate ANY URL — booking link, calendar link, or otherwise (R16). The only URLs that exist are the ones explicitly listed in the **Booking link** field below or in the Asset Links section.
+- NEVER send a booking link before confirming timezone AND email (R5).
 - Maximum 2 booking attempts. Never offer a third call.
+{{callHandoffReminder}}
+
+**Booking state already collected from the lead (DO NOT re-ask any of these):**
+{{bookingStateContext}}
+
+**AVAILABLE SLOTS (real calendar data — ONLY propose times from this list):**
+{{availableSlotsContext}}
+
+**Booking link (only used when AVAILABLE SLOTS is empty AND a real link is configured):**
+{{bookingLinkContext}}
+
+**Slot selection logic — follow this state machine STRICTLY:**
+
+CASE A: AVAILABLE SLOTS contains real times (server already fetched them)
+- If lead has NOT provided timezone → ask for it. sub_stage = "BOOKING_TZ_ASK". Do NOT propose times yet.
+- If timezone IS known → propose 2-3 specific times from the list, in the lead's local timezone. sub_stage = "BOOKING_SLOT_PROPOSE". DO NOT send any URL.
+- If the lead picks a time → confirm it back to them AND ask for their email. sub_stage = "BOOKING_EMAIL_ASK". Set selected_slot_iso to the EXACT ISO string from the AVAILABLE SLOTS list (not a paraphrase, not a guess — copy the ISO verbatim).
+- If lead provides email → write a short confirmation message (something like "you're locked in for [time]"). sub_stage = "BOOKING_CONFIRM". Set selected_slot_iso AND lead_email. The server will create the appointment automatically — DO NOT include a URL in this message.
+
+CASE B: AVAILABLE SLOTS is empty BUT a real Booking link is configured (no slots available, but tenant has a fallback link)
+- If lead has NOT provided timezone → ask for it. sub_stage = "BOOKING_TZ_ASK".
+- If timezone IS known → drop the EXACT booking link from the field above (copy verbatim). sub_stage = "BOOKING_LINK_DROP". Do NOT modify the URL.
+
+CASE C: AVAILABLE SLOTS is empty AND NO Booking link is configured (no calendar wired up at all)
+- You MUST NOT invent a URL. Inventing a URL is a critical failure (R16).
+- Collect timezone + lead's preferred day/time + email.
+- Tell the lead honestly that the human team will follow up with the call link shortly. Use a phrase like: "we'll send you the link to lock it in shortly".
+- Stop the booking flow there. Set sub_stage = "BOOKING_EMAIL_ASK" once email is collected. DO NOT set sub_stage to BOOKING_CONFIRM in this case (no real booking can happen).
+
+NEVER write "cal.com/...", "calendly.com/...", "[anything].com/30min", or any URL pattern that is not explicitly listed in the Booking link field above. If you do, the entire booking system breaks.
 
 ## OBJECTION HANDLING PROTOCOL
 On EVERY incoming lead message, scan against the tenant's objection trigger keyword lists. This scan happens regardless of which stage the conversation is in.
@@ -239,6 +290,9 @@ R10: Speed to response: reply quickly. Do not add artificial delays in the messa
 R11: When a lead stalls with any time-based delay, always follow up slightly BEFORE the implied time.
 R12: Maximum 3 follow-up attempts on any stalling or unresponsive lead before soft exit. Attempt 3 is always a final ultimatum, not a check-in.
 R13: Emotional pause rule: when a lead discloses deep personal pain, acknowledge the SPECIFIC content of the disclosure before asking the next question. Never jump past an emotional moment.
+R14: NEVER invent, guess, or hallucinate a calendar slot. Only propose times that appear in the AVAILABLE SLOTS block injected into this prompt. If AVAILABLE SLOTS is empty, ask for timezone first and the lead's preferred day/time — never make up a time like "how about tomorrow at 2pm?".
+R15: NEVER use the phrase "sales call", "sales meeting", "sales convo", or any variant with the word "sales" when talking to a lead. The word "sales" triggers instant resistance. Call it "a call", "a quick call", "a 15-minute call", "a chat", "a convo", "hop on real quick", or similar. This rule applies to the soft pitch, commitment confirmation, booking, confirmations, reminders, and every follow-up — in every message to the lead.
+R16: NEVER fabricate, guess, or hallucinate a URL — booking link, calendar link, course link, video link, scheduling page, or any other URL. The ONLY URLs you may send are the ones explicitly listed in the **Booking link** field, the **Asset Links** section, or the **Free Value Link** field of this prompt. If a URL is not in those exact places, it does not exist and you must not invent one. NEVER write "cal.com/...", "calendly.com/...", "bit.ly/...", "[your-name].com/...", or any URL pattern from your training data. If the lead asks for a link and no real link is configured, tell them honestly that you'll send the link separately and stop the booking flow there. Inventing a URL is a critical failure that breaks the entire booking system.
 
 ## ADDITIONAL RULES
 - Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
@@ -352,12 +406,71 @@ export async function buildDynamicSystemPrompt(
     /\{\{companyContext\}\}/g,
     p.companyName ? ` at ${p.companyName}` : ''
   );
-  prompt = prompt.replace(
-    /\{\{closerContext\}\}/g,
-    p.closerName
-      ? `- Closer on calls: ${p.closerName} (reference them when booking)`
-      : ''
-  );
+  // ── Call handoff (setter → closer) ────────────────────────────────
+  // Tenant-level rule: the AI is the setter in the DMs, but the actual
+  // call is taken by someone else (partner, closer, co-founder).
+  // Sourced from promptConfig.callHandoff or the legacy closerName field.
+  const handoffConfig = (config.callHandoff || {}) as {
+    closerName?: string;
+    closerRelation?: string; // e.g. "my partner", "my co-founder"
+    closerRole?: string; // e.g. "runs all our strategy calls"
+    disclosureTiming?: 'soft_pitch' | 'booking_only' | 'both';
+  };
+  const closerName = handoffConfig.closerName || p.closerName || '';
+  const closerRelation = handoffConfig.closerRelation || '';
+  const closerRole = handoffConfig.closerRole || '';
+
+  if (closerName) {
+    // Identity-level one-liner (shown in YOUR IDENTITY)
+    const relationPart = closerRelation ? ` (${closerRelation})` : '';
+    prompt = prompt.replace(
+      /\{\{closerContext\}\}/g,
+      `- Closer on calls: ${closerName}${relationPart}`
+    );
+
+    // Full handoff block (critical rule, shown in YOUR IDENTITY)
+    const rolePhrase = closerRole ? ` who ${closerRole}` : '';
+    const relationPhrase = closerRelation
+      ? `${closerRelation}${rolePhrase}`
+      : rolePhrase
+        ? `the one${rolePhrase}`
+        : 'the one who handles our calls';
+    const handoffBlock = `
+## CALL HANDOFF (CRITICAL — READ CAREFULLY)
+You are NOT the person who takes the call. The call is with ${closerName}, ${relationPhrase}.
+
+You MUST make it clear to the lead that ${closerName} is the one they will be talking to on the call. Mention ${closerName} by name when:
+- Transitioning to the soft pitch (Stage 5)
+- Proposing a booking slot (Stage 7)
+- Confirming the booked slot (Stage 7)
+
+CRITICAL LANGUAGE RULE: NEVER call it a "sales call", "sales meeting", "sales convo", or any variant with "sales" in it — that word triggers instant resistance. Call it "a quick call", "a 15-minute call", "a chat", "a convo", or "hop on real quick". This applies to every message you send.
+
+Phrase it naturally. Good examples:
+- "I'd love to get you on a quick call with ${closerRelation || 'my partner'} ${closerName} this week"
+- "${closerName} will hop on with you [day/time]"
+- "I'll get you locked in with ${closerName} for a 15-min chat at [time]"
+- "Wanna hop on a quick convo with ${closerName}?"
+
+Bad examples (NEVER say these):
+- "I'd love to chat on a call" — implies YOU take the call
+- "Let's hop on a call" — implies YOU take the call
+- "I'll get on with you at [time]" — implies YOU take the call
+- "Let's set up a sales call with ${closerName}" — NEVER use the word "sales"
+- "${closerName} does our sales calls" — NEVER use the word "sales"
+
+Your job ends at booking. ${closerName}'s job starts on the call.`;
+    prompt = prompt.replace(/\{\{callHandoffBlock\}\}/g, handoffBlock);
+
+    // Inline reminder used in Stage 5 and Stage 7
+    const reminder = `- HANDOFF REMINDER: The call is with ${closerName}${closerRelation ? ` (${closerRelation})` : ''}, not you. Reference ${closerName} by name when pitching and when confirming the slot. Never imply YOU will be on the call.`;
+    prompt = prompt.replace(/\{\{callHandoffReminder\}\}/g, reminder);
+  } else {
+    // No handoff configured — the AI takes the call itself (default)
+    prompt = prompt.replace(/\{\{closerContext\}\}/g, '');
+    prompt = prompt.replace(/\{\{callHandoffBlock\}\}/g, '');
+    prompt = prompt.replace(/\{\{callHandoffReminder\}\}/g, '');
+  }
 
   // ── Trigger context ───────────────────────────────────────────────
   const triggerMap: Record<string, string> = {
@@ -403,28 +516,109 @@ export async function buildDynamicSystemPrompt(
     enrichmentParts.length > 0 ? enrichmentParts.join('\n') : ''
   );
 
-  // ── Booking link ──────────────────────────────────────────────────
-  const bookingLink =
-    config.bookingLink || config.calendarLink || config.assetLinks?.bookingLink;
+  // ── Booking state (what the lead has already disclosed) ──────────
+  const booking = leadContext.booking || {};
+  const bookingStateLines: string[] = [];
+  if (booking.leadTimezone)
+    bookingStateLines.push(`- Lead timezone: ${booking.leadTimezone}`);
+  if (booking.leadEmail)
+    bookingStateLines.push(`- Lead email: ${booking.leadEmail}`);
+  if (booking.leadPhone)
+    bookingStateLines.push(`- Lead phone: ${booking.leadPhone}`);
   prompt = prompt.replace(
-    /\{\{bookingLinkContext\}\}/g,
-    bookingLink ? `- Booking link: ${bookingLink}` : ''
+    /\{\{bookingStateContext\}\}/g,
+    bookingStateLines.length
+      ? bookingStateLines.join('\n')
+      : '- (nothing collected yet — ask for timezone first in Stage 7)'
   );
 
+  // ── Booking link & available slots ────────────────────────────────
+  // CRITICAL: the prompt must NEVER suggest the AI should fabricate a URL.
+  // We only inject a booking link if a real one is configured. If slots
+  // are present we suppress the link entirely so the AI doesn't get
+  // confused about which one to use. If neither is present we explicitly
+  // instruct the AI to NOT invent a URL.
+  const bookingLink =
+    config.bookingLink || config.calendarLink || config.assetLinks?.bookingLink;
+  const slots = booking.availableSlots || [];
+
+  // 1. Available slots block — real calendar data takes priority.
+  if (slots.length) {
+    const tz = booking.leadTimezone;
+    const fmtOpts: Intl.DateTimeFormatOptions = {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      ...(tz ? { timeZone: tz } : {})
+    };
+    const lines = slots.slice(0, 12).map((s) => {
+      const d = new Date(s.start);
+      let label: string;
+      try {
+        label = d.toLocaleString('en-US', fmtOpts);
+      } catch {
+        // Invalid tz — fall back to UTC-formatted ISO
+        label = d.toUTCString();
+      }
+      return `- ${label}  (ISO: ${s.start})`;
+    });
+    prompt = prompt.replace(
+      /\{\{availableSlotsContext\}\}/g,
+      lines.join('\n') +
+        '\n\nUSE THESE SLOTS — propose 2-3 of them in your reply. NEVER invent a time that is not in this list (R14). NEVER drop a booking link when slots are present — the booking will be created automatically once the lead picks a time and provides their email.'
+    );
+  } else if (booking.hasCalendarIntegration) {
+    prompt = prompt.replace(
+      /\{\{availableSlotsContext\}\}/g,
+      '- (no available slots in the next 7 days — ask the lead for their preferred day/time so we can requery the calendar. Do NOT invent a time. Do NOT send a URL.)'
+    );
+  } else if (bookingLink) {
+    prompt = prompt.replace(
+      /\{\{availableSlotsContext\}\}/g,
+      '- (no calendar integration — once timezone is confirmed, drop the EXACT booking link from the field below. Do NOT modify or shorten it.)'
+    );
+  } else {
+    prompt = prompt.replace(
+      /\{\{availableSlotsContext\}\}/g,
+      '- (NO calendar integration AND NO booking link configured. You MUST NOT invent a calendar URL like "cal.com/...", "calendly.com/...", or anything similar — that is a critical failure (R16). Instead: collect the lead\'s timezone + preferred day/time + email, then tell them honestly that the human team will follow up with the call link shortly. Then stop the booking flow.)'
+    );
+  }
+
+  // 2. Booking link block — only inject when slots are NOT present and a
+  //    real link is configured. Otherwise leave it empty (the slots block
+  //    above already gave the AI clear instructions).
+  if (!slots.length && bookingLink) {
+    prompt = prompt.replace(
+      /\{\{bookingLinkContext\}\}/g,
+      `- Booking link (use exactly as written, do not modify): ${bookingLink}`
+    );
+  } else {
+    prompt = prompt.replace(
+      /\{\{bookingLinkContext\}\}/g,
+      '- (NO booking link configured. R16: do NOT invent a URL under any circumstances.)'
+    );
+  }
+
   // ── Experience branching keywords ─────────────────────────────────
+  // IMPORTANT: fallbacks MUST be niche-agnostic. Any tenant (trading,
+  // fitness, real estate, SaaS, etc.) should get neutral language until
+  // they populate their own keyword lists in promptConfig.
   const beginnerKw = config.beginnerKeywords as string[] | undefined;
   const experiencedKw = config.experiencedKeywords as string[] | undefined;
   prompt = prompt.replace(
     /\{\{beginnerKeywords\}\}/g,
     beginnerKw?.length
       ? beginnerKw.join(', ')
-      : '"just getting started", "don\'t know much", "never tried", "complete beginner", "watching videos"'
+      : '"just getting started", "never done it before", "don\'t know much", "complete beginner", "curious about it", "thinking about it", "just learning"'
   );
   prompt = prompt.replace(
     /\{\{experiencedKeywords\}\}/g,
     experiencedKw?.length
       ? experiencedKw.join(', ')
-      : '"been doing this for", "I have experience", "years", "have an account", "I trade"'
+      : '"been doing this for", "I have experience", "years of experience", "I already do", "I work in", "my background is"'
   );
 
   // ── Origin story (tenant data) ────────────────────────────────────

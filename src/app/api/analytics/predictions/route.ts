@@ -44,12 +44,13 @@ export async function GET(req: NextRequest) {
       select: {
         id: true,
         leadId: true,
-        stageQualificationAt: true,
-        stageVisionBuildingAt: true,
-        stagePainIdentificationAt: true,
+        // New 7-stage SOP sequence
+        stageOpeningAt: true,
+        stageSituationDiscoveryAt: true,
+        stageGoalEmotionalWhyAt: true,
         stageUrgencyAt: true,
-        stageSolutionOfferAt: true,
-        stageCapitalQualificationAt: true,
+        stageSoftPitchCommitmentAt: true,
+        stageFinancialScreeningAt: true,
         stageBookingAt: true
       }
     });

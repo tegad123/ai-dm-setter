@@ -135,6 +135,14 @@ export default function IntegrationsPage() {
         if (i.provider === 'INSTAGRAM' && i.metadata) {
           setIgMetadata(i.metadata as any);
         }
+        // Hydrate LeadConnector config from metadata (non-secret values)
+        if (i.provider === 'LEADCONNECTOR' && i.metadata) {
+          const meta = i.metadata as any;
+          if (typeof meta.calendarId === 'string')
+            setLcCalendarId(meta.calendarId);
+          if (typeof meta.locationId === 'string')
+            setLcLocationId(meta.locationId);
+        }
         // Store masked keys from API
         if (i.maskedKey) {
           if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC')
@@ -263,27 +271,47 @@ export default function IntegrationsPage() {
   }
 
   async function saveLeadConnector() {
-    if (!lcApiKey.trim()) {
+    if (!lcApiKey.trim() && !lcSavedKey) {
       toast.error('Please enter an API key');
       return;
     }
     setLcSaving(true);
     try {
+      const calendarId = lcCalendarId.trim();
+      const locationId = lcLocationId.trim();
+
+      // Dual-write: non-secret config (calendarId/locationId) lives in both
+      // the encrypted credentials blob (so calendar-adapter.ts can read it)
+      // AND the plaintext metadata column (so the GET endpoint can return it
+      // to the UI on reload without decrypting).
+      //
+      // When the user is editing existing config without re-entering the
+      // API key (lcApiKey is empty but lcSavedKey is set), we must NOT send
+      // apiKey in credentials or the backend will overwrite the saved key
+      // with an empty string. Only include apiKey when a new one is typed.
+      const credentials: Record<string, string> = {};
+      if (lcApiKey.trim()) credentials.apiKey = lcApiKey.trim();
+      if (calendarId) credentials.calendarId = calendarId;
+      if (locationId) credentials.locationId = locationId;
+
       await apiFetch('/api/settings/integrations/LEADCONNECTOR', {
         method: 'PUT',
         body: JSON.stringify({
-          credentials: {
-            apiKey: lcApiKey,
-            calendarId: lcCalendarId.trim() || undefined,
-            locationId: lcLocationId.trim() || undefined
+          credentials,
+          metadata: {
+            ...(calendarId ? { calendarId } : {}),
+            ...(locationId ? { locationId } : {})
           }
         })
       });
       toast.success('LeadConnector credentials saved');
-      setLcSavedKey(maskKey(lcApiKey));
-      setLcApiKey('');
-      setLcCalendarId('');
-      setLcLocationId('');
+      if (lcApiKey.trim()) {
+        setLcSavedKey(maskKey(lcApiKey));
+        setLcApiKey('');
+      }
+      // IMPORTANT: do NOT clear lcCalendarId / lcLocationId here.
+      // They are config, not secrets — leaving them visible confirms to the
+      // user that the save succeeded.
       setStatuses((prev) => ({ ...prev, LEADCONNECTOR: true }));
     } catch {
       toast.error('Failed to save credentials');
@@ -367,7 +395,11 @@ export default function IntegrationsPage() {
       // Clear saved key masks
       if (provider === 'OPENAI' || provider === 'ANTHROPIC') setAiSavedKey('');
       if (provider === 'ELEVENLABS') setElSavedKey('');
-      if (provider === 'LEADCONNECTOR') setLcSavedKey('');
+      if (provider === 'LEADCONNECTOR') {
+        setLcSavedKey('');
+        setLcCalendarId('');
+        setLcLocationId('');
+      }
       if (provider === 'CALENDLY') setCalSavedKey('');
       if (provider === 'META') setMetaMetadata(null);
       if (provider === 'INSTAGRAM') setIgMetadata(null);

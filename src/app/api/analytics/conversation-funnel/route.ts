@@ -2,13 +2,14 @@ import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
+// New 7-stage SOP sequence — current funnel
 const STAGES = [
-  { key: 'stageQualificationAt', label: 'Qualification' },
-  { key: 'stageVisionBuildingAt', label: 'Vision Building' },
-  { key: 'stagePainIdentificationAt', label: 'Pain Identification' },
+  { key: 'stageOpeningAt', label: 'Opening' },
+  { key: 'stageSituationDiscoveryAt', label: 'Situation Discovery' },
+  { key: 'stageGoalEmotionalWhyAt', label: 'Goal / Emotional Why' },
   { key: 'stageUrgencyAt', label: 'Urgency' },
-  { key: 'stageSolutionOfferAt', label: 'Solution Offer' },
-  { key: 'stageCapitalQualificationAt', label: 'Capital Qualification' },
+  { key: 'stageSoftPitchCommitmentAt', label: 'Soft Pitch / Commitment' },
+  { key: 'stageFinancialScreeningAt', label: 'Financial Screening' },
   { key: 'stageBookingAt', label: 'Booking' }
 ] as const;
 
@@ -20,12 +21,12 @@ export async function GET(request: NextRequest) {
       where: { lead: { accountId: auth.accountId } },
       select: {
         outcome: true,
-        stageQualificationAt: true,
-        stageVisionBuildingAt: true,
-        stagePainIdentificationAt: true,
+        stageOpeningAt: true,
+        stageSituationDiscoveryAt: true,
+        stageGoalEmotionalWhyAt: true,
         stageUrgencyAt: true,
-        stageSolutionOfferAt: true,
-        stageCapitalQualificationAt: true,
+        stageSoftPitchCommitmentAt: true,
+        stageFinancialScreeningAt: true,
         stageBookingAt: true
       }
     });

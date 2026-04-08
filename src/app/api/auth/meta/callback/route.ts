@@ -380,6 +380,7 @@ export async function GET(req: NextRequest) {
               body: JSON.stringify({
                 subscribed_fields: [
                   'messages',
+                  'message_echoes',
                   'messaging_postbacks',
                   'messaging_optins',
                   'message_deliveries',
@@ -539,7 +540,7 @@ export async function GET(req: NextRequest) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            subscribed_fields: 'messages',
+            subscribed_fields: 'messages,message_echoes',
             access_token: pageAccessToken
           })
         });

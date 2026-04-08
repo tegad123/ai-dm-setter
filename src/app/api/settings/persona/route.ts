@@ -6,8 +6,12 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
 
+    // Return the most recently updated persona for this account regardless
+    // of isActive state. The settings page needs to be able to load drafts
+    // that haven't been activated yet — otherwise save → refresh loses the
+    // form data because the schema defaults isActive to false on create.
     const persona = await prisma.aIPersona.findFirst({
-      where: { accountId: auth.accountId, isActive: true },
+      where: { accountId: auth.accountId },
       orderBy: { updatedAt: 'desc' }
     });
 
@@ -70,9 +74,17 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    // Find existing active persona for this account
+    // Find the existing persona for this account — any isActive state.
+    // We used to filter by isActive: true here, which caused a nasty bug:
+    // the schema defaults isActive to false on create, so the FIRST save
+    // would create an inactive persona, then every subsequent save would
+    // find `existing = null` (because of the isActive filter) and create
+    // ANOTHER inactive row. The settings GET also filtered by isActive so
+    // nothing was ever visible on refresh. Now we look up ANY persona for
+    // this account and update it in place.
     const existing = await prisma.aIPersona.findFirst({
-      where: { accountId: auth.accountId, isActive: true }
+      where: { accountId: auth.accountId },
+      orderBy: { updatedAt: 'desc' }
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -106,7 +118,11 @@ export async function PUT(req: NextRequest) {
       data.voiceNotesEnabled = voiceNotesEnabled;
     if (setupStep !== undefined) data.setupStep = setupStep;
     if (setupComplete !== undefined) data.setupComplete = setupComplete;
-    if (isActiveParam !== undefined) data.isActive = isActiveParam;
+
+    // Default to active on save — saving the persona through the settings
+    // UI means the user wants this to be THE persona for the account. If
+    // the caller explicitly passes isActive, respect that override.
+    data.isActive = isActiveParam !== undefined ? isActiveParam : true;
 
     let persona;
     if (existing) {

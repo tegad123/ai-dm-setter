@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         accountId: auth.accountId,
         type: 'CALL_BOOKED',
         title: 'New Call Booked',
-        body: `${lead.name} (@${lead.handle}) booked a sales call for ${new Date(slotStart).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}. Provider: ${result.provider}.`,
+        body: `${lead.name} (@${lead.handle}) booked a call for ${new Date(slotStart).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}. Provider: ${result.provider}.`,
         leadId: lead.id,
         userId: null
       }

@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   subscribed_fields:
-                    'messages,messaging_postbacks,messaging_optins',
+                    'messages,message_echoes,messaging_postbacks,messaging_optins',
                   access_token: accessToken
                 })
               }

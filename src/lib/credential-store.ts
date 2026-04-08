@@ -2,8 +2,7 @@ import prisma from '@/lib/prisma';
 import crypto from 'crypto';
 
 const ENCRYPTION_KEY =
-  process.env.CREDENTIAL_ENCRYPTION_KEY ||
-  'dev-encryption-key-32-bytes-long!'; // Must be 32 bytes for AES-256
+  process.env.CREDENTIAL_ENCRYPTION_KEY || 'dev-encryption-key-32-bytes-long!'; // Must be 32 bytes for AES-256
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
@@ -46,10 +45,9 @@ export function decrypt(ciphertext: string): string {
   const encrypted = Buffer.from(encryptedHex, 'hex');
   const decipher = crypto.createDecipheriv(ALGORITHM, getKeyBuffer(), iv);
   decipher.setAuthTag(tag);
-  return Buffer.concat([
-    decipher.update(encrypted),
-    decipher.final()
-  ]).toString('utf-8');
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString(
+    'utf-8'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +103,10 @@ export async function getCredentials(
     }
     return null;
   } catch (err) {
-    console.error(`[credential-store] Failed to decrypt credentials for ${provider}:`, err);
+    console.error(
+      `[credential-store] Failed to decrypt credentials for ${provider}:`,
+      err
+    );
     return null;
   }
 }
@@ -122,18 +123,45 @@ export async function setCredentials(
   credentials: CredentialData,
   metadata?: Record<string, unknown>
 ): Promise<void> {
-  // Encrypt sensitive fields
-  const encrypted: Record<string, unknown> = {};
+  // MERGE semantics: load existing record so partial updates (e.g. just
+  // calendarId/locationId without re-entering the apiKey) don't wipe
+  // previously-saved fields. Callers that want a clean slate should call
+  // deleteCredentials() first.
+  const existing = await prisma.integrationCredential.findFirst({
+    where: {
+      accountId,
+      provider: provider as any
+    }
+  });
+
+  // Start from the existing credentials blob (if any). Encrypted fields
+  // stay encrypted — we only decrypt on read. New plaintext values get
+  // encrypted + overlaid on top.
+  const mergedCredentials: Record<string, unknown> = {};
+  if (existing?.credentials && typeof existing.credentials === 'object') {
+    Object.assign(
+      mergedCredentials,
+      existing.credentials as Record<string, unknown>
+    );
+  }
   for (const [key, value] of Object.entries(credentials)) {
+    // Skip undefined so callers can omit fields they don't want to touch
+    if (value === undefined) continue;
     if (
       typeof value === 'string' &&
       (key === 'apiKey' || key === 'accessToken' || key === 'refreshToken')
     ) {
-      encrypted[key] = encrypt(value);
+      mergedCredentials[key] = encrypt(value);
     } else {
-      encrypted[key] = value;
+      mergedCredentials[key] = value;
     }
   }
+
+  // Same merge semantics for metadata
+  const mergedMetadata: Record<string, unknown> = {
+    ...((existing?.metadata as Record<string, unknown>) ?? {}),
+    ...(metadata ?? {})
+  };
 
   await prisma.integrationCredential.upsert({
     where: {
@@ -143,16 +171,16 @@ export async function setCredentials(
       }
     },
     update: {
-      credentials: encrypted as any,
-      metadata: metadata as any ?? undefined,
+      credentials: mergedCredentials as any,
+      metadata: mergedMetadata as any,
       isActive: true,
       verifiedAt: new Date()
     },
     create: {
       accountId,
       provider: provider as any,
-      credentials: encrypted as any,
-      metadata: metadata as any ?? undefined,
+      credentials: mergedCredentials as any,
+      metadata: mergedMetadata as any,
       isActive: true,
       verifiedAt: new Date()
     }
@@ -175,7 +203,9 @@ export async function deleteCredentials(
  * Get the Meta (Facebook/Instagram) access token for an account.
  * Checks per-account credentials first, then falls back to env vars.
  */
-export async function getMetaAccessToken(accountId: string): Promise<string | null> {
+export async function getMetaAccessToken(
+  accountId: string
+): Promise<string | null> {
   // Try per-account META credentials first
   const metaCreds = await getCredentials(accountId, 'META');
   if (metaCreds?.accessToken) return metaCreds.accessToken as string;
@@ -185,7 +215,9 @@ export async function getMetaAccessToken(accountId: string): Promise<string | nu
   if (igCreds?.accessToken) return igCreds.accessToken as string;
 
   // Fallback to env var
-  return process.env.META_ACCESS_TOKEN || process.env.INSTAGRAM_ACCESS_TOKEN || null;
+  return (
+    process.env.META_ACCESS_TOKEN || process.env.INSTAGRAM_ACCESS_TOKEN || null
+  );
 }
 
 /**

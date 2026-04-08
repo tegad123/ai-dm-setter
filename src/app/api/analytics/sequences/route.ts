@@ -4,27 +4,42 @@ import { checkColdStart, DATA_THRESHOLDS } from '@/lib/cold-start';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Stage fields in logical conversation order, with readable labels
+// New 7-stage SOP sequence (primary) + legacy fields for historical data
 const STAGE_ENTRIES = [
+  // New 7-stage SOP sequence
+  { label: 'opening', field: 'stageOpeningAt' },
+  { label: 'situation_discovery', field: 'stageSituationDiscoveryAt' },
+  { label: 'goal_emotional_why', field: 'stageGoalEmotionalWhyAt' },
+  { label: 'urgency', field: 'stageUrgencyAt' },
+  { label: 'soft_pitch_commitment', field: 'stageSoftPitchCommitmentAt' },
+  { label: 'financial_screening', field: 'stageFinancialScreeningAt' },
+  { label: 'booking', field: 'stageBookingAt' },
+  // Legacy fields (backward compat for historical conversations)
   { label: 'qualification', field: 'stageQualificationAt' },
   { label: 'vision_building', field: 'stageVisionBuildingAt' },
   { label: 'pain_identification', field: 'stagePainIdentificationAt' },
-  { label: 'urgency', field: 'stageUrgencyAt' },
   { label: 'solution_offer', field: 'stageSolutionOfferAt' },
-  { label: 'capital_qualification', field: 'stageCapitalQualificationAt' },
-  { label: 'booking', field: 'stageBookingAt' }
+  { label: 'capital_qualification', field: 'stageCapitalQualificationAt' }
 ] as const;
 
 type StageField = (typeof STAGE_ENTRIES)[number]['field'];
 
 interface ConversationRow {
   outcome: string;
+  // New 7-stage SOP sequence
+  stageOpeningAt: Date | null;
+  stageSituationDiscoveryAt: Date | null;
+  stageGoalEmotionalWhyAt: Date | null;
+  stageUrgencyAt: Date | null;
+  stageSoftPitchCommitmentAt: Date | null;
+  stageFinancialScreeningAt: Date | null;
+  stageBookingAt: Date | null;
+  // Legacy fields
   stageQualificationAt: Date | null;
   stageVisionBuildingAt: Date | null;
   stagePainIdentificationAt: Date | null;
-  stageUrgencyAt: Date | null;
   stageSolutionOfferAt: Date | null;
   stageCapitalQualificationAt: Date | null;
-  stageBookingAt: Date | null;
   _count: { messages: number };
 }
 
@@ -84,13 +99,20 @@ export async function GET(request: NextRequest) {
       },
       select: {
         outcome: true,
+        // New 7-stage SOP sequence
+        stageOpeningAt: true,
+        stageSituationDiscoveryAt: true,
+        stageGoalEmotionalWhyAt: true,
+        stageUrgencyAt: true,
+        stageSoftPitchCommitmentAt: true,
+        stageFinancialScreeningAt: true,
+        stageBookingAt: true,
+        // Legacy fields
         stageQualificationAt: true,
         stageVisionBuildingAt: true,
         stagePainIdentificationAt: true,
-        stageUrgencyAt: true,
         stageSolutionOfferAt: true,
         stageCapitalQualificationAt: true,
-        stageBookingAt: true,
         _count: { select: { messages: true } }
       }
     })) as ConversationRow[];

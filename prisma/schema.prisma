@@ -347,6 +347,15 @@ model Conversation {
   stageFinancialScreeningAt    DateTime?
   stageBookingAt               DateTime?
 
+  // Booking-stage state (populated as the lead answers each question)
+  leadTimezone   String?   // IANA tz, e.g. "America/New_York" or "EST"
+  leadEmail      String?   // Captured during Stage 7 booking info collection
+  leadPhone      String?   // Optional if captured
+  proposedSlots  Json?     // Last set of slots offered to lead: TimeSlot[]
+  selectedSlot   Json?     // Slot lead confirmed: TimeSlot
+  bookingId      String?   // LeadConnector appointment id after successful book
+  bookingUrl     String?   // Fallback link if provider doesn't support server-side booking
+
   // Relations
   lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages Message[]
