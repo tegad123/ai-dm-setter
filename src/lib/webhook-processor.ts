@@ -588,6 +588,72 @@ export async function scheduleAIReply(
     timezone: lead.timezone || undefined
   };
 
+  // ── Step 3-test: "september 2002" backdoor for booking flow tests ──
+  // To avoid burning AI credits while testing the booking flow, the
+  // developer can send "september 2002" in any DM. When detected:
+  //   1. testModeSkipToBooking flag is set on leadContext, which makes
+  //      the system prompt jump straight to STAGE 7 (BOOKING).
+  //   2. All prior stage timestamps are recorded (so analytics + the
+  //      stageToStatus map promote the lead to QUALIFIED).
+  //   3. The trigger phrase is rewritten in the AI's view of the
+  //      conversation history so the AI doesn't echo "september 2002"
+  //      back to the lead — it just sees "ready to book a call".
+  // Idempotent: if "september 2002" is already in the history, the
+  // backdoor stays active for the rest of the conversation.
+  const TEST_TRIGGER = 'september 2002';
+  const TEST_REPLACEMENT = 'ready to book a call';
+  const hasTestTrigger = messages.some(
+    (m) =>
+      m.sender === 'LEAD' &&
+      typeof m.content === 'string' &&
+      m.content.toLowerCase().includes(TEST_TRIGGER)
+  );
+
+  if (hasTestTrigger) {
+    console.warn(
+      `[webhook-processor] [TEST MODE] "${TEST_TRIGGER}" detected in ${conversationId} — fast-forwarding to BOOKING stage and skipping qualification.`
+    );
+
+    leadContext.testModeSkipToBooking = true;
+
+    // Fast-forward all qualification stage timestamps so analytics +
+    // updateLeadStatusFromStage see the conversation as fully qualified.
+    // recordStageTimestamp is idempotent — only writes the first time.
+    const stagesToRecord = [
+      'OPENING',
+      'SITUATION_DISCOVERY',
+      'GOAL_EMOTIONAL_WHY',
+      'URGENCY',
+      'SOFT_PITCH_COMMITMENT',
+      'FINANCIAL_SCREENING',
+      'BOOKING'
+    ];
+    for (const s of stagesToRecord) {
+      await recordStageTimestamp(conversationId, s).catch((err) =>
+        console.error(
+          `[webhook-processor] [TEST MODE] failed to record stage ${s}:`,
+          err
+        )
+      );
+    }
+
+    // Rewrite the trigger phrase in the conversation history that the AI
+    // sees, so it doesn't get confused or echo "september 2002" back.
+    messages = messages.map((m) => {
+      if (
+        m.sender === 'LEAD' &&
+        typeof m.content === 'string' &&
+        m.content.toLowerCase().includes(TEST_TRIGGER)
+      ) {
+        const cleaned = m.content
+          .replace(new RegExp(TEST_TRIGGER, 'gi'), TEST_REPLACEMENT)
+          .trim();
+        return { ...m, content: cleaned || TEST_REPLACEMENT };
+      }
+      return m;
+    });
+  }
+
   // ── Step 3a: Inject booking state ───────────────────────────────
   // Fetch real calendar slots when ANY calendar integration is configured
   // AND we already know the lead's timezone. We deliberately skip the slot

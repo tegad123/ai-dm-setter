@@ -36,6 +36,11 @@ export interface LeadContext {
   timezone?: string;
   // Booking-stage context (populated when conversation reaches Stage 7)
   booking?: BookingState;
+  // Test mode: when true, the system prompt force-jumps to BOOKING stage
+  // and skips all qualification stages. Triggered by sending "september 2002"
+  // in any inbound DM. Used during development to test the booking flow
+  // without burning credits going through 7 stages of qualification.
+  testModeSkipToBooking?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,6 +1008,30 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
   // ── Custom system prompt override ─────────────────────────────────
   if (p.systemPrompt && p.systemPrompt.trim().length > 100) {
     prompt = p.systemPrompt + '\n\n---\n\n' + prompt;
+  }
+
+  // ── TEST MODE: skip-to-booking backdoor ───────────────────────────
+  // When the lead sends "september 2002" in any DM, the webhook-processor
+  // sets leadContext.testModeSkipToBooking = true. This prepends a hard
+  // override at the very top of the prompt that tells the AI to ignore all
+  // earlier stages and jump directly to BOOKING (Stage 7). Used for dev
+  // testing without burning credits going through 7 stages of qualification.
+  if (leadContext.testModeSkipToBooking) {
+    const testModePrefix = `[TEST MODE — DEVELOPMENT ONLY]
+This conversation is being tested by the developer. The lead has been pre-qualified through all earlier stages (OPENING through FINANCIAL_SCREENING). You MUST skip directly to STAGE 7 (BOOKING). Do NOT ask any qualification questions. Do NOT pitch the offer. Do NOT discuss capital, experience, or timing. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
+
+Your ONLY job for the rest of this conversation is to run the booking flow:
+1. If you do not yet know the lead's timezone, set sub_stage="BOOKING_TZ_ASK" and ASK for it first.
+2. Once you have the timezone, set sub_stage="BOOKING_SLOT_PROPOSE" and propose 2-3 specific slots from the available slots list (use the EXACT label including the timezone suffix).
+3. Once they pick a slot, set sub_stage="BOOKING_EMAIL_ASK" and ask for their email.
+4. Once you have email + selected slot, set sub_stage="BOOKING_CONFIRM" AND set selected_slot_iso to the ISO of the picked slot AND set lead_email to the captured email. This will trigger the real LeadConnector booking.
+
+In ALL responses during test mode, set stage="BOOKING".
+
+----- ORIGINAL PROMPT BELOW -----
+
+`;
+    prompt = testModePrefix + prompt;
   }
 
   return prompt;
