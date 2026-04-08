@@ -589,14 +589,17 @@ export async function scheduleAIReply(
   };
 
   // ── Step 3a: Inject booking state ───────────────────────────────
-  // Always fetch real calendar slots when ANY calendar integration is
-  // configured. We used to gate this on `stageFinancialScreeningAt` /
-  // `stageBookingAt` to save API calls, but that gate created a race:
-  // the FIRST AI reply that decides to enter BOOKING is generated BEFORE
-  // those timestamps are recorded (recording happens AFTER generateReply
-  // returns), so the very first booking reply had no slots — and the AI
-  // hallucinated a fake calendar URL to fill the gap. Always-on slot
-  // injection costs 1 LC call per AI reply (~250ms) and prevents that.
+  // Fetch real calendar slots when ANY calendar integration is configured
+  // AND we already know the lead's timezone. We deliberately skip the slot
+  // fetch when leadTimezone is null because:
+  //   1. We can't filter to business-hours-in-lead-local without a tz.
+  //   2. Slot labels in the prompt would be UTC-based and the AI would
+  //      misread them as lead-local — exactly the hallucination bug that
+  //      caused real bookings to fail (AI quoted "5pm CT" thinking it was
+  //      Central Time when it was actually a UTC label).
+  // The prompt's "tz unknown" branch instructs the AI to ASK for the
+  // timezone first; only after the next inbound message (with leadTimezone
+  // persisted) do we start proposing real slots.
   try {
     // Check ALL providers, not just LeadConnector — any one of them
     // counts as a calendar integration.
@@ -612,7 +615,7 @@ export async function scheduleAIReply(
     );
 
     let availableSlots: BookingSlot[] = [];
-    if (hasCalendarIntegration) {
+    if (hasCalendarIntegration && conversation.leadTimezone) {
       const now = new Date();
       const end = new Date(now);
       end.setDate(end.getDate() + 7);
@@ -620,27 +623,29 @@ export async function scheduleAIReply(
         accountId,
         now.toISOString(),
         end.toISOString(),
-        conversation.leadTimezone || undefined
+        conversation.leadTimezone
       );
-      // Filter to business hours 9am-7pm in the lead's tz (or UTC fallback)
+      // Filter to business hours 9am-7pm in the lead's tz
       availableSlots = (avail.slots || [])
         .filter((s) => {
           const d = new Date(s.start);
-          const hour = conversation.leadTimezone
-            ? Number(
-                new Intl.DateTimeFormat('en-US', {
-                  hour: 'numeric',
-                  hour12: false,
-                  timeZone: conversation.leadTimezone
-                }).format(d)
-              )
-            : d.getUTCHours();
+          const hour = Number(
+            new Intl.DateTimeFormat('en-US', {
+              hour: 'numeric',
+              hour12: false,
+              timeZone: conversation.leadTimezone!
+            }).format(d)
+          );
           return hour >= 9 && hour <= 19;
         })
         .slice(0, 12);
 
       console.log(
-        `[webhook-processor] Fetched ${avail.slots?.length || 0} raw slots from ${avail.provider}, ${availableSlots.length} after business-hours filter (lead tz: ${conversation.leadTimezone || 'UTC fallback'})`
+        `[webhook-processor] Fetched ${avail.slots?.length || 0} raw slots from ${avail.provider}, ${availableSlots.length} after business-hours filter (lead tz: ${conversation.leadTimezone})`
+      );
+    } else if (hasCalendarIntegration) {
+      console.log(
+        `[webhook-processor] Skipping slot fetch for ${conversationId} — leadTimezone not yet known. AI will be told to ask for tz first.`
       );
     }
 
@@ -869,6 +874,12 @@ async function sendAIReply(
   // ── Trigger real booking when the AI confirms a slot selection ──
   // This fires when sub_stage is BOOKING_CONFIRM AND we have the minimum
   // data needed to book via LeadConnector (slot + email).
+  //
+  // FAILURE PHILOSOPHY: every failure path below MUST do two things:
+  //   1. Flip conversation.aiActive = false (so AI stops generating)
+  //   2. Create a SYSTEM notification (so a human is alerted in the dashboard)
+  // Otherwise we end up with a phantom "BOOKED" stage with no calendar entry,
+  // which is the bug we hit on 2026-04-08 with conversation cmngzdbbu0002if04jjxlm35i.
   if (
     result.subStage === 'BOOKING_CONFIRM' &&
     result.selectedSlotIso &&
@@ -887,9 +898,31 @@ async function sendAIReply(
     );
 
     if (!matchedSlot) {
+      // R14 hallucination guard tripped — AI picked a slot we never proposed.
+      // Pause AI and surface to the team instead of silently dropping the book.
       console.warn(
-        `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — skipping book.`
+        `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — pausing AI and notifying team.`
       );
+      try {
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: { aiActive: false }
+        });
+        await prisma.notification.create({
+          data: {
+            accountId: lead.accountId,
+            type: 'SYSTEM',
+            title: 'AI hallucinated booking slot — needs human',
+            body: `${lead.name} (@${lead.handle}): AI tried to book a time (${result.selectedSlotIso}) that was not in the proposed slot list. AI is now paused. Please review the conversation and book manually. Proposed slots: ${proposed.map((s) => s.start).join(', ') || '(none)'}.`,
+            leadId: lead.id
+          }
+        });
+      } catch (notifErr) {
+        console.error(
+          '[webhook-processor] Failed to flag hallucinated-slot failure:',
+          notifErr
+        );
+      }
     } else {
       try {
         const bookingResult = await bookUnifiedAppointment(accountId, {
@@ -936,23 +969,87 @@ async function sendAIReply(
             `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
           );
         } else {
+          // Provider returned a structured failure — pause AI + notify team.
           console.error(
             `[webhook-processor] Booking failed for ${conversationId}:`,
             bookingResult.error
           );
+          try {
+            await prisma.conversation.update({
+              where: { id: conversationId },
+              data: { aiActive: false }
+            });
+            await prisma.notification.create({
+              data: {
+                accountId: lead.accountId,
+                type: 'SYSTEM',
+                title: 'Booking failed — needs human',
+                body: `${lead.name} (@${lead.handle}): AI tried to book but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}. AI is now paused.`,
+                leadId: lead.id
+              }
+            });
+          } catch (notifErr) {
+            console.error(
+              '[webhook-processor] Failed to flag provider booking failure:',
+              notifErr
+            );
+          }
+        }
+      } catch (bookErr: any) {
+        // Unhandled exception in the booking call — pause AI + notify team.
+        console.error('[webhook-processor] Unhandled booking error:', bookErr);
+        try {
+          await prisma.conversation.update({
+            where: { id: conversationId },
+            data: { aiActive: false }
+          });
           await prisma.notification.create({
             data: {
               accountId: lead.accountId,
               type: 'SYSTEM',
-              title: 'Booking failed — needs human',
-              body: `AI tried to book ${lead.name} but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}`,
+              title: 'Booking crashed — needs human',
+              body: `${lead.name} (@${lead.handle}): unhandled error while booking. AI is now paused. Error: ${(bookErr?.message || String(bookErr)).slice(0, 200)}`,
               leadId: lead.id
             }
           });
+        } catch (notifErr) {
+          console.error(
+            '[webhook-processor] Failed to flag unhandled booking error:',
+            notifErr
+          );
         }
-      } catch (bookErr: any) {
-        console.error('[webhook-processor] Unhandled booking error:', bookErr);
       }
+    }
+  } else if (result.subStage === 'BOOKING_CONFIRM') {
+    // The AI advanced to BOOKING_CONFIRM but is missing critical data
+    // (slot or email). This shouldn't happen with a correct prompt, but if
+    // it does we surface it loudly so we don't end up with a phantom
+    // BOOKED stage and no real booking.
+    const missing: string[] = [];
+    if (!result.selectedSlotIso) missing.push('slot');
+    if (!result.leadEmail) missing.push('email');
+    console.warn(
+      `[webhook-processor] BOOKING_CONFIRM sub-stage but missing ${missing.join(', ')} for ${conversationId} — pausing AI and notifying team.`
+    );
+    try {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'Booking incomplete — needs human',
+          body: `${lead.name} (@${lead.handle}): AI advanced to booking confirmation but is missing ${missing.join(' + ')}. AI is now paused. Please review and book manually.`,
+          leadId: lead.id
+        }
+      });
+    } catch (notifErr) {
+      console.error(
+        '[webhook-processor] Failed to flag missing-data booking failure:',
+        notifErr
+      );
     }
   }
 
@@ -1528,7 +1625,15 @@ async function updateLeadStatusFromStage(
   currentStatus: string,
   stage: string
 ): Promise<void> {
-  // Map AI stages to lead statuses (only upgrade, never downgrade)
+  // Map AI stages to lead statuses (only upgrade, never downgrade).
+  //
+  // CRITICAL: BOOKING stage caps at QUALIFIED, NOT 'BOOKED'.
+  // The 'BOOKED' status must ONLY be set inside the success branch of
+  // bookUnifiedAppointment() in sendAIReply (search for `lead.status: 'BOOKED'`).
+  // Setting it here would create a phantom "BOOKED" lead even when the
+  // calendar booking silently failed (e.g. R14 anti-hallucination guard
+  // rejected the AI's slot pick), which is exactly the bug we hit on
+  // 2026-04-08 with conversation cmngzdbbu0002if04jjxlm35i.
   const stageToStatus: Record<string, string> = {
     // New 7-stage SOP sequence
     OPENING: 'NEW_LEAD',
@@ -1537,7 +1642,7 @@ async function updateLeadStatusFromStage(
     URGENCY: 'HOT_LEAD',
     SOFT_PITCH_COMMITMENT: 'QUALIFIED',
     FINANCIAL_SCREENING: 'QUALIFIED',
-    BOOKING: 'BOOKED',
+    BOOKING: 'QUALIFIED', // ← capped at QUALIFIED — only real booking promotes to BOOKED
     // Legacy stage names (backward compat)
     GREETING: 'NEW_LEAD',
     QUALIFICATION: 'IN_QUALIFICATION',

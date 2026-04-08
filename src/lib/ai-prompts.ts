@@ -543,8 +543,24 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
   const slots = booking.availableSlots || [];
 
   // 1. Available slots block — real calendar data takes priority.
-  if (slots.length) {
+  // CRITICAL ORDERING — the no-timezone branch MUST come before any other
+  // calendar branch. Without leadTimezone we cannot label slots in the
+  // lead's local time, and the AI will misread UTC-labeled times as
+  // lead-local. The webhook-processor enforces this by skipping slot
+  // fetching when leadTimezone is null, so `slots` will be empty here
+  // even if calendar integration exists.
+  if (booking.hasCalendarIntegration && !booking.leadTimezone) {
+    prompt = prompt.replace(
+      /\{\{availableSlotsContext\}\}/g,
+      '- (Lead timezone is NOT YET KNOWN. STEP 1 of booking: ask the lead what timezone they are in BEFORE proposing any times. Do NOT invent any specific time. Do NOT send a URL. Once they answer with a timezone, real calendar slots will be fetched and shown to you on the next turn.)'
+    );
+  } else if (slots.length) {
     const tz = booking.leadTimezone;
+    // Always include timeZoneName so labels are unambiguous
+    // (e.g. "Mon, Apr 8, 12:30 PM CDT" instead of "Mon, Apr 8, 12:30 PM").
+    // Without this suffix, the AI hallucinates the wrong tz when reading
+    // the slot list back to the lead — that bug previously caused the AI
+    // to quote "5pm CT" for a UTC-labeled slot that was actually noon CDT.
     const fmtOpts: Intl.DateTimeFormatOptions = {
       weekday: 'short',
       month: 'short',
@@ -552,6 +568,7 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
+      timeZoneName: 'short',
       ...(tz ? { timeZone: tz } : {})
     };
     const lines = slots.slice(0, 12).map((s) => {
@@ -568,7 +585,7 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
     prompt = prompt.replace(
       /\{\{availableSlotsContext\}\}/g,
       lines.join('\n') +
-        '\n\nUSE THESE SLOTS — propose 2-3 of them in your reply. NEVER invent a time that is not in this list (R14). NEVER drop a booking link when slots are present — the booking will be created automatically once the lead picks a time and provides their email.'
+        '\n\nUSE THESE SLOTS — propose 2-3 of them in your reply, quoting the EXACT label including the timezone suffix (e.g. "CDT", "EDT"). NEVER invent a time that is not in this list (R14). NEVER strip the timezone suffix when reading a slot back to the lead. NEVER drop a booking link when slots are present — the booking will be created automatically once the lead picks a time and provides their email.'
     );
   } else if (booking.hasCalendarIntegration) {
     prompt = prompt.replace(
