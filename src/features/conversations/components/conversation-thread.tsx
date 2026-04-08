@@ -71,9 +71,9 @@ export function ConversationThread({
   };
 
   return (
-    <div className='flex flex-1 flex-col'>
+    <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
       {/* Header */}
-      <div className='flex items-center justify-between border-b px-6 py-3'>
+      <div className='flex shrink-0 items-center justify-between border-b px-6 py-3'>
         <div className='flex items-center gap-3'>
           <div>
             <div className='flex items-center gap-2'>
@@ -134,12 +134,11 @@ export function ConversationThread({
       </div>
 
       {/* Conversation Panel */}
-      <div className='flex flex-1 flex-col overflow-hidden px-4 py-3'>
-        {/* Messages Box — fixed height, scrollable */}
+      <div className='flex min-h-0 flex-1 flex-col px-4 py-3'>
+        {/* Messages Box — fills remaining space, scrollable */}
         <div
           ref={messagesContainerRef}
-          className='bg-muted/20 flex-1 overflow-y-auto rounded-xl border shadow-inner'
-          style={{ maxHeight: 'calc(100vh - 220px)' }}
+          className='bg-muted/20 min-h-0 flex-1 overflow-y-auto rounded-xl border shadow-inner'
         >
           <div className='p-4 md:p-5'>
             {loading ? (
@@ -247,8 +246,8 @@ export function ConversationThread({
           </div>
         </div>
 
-        {/* Input — sits below the messages box */}
-        <div className='mt-3 pb-2'>
+        {/* Input — fixed at bottom below messages */}
+        <div className='mt-3 shrink-0 pb-2'>
           <div className='flex items-center gap-2'>
             <Input
               placeholder='Type a message...'
