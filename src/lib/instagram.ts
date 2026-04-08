@@ -290,13 +290,15 @@ export async function getUserProfile(
   // graph.instagram.com, EAA tokens go to graph.facebook.com.
   const isIGToken = String(accessToken).startsWith('IGAA');
   const apiBase = isIGToken ? IG_GRAPH_API_BASE : GRAPH_API_BASE;
-  // Instagram Login API uses `profile_picture_url`, Facebook Login API
-  // uses `profile_pic`. The other field names (name, username) are the same.
-  const picField = isIGToken ? 'profile_picture_url' : 'profile_pic';
 
-  // Strategy 1: Direct user lookup against the correct host
+  // Strategy 1: Direct user lookup with `name,username` only.
+  // The picture field varies by API surface (and on the IG Login flow
+  // the messaging-API user lookup doesn't expose any picture field at
+  // all — see fbtrace_id "Tried accessing nonexisting field"). The
+  // conversations API path below picks up the avatar via participants
+  // when needed.
   try {
-    const url = `${apiBase}/${userId}?fields=name,username,${picField}&access_token=${accessToken}`;
+    const url = `${apiBase}/${userId}?fields=name,username&access_token=${accessToken}`;
     const response = await fetch(url);
     if (response.ok) {
       const data = await response.json();
@@ -308,17 +310,15 @@ export async function getUserProfile(
           id: data.id || userId,
           name: data.name || data.username || userId,
           username: data.username || userId,
-          profilePicUrl: data[picField]
+          profilePicUrl: undefined
         };
       }
-    } else {
-      const errBody = await response.text().catch(() => '');
-      console.warn(
-        `[instagram] Direct lookup failed (${response.status}) on ${isIGToken ? 'IG' : 'FB'} host: ${errBody.slice(0, 200)}`
-      );
     }
-  } catch (err) {
-    console.warn(`[instagram] Direct lookup threw:`, err);
+    // Don't log non-OK here — IGSIDs almost always 400 on direct lookup
+    // and Strategy 2 (conversations API) is the canonical path. Logging
+    // every failure would spam the logs on every webhook.
+  } catch {
+    // Direct lookup threw — fall through to Strategy 2
   }
 
   // Strategy 2: Conversations API — find the participant by ID
