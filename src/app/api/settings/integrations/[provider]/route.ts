@@ -86,24 +86,27 @@ export async function DELETE(
       );
     }
 
-    // For Meta/Instagram, revoke the grant on Facebook's side BEFORE deleting
-    // the local credential. Otherwise Meta will silently re-use the existing
-    // grant on the next OAuth attempt — even with auth_type=rerequest — and
-    // any newly-approved scopes will be silently dropped from the new token.
-    // The DELETE /me/permissions endpoint nukes the user's entire app
-    // authorization, forcing a fresh consent dialog next time.
+    // For Meta/Instagram (Facebook Login flow), revoke the grant on
+    // Facebook's side BEFORE deleting the local credential. Otherwise Meta
+    // will silently re-use the existing grant on the next OAuth attempt —
+    // even with auth_type=rerequest — and any newly-approved scopes will be
+    // silently dropped from the new token. The DELETE /me/permissions
+    // endpoint nukes the user's entire app authorization, forcing a fresh
+    // consent dialog next time.
+    //
+    // IMPORTANT: only Facebook Graph API supports DELETE /me/permissions.
+    // Instagram Login (IGAA* tokens via graph.instagram.com) does NOT have
+    // this endpoint — calling it returns IGApiException code 100/33. For
+    // IGAA tokens we just skip server-side revocation and rely on local
+    // credential deletion (the user can fully revoke via Instagram app
+    // settings → Apps and Websites → Active Apps if they need to).
     if (provider === 'META' || provider === 'INSTAGRAM') {
       try {
         const existing = await getCredentials(auth.accountId, provider);
         const token = existing?.accessToken;
-        if (token) {
-          // Use the right host: Instagram tokens (IGAA*) live on
-          // graph.instagram.com, Meta tokens (EAA*) on graph.facebook.com.
-          const host = String(token).startsWith('IGAA')
-            ? 'https://graph.instagram.com'
-            : 'https://graph.facebook.com';
+        if (token && !String(token).startsWith('IGAA')) {
           const revokeRes = await fetch(
-            `${host}/v21.0/me/permissions?access_token=${token}`,
+            `https://graph.facebook.com/v21.0/me/permissions?access_token=${token}`,
             { method: 'DELETE' }
           );
           if (revokeRes.ok) {
@@ -120,6 +123,10 @@ export async function DELETE(
             );
             // Don't fail the disconnect — local cleanup still has value
           }
+        } else if (token) {
+          console.log(
+            `[disconnect] Skipping server-side revoke for ${provider} (Instagram Login token — endpoint not supported)`
+          );
         }
       } catch (revokeErr) {
         console.warn(
