@@ -278,6 +278,20 @@ function keywordsToArray(s: string): string[] {
     .filter(Boolean);
 }
 
+// Human-readable formatter for the response-delay inputs.
+//   30   → "30s"
+//   60   → "1 min"
+//   90   → "1 min 30s"
+//   125  → "2 min 5s"
+// We use floor for the minutes component so 30s never reads as "1 min 30s".
+function formatDelaySeconds(seconds: number): string {
+  if (seconds <= 0) return '0s';
+  if (seconds < 60) return `${seconds}s`;
+  const min = Math.floor(seconds / 60);
+  const rem = seconds % 60;
+  return rem === 0 ? `${min} min` : `${min} min ${rem}s`;
+}
+
 // Hydrate a SOP nested object — if the stored value is an object,
 // merge known keys; if it's a plain string (the old fallback the prompt
 // engine accepts), drop it into the FIRST sub-field so the user can
@@ -638,6 +652,20 @@ export default function PersonaSettingsPage() {
       const more = missing.length > 6 ? ` (+${missing.length - 6} more)` : '';
       toast.error(
         `Missing required fields: ${preview}${more}. Scroll to the SOP Sales Flow card or upload your playbook to auto-fill.`
+      );
+      return;
+    }
+
+    // ── Response delay sanity check ─────────────────────────────────
+    // We let the inputs accept anything during typing, so guard against
+    // min > max here. If max is 0 we treat the whole feature as off and
+    // skip the check (min is also effectively ignored downstream).
+    if (
+      persona.responseDelayMax > 0 &&
+      persona.responseDelayMin > persona.responseDelayMax
+    ) {
+      toast.error(
+        `Minimum delay (${persona.responseDelayMin}s) cannot exceed maximum delay (${persona.responseDelayMax}s).`
       );
       return;
     }
@@ -1236,22 +1264,23 @@ export default function PersonaSettingsPage() {
                   step={15}
                   value={persona.responseDelayMin}
                   onChange={(e) => {
+                    // Only mutate the field the user is typing in. Auto-
+                    // bumping the other field on every keystroke makes the
+                    // inputs feel "linked" and prevents the user from typing
+                    // values like min=30, max=60 (the first keystroke would
+                    // bump max to 30 and overwrite their intended value).
+                    // We validate min <= max once on save, not on input.
                     const v = Math.max(
                       0,
                       Math.min(1800, parseInt(e.target.value || '0', 10))
                     );
-                    setPersona((prev) => ({
-                      ...prev,
-                      responseDelayMin: v,
-                      // Keep max >= min
-                      responseDelayMax: Math.max(prev.responseDelayMax, v)
-                    }));
+                    setPersona((prev) => ({ ...prev, responseDelayMin: v }));
                   }}
                 />
                 <p className='text-muted-foreground text-xs'>
                   {persona.responseDelayMin === 0
                     ? 'No minimum delay'
-                    : `~${Math.round(persona.responseDelayMin / 60)} min ${persona.responseDelayMin % 60}s`}
+                    : `~${formatDelaySeconds(persona.responseDelayMin)}`}
                 </p>
               </div>
               <div className='grid gap-2'>
@@ -1270,21 +1299,24 @@ export default function PersonaSettingsPage() {
                       0,
                       Math.min(1800, parseInt(e.target.value || '0', 10))
                     );
-                    setPersona((prev) => ({
-                      ...prev,
-                      responseDelayMax: v,
-                      // Keep min <= max
-                      responseDelayMin: Math.min(prev.responseDelayMin, v)
-                    }));
+                    setPersona((prev) => ({ ...prev, responseDelayMax: v }));
                   }}
                 />
                 <p className='text-muted-foreground text-xs'>
                   {persona.responseDelayMax === 0
                     ? 'No maximum delay'
-                    : `~${Math.round(persona.responseDelayMax / 60)} min ${persona.responseDelayMax % 60}s`}
+                    : `~${formatDelaySeconds(persona.responseDelayMax)}`}
                 </p>
               </div>
             </div>
+            {persona.responseDelayMin > persona.responseDelayMax &&
+              persona.responseDelayMax > 0 && (
+                <div className='rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
+                  Minimum delay ({persona.responseDelayMin}s) is greater than
+                  maximum delay ({persona.responseDelayMax}s). The save will be
+                  blocked until you fix this.
+                </div>
+              )}
             <div className='bg-muted/40 text-muted-foreground rounded-md border p-3 text-xs'>
               <strong className='text-foreground'>How it works:</strong> When a
               lead messages you, the AI generates the reply at delivery time
