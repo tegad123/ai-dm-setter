@@ -38,6 +38,11 @@ export async function GET(req: NextRequest) {
     oauthUrl.searchParams.set('redirect_uri', redirectUri);
     oauthUrl.searchParams.set('state', state);
     oauthUrl.searchParams.set('response_type', 'code');
+    // Force Meta to re-prompt for previously declined scopes (e.g.
+    // instagram_basic). Without this, Meta silently skips any permission
+    // the user has declined in the past, even if we ask for it again.
+    // See https://developers.facebook.com/docs/facebook-login/guides/permissions/request-revoke#re-request-declined-permissions
+    oauthUrl.searchParams.set('auth_type', 'rerequest');
 
     if (configId) {
       // Facebook Login for Business mode — use config_id (no scope)

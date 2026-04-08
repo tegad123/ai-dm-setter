@@ -279,23 +279,98 @@ export async function GET(req: NextRequest) {
       }
 
       if (discoveredPageId) {
-        // Save what we have — user token + page ID from granular_scopes
+        // Last-chance attempt: try to fetch real page details using the
+        // user token. If pages_read_engagement is granted, this returns the
+        // page name + a long-lived page access token + the linked IG account.
+        // We do this ONE more time defensively even though Fallback 3 should
+        // have already tried it — Fallback 3 may have been skipped if
+        // debug_token returned different page IDs than /me/accounts.
+        let resolvedPageName: string | null = null;
+        let resolvedPageToken: string | null = null;
+        let resolvedIgId: string | null = null;
+        let resolvedIgUsername: string | null = null;
+        try {
+          const lastChanceRes = await fetch(
+            `${GRAPH_API}/${discoveredPageId}?fields=id,name,access_token,instagram_business_account&access_token=${userToken}`
+          );
+          if (lastChanceRes.ok) {
+            const lastChanceData = await lastChanceRes.json();
+            if (lastChanceData.id && lastChanceData.name) {
+              resolvedPageName = lastChanceData.name;
+              resolvedPageToken = lastChanceData.access_token ?? null;
+              resolvedIgId =
+                lastChanceData.instagram_business_account?.id ?? null;
+              console.log(
+                `[meta-oauth] Fallback 4 last-chance fetch succeeded: name="${resolvedPageName}", hasPageToken=${!!resolvedPageToken}, ig=${resolvedIgId ?? 'none'}`
+              );
+            }
+          } else {
+            const errBody = await lastChanceRes.text();
+            console.warn(
+              `[meta-oauth] Fallback 4 last-chance fetch failed (${lastChanceRes.status}):`,
+              errBody.slice(0, 300)
+            );
+          }
+        } catch (err) {
+          console.warn('[meta-oauth] Fallback 4 last-chance fetch error:', err);
+        }
+
+        // If we got the IG account ID, also resolve the IG username
+        if (resolvedIgId && (resolvedPageToken || userToken)) {
+          try {
+            const igRes = await fetch(
+              `${GRAPH_API}/${resolvedIgId}?fields=username&access_token=${resolvedPageToken ?? userToken}`
+            );
+            if (igRes.ok) {
+              const igData = await igRes.json();
+              resolvedIgUsername = igData.username ?? null;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        const finalPageName = resolvedPageName ?? `Page ${discoveredPageId}`;
+        const finalAccessToken = resolvedPageToken ?? userToken;
+
         console.log(
-          `[meta-oauth] Saving with user token fallback for page ${discoveredPageId}`
+          `[meta-oauth] Saving Fallback 4 credential: page="${finalPageName}" (${discoveredPageId}), usingPageToken=${!!resolvedPageToken}, ig=${resolvedIgId ?? 'none'}`
         );
 
         await saveCredentials(
           state.accountId,
           'META',
-          { accessToken: userToken },
+          { accessToken: finalAccessToken },
           {
             pageId: discoveredPageId,
-            pageName: `Page ${discoveredPageId}`,
-            platform: 'FACEBOOK'
+            pageName: finalPageName,
+            ...(resolvedIgId ? { instagramAccountId: resolvedIgId } : {}),
+            ...(resolvedIgUsername
+              ? { instagramUsername: resolvedIgUsername }
+              : {}),
+            platform: resolvedIgId ? 'INSTAGRAM_AND_FACEBOOK' : 'FACEBOOK'
           }
         );
 
-        // Subscribe the page to webhooks using the user token
+        // If we resolved an IG link, also write the INSTAGRAM credential row
+        if (resolvedIgId) {
+          await saveCredentials(
+            state.accountId,
+            'INSTAGRAM',
+            { accessToken: finalAccessToken },
+            {
+              igUserId: resolvedIgId,
+              username: resolvedIgUsername || '',
+              name: resolvedIgUsername || '',
+              instagramAccountId: resolvedIgId,
+              connectedVia: 'META_OAUTH'
+            }
+          );
+        }
+
+        // Subscribe the page to webhooks. Prefer the resolved page token
+        // (proper credential) — fall back to the user token if we never got
+        // page-level credentials.
         try {
           const subRes = await fetch(
             `${GRAPH_API}/${discoveredPageId}/subscribed_apps`,
@@ -310,14 +385,14 @@ export async function GET(req: NextRequest) {
                   'message_deliveries',
                   'message_reads'
                 ].join(','),
-                access_token: userToken
+                access_token: finalAccessToken
               })
             }
           );
           if (subRes.ok) {
             const subData = await subRes.json();
             console.log(
-              `[meta-oauth] Subscribed page ${discoveredPageId} to webhooks (user token):`,
+              `[meta-oauth] Subscribed page ${discoveredPageId} to webhooks (fallback):`,
               subData
             );
           } else {
@@ -335,11 +410,11 @@ export async function GET(req: NextRequest) {
         }
 
         console.log(
-          `[meta-oauth] Saved user token + page ID ${discoveredPageId} for account ${state.accountId}`
+          `[meta-oauth] Saved Fallback 4 credential for "${finalPageName}" (${discoveredPageId}) on account ${state.accountId}`
         );
 
         return NextResponse.redirect(
-          `${baseUrl}/dashboard/settings/integrations?connected=meta&page=${encodeURIComponent(`Page ${discoveredPageId}`)}`
+          `${baseUrl}/dashboard/settings/integrations?connected=meta&page=${encodeURIComponent(finalPageName)}`
         );
       }
 
