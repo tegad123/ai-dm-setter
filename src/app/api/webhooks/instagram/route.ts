@@ -200,15 +200,17 @@ async function processInstagramEvents(payload: any): Promise<void> {
       }
     }
 
-    // ── Gate: skip if no active Instagram/Meta credential for this account ─
-    // When a user disconnects Instagram, the credential is deleted. No
-    // credential = no processing. This replaces the old toggle-based gate.
+    // ── Gate: skip if no active INSTAGRAM credential for this account ────
+    // A META-only credential (Messenger) should NOT enable Instagram DM
+    // processing. The Meta OAuth callback auto-creates a separate INSTAGRAM
+    // credential when the FB page has a linked IG Business Account, so
+    // legitimate dual-platform users will still pass this gate.
     const hasIgCredential = allCredentials.some(
-      (c) => c.accountId === accountId
+      (c) => c.accountId === accountId && c.provider === 'INSTAGRAM'
     );
     if (!hasIgCredential) {
       console.log(
-        `[instagram-webhook] No active credential for account=${accountId}, skipping`
+        `[instagram-webhook] No INSTAGRAM credential for account=${accountId}, skipping`
       );
       continue;
     }
