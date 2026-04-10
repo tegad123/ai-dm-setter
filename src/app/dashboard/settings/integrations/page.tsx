@@ -14,7 +14,6 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 
@@ -115,10 +114,6 @@ export default function IntegrationsPage() {
     null
   );
 
-  // Platform enable/disable toggles
-  const [instagramEnabled, setInstagramEnabled] = useState(true);
-  const [facebookEnabled, setFacebookEnabled] = useState(true);
-
   // Loading
   const [loading, setLoading] = useState(true);
 
@@ -162,20 +157,6 @@ export default function IntegrationsPage() {
       // If Anthropic is connected but OpenAI is not, default to Anthropic
       if (map['ANTHROPIC'] && !map['OPENAI']) {
         setSelectedAI('ANTHROPIC');
-      }
-
-      // Fetch platform toggles from account
-      try {
-        const acctData = await apiFetch<{
-          account: {
-            instagramEnabled: boolean;
-            facebookEnabled: boolean;
-          };
-        }>('/api/settings/account');
-        setInstagramEnabled(acctData.account.instagramEnabled);
-        setFacebookEnabled(acctData.account.facebookEnabled);
-      } catch {
-        // Keep defaults
       }
     } catch {
       // Silently fail on initial load -- user will see "Not Connected"
@@ -396,35 +377,6 @@ export default function IntegrationsPage() {
       toast.error('Failed to save Calendly credentials');
     } finally {
       setCalSaving(false);
-    }
-  }
-
-  // --------------------------------------------------
-  // Platform toggle handlers
-  // --------------------------------------------------
-
-  async function togglePlatform(
-    platform: 'instagram' | 'facebook',
-    enabled: boolean
-  ) {
-    const field =
-      platform === 'instagram' ? 'instagramEnabled' : 'facebookEnabled';
-    const setter =
-      platform === 'instagram' ? setInstagramEnabled : setFacebookEnabled;
-
-    // Optimistic update
-    setter(enabled);
-    try {
-      await apiFetch('/api/settings/account', {
-        method: 'PUT',
-        body: JSON.stringify({ [field]: enabled })
-      });
-      toast.success(
-        `${platform === 'instagram' ? 'Instagram' : 'Facebook'} DMs ${enabled ? 'enabled' : 'disabled'}`
-      );
-    } catch {
-      setter(!enabled); // Revert
-      toast.error('Failed to update platform setting');
     }
   }
 
@@ -950,18 +902,6 @@ export default function IntegrationsPage() {
                 <p className='text-muted-foreground mt-2 text-sm'>
                   Receiving and sending Messenger DMs for this page.
                 </p>
-                <div className='mt-3 flex items-center justify-between rounded-lg border p-3'>
-                  <div>
-                    <p className='text-sm font-medium'>Process Facebook DMs</p>
-                    <p className='text-muted-foreground text-xs'>
-                      When off, incoming Messenger DMs will be ignored
-                    </p>
-                  </div>
-                  <Switch
-                    checked={facebookEnabled}
-                    onCheckedChange={(v) => togglePlatform('facebook', v)}
-                  />
-                </div>
               </div>
             ) : (
               <p className='text-muted-foreground text-sm'>
@@ -1037,18 +977,6 @@ export default function IntegrationsPage() {
                 <p className='text-muted-foreground mt-2 text-sm'>
                   Receiving and sending Instagram DMs for this account.
                 </p>
-                <div className='mt-3 flex items-center justify-between rounded-lg border p-3'>
-                  <div>
-                    <p className='text-sm font-medium'>Process Instagram DMs</p>
-                    <p className='text-muted-foreground text-xs'>
-                      When off, incoming Instagram DMs will be ignored
-                    </p>
-                  </div>
-                  <Switch
-                    checked={instagramEnabled}
-                    onCheckedChange={(v) => togglePlatform('instagram', v)}
-                  />
-                </div>
               </div>
             ) : (
               <p className='text-muted-foreground text-sm'>

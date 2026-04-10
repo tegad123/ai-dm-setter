@@ -152,14 +152,15 @@ async function processFacebookEvents(payload: any): Promise<void> {
       }
     }
 
-    // ── Gate: skip if Facebook is disabled for this account ─────────
-    const account = await prisma.account.findUnique({
-      where: { id: accountId },
-      select: { facebookEnabled: true }
-    });
-    if (account && !account.facebookEnabled) {
+    // ── Gate: skip if no active Meta credential for this account ────
+    // When a user disconnects Facebook, the credential is deleted. No
+    // credential = no processing.
+    const hasMetaCredential = metaCredentials.some(
+      (c) => c.accountId === accountId
+    );
+    if (!hasMetaCredential) {
       console.log(
-        `[facebook-webhook] Facebook disabled for account=${accountId}, skipping`
+        `[facebook-webhook] No active credential for account=${accountId}, skipping`
       );
       continue;
     }

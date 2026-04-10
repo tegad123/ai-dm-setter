@@ -200,14 +200,15 @@ async function processInstagramEvents(payload: any): Promise<void> {
       }
     }
 
-    // ── Gate: skip if Instagram is disabled for this account ──────────
-    const account = await prisma.account.findUnique({
-      where: { id: accountId },
-      select: { instagramEnabled: true }
-    });
-    if (account && !account.instagramEnabled) {
+    // ── Gate: skip if no active Instagram/Meta credential for this account ─
+    // When a user disconnects Instagram, the credential is deleted. No
+    // credential = no processing. This replaces the old toggle-based gate.
+    const hasIgCredential = allCredentials.some(
+      (c) => c.accountId === accountId
+    );
+    if (!hasIgCredential) {
       console.log(
-        `[instagram-webhook] Instagram disabled for account=${accountId}, skipping`
+        `[instagram-webhook] No active credential for account=${accountId}, skipping`
       );
       continue;
     }
