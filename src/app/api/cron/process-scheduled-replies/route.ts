@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     const now = new Date();
 
     // Find pending replies that are due
-    const pendingReplies = await prisma.scheduledReply.findMany({
+    const dueReplies = await prisma.scheduledReply.findMany({
       where: {
         status: 'PENDING',
         scheduledFor: { lte: now },
@@ -26,10 +26,37 @@ export async function GET(req: NextRequest) {
       orderBy: { scheduledFor: 'asc' },
       take: 10
     });
-    console.log(`[cron] picked up ${pendingReplies.length} pending replies`);
+    console.log(`[cron] picked up ${dueReplies.length} due replies`);
 
-    if (pendingReplies.length === 0) {
+    if (dueReplies.length === 0) {
       return NextResponse.json({ processed: 0, failed: 0, total: 0 });
+    }
+
+    // Defensive de-dup: only process ONE reply per conversation per cron tick.
+    // If two ScheduledReply rows exist for the same convo (e.g. Meta retried
+    // a webhook and the route enqueued twice), the cron used to process both
+    // and send the same AI message twice — exactly the duplicate the user
+    // saw on tegaumukoro_ on 2026-04-08. We keep the earliest-scheduled row
+    // per conversation, cancel the rest, and only act on the survivors.
+    const pendingReplies: typeof dueReplies = [];
+    const dupIdsToCancel: string[] = [];
+    const seenConvos = new Set<string>();
+    for (const r of dueReplies) {
+      if (seenConvos.has(r.conversationId)) {
+        dupIdsToCancel.push(r.id);
+        continue;
+      }
+      seenConvos.add(r.conversationId);
+      pendingReplies.push(r);
+    }
+    if (dupIdsToCancel.length > 0) {
+      await prisma.scheduledReply.updateMany({
+        where: { id: { in: dupIdsToCancel } },
+        data: { status: 'CANCELLED' }
+      });
+      console.log(
+        `[cron] cancelled ${dupIdsToCancel.length} duplicate replies (same conversation already queued)`
+      );
     }
 
     // Mark as PROCESSING (optimistic lock to prevent double-pickup)

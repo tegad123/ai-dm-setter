@@ -89,20 +89,32 @@ export async function generateReply(
   // 5. Parse the structured JSON response
   const parsed = parseAIResponse(rawResponse);
 
-  // 6. Get response delay from persona config
-  const persona = await prisma.aIPersona.findFirst({
-    where: { accountId },
-    select: {
-      responseDelayMin: true,
-      responseDelayMax: true,
-      voiceNotesEnabled: true
-    }
-  });
+  // 6. Get response delay from persona config — must read the ACTIVE persona,
+  // not the oldest row, otherwise stale defaults override the dashboard value.
+  const persona =
+    (await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        responseDelayMin: true,
+        responseDelayMax: true,
+        voiceNotesEnabled: true
+      }
+    })) ??
+    (await prisma.aIPersona.findFirst({
+      where: { accountId },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        responseDelayMin: true,
+        responseDelayMax: true,
+        voiceNotesEnabled: true
+      }
+    }));
 
   const delayMin = persona?.responseDelayMin ?? 300;
   const delayMax = persona?.responseDelayMax ?? 600;
-  const suggestedDelay =
-    Math.floor(Math.random() * (delayMax - delayMin + 1)) + delayMin;
+  const { humanResponseDelay } = await import('@/lib/delay-utils');
+  const suggestedDelay = humanResponseDelay(delayMin, delayMax);
 
   const shouldVoiceNote =
     parsed.format === 'voice_note' && (persona?.voiceNotesEnabled ?? false);

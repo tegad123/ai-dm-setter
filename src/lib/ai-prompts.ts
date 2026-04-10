@@ -206,15 +206,27 @@ When an objection is detected:
 2. Fire the tenant's corresponding objection protocol script.
 3. After the objection protocol completes, RESUME from the EXACT stage that was interrupted. Do NOT restart from Stage 1.
 4. Set objection_detected to the matching type.
+5. NEVER set soft_exit: true as a reaction to any objection. Objections are COUNTER-PITCH opportunities, not exit cues. Only the 3 conditions in SOFT EXIT GUARD RAILS justify soft_exit.
 
 Objection types and their tenant protocols:
 {{objectionProtocolsContext}}
+
+**HAS_MENTOR counter-pitch pattern** (use whenever the lead says they already have a mentor, coach, program, course, community, or education — phrases like "I got my education from X", "I'm in Y's program", "I've got this", "I'm good bro", "I already have someone", "I learned from [name]"):
+- Acknowledge their current setup without dismissing it. Show respect for the foundation.
+- Probe their actual results with ONE pointed question. Examples: "How long have you been with them?", "Where are you still stuck that the program hasn't solved yet?", "What's your current consistency / win rate looking like?", "What's the biggest bottleneck you haven't cracked yet?"
+- Position the difference between their current setup and YOUR 1-on-1 offer. Anchor on OUTCOMES, not features: personalized trade reviews, a plan built around THEIR specific bottleneck, direct live feedback vs generic course content / group chats / prerecorded lessons.
+- Do NOT list features.
+- Do NOT write a farewell.
+- Do NOT invite them to "come back later".
+- Resume the interrupted stage (usually SOFT_PITCH_COMMITMENT or FINANCIAL_SCREENING) once the objection is answered and the lead engages.
+- Keep going on them until either (a) they commit, (b) they hit a genuine hard disqualifier in financial screening, or (c) they explicitly say stop.
 
 If no tenant objection protocols are configured, handle objections naturally:
 - Acknowledge the concern with empathy.
 - Address it honestly and directly.
 - Never dismiss or minimize it.
 - Return to the interrupted stage once the concern is resolved.
+- NEVER write a "if you ever need me down the road" or "door's always open" message in response to an objection. Those are soft exits in disguise and violate the guard rails above.
 
 NEVER discuss payment plans, split pay, or program pricing in the DM (R4). Those conversations happen on the call.
 
@@ -266,12 +278,18 @@ Content comes from tenant data. Only the timing framework is defined here.
 ## SOFT EXIT GUARD RAILS
 Soft exit (set soft_exit: true) must ONLY fire under these THREE conditions:
 1. **Hard disqualifier confirmed**: lead has no capital AND no credit AND no credit card limit (all three financial levels exhausted).
-2. **Lead explicitly says stop**: they ask you to stop messaging them or say they are not interested.
+2. **Lead explicitly says stop**: they ask you to stop messaging them in unambiguous terms ("stop messaging me", "leave me alone", "unsubscribe", "I'm genuinely not interested, please don't reach out again"). Polite deflections like "I've got this", "I'm good bro", "I appreciate it but no", "I already have a mentor", "I'm in a program", "thanks I'll come back later", or "I'm not ready yet" are OBJECTIONS to counter, NOT stop signals. Do not treat them as condition #2.
 3. **Three failed follow-ups**: no response after follow-up attempt 3 in any stall or ghost sequence.
 
 When soft exit fires, use the tenant's exit content (free value link, parting message). Be warm and leave the door open.
 
 A positive response to the soft pitch must NEVER trigger soft exit. This is the most critical rule. If someone says "yes" or "sounds good" to the soft pitch, that is a COMMITMENT signal, not an exit signal.
+
+**HAS_MENTOR and NOT_READY objections NEVER trigger soft_exit.** When a lead says "I already have a mentor", "I'm already in a program", "I'm good, I got this", "I got my education from X", or any variant claiming they already have guidance/training:
+- Do NOT set soft_exit: true under any circumstance.
+- Do NOT write a "if you ever need me down the road" / "door's open" / "keep grinding, wishing you well" farewell message. Those are soft exits in disguise.
+- Instead, counter-pitch: acknowledge their current setup without dismissing it, probe their actual results with a specific question, and position how your 1-on-1 offer differs from generic courses/group programs/recorded content. Keep going on them.
+- Only exit if they then explicitly say "stop messaging me" after you've counter-pitched.
 
 ## GHOST RE-ENGAGEMENT
 When re-engaging a lead who went silent (different from active stall handling):
@@ -299,6 +317,7 @@ R14: NEVER invent, guess, or hallucinate a calendar slot. Only propose times tha
 R15: NEVER use the phrase "sales call", "sales meeting", "sales convo", or any variant with the word "sales" when talking to a lead. The word "sales" triggers instant resistance. Call it "a call", "a quick call", "a 15-minute call", "a chat", "a convo", "hop on real quick", or similar. This rule applies to the soft pitch, commitment confirmation, booking, confirmations, reminders, and every follow-up — in every message to the lead.
 R16: NEVER fabricate, guess, or hallucinate a URL — booking link, calendar link, course link, video link, scheduling page, or any other URL. The ONLY URLs you may send are the ones explicitly listed in the **Booking link** field, the **Asset Links** section, or the **Free Value Link** field of this prompt. If a URL is not in those exact places, it does not exist and you must not invent one. NEVER write "cal.com/...", "calendly.com/...", "bit.ly/...", "[your-name].com/...", or any URL pattern from your training data. If the lead asks for a link and no real link is configured, tell them honestly that you'll send the link separately and stop the booking flow there. Inventing a URL is a critical failure that breaks the entire booking system.
 R17: NEVER use em-dashes (—) or en-dashes (–) in ANY message you send to a lead. These are dead giveaways that text was written by an AI and instantly break rapport. If you need a pause mid-sentence, use a comma or split into two sentences with a period. NEVER use a hyphen with spaces around it as a sentence connector either (e.g. "I work from home - it's great" is BANNED — write "I work from home, it's great" or "I work from home. It's great" instead). Hyphens are ONLY allowed inside compound words like "well-known", "self-aware", "high-quality", "9-5", "Mon-Fri". This rule applies to every single message — opening, qualification, urgency, soft pitch, financial screening, booking, follow-ups, confirmations. No exceptions. This is one of the strictest style rules in the entire prompt.
+R18: NEVER soft-exit a HAS_MENTOR or NOT_READY objection — no matter how final the lead sounds. When a lead says any variant of "I already have a mentor", "I'm in a program", "I got my education from X", "I've got this", "I'm good bro", "I appreciate it but I'm set", or "I'm not ready": this is an OBJECTION to counter-pitch against, NOT an exit signal. Do not set soft_exit: true, do not write a goodbye/door-is-open message, do not quit the conversation. Always run the HAS_MENTOR counter-pitch pattern (acknowledge → probe results → position the 1-on-1 difference on outcomes → resume the interrupted stage) and keep going on them. The ONLY conditions that allow soft_exit are the 3 in SOFT EXIT GUARD RAILS; HAS_MENTOR is explicitly excluded and overrides all other interpretations.
 
 ## ADDITIONAL RULES
 - Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
@@ -312,26 +331,7 @@ R17: NEVER use em-dashes (—) or en-dashes (–) in ANY message you send to a l
 - All scripts and dialogue come from the tenant data sections below. Do not improvise product-specific claims.
 
 ## TENANT DATA
-The sections below contain all brand-specific scripts, proof points, and content. Use these verbatim where indicated.
-
-{{originStoryContext}}
-{{openingScriptsContext}}
-{{pathAScriptsContext}}
-{{pathBScriptsContext}}
-{{goalEmotionalWhyScriptsContext}}
-{{emotionalDisclosurePatternsContext}}
-{{urgencyScriptsContext}}
-{{softPitchScriptsContext}}
-{{commitmentConfirmationContext}}
-{{financialScreeningScriptsContext}}
-{{lowTicketPitchContext}}
-{{bookingScriptsContext}}
-{{incomeFramingRuleContext}}
-{{assetLinksContext}}
-{{trainingExamplesContext}}
-{{knowledgeAssetsContext}}
-{{proofPointsContext}}
-{{customPhrasesContext}}
+{{tenantDataBlock}}
 
 ## LEAD CONTEXT
 - Name: {{leadName}}
@@ -346,6 +346,361 @@ The sections below contain all brand-specific scripts, proof points, and content
 The messages below are the full conversation so far. Continue naturally from the last message.
 Do NOT repeat or rephrase anything that has already been said.
 `.trim();
+
+// ---------------------------------------------------------------------------
+// Shared helpers for building supplemental data sections
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildSupplementalSections(
+  p: any,
+  trainingExamples: any[],
+  config: any
+): string {
+  const parts: string[] = [];
+
+  // Asset links
+  const assets = config.assetLinks;
+  if (assets && typeof assets === 'object') {
+    const assetParts: string[] = [];
+    if (assets.bookingLink)
+      assetParts.push(`- Booking link: ${assets.bookingLink}`);
+    if (assets.courseLink)
+      assetParts.push(`- Course link: ${assets.courseLink}`);
+    if (assets.freeValueLink || p.freeValueLink)
+      assetParts.push(
+        `- Free value link: ${assets.freeValueLink || p.freeValueLink}`
+      );
+    if (assets.videoLinks?.length) {
+      assets.videoLinks.forEach((v: any) => {
+        if (typeof v === 'string') assetParts.push(`- Video: ${v}`);
+        else if (v.label && v.url) assetParts.push(`- ${v.label}: ${v.url}`);
+      });
+    }
+    if (assetParts.length)
+      parts.push(`\n### ASSET LINKS\n${assetParts.join('\n')}`);
+  }
+
+  // Training examples (few-shot)
+  if (trainingExamples.length > 0) {
+    const exText = trainingExamples
+      .map(
+        (ex: any) =>
+          `**[${ex.category}]**\nLead: "${ex.leadMessage}"\nIdeal Response: "${ex.idealResponse}"${ex.notes ? `\nNote: ${ex.notes}` : ''}`
+      )
+      .join('\n\n');
+    parts.push(
+      `\n### TRAINING EXAMPLES\nUse these as reference for tone and style:\n\n${exText}`
+    );
+  }
+
+  // Knowledge assets
+  const knowledge = p.knowledgeAssets as any[];
+  if (knowledge?.length) {
+    const kaText = knowledge
+      .map(
+        (ka: any) =>
+          `### ${ka.title}\n${ka.content}\n*Deploy when: ${ka.deployTrigger || 'relevant'}*`
+      )
+      .join('\n\n');
+    parts.push(`\n### KNOWLEDGE ASSETS\n${kaText}`);
+  }
+
+  // Proof points
+  const proofs = p.proofPoints as any[];
+  if (proofs?.length) {
+    const ppText = proofs
+      .map(
+        (pp: any) =>
+          `- ${pp.name}: ${pp.result} (deploy when: ${pp.deployContext || pp.deployTrigger || 'building credibility'})`
+      )
+      .join('\n');
+    parts.push(`\n### PROOF POINTS / SOCIAL PROOF\n${ppText}`);
+  }
+
+  // Custom phrases
+  const phrases = p.customPhrases as any;
+  if (phrases && typeof phrases === 'object') {
+    const cpText = Object.entries(phrases)
+      .map(([key, val]) => `- ${key}: "${val}"`)
+      .join('\n');
+    parts.push(
+      `\n### CUSTOM PHRASES\nUse these naturally in your messages:\n${cpText}`
+    );
+  }
+
+  return parts.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Script-first tenant data builder
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildScriptFirstTenantData(
+  p: any,
+  trainingExamples: any[],
+  config: any
+): string {
+  const sections: string[] = [];
+
+  sections.push(
+    `The sections below contain the account owner's complete sales script and an AI-generated style analysis. Use the script as your PRIMARY reference for exact language, phrases, and tone at each stage. When the process framework above says to "use tenant scripts" or "fire tenant's message", look in the script below for how to say it.`
+  );
+
+  sections.push(`\n### YOUR SALES SCRIPT\n${(p.rawScript as string).trim()}`);
+
+  if (p.styleAnalysis) {
+    sections.push(
+      `\n### STYLE ANALYSIS\nThe following analysis was generated from the script above. Use it to understand communication patterns, vocabulary, and approach. When in doubt about HOW to say something, reference this analysis.\n\n${(p.styleAnalysis as string).trim()}`
+    );
+  }
+
+  const supplemental = buildSupplementalSections(p, trainingExamples, config);
+  if (supplemental) {
+    sections.push(`\n### SUPPLEMENTAL DATA\n${supplemental}`);
+  }
+
+  return sections.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Legacy tenant data builder (field-by-field)
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildLegacyTenantData(
+  p: any,
+  trainingExamples: any[],
+  config: any
+): string {
+  const sections: string[] = [];
+
+  sections.push(
+    'The sections below contain all brand-specific scripts, proof points, and content. Use these verbatim where indicated.'
+  );
+
+  // Origin story
+  const originStory = config.originStory as string | undefined;
+  if (originStory) {
+    sections.push(
+      `\n### ORIGIN STORY\nDeploy this when building trust or handling skepticism objections:\n${originStory}`
+    );
+  }
+
+  // Opening scripts
+  const openingScripts = config.openingScripts as any;
+  if (openingScripts) {
+    const osParts: string[] = [];
+    if (openingScripts.inbound)
+      osParts.push(
+        `**Inbound opener** (lead messaged first):\n${openingScripts.inbound}`
+      );
+    if (openingScripts.outbound)
+      osParts.push(
+        `**Outbound opener** (you reach out first):\n${openingScripts.outbound}`
+      );
+    if (openingScripts.openingQuestion)
+      osParts.push(`**Opening question:**\n${openingScripts.openingQuestion}`);
+    if (osParts.length)
+      sections.push(`\n### OPENING SCRIPTS\n${osParts.join('\n\n')}`);
+  }
+
+  // Path A scripts (experienced)
+  const pathA = config.pathAScripts as any;
+  if (pathA)
+    sections.push(
+      `\n### PATH A SCRIPTS (EXPERIENCED LEAD)\n${typeof pathA === 'string' ? pathA : JSON.stringify(pathA, null, 2)}`
+    );
+
+  // Path B scripts (beginner)
+  const pathB = config.pathBScripts as any;
+  if (pathB)
+    sections.push(
+      `\n### PATH B SCRIPTS (BEGINNER LEAD)\n${typeof pathB === 'string' ? pathB : JSON.stringify(pathB, null, 2)}`
+    );
+
+  // Goal & Emotional Why scripts
+  const goalScripts = config.goalEmotionalWhyScripts || config.goalScripts;
+  if (goalScripts)
+    sections.push(
+      `\n### GOAL & EMOTIONAL WHY SCRIPTS\n${typeof goalScripts === 'string' ? goalScripts : JSON.stringify(goalScripts, null, 2)}`
+    );
+
+  // Emotional disclosure patterns
+  const emotionalPatterns = config.emotionalDisclosurePatterns as any;
+  if (emotionalPatterns)
+    sections.push(
+      `\n### EMOTIONAL DISCLOSURE PATTERNS\nWhen a lead shares personal pain, respond using these patterns:\n${typeof emotionalPatterns === 'string' ? emotionalPatterns : JSON.stringify(emotionalPatterns, null, 2)}`
+    );
+
+  // Urgency scripts
+  const urgencyScripts = config.urgencyScripts || config.urgencyQuestion;
+  if (urgencyScripts)
+    sections.push(
+      `\n### URGENCY SCRIPTS\n${typeof urgencyScripts === 'string' ? urgencyScripts : JSON.stringify(urgencyScripts, null, 2)}`
+    );
+
+  // Soft pitch scripts
+  const softPitch = config.softPitchScripts || config.callPitchMessage;
+  if (softPitch)
+    sections.push(
+      `\n### SOFT PITCH SCRIPTS\n${typeof softPitch === 'string' ? softPitch : JSON.stringify(softPitch, null, 2)}`
+    );
+
+  // Commitment confirmation
+  const commitConfirm =
+    config.commitmentConfirmationScript ||
+    config.softPitchScripts?.commitmentConfirmation;
+  if (commitConfirm)
+    sections.push(
+      `\n### COMMITMENT CONFIRMATION SCRIPT\nUse this after the lead confirms interest in the soft pitch:\n${commitConfirm}`
+    );
+
+  // Financial screening scripts
+  const finWaterfall = p.financialWaterfall as any;
+  if (finWaterfall) {
+    const levels = Array.isArray(finWaterfall)
+      ? finWaterfall
+      : [
+          finWaterfall.level1,
+          finWaterfall.level2,
+          finWaterfall.level3,
+          finWaterfall.level4
+        ].filter(Boolean);
+    const fwText = levels
+      .map(
+        (lvl: any, i: number) =>
+          `**Level ${i + 1}: ${lvl.label || `Level ${i + 1}`}**\n${lvl.question || lvl}\n${lvl.passAction ? `If pass: ${lvl.passAction}` : ''}`
+      )
+      .join('\n\n');
+    sections.push(`\n### FINANCIAL SCREENING SCRIPTS\n${fwText}`);
+  } else {
+    const fsScripts = config.financialScreeningScripts;
+    if (fsScripts)
+      sections.push(
+        `\n### FINANCIAL SCREENING SCRIPTS\n${typeof fsScripts === 'string' ? fsScripts : JSON.stringify(fsScripts, null, 2)}`
+      );
+  }
+
+  // Low-ticket pitch
+  const lowTicket = config.lowTicketPitchScripts || config.lowTicketPitch;
+  if (lowTicket)
+    sections.push(
+      `\n### LOW-TICKET PITCH SEQUENCE\nUse this when all financial waterfall levels are exhausted:\n${typeof lowTicket === 'string' ? lowTicket : JSON.stringify(lowTicket, null, 2)}`
+    );
+
+  // Booking scripts
+  const bookingScripts =
+    config.bookingScripts || config.bookingConfirmationMessage;
+  if (bookingScripts)
+    sections.push(
+      `\n### BOOKING SCRIPTS\n${typeof bookingScripts === 'string' ? bookingScripts : JSON.stringify(bookingScripts, null, 2)}`
+    );
+
+  // Income framing rule
+  const incomeRule = config.incomeFramingRule;
+  if (incomeRule) sections.push(`\n### INCOME FRAMING RULE\n${incomeRule}`);
+
+  // Objection protocols
+  const objHandling = p.objectionHandling as any;
+  if (objHandling && typeof objHandling === 'object') {
+    let objText: string;
+    if (Array.isArray(objHandling)) {
+      objText = objHandling
+        .map((obj: any) => {
+          const keywords = obj.triggerKeywords?.join(', ') || '';
+          return `### ${obj.type || 'CUSTOM'}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${obj.script || obj.response || ''}`;
+        })
+        .join('\n\n');
+    } else {
+      objText = Object.entries(objHandling)
+        .map(([key, val]: [string, any]) => {
+          if (typeof val === 'object' && val !== null) {
+            const keywords = val.triggerKeywords?.join(', ') || '';
+            return `### ${key}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${val.script || val.response || JSON.stringify(val)}`;
+          }
+          return `### ${key}\n**Protocol:**\n${val}`;
+        })
+        .join('\n\n');
+    }
+    sections.push(`\n### OBJECTION PROTOCOLS\n${objText}`);
+  }
+
+  // Stall scripts
+  const stallScripts = config.stallScripts;
+  if (stallScripts) {
+    let stallText: string;
+    if (Array.isArray(stallScripts)) {
+      stallText = stallScripts
+        .map((s: any) => {
+          const followUps =
+            s.followUps
+              ?.map((f: string, i: number) => `  Follow-up ${i + 1}: "${f}"`)
+              .join('\n') || '';
+          return `**${s.type}**\nInitial: "${s.initial || ''}"\n${followUps}\nSoft exit: "${s.softExit || ''}"`;
+        })
+        .join('\n\n');
+    } else {
+      stallText =
+        typeof stallScripts === 'string'
+          ? stallScripts
+          : JSON.stringify(stallScripts, null, 2);
+    }
+    sections.push(`\n### STALL SCRIPTS\n${stallText}`);
+  } else {
+    const legacyStalls: string[] = [];
+    if (config.stallTimeScript)
+      legacyStalls.push(`**TIME_DELAY:**\n${config.stallTimeScript}`);
+    if (config.stallMoneyScript)
+      legacyStalls.push(`**MONEY_DELAY:**\n${config.stallMoneyScript}`);
+    if (config.stallThinkScript)
+      legacyStalls.push(`**THINKING:**\n${config.stallThinkScript}`);
+    if (config.stallPartnerScript)
+      legacyStalls.push(`**PARTNER:**\n${config.stallPartnerScript}`);
+    if (legacyStalls.length)
+      sections.push(`\n### STALL SCRIPTS\n${legacyStalls.join('\n\n')}`);
+  }
+
+  // No-show scripts
+  const noShow = p.noShowProtocol as any;
+  if (noShow) {
+    const nsParts: string[] = [];
+    if (noShow.firstNoShow)
+      nsParts.push(`**First no-show:** ${noShow.firstNoShow}`);
+    if (noShow.secondNoShow)
+      nsParts.push(`**Second no-show (pull-back):** ${noShow.secondNoShow}`);
+    if (nsParts.length)
+      sections.push(`\n### NO-SHOW SCRIPTS\n${nsParts.join('\n')}`);
+  }
+
+  // Pre-call sequence
+  const preCall = p.preCallSequence as any[];
+  if (preCall?.length) {
+    const pcText = preCall
+      .map((step: any) => `- ${step.timing}: "${step.message}"`)
+      .join('\n');
+    sections.push(`\n### PRE-CALL MESSAGES\n${pcText}`);
+  } else {
+    const preCallConfig = config.preCallMessages;
+    if (preCallConfig) {
+      const pcParts: string[] = [];
+      if (preCallConfig.nightBefore)
+        pcParts.push(`- Night before (9pm): "${preCallConfig.nightBefore}"`);
+      if (preCallConfig.morningOf)
+        pcParts.push(`- Morning of (9:30am): "${preCallConfig.morningOf}"`);
+      if (preCallConfig.oneHourBefore)
+        pcParts.push(`- 1 hour before: "${preCallConfig.oneHourBefore}"`);
+      if (pcParts.length)
+        sections.push(`\n### PRE-CALL MESSAGES\n${pcParts.join('\n')}`);
+    }
+  }
+
+  // Supplemental data (shared with script-first path)
+  sections.push(buildSupplementalSections(p, trainingExamples, config));
+
+  return sections.join('\n');
+}
 
 // ---------------------------------------------------------------------------
 // Build Dynamic System Prompt
@@ -644,367 +999,29 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
       : '"been doing this for", "I have experience", "years of experience", "I already do", "I work in", "my background is"'
   );
 
-  // ── Origin story (tenant data) ────────────────────────────────────
-  const originStory = config.originStory as string | undefined;
-  prompt = prompt.replace(
-    /\{\{originStoryContext\}\}/g,
-    originStory
-      ? `\n### ORIGIN STORY\nDeploy this when building trust or handling skepticism objections:\n${originStory}`
-      : ''
-  );
+  // ── Tenant data block ──────────────────────────────────────────────
+  // Script-first path: inject rawScript + styleAnalysis + supplemental data.
+  // Legacy path: build block from individual promptConfig fields.
+  const hasRawScript =
+    !!(p as any).rawScript &&
+    ((p as any).rawScript as string).trim().length > 100;
 
-  // ── Opening scripts (tenant data) ─────────────────────────────────
-  const openingScripts = config.openingScripts as any;
-  if (openingScripts) {
-    const parts: string[] = [];
-    if (openingScripts.inbound)
-      parts.push(
-        `**Inbound opener** (lead messaged first):\n${openingScripts.inbound}`
-      );
-    if (openingScripts.outbound)
-      parts.push(
-        `**Outbound opener** (you reach out first):\n${openingScripts.outbound}`
-      );
-    if (openingScripts.openingQuestion)
-      parts.push(`**Opening question:**\n${openingScripts.openingQuestion}`);
-    prompt = prompt.replace(
-      /\{\{openingScriptsContext\}\}/g,
-      parts.length ? `\n### OPENING SCRIPTS\n${parts.join('\n\n')}` : ''
+  if (hasRawScript) {
+    // ── SCRIPT-FIRST PATH ───────────────────────────────────────────
+    const scriptBlock = buildScriptFirstTenantData(
+      p as any,
+      trainingExamples,
+      config
     );
+    prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, scriptBlock);
   } else {
-    prompt = prompt.replace(/\{\{openingScriptsContext\}\}/g, '');
+    // ── LEGACY PATH — assemble from individual fields ───────────────
+    const legacyBlock = buildLegacyTenantData(p, trainingExamples, config);
+    prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, legacyBlock);
   }
 
-  // ── Path A scripts (experienced) ──────────────────────────────────
-  const pathA = config.pathAScripts as any;
-  prompt = prompt.replace(
-    /\{\{pathAScriptsContext\}\}/g,
-    pathA
-      ? `\n### PATH A SCRIPTS (EXPERIENCED LEAD)\n${typeof pathA === 'string' ? pathA : JSON.stringify(pathA, null, 2)}`
-      : ''
-  );
-
-  // ── Path B scripts (beginner) ─────────────────────────────────────
-  const pathB = config.pathBScripts as any;
-  prompt = prompt.replace(
-    /\{\{pathBScriptsContext\}\}/g,
-    pathB
-      ? `\n### PATH B SCRIPTS (BEGINNER LEAD)\n${typeof pathB === 'string' ? pathB : JSON.stringify(pathB, null, 2)}`
-      : ''
-  );
-
-  // ── Goal & Emotional Why scripts ──────────────────────────────────
-  const goalScripts = config.goalEmotionalWhyScripts || config.goalScripts;
-  prompt = prompt.replace(
-    /\{\{goalEmotionalWhyScriptsContext\}\}/g,
-    goalScripts
-      ? `\n### GOAL & EMOTIONAL WHY SCRIPTS\n${typeof goalScripts === 'string' ? goalScripts : JSON.stringify(goalScripts, null, 2)}`
-      : ''
-  );
-
-  // ── Emotional disclosure patterns ─────────────────────────────────
-  const emotionalPatterns = config.emotionalDisclosurePatterns as any;
-  prompt = prompt.replace(
-    /\{\{emotionalDisclosurePatternsContext\}\}/g,
-    emotionalPatterns
-      ? `\n### EMOTIONAL DISCLOSURE PATTERNS\nWhen a lead shares personal pain, respond using these patterns:\n${typeof emotionalPatterns === 'string' ? emotionalPatterns : JSON.stringify(emotionalPatterns, null, 2)}`
-      : ''
-  );
-
-  // ── Urgency scripts ───────────────────────────────────────────────
-  const urgencyScripts = config.urgencyScripts || config.urgencyQuestion;
-  prompt = prompt.replace(
-    /\{\{urgencyScriptsContext\}\}/g,
-    urgencyScripts
-      ? `\n### URGENCY SCRIPTS\n${typeof urgencyScripts === 'string' ? urgencyScripts : JSON.stringify(urgencyScripts, null, 2)}`
-      : ''
-  );
-
-  // ── Soft pitch scripts ────────────────────────────────────────────
-  const softPitch = config.softPitchScripts || config.callPitchMessage;
-  prompt = prompt.replace(
-    /\{\{softPitchScriptsContext\}\}/g,
-    softPitch
-      ? `\n### SOFT PITCH SCRIPTS\n${typeof softPitch === 'string' ? softPitch : JSON.stringify(softPitch, null, 2)}`
-      : ''
-  );
-
-  // ── Commitment confirmation ───────────────────────────────────────
-  const commitConfirm =
-    config.commitmentConfirmationScript ||
-    config.softPitchScripts?.commitmentConfirmation;
-  prompt = prompt.replace(
-    /\{\{commitmentConfirmationContext\}\}/g,
-    commitConfirm
-      ? `\n### COMMITMENT CONFIRMATION SCRIPT\nUse this after the lead confirms interest in the soft pitch:\n${commitConfirm}`
-      : ''
-  );
-
-  // ── Financial screening scripts ───────────────────────────────────
-  const finWaterfall = p.financialWaterfall as any;
-  if (finWaterfall) {
-    const levels = Array.isArray(finWaterfall)
-      ? finWaterfall
-      : [
-          finWaterfall.level1,
-          finWaterfall.level2,
-          finWaterfall.level3,
-          finWaterfall.level4
-        ].filter(Boolean);
-    const fwText = levels
-      .map(
-        (lvl: any, i: number) =>
-          `**Level ${i + 1}: ${lvl.label || `Level ${i + 1}`}**\n${lvl.question || lvl}\n${lvl.passAction ? `If pass: ${lvl.passAction}` : ''}`
-      )
-      .join('\n\n');
-    prompt = prompt.replace(
-      /\{\{financialScreeningScriptsContext\}\}/g,
-      `\n### FINANCIAL SCREENING SCRIPTS\n${fwText}`
-    );
-  } else {
-    const fsScripts = config.financialScreeningScripts;
-    prompt = prompt.replace(
-      /\{\{financialScreeningScriptsContext\}\}/g,
-      fsScripts
-        ? `\n### FINANCIAL SCREENING SCRIPTS\n${typeof fsScripts === 'string' ? fsScripts : JSON.stringify(fsScripts, null, 2)}`
-        : ''
-    );
-  }
-
-  // ── Low-ticket pitch ──────────────────────────────────────────────
-  const lowTicket = config.lowTicketPitchScripts || config.lowTicketPitch;
-  prompt = prompt.replace(
-    /\{\{lowTicketPitchContext\}\}/g,
-    lowTicket
-      ? `\n### LOW-TICKET PITCH SEQUENCE\nUse this when all financial waterfall levels are exhausted:\n${typeof lowTicket === 'string' ? lowTicket : JSON.stringify(lowTicket, null, 2)}`
-      : ''
-  );
-
-  // ── Booking scripts ───────────────────────────────────────────────
-  const bookingScripts =
-    config.bookingScripts || config.bookingConfirmationMessage;
-  prompt = prompt.replace(
-    /\{\{bookingScriptsContext\}\}/g,
-    bookingScripts
-      ? `\n### BOOKING SCRIPTS\n${typeof bookingScripts === 'string' ? bookingScripts : JSON.stringify(bookingScripts, null, 2)}`
-      : ''
-  );
-
-  // ── Objection protocols (tenant data) ─────────────────────────────
-  const objHandling = p.objectionHandling as any;
-  if (objHandling && typeof objHandling === 'object') {
-    // Support both array and object formats
-    let objText: string;
-    if (Array.isArray(objHandling)) {
-      objText = objHandling
-        .map((obj: any) => {
-          const keywords = obj.triggerKeywords?.join(', ') || '';
-          return `### ${obj.type || 'CUSTOM'}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${obj.script || obj.response || ''}`;
-        })
-        .join('\n\n');
-    } else {
-      objText = Object.entries(objHandling)
-        .map(([key, val]: [string, any]) => {
-          if (typeof val === 'object' && val !== null) {
-            const keywords = val.triggerKeywords?.join(', ') || '';
-            return `### ${key}\n**Trigger keywords:** ${keywords}\n**Protocol:**\n${val.script || val.response || JSON.stringify(val)}`;
-          }
-          return `### ${key}\n**Protocol:**\n${val}`;
-        })
-        .join('\n\n');
-    }
-    prompt = prompt.replace(
-      /\{\{objectionProtocolsContext\}\}/g,
-      `\n### OBJECTION PROTOCOLS\n${objText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{objectionProtocolsContext\}\}/g, '');
-  }
-
-  // ── Stall scripts (tenant data) ───────────────────────────────────
-  const stallScripts = config.stallScripts;
-  if (stallScripts) {
-    let stallText: string;
-    if (Array.isArray(stallScripts)) {
-      stallText = stallScripts
-        .map((s: any) => {
-          const followUps =
-            s.followUps
-              ?.map((f: string, i: number) => `  Follow-up ${i + 1}: "${f}"`)
-              .join('\n') || '';
-          return `**${s.type}**\nInitial: "${s.initial || ''}"\n${followUps}\nSoft exit: "${s.softExit || ''}"`;
-        })
-        .join('\n\n');
-    } else {
-      stallText =
-        typeof stallScripts === 'string'
-          ? stallScripts
-          : JSON.stringify(stallScripts, null, 2);
-    }
-    prompt = prompt.replace(
-      /\{\{stallScriptsContext\}\}/g,
-      `\n### STALL SCRIPTS\n${stallText}`
-    );
-  } else {
-    // Fall back to legacy stall scripts from promptConfig
-    const legacyStalls: string[] = [];
-    if (config.stallTimeScript)
-      legacyStalls.push(`**TIME_DELAY:**\n${config.stallTimeScript}`);
-    if (config.stallMoneyScript)
-      legacyStalls.push(`**MONEY_DELAY:**\n${config.stallMoneyScript}`);
-    if (config.stallThinkScript)
-      legacyStalls.push(`**THINKING:**\n${config.stallThinkScript}`);
-    if (config.stallPartnerScript)
-      legacyStalls.push(`**PARTNER:**\n${config.stallPartnerScript}`);
-    prompt = prompt.replace(
-      /\{\{stallScriptsContext\}\}/g,
-      legacyStalls.length
-        ? `\n### STALL SCRIPTS\n${legacyStalls.join('\n\n')}`
-        : ''
-    );
-  }
-
-  // ── No-show scripts (tenant data) ─────────────────────────────────
-  const noShow = p.noShowProtocol as any;
-  if (noShow) {
-    const nsParts: string[] = [];
-    if (noShow.firstNoShow)
-      nsParts.push(`**First no-show:** ${noShow.firstNoShow}`);
-    if (noShow.secondNoShow)
-      nsParts.push(`**Second no-show (pull-back):** ${noShow.secondNoShow}`);
-    prompt = prompt.replace(
-      /\{\{noShowScriptsContext\}\}/g,
-      nsParts.length ? `\n### NO-SHOW SCRIPTS\n${nsParts.join('\n')}` : ''
-    );
-  } else {
-    prompt = prompt.replace(/\{\{noShowScriptsContext\}\}/g, '');
-  }
-
-  // ── Pre-call sequence (tenant data) ───────────────────────────────
-  const preCall = p.preCallSequence as any[];
-  if (preCall?.length) {
-    const pcText = preCall
-      .map((step: any) => `- ${step.timing}: "${step.message}"`)
-      .join('\n');
-    prompt = prompt.replace(
-      /\{\{preCallSequenceContext\}\}/g,
-      `\n### PRE-CALL MESSAGES\n${pcText}`
-    );
-  } else {
-    const preCallConfig = config.preCallMessages;
-    if (preCallConfig) {
-      const parts: string[] = [];
-      if (preCallConfig.nightBefore)
-        parts.push(`- Night before (9pm): "${preCallConfig.nightBefore}"`);
-      if (preCallConfig.morningOf)
-        parts.push(`- Morning of (9:30am): "${preCallConfig.morningOf}"`);
-      if (preCallConfig.oneHourBefore)
-        parts.push(`- 1 hour before: "${preCallConfig.oneHourBefore}"`);
-      prompt = prompt.replace(
-        /\{\{preCallSequenceContext\}\}/g,
-        parts.length ? `\n### PRE-CALL MESSAGES\n${parts.join('\n')}` : ''
-      );
-    } else {
-      prompt = prompt.replace(/\{\{preCallSequenceContext\}\}/g, '');
-    }
-  }
-
-  // ── Income framing rule ───────────────────────────────────────────
-  const incomeRule = config.incomeFramingRule;
-  prompt = prompt.replace(
-    /\{\{incomeFramingRuleContext\}\}/g,
-    incomeRule ? `\n### INCOME FRAMING RULE\n${incomeRule}` : ''
-  );
-
-  // ── Asset links ───────────────────────────────────────────────────
-  const assets = config.assetLinks;
-  if (assets && typeof assets === 'object') {
-    const assetParts: string[] = [];
-    if (assets.bookingLink)
-      assetParts.push(`- Booking link: ${assets.bookingLink}`);
-    if (assets.courseLink)
-      assetParts.push(`- Course link: ${assets.courseLink}`);
-    if (assets.freeValueLink || p.freeValueLink)
-      assetParts.push(
-        `- Free value link: ${assets.freeValueLink || p.freeValueLink}`
-      );
-    if (assets.videoLinks?.length) {
-      assets.videoLinks.forEach((v: any) => {
-        if (typeof v === 'string') assetParts.push(`- Video: ${v}`);
-        else if (v.label && v.url) assetParts.push(`- ${v.label}: ${v.url}`);
-      });
-    }
-    prompt = prompt.replace(
-      /\{\{assetLinksContext\}\}/g,
-      assetParts.length ? `\n### ASSET LINKS\n${assetParts.join('\n')}` : ''
-    );
-  } else {
-    prompt = prompt.replace(/\{\{assetLinksContext\}\}/g, '');
-  }
-
-  // ── Training examples (few-shot) ──────────────────────────────────
-  if (trainingExamples.length > 0) {
-    const exText = trainingExamples
-      .map(
-        (ex) =>
-          `**[${ex.category}]**\nLead: "${ex.leadMessage}"\nIdeal Response: "${ex.idealResponse}"${ex.notes ? `\nNote: ${ex.notes}` : ''}`
-      )
-      .join('\n\n');
-    prompt = prompt.replace(
-      /\{\{trainingExamplesContext\}\}/g,
-      `\n### TRAINING EXAMPLES\nUse these as reference for tone and style:\n\n${exText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{trainingExamplesContext\}\}/g, '');
-  }
-
-  // ── Knowledge assets ──────────────────────────────────────────────
-  const knowledge = p.knowledgeAssets as any[];
-  if (knowledge?.length) {
-    const kaText = knowledge
-      .map(
-        (ka: any) =>
-          `### ${ka.title}\n${ka.content}\n*Deploy when: ${ka.deployTrigger || 'relevant'}*`
-      )
-      .join('\n\n');
-    prompt = prompt.replace(
-      /\{\{knowledgeAssetsContext\}\}/g,
-      `\n### KNOWLEDGE ASSETS\n${kaText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{knowledgeAssetsContext\}\}/g, '');
-  }
-
-  // ── Proof points ──────────────────────────────────────────────────
-  const proofs = p.proofPoints as any[];
-  if (proofs?.length) {
-    const ppText = proofs
-      .map(
-        (pp: any) =>
-          `- ${pp.name}: ${pp.result} (deploy when: ${pp.deployContext || pp.deployTrigger || 'building credibility'})`
-      )
-      .join('\n');
-    prompt = prompt.replace(
-      /\{\{proofPointsContext\}\}/g,
-      `\n### PROOF POINTS / SOCIAL PROOF\n${ppText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{proofPointsContext\}\}/g, '');
-  }
-
-  // ── Custom phrases ────────────────────────────────────────────────
-  const phrases = p.customPhrases as any;
-  if (phrases && typeof phrases === 'object') {
-    const cpText = Object.entries(phrases)
-      .map(([key, val]) => `- ${key}: "${val}"`)
-      .join('\n');
-    prompt = prompt.replace(
-      /\{\{customPhrasesContext\}\}/g,
-      `\n### CUSTOM PHRASES\nUse these naturally in your messages:\n${cpText}`
-    );
-  } else {
-    prompt = prompt.replace(/\{\{customPhrasesContext\}\}/g, '');
-  }
+  // ── Cleanup: strip any remaining template vars ────────────────────
+  prompt = prompt.replace(/\{\{[a-zA-Z_]+\}\}/g, '');
 
   // ── Custom system prompt override ─────────────────────────────────
   if (p.systemPrompt && p.systemPrompt.trim().length > 100) {

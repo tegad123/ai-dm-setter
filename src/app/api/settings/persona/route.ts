@@ -53,6 +53,9 @@ export async function PUT(req: NextRequest) {
       freeValueLink,
       customPhrases,
       promptConfig,
+      rawScript,
+      rawScriptFileName,
+      styleAnalysis,
       financialWaterfall,
       knowledgeAssets,
       proofPoints,
@@ -108,6 +111,12 @@ export async function PUT(req: NextRequest) {
       preCallSequence: preCallSequence || undefined,
       closerName: closerName || null
     };
+
+    // Script-first fields (optional, set if provided)
+    if (rawScript !== undefined) data.rawScript = rawScript;
+    if (rawScriptFileName !== undefined)
+      data.rawScriptFileName = rawScriptFileName;
+    if (styleAnalysis !== undefined) data.styleAnalysis = styleAnalysis;
 
     // AI engine settings (optional, only set if provided)
     if (responseDelayMin !== undefined)

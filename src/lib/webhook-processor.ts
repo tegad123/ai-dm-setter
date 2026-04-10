@@ -143,6 +143,17 @@ export interface ProcessResult {
   conversationId: string;
   messageId: string;
   isNewLead: boolean;
+  /**
+   * True when this call did not actually save a new inbound message —
+   * either because we deduped it (same platformMessageId already saved),
+   * or because the message was a control command like "clear conversation"
+   * that we explicitly handle and discard. Webhook routes MUST skip
+   * scheduleAIReply when this is true, otherwise Meta's webhook retries
+   * (or duplicate deliveries) cause two ScheduledReply rows to be created
+   * for one inbound message — which is exactly what fired two AI replies
+   * to tegaumukoro_'s "Hey" on 2026-04-08.
+   */
+  skipReply?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -384,9 +395,87 @@ export async function processIncomingMessage(
         leadId: lead.id,
         conversationId,
         messageId: existing.id,
-        isNewLead: false
+        isNewLead: false,
+        skipReply: true
       };
     }
+  }
+
+  // ── Step 1c: "clear conversation" reset command ────────────────
+  // The user uses a literal DM of "clear conversation" as a debug
+  // command to fully reset a test conversation back to a blank slate
+  // before re-running a flow. We wipe all messages, reset conversation
+  // and lead state, cancel any pending scheduled replies, and return
+  // without saving the command message itself or triggering an AI reply.
+  // The next inbound message will be treated like a fresh opener.
+  if (messageText.trim().toLowerCase() === 'clear conversation') {
+    console.log(
+      `[webhook-processor] CLEAR CONVERSATION command from ${senderHandle} on ${conversationId} — resetting all state`
+    );
+    await prisma.message.deleteMany({ where: { conversationId } });
+    await prisma.scheduledReply.updateMany({
+      where: {
+        conversationId,
+        status: { in: ['PENDING', 'PROCESSING'] }
+      },
+      data: { status: 'CANCELLED' }
+    });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        aiActive: true,
+        unreadCount: 0,
+        lastMessageAt: null,
+        outcome: 'ONGOING',
+        leadIntentTag: 'NEUTRAL',
+        // Current 7-stage timestamps
+        stageOpeningAt: null,
+        stageSituationDiscoveryAt: null,
+        stageGoalEmotionalWhyAt: null,
+        stageUrgencyAt: null,
+        stageSoftPitchCommitmentAt: null,
+        stageFinancialScreeningAt: null,
+        stageBookingAt: null,
+        // Legacy stages
+        stageQualificationAt: null,
+        stageVisionBuildingAt: null,
+        stagePainIdentificationAt: null,
+        stageSolutionOfferAt: null,
+        stageCapitalQualificationAt: null,
+        // Booking state
+        leadTimezone: null,
+        leadEmail: null,
+        leadPhone: null,
+        proposedSlots: undefined,
+        selectedSlot: undefined,
+        bookingId: null,
+        bookingUrl: null
+      }
+    });
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        status: 'NEW_LEAD',
+        qualityScore: 0,
+        bookedAt: null,
+        showedUp: false,
+        closedAt: null,
+        revenue: null,
+        experience: null,
+        incomeLevel: null,
+        geography: null
+      }
+    });
+    console.log(
+      `[webhook-processor] Conversation ${conversationId} fully reset`
+    );
+    return {
+      leadId: lead.id,
+      conversationId,
+      messageId: '',
+      isNewLead: false,
+      skipReply: true
+    };
   }
 
   // ── Step 2: Save the incoming message ──────────────────────────
@@ -415,7 +504,8 @@ export async function processIncomingMessage(
         leadId: lead.id,
         conversationId,
         messageId: existing?.id || '',
-        isNewLead: false
+        isNewLead: false,
+        skipReply: true
       };
     }
     throw err;
@@ -693,16 +783,30 @@ export async function scheduleAIReply(
     shouldAutoSend
   ) {
     try {
-      const persona = await prisma.aIPersona.findFirst({
-        where: { accountId },
-        select: { responseDelayMin: true, responseDelayMax: true }
-      });
+      // Read the ACTIVE persona — same convention used by ai-prompts.ts and
+      // the allow-list lookup at line 46. Without the isActive filter we'd
+      // pick the oldest persona by row order, which on this account was a
+      // stale row with the schema defaults of 300/600s, ignoring whatever
+      // the user actually saved in the dashboard. Fall back to "any persona"
+      // only if nothing is active, to keep working on accounts that haven't
+      // gone through activation yet.
+      const persona =
+        (await prisma.aIPersona.findFirst({
+          where: { accountId, isActive: true },
+          orderBy: { updatedAt: 'desc' },
+          select: { responseDelayMin: true, responseDelayMax: true }
+        })) ??
+        (await prisma.aIPersona.findFirst({
+          where: { accountId },
+          orderBy: { updatedAt: 'desc' },
+          select: { responseDelayMin: true, responseDelayMax: true }
+        }));
       const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
       const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
 
       if (maxDelay > 0) {
-        const delaySeconds =
-          Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+        const { humanResponseDelay } = await import('@/lib/delay-utils');
+        const delaySeconds = humanResponseDelay(minDelay, maxDelay);
         const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
         await prisma.scheduledReply.create({
           data: {
@@ -1087,90 +1191,137 @@ async function sendAIReply(
     // the AI from hallucinating times despite R14).
     const convoForBooking = await prisma.conversation.findUnique({
       where: { id: conversationId },
-      select: { proposedSlots: true, leadTimezone: true }
-    });
-    const proposed =
-      (convoForBooking?.proposedSlots as BookingSlot[] | null) || [];
-    const matchedSlot = proposed.find(
-      (s) => s.start === result.selectedSlotIso
-    );
-
-    if (!matchedSlot) {
-      // R14 hallucination guard tripped — AI picked a slot we never proposed.
-      // Pause AI and surface to the team instead of silently dropping the book.
-      console.warn(
-        `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — pausing AI and notifying team.`
-      );
-      try {
-        await prisma.conversation.update({
-          where: { id: conversationId },
-          data: { aiActive: false }
-        });
-        await prisma.notification.create({
-          data: {
-            accountId: lead.accountId,
-            type: 'SYSTEM',
-            title: 'AI hallucinated booking slot — needs human',
-            body: `${lead.name} (@${lead.handle}): AI tried to book a time (${result.selectedSlotIso}) that was not in the proposed slot list. AI is now paused. Please review the conversation and book manually. Proposed slots: ${proposed.map((s) => s.start).join(', ') || '(none)'}.`,
-            leadId: lead.id
-          }
-        });
-      } catch (notifErr) {
-        console.error(
-          '[webhook-processor] Failed to flag hallucinated-slot failure:',
-          notifErr
-        );
+      select: {
+        proposedSlots: true,
+        leadTimezone: true,
+        bookingId: true,
+        outcome: true
       }
-    } else {
-      try {
-        const bookingResult = await bookUnifiedAppointment(accountId, {
-          leadName: lead.name,
-          leadHandle: lead.handle,
-          leadEmail: result.leadEmail,
-          platform: lead.platform,
-          slotStart: matchedSlot.start,
-          slotEnd: matchedSlot.end,
-          timezone: convoForBooking?.leadTimezone || undefined,
-          notes: `Auto-booked via DMsetter AI. Platform: ${lead.platform}, handle: @${lead.handle}.`
-        });
+    });
 
-        if (bookingResult.success) {
+    // If this conversation is already in BOOKED outcome, the AI is just
+    // acknowledging the existing booking in chat (not re-booking). Skip the
+    // validator and the booking call entirely so we don't trip the R14 guard
+    // against the already-confirmed slot when proposedSlots has been cleared
+    // or rotated. This was the cause of the 2026-04-08 stuck-conversation bug
+    // on cmngzdbbu0002if04jjxlm35i where every follow-up message tripped the
+    // guard and flipped aiActive=false. We accept BOOKED outcome (not just
+    // bookingId) because some providers return without an appointmentId but
+    // the conversation is still legitimately booked.
+    if (convoForBooking?.outcome === 'BOOKED' || convoForBooking?.bookingId) {
+      console.log(
+        `[webhook-processor] BOOKING_CONFIRM substage but conversation ${conversationId} already BOOKED (outcome=${convoForBooking?.outcome}, bookingId=${convoForBooking?.bookingId ?? 'null'}) — skipping re-book validator.`
+      );
+    } else {
+      const proposed =
+        (convoForBooking?.proposedSlots as BookingSlot[] | null) || [];
+      const matchedSlot = proposed.find(
+        (s) => s.start === result.selectedSlotIso
+      );
+
+      if (!matchedSlot) {
+        // R14 hallucination guard tripped — AI picked a slot we never proposed.
+        // Pause AI and surface to the team instead of silently dropping the book.
+        console.warn(
+          `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — pausing AI and notifying team.`
+        );
+        try {
           await prisma.conversation.update({
             where: { id: conversationId },
-            data: {
-              selectedSlot: matchedSlot as any,
-              bookingId: bookingResult.appointmentId || null,
-              bookingUrl: bookingResult.meetingUrl || null,
-              outcome: 'BOOKED'
-            }
-          });
-          await prisma.lead.update({
-            where: { id: lead.id },
-            data: { status: 'BOOKED', bookedAt: new Date() }
+            data: { aiActive: false }
           });
           await prisma.notification.create({
             data: {
               accountId: lead.accountId,
-              type: 'CALL_BOOKED',
-              title: 'New Call Booked (AI)',
-              body: `${lead.name} (@${lead.handle}) booked a call for ${new Date(
-                matchedSlot.start
-              ).toLocaleString('en-US', {
-                dateStyle: 'medium',
-                timeStyle: 'short'
-              })} via ${bookingResult.provider}.`,
-              leadId: lead.id,
-              userId: null
+              type: 'SYSTEM',
+              title: 'AI hallucinated booking slot — needs human',
+              body: `${lead.name} (@${lead.handle}): AI tried to book a time (${result.selectedSlotIso}) that was not in the proposed slot list. AI is now paused. Please review the conversation and book manually. Proposed slots: ${proposed.map((s) => s.start).join(', ') || '(none)'}.`,
+              leadId: lead.id
             }
           });
-          console.log(
-            `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
-          );
-        } else {
-          // Provider returned a structured failure — pause AI + notify team.
+        } catch (notifErr) {
           console.error(
-            `[webhook-processor] Booking failed for ${conversationId}:`,
-            bookingResult.error
+            '[webhook-processor] Failed to flag hallucinated-slot failure:',
+            notifErr
+          );
+        }
+      } else {
+        try {
+          const bookingResult = await bookUnifiedAppointment(accountId, {
+            leadName: lead.name,
+            leadHandle: lead.handle,
+            leadEmail: result.leadEmail,
+            platform: lead.platform,
+            slotStart: matchedSlot.start,
+            slotEnd: matchedSlot.end,
+            timezone: convoForBooking?.leadTimezone || undefined,
+            notes: `Auto-booked via DMsetter AI. Platform: ${lead.platform}, handle: @${lead.handle}.`
+          });
+
+          if (bookingResult.success) {
+            await prisma.conversation.update({
+              where: { id: conversationId },
+              data: {
+                selectedSlot: matchedSlot as any,
+                bookingId: bookingResult.appointmentId || null,
+                bookingUrl: bookingResult.meetingUrl || null,
+                outcome: 'BOOKED'
+              }
+            });
+            await prisma.lead.update({
+              where: { id: lead.id },
+              data: { status: 'BOOKED', bookedAt: new Date() }
+            });
+            await prisma.notification.create({
+              data: {
+                accountId: lead.accountId,
+                type: 'CALL_BOOKED',
+                title: 'New Call Booked (AI)',
+                body: `${lead.name} (@${lead.handle}) booked a call for ${new Date(
+                  matchedSlot.start
+                ).toLocaleString('en-US', {
+                  dateStyle: 'medium',
+                  timeStyle: 'short'
+                })} via ${bookingResult.provider}.`,
+                leadId: lead.id,
+                userId: null
+              }
+            });
+            console.log(
+              `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
+            );
+          } else {
+            // Provider returned a structured failure — pause AI + notify team.
+            console.error(
+              `[webhook-processor] Booking failed for ${conversationId}:`,
+              bookingResult.error
+            );
+            try {
+              await prisma.conversation.update({
+                where: { id: conversationId },
+                data: { aiActive: false }
+              });
+              await prisma.notification.create({
+                data: {
+                  accountId: lead.accountId,
+                  type: 'SYSTEM',
+                  title: 'Booking failed — needs human',
+                  body: `${lead.name} (@${lead.handle}): AI tried to book but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}. AI is now paused.`,
+                  leadId: lead.id
+                }
+              });
+            } catch (notifErr) {
+              console.error(
+                '[webhook-processor] Failed to flag provider booking failure:',
+                notifErr
+              );
+            }
+          }
+        } catch (bookErr: any) {
+          // Unhandled exception in the booking call — pause AI + notify team.
+          console.error(
+            '[webhook-processor] Unhandled booking error:',
+            bookErr
           );
           try {
             await prisma.conversation.update({
@@ -1181,43 +1332,20 @@ async function sendAIReply(
               data: {
                 accountId: lead.accountId,
                 type: 'SYSTEM',
-                title: 'Booking failed — needs human',
-                body: `${lead.name} (@${lead.handle}): AI tried to book but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}. AI is now paused.`,
+                title: 'Booking crashed — needs human',
+                body: `${lead.name} (@${lead.handle}): unhandled error while booking. AI is now paused. Error: ${(bookErr?.message || String(bookErr)).slice(0, 200)}`,
                 leadId: lead.id
               }
             });
           } catch (notifErr) {
             console.error(
-              '[webhook-processor] Failed to flag provider booking failure:',
+              '[webhook-processor] Failed to flag unhandled booking error:',
               notifErr
             );
           }
         }
-      } catch (bookErr: any) {
-        // Unhandled exception in the booking call — pause AI + notify team.
-        console.error('[webhook-processor] Unhandled booking error:', bookErr);
-        try {
-          await prisma.conversation.update({
-            where: { id: conversationId },
-            data: { aiActive: false }
-          });
-          await prisma.notification.create({
-            data: {
-              accountId: lead.accountId,
-              type: 'SYSTEM',
-              title: 'Booking crashed — needs human',
-              body: `${lead.name} (@${lead.handle}): unhandled error while booking. AI is now paused. Error: ${(bookErr?.message || String(bookErr)).slice(0, 200)}`,
-              leadId: lead.id
-            }
-          });
-        } catch (notifErr) {
-          console.error(
-            '[webhook-processor] Failed to flag unhandled booking error:',
-            notifErr
-          );
-        }
       }
-    }
+    } // close: !alreadyBooked branch
   } else if (result.subStage === 'BOOKING_CONFIRM') {
     // The AI advanced to BOOKING_CONFIRM but is missing critical data
     // (slot or email). This shouldn't happen with a correct prompt, but if
@@ -1901,4 +2029,32 @@ export async function processScheduledReply(
   accountId: string
 ): Promise<void> {
   await scheduleAIReply(conversationId, accountId, { skipDelayQueue: true });
+}
+
+// ---------------------------------------------------------------------------
+// 9. Compute reply delay seconds for the active persona
+// ---------------------------------------------------------------------------
+// Used by webhook routes to decide whether to handle the delay inline (via
+// Next.js after()) or fall back to the cron queue. Reads the SAME active
+// persona that scheduleAIReply uses, picks a random value in the configured
+// range, and returns it. Returns 0 if no persona / no delay configured.
+// ---------------------------------------------------------------------------
+export async function computeReplyDelaySeconds(
+  accountId: string
+): Promise<number> {
+  const persona =
+    (await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      orderBy: { updatedAt: 'desc' },
+      select: { responseDelayMin: true, responseDelayMax: true }
+    })) ??
+    (await prisma.aIPersona.findFirst({
+      where: { accountId },
+      orderBy: { updatedAt: 'desc' },
+      select: { responseDelayMin: true, responseDelayMax: true }
+    }));
+  const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
+  const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
+  if (maxDelay <= 0) return 0;
+  return Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 }

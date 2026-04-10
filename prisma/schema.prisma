@@ -184,6 +184,9 @@ model AIPersona {
   freeValueLink            String?                   // Bootcamp/resource URL
   customPhrases            Json?                     // JSON: {"greeting": "yo", "affirmation": "bet"}
   promptConfig             Json?                     // All template variables: {whatYouSell, adminBio, toneDescription, ...}
+  rawScript                String?  @db.Text          // Full uploaded sales script (plain text)
+  rawScriptFileName        String?                    // Original filename for UI display
+  styleAnalysis            String?  @db.Text          // AI-generated style analysis (markdown)
   financialWaterfall       Json?                     // [{label, question, threshold?, passAction}]
   downsellConfig           Json?                     // {productName, price, pitchMessage, link}
   knowledgeAssets          Json?                     // [{key, title, content, deployTrigger}]

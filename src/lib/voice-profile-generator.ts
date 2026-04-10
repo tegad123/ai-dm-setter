@@ -4,9 +4,7 @@ import { getCredentials } from '@/lib/credential-store';
 /**
  * Generate a voice profile analysis for an account's AI persona.
  */
-export async function generateVoiceProfile(
-  accountId: string
-): Promise<{
+export async function generateVoiceProfile(accountId: string): Promise<{
   toneAnalysis: string;
   styleDescription: string;
   vocabularyPatterns: string[];
@@ -14,10 +12,18 @@ export async function generateVoiceProfile(
   emojiUsage: number;
   suggestions: string[];
 }> {
-  // Fetch the persona and recent AI messages
-  const persona = await prisma.aIPersona.findFirst({
-    where: { accountId }
-  });
+  // Fetch the active persona — fallback to any persona if none active —
+  // so voice profiles always reflect the dashboard's current persona, not
+  // a stale row created during onboarding.
+  const persona =
+    (await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      orderBy: { updatedAt: 'desc' }
+    })) ??
+    (await prisma.aIPersona.findFirst({
+      where: { accountId },
+      orderBy: { updatedAt: 'desc' }
+    }));
 
   const aiMessages = await prisma.message.findMany({
     where: {
@@ -44,14 +50,19 @@ export async function generateVoiceProfile(
   const avgLength = lengths.reduce((a, b) => a + b, 0) / lengths.length;
   const emojiCount = aiMessages.reduce(
     // eslint-disable-next-line no-control-regex
-    (count, m) => count + (m.content.match(/[\uD83D][\uDE00-\uDE4F]/g) || []).length,
+    (count, m) =>
+      count + (m.content.match(/[\uD83D][\uDE00-\uDE4F]/g) || []).length,
     0
   );
 
   return {
     toneAnalysis: persona?.tone || 'casual, direct',
     styleDescription: persona?.tone || 'casual, direct, friendly',
-    vocabularyPatterns: ['conversational', 'short sentences', 'question-driven'],
+    vocabularyPatterns: [
+      'conversational',
+      'short sentences',
+      'question-driven'
+    ],
     messageLength: {
       avg: Math.round(avgLength),
       min: Math.min(...lengths),

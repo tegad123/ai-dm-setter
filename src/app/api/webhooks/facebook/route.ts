@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { after } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/facebook';
 import {
   processIncomingMessage,
-  scheduleAIReply
+  scheduleAIReply,
+  processScheduledReply,
+  computeReplyDelaySeconds
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
 
-// Vercel Hobby defaults to 10s — AI generation + send needs more time
-export const maxDuration = 60;
+// Vercel Hobby defaults to 10s — AI generation + send needs more time.
+// Bumped to 120s to fit the inline-delay-then-reply path.
+export const maxDuration = 120;
+
+// Short delays bypass the per-minute cron and run inline via after().
+const INLINE_DELAY_THRESHOLD_SECONDS = 90;
 
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
@@ -224,13 +231,60 @@ async function processFacebookEvents(payload: any): Promise<void> {
           platformMessageId: platformMessageId || undefined
         });
 
+        // Skip the AI reply trigger when processIncomingMessage already
+        // determined this delivery should not produce a reply (deduped
+        // retry, "clear conversation" command, P2002 race). Otherwise Meta's
+        // webhook retries cause two ScheduledReply rows to be created for
+        // one inbound message.
+        if (result.skipReply) {
+          continue;
+        }
+
         // Only schedule AI reply if AI is active on this conversation
         const convo = await prisma.conversation.findUnique({
           where: { id: result.conversationId },
           select: { aiActive: true }
         });
         if (convo?.aiActive) {
-          await scheduleAIReply(result.conversationId, accountId);
+          const delaySeconds = await computeReplyDelaySeconds(accountId);
+          const targetConvoId = result.conversationId;
+
+          if (delaySeconds <= INLINE_DELAY_THRESHOLD_SECONDS) {
+            console.log(
+              `[facebook-webhook] Inline-deferring reply for ${targetConvoId} ` +
+                `(${delaySeconds}s)`
+            );
+            after(async () => {
+              try {
+                if (delaySeconds > 0) {
+                  await new Promise((resolve) =>
+                    setTimeout(resolve, delaySeconds * 1000)
+                  );
+                }
+                const fresh = await prisma.conversation.findUnique({
+                  where: { id: targetConvoId },
+                  select: { aiActive: true }
+                });
+                if (!fresh?.aiActive) {
+                  console.log(
+                    `[facebook-webhook] inline reply cancelled — aiActive flipped off for ${targetConvoId}`
+                  );
+                  return;
+                }
+                await processScheduledReply(targetConvoId, accountId);
+                console.log(
+                  `[facebook-webhook] inline reply delivered for ${targetConvoId}`
+                );
+              } catch (afterErr) {
+                console.error(
+                  `[facebook-webhook] inline reply failed for ${targetConvoId}:`,
+                  afterErr
+                );
+              }
+            });
+          } else {
+            await scheduleAIReply(targetConvoId, accountId);
+          }
         }
       } catch (err) {
         console.error(

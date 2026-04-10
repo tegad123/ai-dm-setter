@@ -298,7 +298,20 @@ export async function bookLeadConnectorAppointment(
     `${safeHandle || 'lead'}+${(params.platform || 'dm').toLowerCase()}@dmsetter-leads.local`;
 
   // 1. Create contact (GHL will return existing id if duplicate)
+  //
+  // Duplicate handling: when the location has "Allow Duplicate Contacts"
+  // disabled (the default), POST /contacts/ returns 400 with a body shaped
+  // like:
+  //   { statusCode: 400, message: "This location does not allow duplicated contacts.",
+  //     meta: { contactId: "...", contactName: "...", matchingField: "email" } }
+  // We extract meta.contactId directly so we don't need a second API call.
+  // The previous fallback used GET /contacts/lookup?email=... which LC routes
+  // as /contacts/{id=lookup} and returns 400 "Contact with id lookup not
+  // found" — that endpoint doesn't exist on the v2 API, which is why the
+  // 2026-04-08 booking failed even though the contact already existed.
   let contactId: string | undefined;
+  let contactErrText: string | undefined;
+  let contactErrStatus: number | undefined;
   try {
     const contactRes = await fetch(`${LC_BASE}/contacts/`, {
       method: 'POST',
@@ -317,33 +330,74 @@ export async function bookLeadConnectorAppointment(
     if (contactRes.ok) {
       const contactData = (await contactRes.json()) as any;
       contactId = contactData?.contact?.id || contactData?.id;
-    } else if (contactRes.status === 400 || contactRes.status === 422) {
-      // Duplicate contact — try to look it up by email
-      const lookup = await fetch(
-        `${LC_BASE}/contacts/lookup?email=${encodeURIComponent(email)}`,
-        { headers: lcHeaders(apiKey) }
-      );
-      if (lookup.ok) {
-        const lookupData = (await lookup.json()) as any;
-        contactId =
-          lookupData?.contacts?.[0]?.id || lookupData?.contact?.id || undefined;
-      }
     } else {
-      const errText = await contactRes.text().catch(() => '');
+      contactErrStatus = contactRes.status;
+      contactErrText = await contactRes.text().catch(() => '');
       console.error(
         `[calendar-adapter] LC contact create ${contactRes.status}:`,
-        errText
+        contactErrText
       );
+
+      // Try to parse meta.contactId from the duplicate-error body first
+      try {
+        const errBody = JSON.parse(contactErrText) as any;
+        const dupId =
+          errBody?.meta?.contactId ||
+          errBody?.meta?.contact?.id ||
+          errBody?.contactId;
+        if (dupId) {
+          contactId = dupId;
+          console.log(
+            `[calendar-adapter] LC duplicate contact resolved from error meta: ${dupId}`
+          );
+        }
+      } catch {
+        // body wasn't JSON — fall through to the search-by-duplicate path
+      }
+
+      // Defensive fallback: hit the actual v2 search endpoint if meta didn't
+      // give us an id. This is the correct LC v2 endpoint
+      // (the old /contacts/lookup path is broken — see comment above).
+      if (!contactId) {
+        try {
+          const searchRes = await fetch(
+            `${LC_BASE}/contacts/search/duplicate?locationId=${encodeURIComponent(
+              locationId
+            )}&email=${encodeURIComponent(email)}`,
+            { headers: lcHeaders(apiKey) }
+          );
+          if (searchRes.ok) {
+            const searchData = (await searchRes.json()) as any;
+            contactId =
+              searchData?.contact?.id ||
+              searchData?.contacts?.[0]?.id ||
+              undefined;
+            if (contactId) {
+              console.log(
+                `[calendar-adapter] LC duplicate contact resolved via /contacts/search/duplicate: ${contactId}`
+              );
+            }
+          }
+        } catch (searchErr) {
+          console.error(
+            '[calendar-adapter] LC search/duplicate fallback failed:',
+            searchErr
+          );
+        }
+      }
     }
   } catch (err) {
     console.error('[calendar-adapter] LC contact create threw:', err);
+    contactErrText = err instanceof Error ? err.message : String(err);
   }
 
   if (!contactId) {
     return {
       success: false,
       provider: 'leadconnector',
-      error: 'Failed to create or resolve LeadConnector contact'
+      error: `LC contact create${contactErrStatus ? ` (${contactErrStatus})` : ''}: ${(
+        contactErrText || 'unknown error'
+      ).slice(0, 300)}`
     };
   }
 

@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import {
   Check,
+  CheckCircle2,
   ArrowRight,
   ArrowLeft,
   Rocket,
@@ -28,34 +29,28 @@ import {
   Loader2,
   ExternalLink,
   Send,
-  ShieldAlert
+  ShieldAlert,
+  Upload
 } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 4;
 
 const STEP_TITLES = [
   'Identity',
-  'Tone & Style',
-  'Conversation Flow',
-  'Value & Booking',
-  'Objection Scripts',
-  'Follow-ups',
-  'Settings & Integrations',
+  'Upload Script',
+  'Links & Settings',
   'Review & Activate'
 ];
 
 const STEP_DESCRIPTIONS = [
   'Tell the AI who you are and what you do.',
-  'Define your unique communication style.',
-  'Set up how the AI qualifies and disqualifies leads.',
-  'Configure your free value offer and booking flow.',
-  'Prepare scripts for common objections.',
-  'Set up automated follow-up sequences.',
-  'Configure AI model, response delays, and voice notes.',
+  'Upload your sales script so the AI can learn your style.',
+  'Configure your booking link, free value link, and response settings.',
   'Review your setup and activate the AI.'
 ];
 
@@ -163,7 +158,17 @@ export default function OnboardingPage() {
   );
   const [integrationsLoading, setIntegrationsLoading] = useState(false);
 
-  // Step 8: Review & Activate
+  // Step 2: Upload Script
+  const [rawScript, setRawScript] = useState<string | null>(null);
+  const [rawScriptFileName, setRawScriptFileName] = useState<string | null>(
+    null
+  );
+  const [styleAnalysis, setStyleAnalysis] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisStage, setAnalysisStage] = useState('');
+
+  // Step 4: Review & Activate
   const [testMessage, setTestMessage] = useState(
     'Hey, I saw your post about trading. How does this work?'
   );
@@ -185,6 +190,9 @@ export default function OnboardingPage() {
       minResponseDelay,
       maxResponseDelay,
       voiceNotesEnabled,
+      rawScript: rawScript || undefined,
+      rawScriptFileName: rawScriptFileName || undefined,
+      styleAnalysis: styleAnalysis || undefined,
       objectionHandling: {
         trust: trustScript.trim(),
         priorFailure: priorFailureScript.trim(),
@@ -219,6 +227,9 @@ export default function OnboardingPage() {
       minResponseDelay,
       maxResponseDelay,
       voiceNotesEnabled,
+      rawScript,
+      rawScriptFileName,
+      styleAnalysis,
       trustScript,
       priorFailureScript,
       moneyScript,
@@ -271,6 +282,11 @@ export default function OnboardingPage() {
           setMaxResponseDelay(persona.maxResponseDelay as number);
         if (typeof persona.voiceNotesEnabled === 'boolean')
           setVoiceNotesEnabled(persona.voiceNotesEnabled);
+        if (persona.rawScript) setRawScript(persona.rawScript as string);
+        if (persona.rawScriptFileName)
+          setRawScriptFileName(persona.rawScriptFileName as string);
+        if (persona.styleAnalysis)
+          setStyleAnalysis(persona.styleAnalysis as string);
 
         const oh = persona.objectionHandling as
           | Record<string, string>
@@ -318,32 +334,6 @@ export default function OnboardingPage() {
   }, []);
 
   // --------------------------------------------------
-  // Fetch integration status when entering step 7
-  // --------------------------------------------------
-
-  useEffect(() => {
-    if (step !== 7) return;
-
-    async function fetchIntegrations() {
-      setIntegrationsLoading(true);
-      try {
-        const data = await apiFetch<Record<string, unknown>>(
-          '/settings/integrations'
-        );
-        if (data?.openai) setAiProvider('openai');
-        else if (data?.anthropic) setAiProvider('anthropic');
-        else setAiProvider(null);
-      } catch {
-        setAiProvider(null);
-      } finally {
-        setIntegrationsLoading(false);
-      }
-    }
-
-    fetchIntegrations();
-  }, [step]);
-
-  // --------------------------------------------------
   // Save progress per step
   // --------------------------------------------------
 
@@ -355,6 +345,93 @@ export default function OnboardingPage() {
       });
     } catch {
       // Silent — non-blocking
+    }
+  }
+
+  // --------------------------------------------------
+  // Script upload handler
+  // --------------------------------------------------
+
+  async function handleScriptUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setAnalyzing(true);
+    setAnalysisProgress(0);
+    setAnalysisStage('Reading document...');
+
+    try {
+      let body: Record<string, string>;
+
+      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        setAnalysisProgress(10);
+        setAnalysisStage('Parsing PDF...');
+        const arrayBuffer = await file.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce(
+            (data, byte) => data + String.fromCharCode(byte),
+            ''
+          )
+        );
+        body = { pdfBase64: base64 };
+      } else {
+        const documentText = await file.text();
+        if (!documentText.trim()) {
+          toast.error('Could not read file content.');
+          setAnalyzing(false);
+          return;
+        }
+        body = { documentText: documentText.slice(0, 100000) };
+      }
+
+      setAnalysisProgress(20);
+      setAnalysisStage('Uploading to AI...');
+
+      const progressInterval = setInterval(() => {
+        setAnalysisProgress((prev) => {
+          if (prev >= 85) {
+            clearInterval(progressInterval);
+            return 85;
+          }
+          return prev + Math.random() * 8;
+        });
+        setAnalysisStage((prev) => {
+          const stages = [
+            'AI is reading your script...',
+            'Analyzing communication style...',
+            'Mapping objection patterns...',
+            'Extracting key phrases...',
+            'Finalizing style analysis...'
+          ];
+          const currentIdx = stages.indexOf(prev);
+          if (currentIdx < 0 || currentIdx >= stages.length - 1)
+            return stages[0];
+          return stages[currentIdx + 1];
+        });
+      }, 3000);
+
+      const res = await apiFetch<{ rawScript: string; styleAnalysis: string }>(
+        '/settings/persona/analyze',
+        { method: 'POST', body: JSON.stringify(body) }
+      );
+
+      clearInterval(progressInterval);
+
+      setRawScript(res.rawScript);
+      setRawScriptFileName(file.name);
+      setStyleAnalysis(res.styleAnalysis);
+      setAnalysisProgress(100);
+      setAnalysisStage('Done!');
+      toast.success('Script analyzed!');
+    } catch (err) {
+      console.error('[onboarding] Script analysis failed:', err);
+      toast.error(
+        err instanceof Error
+          ? `Analysis failed: ${err.message}`
+          : 'Failed to analyze script'
+      );
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -417,7 +494,7 @@ export default function OnboardingPage() {
           buildPersonaPayload({
             isActive: true,
             setupComplete: true,
-            setupStep: 9 // 9 = all complete including review
+            setupStep: 5 // 5 = all complete including review
           })
         )
       });
@@ -447,19 +524,11 @@ export default function OnboardingPage() {
     return [
       // 1. Identity
       !!fullName.trim(),
-      // 2. Tone
-      !!toneDescription.trim(),
-      // 3. Conversation Flow
-      !!qualificationQuestions.trim(),
-      // 4. Value & Booking
-      !!freeValueLink.trim() || !!callPitchMessage.trim(),
-      // 5. Objection Scripts
-      !!trustScript.trim() || !!moneyScript.trim(),
-      // 6. Follow-ups
-      !!followupDay1.trim(),
-      // 7. Settings
-      true, // Always considered complete (has defaults)
-      // 8. Review — not applicable
+      // 2. Upload Script
+      !!rawScript,
+      // 3. Links & Settings
+      true, // Always considered complete (optional fields)
+      // 4. Review — not applicable
       false
     ];
   }
@@ -518,99 +587,78 @@ export default function OnboardingPage() {
 
       case 2:
         return (
-          <div className='space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='toneDescription'>Describe Your Tone</Label>
-              <Textarea
-                id='toneDescription'
-                placeholder='e.g. Confident, direct, friendly but not too casual. Use short sentences. Drop knowledge bombs.'
-                value={toneDescription}
-                onChange={(e) => setToneDescription(e.target.value)}
-                rows={3}
-              />
+          <div className='space-y-6'>
+            <div>
+              <h2 className='mb-2 text-xl font-semibold'>
+                Upload Your Sales Script
+              </h2>
+              <p className='text-muted-foreground text-sm'>
+                Upload your sales script, setter playbook, or SOP. The AI will
+                learn your style automatically.
+              </p>
             </div>
-            <div className='space-y-2'>
-              <Label htmlFor='toneExamplesGood'>
-                Good Examples (paste 3-5 messages that sound like you)
-              </Label>
-              <Textarea
-                id='toneExamplesGood'
-                placeholder="Paste real messages you've sent that capture your voice..."
-                value={toneExamplesGood}
-                onChange={(e) => setToneExamplesGood(e.target.value)}
-                rows={5}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='toneExamplesBad'>
-                Bad Examples (what you&apos;d NEVER say)
-              </Label>
-              <Textarea
-                id='toneExamplesBad'
-                placeholder="Paste examples of messages that don't sound like you at all..."
-                value={toneExamplesBad}
-                onChange={(e) => setToneExamplesBad(e.target.value)}
-                rows={5}
-              />
-            </div>
+
+            {analyzing ? (
+              <div className='space-y-3'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='text-muted-foreground'>{analysisStage}</span>
+                  <span className='text-muted-foreground'>
+                    {Math.round(analysisProgress)}%
+                  </span>
+                </div>
+                <Progress value={analysisProgress} className='h-2' />
+              </div>
+            ) : rawScript ? (
+              <div className='space-y-4'>
+                <div className='flex items-center gap-3 rounded-lg border bg-green-50 p-4 dark:bg-green-950/30'>
+                  <CheckCircle2 className='h-5 w-5 shrink-0 text-green-500' />
+                  <div className='min-w-0 flex-1'>
+                    <p className='text-sm font-medium'>
+                      Script analyzed successfully
+                    </p>
+                    <p className='text-muted-foreground truncate text-xs'>
+                      {rawScriptFileName || 'Uploaded document'}
+                    </p>
+                  </div>
+                  <label className='cursor-pointer'>
+                    <Button variant='outline' size='sm' asChild>
+                      <span>Re-upload</span>
+                    </Button>
+                    <input
+                      type='file'
+                      className='hidden'
+                      accept='.pdf,.txt,.md,.doc,.docx'
+                      onChange={handleScriptUpload}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <label className='block cursor-pointer'>
+                <div className='hover:border-primary/50 hover:bg-muted/30 rounded-lg border-2 border-dashed p-12 text-center transition-colors'>
+                  <Upload className='text-muted-foreground mx-auto mb-3 h-10 w-10' />
+                  <p className='mb-1 font-medium'>
+                    Drop your sales script here or click to upload
+                  </p>
+                  <p className='text-muted-foreground text-sm'>
+                    PDF, TXT, or MD file
+                  </p>
+                </div>
+                <input
+                  type='file'
+                  className='hidden'
+                  accept='.pdf,.txt,.md,.doc,.docx'
+                  onChange={handleScriptUpload}
+                />
+              </label>
+            )}
           </div>
         );
 
       case 3:
         return (
-          <div className='space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='openingMessageStyle'>Opening Message Style</Label>
-              <Textarea
-                id='openingMessageStyle'
-                placeholder='How should the AI open a conversation? Describe the vibe and give an example...'
-                value={openingMessageStyle}
-                onChange={(e) => setOpeningMessageStyle(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='qualificationQuestions'>
-                Qualification Questions (one per line)
-              </Label>
-              <Textarea
-                id='qualificationQuestions'
-                placeholder="What's your current income level?&#10;Have you traded before?&#10;How soon are you looking to start?"
-                value={qualificationQuestions}
-                onChange={(e) => setQualificationQuestions(e.target.value)}
-                rows={5}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='disqualificationCriteria'>
-                Disqualification Criteria
-              </Label>
-              <Textarea
-                id='disqualificationCriteria'
-                placeholder='When should the AI stop pursuing a lead? e.g. Under 18, no budget, not serious...'
-                value={disqualificationCriteria}
-                onChange={(e) => setDisqualificationCriteria(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='disqualificationMessage'>
-                Disqualification Message
-              </Label>
-              <Textarea
-                id='disqualificationMessage'
-                placeholder='What should the AI say when disqualifying someone? Keep it respectful...'
-                value={disqualificationMessage}
-                onChange={(e) => setDisqualificationMessage(e.target.value)}
-                rows={3}
-              />
-            </div>
-          </div>
-        );
-
-      case 4:
-        return (
-          <div className='space-y-4'>
+          <div className='space-y-6'>
+            {/* Booking Link */}
             <div className='space-y-2'>
               <Label htmlFor='freeValueLink'>Free Value Link</Label>
               <Input
@@ -619,166 +667,6 @@ export default function OnboardingPage() {
                 value={freeValueLink}
                 onChange={(e) => setFreeValueLink(e.target.value)}
               />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='freeValueMessage'>
-                Free Value Message (what to say when sending it)
-              </Label>
-              <Textarea
-                id='freeValueMessage'
-                placeholder="e.g. Here's a free guide I put together that breaks down my exact strategy..."
-                value={freeValueMessage}
-                onChange={(e) => setFreeValueMessage(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='freeValueFollowup'>
-                Free Value Follow-up (after they receive it)
-              </Label>
-              <Textarea
-                id='freeValueFollowup'
-                placeholder='e.g. Did you get a chance to check out that guide? What stood out to you?'
-                value={freeValueFollowup}
-                onChange={(e) => setFreeValueFollowup(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='callPitchMessage'>Call Pitch Message</Label>
-              <Textarea
-                id='callPitchMessage'
-                placeholder="How should the AI pitch the call? e.g. I'd love to hop on a quick 15-min call to see if this is a fit..."
-                value={callPitchMessage}
-                onChange={(e) => setCallPitchMessage(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='bookingConfirmationMessage'>
-                Booking Confirmation Message
-              </Label>
-              <Textarea
-                id='bookingConfirmationMessage'
-                placeholder="What to say after they book. e.g. You're locked in! Check your email for the calendar invite..."
-                value={bookingConfirmationMessage}
-                onChange={(e) => setBookingConfirmationMessage(e.target.value)}
-                rows={3}
-              />
-            </div>
-          </div>
-        );
-
-      case 5:
-        return (
-          <div className='space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='trustScript'>Trust Objection Script</Label>
-              <Textarea
-                id='trustScript'
-                placeholder='When they say "I don&#39;t know if this is legit..." — how do you respond?'
-                value={trustScript}
-                onChange={(e) => setTrustScript(e.target.value)}
-                rows={4}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='priorFailureScript'>
-                Prior Failure Objection Script
-              </Label>
-              <Textarea
-                id='priorFailureScript'
-                placeholder='When they say "I&#39;ve tried this before and it didn&#39;t work..." — how do you respond?'
-                value={priorFailureScript}
-                onChange={(e) => setPriorFailureScript(e.target.value)}
-                rows={4}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='moneyScript'>Money Objection Script</Label>
-              <Textarea
-                id='moneyScript'
-                placeholder='When they say "I can&#39;t afford it right now..." — how do you respond?'
-                value={moneyScript}
-                onChange={(e) => setMoneyScript(e.target.value)}
-                rows={4}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='timeScript'>Time Objection Script</Label>
-              <Textarea
-                id='timeScript'
-                placeholder='When they say "I don&#39;t have time for this..." — how do you respond?'
-                value={timeScript}
-                onChange={(e) => setTimeScript(e.target.value)}
-                rows={4}
-              />
-            </div>
-          </div>
-        );
-
-      case 6:
-        return (
-          <div className='space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='followupDay1'>Day 1 Follow-up</Label>
-              <Textarea
-                id='followupDay1'
-                placeholder='What to send if they go silent after 1 day...'
-                value={followupDay1}
-                onChange={(e) => setFollowupDay1(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='followupDay3'>Day 3 Follow-up</Label>
-              <Textarea
-                id='followupDay3'
-                placeholder='What to send if they go silent after 3 days...'
-                value={followupDay3}
-                onChange={(e) => setFollowupDay3(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='followupDay7'>Day 7 Follow-up</Label>
-              <Textarea
-                id='followupDay7'
-                placeholder='What to send if they go silent after 7 days...'
-                value={followupDay7}
-                onChange={(e) => setFollowupDay7(e.target.value)}
-                rows={3}
-              />
-            </div>
-          </div>
-        );
-
-      // ---- Step 7: Settings & Integrations (NEW) ----
-      case 7:
-        return (
-          <div className='space-y-6'>
-            {/* AI Model Status */}
-            <div className='space-y-2'>
-              <Label>AI Model</Label>
-              {integrationsLoading ? (
-                <div className='text-muted-foreground flex items-center gap-2 text-sm'>
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                  Checking integrations...
-                </div>
-              ) : aiProvider === 'openai' ? (
-                <Badge variant='secondary' className='text-sm'>
-                  <Check className='mr-1 h-3 w-3' /> Using OpenAI
-                </Badge>
-              ) : aiProvider === 'anthropic' ? (
-                <Badge variant='secondary' className='text-sm'>
-                  <Check className='mr-1 h-3 w-3' /> Using Anthropic
-                </Badge>
-              ) : (
-                <div className='flex items-center gap-2 rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-200'>
-                  <AlertCircle className='h-4 w-4 shrink-0' />
-                  Connect your AI provider in Integrations first
-                </div>
-              )}
             </div>
 
             <Separator />
@@ -848,39 +736,12 @@ export default function OnboardingPage() {
                 rows={4}
               />
             </div>
-
-            {/* Link to integrations */}
-            <Button
-              variant='outline'
-              className='w-full'
-              onClick={() =>
-                window.open('/dashboard/settings/integrations', '_blank')
-              }
-            >
-              <ExternalLink className='mr-2 h-4 w-4' />
-              Manage API Keys & Connections
-            </Button>
           </div>
         );
 
-      // ---- Step 8: Review & Activate (NEW) ----
-      case 8: {
+      // ---- Step 4: Review & Activate ----
+      case 4: {
         const completionStatus = getStepCompletionStatus();
-        const objectionScripts = {
-          trust: !!trustScript.trim(),
-          priorFailure: !!priorFailureScript.trim(),
-          money: !!moneyScript.trim(),
-          time: !!timeScript.trim()
-        };
-        const followUps = {
-          day1: !!followupDay1.trim(),
-          day3: !!followupDay3.trim(),
-          day7: !!followupDay7.trim()
-        };
-        const questionCount = qualificationQuestions
-          .trim()
-          .split('\n')
-          .filter((q) => q.trim()).length;
 
         return (
           <div className='space-y-6'>
@@ -911,97 +772,15 @@ export default function OnboardingPage() {
               <Card>
                 <CardHeader className='p-4 pb-2'>
                   <CardTitle className='text-muted-foreground text-sm font-medium'>
-                    Tone
+                    Script
                   </CardTitle>
                 </CardHeader>
                 <CardContent className='p-4 pt-0'>
                   <p className='text-sm'>
-                    {toneDescription
-                      ? toneDescription.slice(0, 100) +
-                        (toneDescription.length > 100 ? '...' : '')
-                      : '(not set)'}
+                    {rawScript
+                      ? rawScriptFileName || 'Script uploaded'
+                      : '(no script uploaded)'}
                   </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className='p-4 pb-2'>
-                  <CardTitle className='text-muted-foreground text-sm font-medium'>
-                    Qualification
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className='p-4 pt-0'>
-                  <p className='text-sm'>
-                    {questionCount > 0
-                      ? `${questionCount} question${questionCount !== 1 ? 's' : ''} configured`
-                      : '(no questions set)'}
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className='p-4 pb-2'>
-                  <CardTitle className='text-muted-foreground text-sm font-medium'>
-                    Objections
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className='flex flex-wrap gap-1.5 p-4 pt-0'>
-                  <Badge
-                    variant={objectionScripts.trust ? 'default' : 'outline'}
-                  >
-                    {objectionScripts.trust ? (
-                      <Check className='mr-1 h-3 w-3' />
-                    ) : null}
-                    Trust
-                  </Badge>
-                  <Badge
-                    variant={objectionScripts.money ? 'default' : 'outline'}
-                  >
-                    {objectionScripts.money ? (
-                      <Check className='mr-1 h-3 w-3' />
-                    ) : null}
-                    Money
-                  </Badge>
-                  <Badge
-                    variant={
-                      objectionScripts.priorFailure ? 'default' : 'outline'
-                    }
-                  >
-                    {objectionScripts.priorFailure ? (
-                      <Check className='mr-1 h-3 w-3' />
-                    ) : null}
-                    Prior Failure
-                  </Badge>
-                  <Badge
-                    variant={objectionScripts.time ? 'default' : 'outline'}
-                  >
-                    {objectionScripts.time ? (
-                      <Check className='mr-1 h-3 w-3' />
-                    ) : null}
-                    Time
-                  </Badge>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className='p-4 pb-2'>
-                  <CardTitle className='text-muted-foreground text-sm font-medium'>
-                    Follow-ups
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className='flex flex-wrap gap-1.5 p-4 pt-0'>
-                  <Badge variant={followUps.day1 ? 'default' : 'outline'}>
-                    {followUps.day1 ? <Check className='mr-1 h-3 w-3' /> : null}
-                    Day 1
-                  </Badge>
-                  <Badge variant={followUps.day3 ? 'default' : 'outline'}>
-                    {followUps.day3 ? <Check className='mr-1 h-3 w-3' /> : null}
-                    Day 3
-                  </Badge>
-                  <Badge variant={followUps.day7 ? 'default' : 'outline'}>
-                    {followUps.day7 ? <Check className='mr-1 h-3 w-3' /> : null}
-                    Day 7
-                  </Badge>
                 </CardContent>
               </Card>
 
@@ -1018,6 +797,11 @@ export default function OnboardingPage() {
                   <p className='text-sm'>
                     Voice notes: {voiceNotesEnabled ? 'On' : 'Off'}
                   </p>
+                  {freeValueLink && (
+                    <p className='truncate text-sm'>
+                      Free value: {freeValueLink}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -1030,7 +814,7 @@ export default function OnboardingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className='space-y-2 p-4 pt-0'>
-                {STEP_TITLES.slice(0, 7).map((title, i) => (
+                {STEP_TITLES.slice(0, 3).map((title, i) => (
                   <div key={title} className='flex items-center gap-2 text-sm'>
                     {completionStatus[i] ? (
                       <Check className='h-4 w-4 text-green-600' />

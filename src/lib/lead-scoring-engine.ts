@@ -213,8 +213,12 @@ export async function computeLeadScore(
     now
   );
 
-  // 5. Derive temperature label
-  const temperatureLabel = getTemperatureLabel(qualityScore);
+  // 5. Derive temperature label (cold-start aware)
+  const scoredLeadCount = await prisma.lead.count({
+    where: { accountId: conversation.lead.accountId, qualityScore: { gt: 0 } }
+  });
+  const isColdStart = scoredLeadCount < 50;
+  const temperatureLabel = getTemperatureLabel(qualityScore, isColdStart);
 
   // 6. Derive intent tag
   const intentTag = getIntentTag(intent, allLeadText, qualityScore);
@@ -576,8 +580,20 @@ function computePriority(
 // ---------------------------------------------------------------------------
 
 function getTemperatureLabel(
-  score: number
+  score: number,
+  isColdStart = false
 ): 'COLD' | 'WARM' | 'HOT' | 'ON_FIRE' {
+  // Cold-start: use lower thresholds when the account has < 50 scored
+  // conversations. LLM confidence scores are poorly calibrated on small
+  // datasets — high thresholds on a cold system either block everything
+  // good (reviewer fatigue) or pass everything bad. Lower the bar initially
+  // and raise it as the corpus grows.
+  if (isColdStart) {
+    if (score >= 65) return 'ON_FIRE';
+    if (score >= 45) return 'HOT';
+    if (score >= 25) return 'WARM';
+    return 'COLD';
+  }
   if (score >= 80) return 'ON_FIRE';
   if (score >= 55) return 'HOT';
   if (score >= 30) return 'WARM';

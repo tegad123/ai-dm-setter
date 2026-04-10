@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { after } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/instagram';
 import {
   processIncomingMessage,
-  scheduleAIReply
+  scheduleAIReply,
+  processScheduledReply,
+  computeReplyDelaySeconds
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
 
-// Vercel Hobby defaults to 10s — AI generation + send needs more time
-export const maxDuration = 60;
+// Short delays bypass the per-minute cron queue and run inline via after().
+// Anything longer falls back to ScheduledReply + cron pickup so the lambda
+// doesn't have to stay alive for minutes. 90s leaves headroom for AI gen.
+const INLINE_DELAY_THRESHOLD_SECONDS = 90;
+
+// Vercel Hobby defaults to 10s — AI generation + send needs more time.
+// Bumped to 120s to accommodate the inline-delay-then-reply path (after()
+// callback): up to 90s delay + ~25s for AI generation + Instagram send.
+export const maxDuration = 120;
 
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
@@ -285,13 +295,70 @@ async function processInstagramEvents(payload: any): Promise<void> {
           platformMessageId: platformMessageId || undefined
         });
 
+        // Skip the AI reply trigger when processIncomingMessage already
+        // determined this delivery should not produce a reply (deduped
+        // retry, "clear conversation" command, P2002 race). Otherwise Meta's
+        // webhook retries cause two ScheduledReply rows to be created for
+        // one inbound message and the AI sends the same opener twice — the
+        // bug tegaumukoro_ saw on 2026-04-08.
+        if (result.skipReply) {
+          continue;
+        }
+
         // Only schedule AI reply if AI is active on this conversation
         const convo = await prisma.conversation.findUnique({
           where: { id: result.conversationId },
           select: { aiActive: true }
         });
         if (convo?.aiActive) {
-          await scheduleAIReply(result.conversationId, accountId);
+          // Decide between inline (after()) and queued (cron) execution.
+          // The cron runs every minute, so a 30-45s configured delay would
+          // typically wait an extra 0-60s for the next tick, making the
+          // total feel like 90s+ to the user. For short delays we keep the
+          // lambda alive via after() and process inline — no cron lag.
+          const delaySeconds = await computeReplyDelaySeconds(accountId);
+          const targetConvoId = result.conversationId;
+
+          if (delaySeconds <= INLINE_DELAY_THRESHOLD_SECONDS) {
+            console.log(
+              `[instagram-webhook] Inline-deferring reply for ${targetConvoId} ` +
+                `(${delaySeconds}s, threshold ${INLINE_DELAY_THRESHOLD_SECONDS}s)`
+            );
+            after(async () => {
+              try {
+                if (delaySeconds > 0) {
+                  await new Promise((resolve) =>
+                    setTimeout(resolve, delaySeconds * 1000)
+                  );
+                }
+                // Re-check aiActive at delivery time — the user may have
+                // toggled AI off during the delay window.
+                const fresh = await prisma.conversation.findUnique({
+                  where: { id: targetConvoId },
+                  select: { aiActive: true }
+                });
+                if (!fresh?.aiActive) {
+                  console.log(
+                    `[instagram-webhook] inline reply cancelled — aiActive flipped off for ${targetConvoId}`
+                  );
+                  return;
+                }
+                await processScheduledReply(targetConvoId, accountId);
+                console.log(
+                  `[instagram-webhook] inline reply delivered for ${targetConvoId}`
+                );
+              } catch (afterErr) {
+                console.error(
+                  `[instagram-webhook] inline reply failed for ${targetConvoId}:`,
+                  afterErr
+                );
+              }
+            });
+          } else {
+            // Long delay — fall back to the durable cron queue. Pass the
+            // skipDelayQueue=false flow that scheduleAIReply already handles.
+            await scheduleAIReply(targetConvoId, accountId);
+          }
         }
       } catch (err) {
         console.error(
