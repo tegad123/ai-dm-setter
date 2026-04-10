@@ -214,7 +214,9 @@ async function processFacebookEvents(payload: any): Promise<void> {
 
         try {
           const { getUserProfile } = await import('@/lib/facebook');
-          const profile = await getUserProfile(accountId, senderId);
+          // Pass pageId so getUserProfile can use the conversations API
+          // fallback without needing to re-derive it from credentials.
+          const profile = await getUserProfile(accountId, senderId, pageId);
           senderName = profile.name || senderId;
           console.log(`[facebook-webhook] Resolved profile: ${senderName}`);
         } catch (profileErr: any) {

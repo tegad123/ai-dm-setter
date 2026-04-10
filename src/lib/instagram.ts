@@ -273,7 +273,9 @@ export interface IGUserProfile {
  */
 export async function getUserProfile(
   accountId: string,
-  userId: string
+  userId: string,
+  /** The IG Business Account ID from the webhook entry — avoids re-deriving from credentials */
+  knownIgAccountId?: string
 ): Promise<IGUserProfile> {
   // Prefer Instagram token for profile lookups (has instagram_business_manage_messages)
   const { getCredentials } = await import('@/lib/credential-store');
@@ -325,22 +327,39 @@ export async function getUserProfile(
   // This is the most reliable path for IGSIDs from incoming webhooks
   // because Meta only exposes the username via the conversation context.
   try {
-    const metaRec = await prisma.integrationCredential.findFirst({
-      where: { accountId, provider: 'META' as any, isActive: true },
-      select: { metadata: true }
-    });
-    const igRec = await prisma.integrationCredential.findFirst({
-      where: { accountId, provider: 'INSTAGRAM' as any, isActive: true },
-      select: { metadata: true }
-    });
-    const igAccountId =
-      (igRec?.metadata as any)?.igUserId ||
-      (metaRec?.metadata as any)?.instagramAccountId;
+    // Resolve the IG Business Account ID. Priority:
+    // 1. Caller-provided knownIgAccountId (from webhook entry.id — most reliable)
+    // 2. INSTAGRAM credential metadata (igUserId, instagramAccountId, igBusinessAccountId)
+    // 3. META credential metadata (instagramAccountId, igUserId, igBusinessAccountId)
+    let igAccountId = knownIgAccountId;
+
+    if (!igAccountId) {
+      const metaRec = await prisma.integrationCredential.findFirst({
+        where: { accountId, provider: 'META' as any, isActive: true },
+        select: { metadata: true }
+      });
+      const igRec = await prisma.integrationCredential.findFirst({
+        where: { accountId, provider: 'INSTAGRAM' as any, isActive: true },
+        select: { metadata: true }
+      });
+      const igMeta = (igRec?.metadata as any) || {};
+      const metaMeta = (metaRec?.metadata as any) || {};
+      igAccountId =
+        igMeta.igUserId ||
+        igMeta.instagramAccountId ||
+        igMeta.igBusinessAccountId ||
+        metaMeta.instagramAccountId ||
+        metaMeta.igUserId ||
+        metaMeta.igBusinessAccountId;
+    }
 
     if (igAccountId) {
       // For IG Login flow, the conversations endpoint lives at
       // graph.instagram.com/{ig-user-id}/conversations
       const convUrl = `${apiBase}/${igAccountId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
+      console.log(
+        `[instagram] Trying conversations API with igAccountId=${igAccountId} (source=${knownIgAccountId ? 'webhook' : 'credentials'})`
+      );
       const convResponse = await fetch(convUrl);
       if (convResponse.ok) {
         const convData = await convResponse.json();
@@ -371,7 +390,7 @@ export async function getUserProfile(
       }
     } else {
       console.warn(
-        `[instagram] No igAccountId found in credentials — cannot use conversations API`
+        `[instagram] No igAccountId found (no knownIgAccountId and no matching credential metadata) — cannot use conversations API`
       );
     }
   } catch (err) {

@@ -164,7 +164,9 @@ export interface FBUserProfile {
  */
 export async function getUserProfile(
   accountId: string,
-  userId: string
+  userId: string,
+  /** The Facebook Page ID from the webhook entry — avoids re-deriving from credentials */
+  knownPageId?: string
 ): Promise<FBUserProfile> {
   const accessToken = await getMetaAccessToken(accountId);
   if (!accessToken) {
@@ -203,7 +205,9 @@ export async function getUserProfile(
   try {
     const { getMetaPageId } = await import('@/lib/credential-store');
     const pageId =
-      (await getMetaPageId(accountId)) || process.env.FACEBOOK_PAGE_ID;
+      knownPageId ||
+      (await getMetaPageId(accountId)) ||
+      process.env.FACEBOOK_PAGE_ID;
 
     if (pageId) {
       const convUrl = `${GRAPH_API_BASE}/${pageId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;

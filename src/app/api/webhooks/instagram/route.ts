@@ -272,7 +272,11 @@ async function processInstagramEvents(payload: any): Promise<void> {
 
         try {
           const { getUserProfile } = await import('@/lib/instagram');
-          const profile = await getUserProfile(accountId, senderId);
+          // Pass entryId as the known IG Business Account ID so
+          // getUserProfile can use it for the conversations API without
+          // needing to re-derive it from credential metadata (which may
+          // not have it stored under the right key).
+          const profile = await getUserProfile(accountId, senderId, entryId);
           senderName = profile.name || senderId;
           senderHandle = profile.username || senderId;
           console.log(
