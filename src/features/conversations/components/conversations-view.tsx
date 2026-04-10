@@ -46,8 +46,11 @@ function toLocalConvo(
 
 type InboxTab = 'all' | 'priority' | 'unread';
 
+type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
+
 export function ConversationsView() {
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('');
   const {
     conversations: apiConversations,
     loading: listLoading,
@@ -55,7 +58,8 @@ export function ConversationsView() {
   } = useConversations(
     undefined,
     inboxTab === 'priority' ? true : undefined,
-    inboxTab === 'unread' ? true : undefined
+    inboxTab === 'unread' ? true : undefined,
+    platformFilter || undefined
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -155,6 +159,8 @@ export function ConversationsView() {
         onSelect={handleSelect}
         activeTab={inboxTab}
         onTabChange={setInboxTab}
+        platformFilter={platformFilter}
+        onPlatformFilterChange={setPlatformFilter}
       />
       <ConversationThread
         conversation={selected}

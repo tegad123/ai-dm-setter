@@ -96,26 +96,23 @@ export function useLeads(params?: {
   page?: number;
   limit?: number;
 }) {
-  const { data, loading, error, refetch } = useApiFetch(
-    () => {
-      const stringParams = params
-        ? Object.fromEntries(
-            Object.entries(params)
-              .filter(([, v]) => v !== undefined)
-              .map(([k, v]) => [k, String(v)])
-          )
-        : undefined;
-      return getLeads(stringParams);
-    },
-    [
-      params?.status,
-      params?.platform,
-      params?.search,
-      params?.tag,
-      params?.page,
-      params?.limit
-    ]
-  );
+  const { data, loading, error, refetch } = useApiFetch(() => {
+    const stringParams = params
+      ? Object.fromEntries(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined)
+            .map(([k, v]) => [k, String(v)])
+        )
+      : undefined;
+    return getLeads(stringParams);
+  }, [
+    params?.status,
+    params?.platform,
+    params?.search,
+    params?.tag,
+    params?.page,
+    params?.limit
+  ]);
 
   return {
     leads: data?.leads ?? ([] as Lead[]),
@@ -133,23 +130,22 @@ export function useLeads(params?: {
 export function useConversations(
   search?: string,
   priority?: boolean,
-  unread?: boolean
+  unread?: boolean,
+  platform?: string
 ) {
   const {
     data: raw,
     loading,
     error,
     refetch
-  } = useApiFetch(
-    () => {
-      const p: Record<string, string> = {};
-      if (search) p.search = search;
-      if (priority) p.priority = 'true';
-      if (unread) p.unread = 'true';
-      return getConversations(Object.keys(p).length ? p : undefined);
-    },
-    [search, priority, unread]
-  );
+  } = useApiFetch(() => {
+    const p: Record<string, string> = {};
+    if (search) p.search = search;
+    if (priority) p.priority = 'true';
+    if (unread) p.unread = 'true';
+    if (platform) p.platform = platform;
+    return getConversations(Object.keys(p).length ? p : undefined);
+  }, [search, priority, unread, platform]);
   // API returns { conversations: [...] } — unwrap
   const conversations = Array.isArray(raw)
     ? raw
@@ -388,10 +384,7 @@ export function useTeamNotes(leadId: string | undefined, page?: number) {
     error,
     refetch
   } = useApiFetch(
-    () =>
-      leadId
-        ? getTeamNotes(leadId)
-        : Promise.resolve([] as TeamNote[]),
+    () => (leadId ? getTeamNotes(leadId) : Promise.resolve([] as TeamNote[])),
     [leadId, page]
   );
 

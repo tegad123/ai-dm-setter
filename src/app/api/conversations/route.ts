@@ -10,20 +10,24 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search');
     const priority = searchParams.get('priority'); // "true" to filter high-priority
     const unreadOnly = searchParams.get('unread'); // "true" to filter unread only
+    const platform = searchParams.get('platform'); // "INSTAGRAM" | "FACEBOOK"
 
-    const where: Record<string, unknown> = {
-      lead: {
-        accountId: auth.accountId,
-        ...(search
-          ? {
-              OR: [
-                { name: { contains: search, mode: 'insensitive' } },
-                { handle: { contains: search, mode: 'insensitive' } }
-              ]
-            }
-          : {})
-      }
+    const leadFilter: Record<string, unknown> = {
+      accountId: auth.accountId,
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' } },
+              { handle: { contains: search, mode: 'insensitive' } }
+            ]
+          }
+        : {})
     };
+    if (platform === 'INSTAGRAM' || platform === 'FACEBOOK') {
+      leadFilter.platform = platform;
+    }
+
+    const where: Record<string, unknown> = { lead: leadFilter };
 
     if (priority === 'true') {
       where.priorityScore = { gte: 50 };

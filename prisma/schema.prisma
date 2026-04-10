@@ -152,6 +152,8 @@ model Account {
   plan               AccountPlan @default(FREE)
   awayMode           Boolean     @default(false)     // Global AI takeover toggle
   awayModeEnabledAt  DateTime?                       // When away mode was last enabled
+  instagramEnabled   Boolean     @default(true)      // Process Instagram DMs
+  facebookEnabled    Boolean     @default(true)      // Process Facebook Messenger DMs
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

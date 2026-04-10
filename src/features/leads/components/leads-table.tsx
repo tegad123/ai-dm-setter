@@ -34,6 +34,7 @@ export function LeadsTable() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
+  const [platformFilter, setPlatformFilter] = useState<string>('all');
 
   const { tags: availableTags } = useTags();
 
@@ -50,6 +51,7 @@ export function LeadsTable() {
     status: apiStatus,
     search: search || undefined,
     tag: tagFilter !== 'all' ? tagFilter : undefined,
+    platform: platformFilter !== 'all' ? platformFilter : undefined,
     limit: 100
   });
 
@@ -150,6 +152,16 @@ export function LeadsTable() {
                 </div>
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={platformFilter} onValueChange={setPlatformFilter}>
+          <SelectTrigger className='w-[160px]'>
+            <SelectValue placeholder='Platform' />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='all'>All Platforms</SelectItem>
+            <SelectItem value='INSTAGRAM'>Instagram</SelectItem>
+            <SelectItem value='FACEBOOK'>Facebook</SelectItem>
           </SelectContent>
         </Select>
       </div>

@@ -200,6 +200,18 @@ async function processInstagramEvents(payload: any): Promise<void> {
       }
     }
 
+    // ── Gate: skip if Instagram is disabled for this account ──────────
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { instagramEnabled: true }
+    });
+    if (account && !account.instagramEnabled) {
+      console.log(
+        `[instagram-webhook] Instagram disabled for account=${accountId}, skipping`
+      );
+      continue;
+    }
+
     // ── Resolve page/business account ID for admin message detection ──
     const credMeta = (matchedCred?.metadata as any) || {};
     const pageOwnIds = new Set(

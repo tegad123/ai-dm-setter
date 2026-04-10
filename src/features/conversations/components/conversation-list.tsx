@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
 type InboxTab = 'all' | 'priority' | 'unread';
+type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -18,6 +19,8 @@ interface ConversationListProps {
   onSelect: (c: Conversation) => void;
   activeTab?: InboxTab;
   onTabChange?: (tab: InboxTab) => void;
+  platformFilter?: PlatformFilter;
+  onPlatformFilterChange?: (f: PlatformFilter) => void;
 }
 
 export function ConversationList({
@@ -25,7 +28,9 @@ export function ConversationList({
   selected,
   onSelect,
   activeTab = 'all',
-  onTabChange
+  onTabChange,
+  platformFilter = '',
+  onPlatformFilterChange
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
   const filtered = conversations.filter((c) =>
@@ -57,6 +62,34 @@ export function ConversationList({
               >
                 {tab.icon && <tab.icon className='h-3 w-3' />}
                 {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Platform Filter */}
+        {onPlatformFilterChange && (
+          <div className='mb-3 flex gap-1'>
+            {[
+              { key: '' as PlatformFilter, label: 'All' },
+              { key: 'INSTAGRAM' as PlatformFilter, label: 'Instagram' },
+              { key: 'FACEBOOK' as PlatformFilter, label: 'Facebook' }
+            ].map((pf) => (
+              <button
+                key={pf.key}
+                onClick={() => onPlatformFilterChange(pf.key)}
+                className={cn(
+                  'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                  platformFilter === pf.key
+                    ? pf.key === 'INSTAGRAM'
+                      ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
+                      : pf.key === 'FACEBOOK'
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                        : 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                )}
+              >
+                {pf.label}
               </button>
             ))}
           </div>

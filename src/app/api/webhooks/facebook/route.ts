@@ -152,6 +152,18 @@ async function processFacebookEvents(payload: any): Promise<void> {
       }
     }
 
+    // ── Gate: skip if Facebook is disabled for this account ─────────
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { facebookEnabled: true }
+    });
+    if (account && !account.facebookEnabled) {
+      console.log(
+        `[facebook-webhook] Facebook disabled for account=${accountId}, skipping`
+      );
+      continue;
+    }
+
     // ── Resolve page ID for admin message detection ────────────────────
     const credMeta = (matchedCred?.metadata as any) || {};
     const pageOwnIds = new Set(
