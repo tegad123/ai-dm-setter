@@ -158,6 +158,9 @@ export interface FBUserProfile {
 
 /**
  * Fetch a Facebook user's profile via the Graph API.
+ * Strategy 1: Direct PSID lookup (works when Page Access Token has pages_messaging).
+ * Strategy 2: Conversations API — find the participant by ID in the page's
+ *             conversation list (more reliable when direct lookup is restricted).
  */
 export async function getUserProfile(
   accountId: string,
@@ -168,19 +171,82 @@ export async function getUserProfile(
     throw new Error('No Meta access token configured');
   }
 
-  const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,profile_pic&access_token=${accessToken}`;
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch Facebook profile: ${response.status}`);
+  // Strategy 1: Direct user lookup
+  try {
+    const url = `${GRAPH_API_BASE}/${userId}?fields=id,name,profile_pic&access_token=${accessToken}`;
+    const response = await fetch(url);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.name) {
+        console.log(
+          `[facebook] Profile resolved via direct lookup: ${data.name}`
+        );
+        return {
+          id: data.id || userId,
+          name: data.name,
+          profilePicUrl: data.profile_pic
+        };
+      }
+    } else {
+      const errBody = await response.text().catch(() => '');
+      console.warn(
+        `[facebook] Direct profile lookup failed (${response.status}): ${errBody.slice(0, 200)}`
+      );
+    }
+  } catch (err: any) {
+    console.warn(
+      `[facebook] Direct profile lookup threw: ${err?.message || err}`
+    );
   }
 
-  const data = await response.json();
-  return {
-    id: data.id,
-    name: data.name || userId,
-    profilePicUrl: data.profile_pic
-  };
+  // Strategy 2: Conversations API — find participant by user ID
+  try {
+    const { getMetaPageId } = await import('@/lib/credential-store');
+    const pageId =
+      (await getMetaPageId(accountId)) || process.env.FACEBOOK_PAGE_ID;
+
+    if (pageId) {
+      const convUrl = `${GRAPH_API_BASE}/${pageId}/conversations?fields=participants&user_id=${userId}&access_token=${accessToken}`;
+      const convResponse = await fetch(convUrl);
+      if (convResponse.ok) {
+        const convData = await convResponse.json();
+        const conversations = convData.data || [];
+        if (conversations.length > 0) {
+          const participants = conversations[0].participants?.data || [];
+          const sender = participants.find((p: any) => p.id === userId);
+          if (sender?.name) {
+            console.log(
+              `[facebook] Profile resolved via conversations API: ${sender.name}`
+            );
+            return {
+              id: userId,
+              name: sender.name,
+              profilePicUrl: undefined
+            };
+          }
+        }
+        console.warn(
+          `[facebook] Conversations API returned no matching participant for ${userId}`
+        );
+      } else {
+        const errBody = await convResponse.text().catch(() => '');
+        console.warn(
+          `[facebook] Conversations API failed (${convResponse.status}): ${errBody.slice(0, 200)}`
+        );
+      }
+    } else {
+      console.warn(
+        `[facebook] No pageId found — cannot use conversations API fallback`
+      );
+    }
+  } catch (err: any) {
+    console.warn(
+      `[facebook] Conversations API strategy threw: ${err?.message || err}`
+    );
+  }
+
+  // All strategies failed
+  throw new Error(`Failed to fetch Facebook profile for ${userId}`);
 }
 
 // ---------------------------------------------------------------------------

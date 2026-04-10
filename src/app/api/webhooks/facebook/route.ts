@@ -216,8 +216,11 @@ async function processFacebookEvents(payload: any): Promise<void> {
           const { getUserProfile } = await import('@/lib/facebook');
           const profile = await getUserProfile(accountId, senderId);
           senderName = profile.name || senderId;
-        } catch {
-          // Profile fetch can fail for privacy reasons — use ID as fallback
+          console.log(`[facebook-webhook] Resolved profile: ${senderName}`);
+        } catch (profileErr: any) {
+          console.warn(
+            `[facebook-webhook] Profile fetch failed for ${senderId}: ${profileErr?.message || profileErr}`
+          );
         }
 
         const result = await processIncomingMessage({
