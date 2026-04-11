@@ -123,6 +123,8 @@ export default function TrainingDataPage() {
   const [showUploads, setShowUploads] = useState(false);
   const [labelingAll, setLabelingAll] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [inputMode, setInputMode] = useState<'pdf' | 'paste'>('paste');
+  const [pasteText, setPasteText] = useState('');
   const [structuringUploadId, setStructuringUploadId] = useState<string | null>(
     null
   );
@@ -232,6 +234,46 @@ export default function TrainingDataPage() {
   // --------------------------------------------------
   // PDF Upload handlers
   // --------------------------------------------------
+
+  async function handleTextPaste() {
+    if (!pasteText.trim()) return;
+
+    setUploadStep('uploading');
+    setUploadResult(null);
+    setStructuredConversations([]);
+
+    try {
+      const result = await apiFetch<any>('/settings/training/upload', {
+        method: 'POST',
+        body: JSON.stringify({
+          rawText: pasteText,
+          fileName: 'pasted-conversations'
+        })
+      });
+
+      if (result.conversations) {
+        // Text paste returns conversations directly — skip to results
+        setUploadResult({
+          upload: result.upload
+        });
+        setStructuredConversations(result.conversations);
+        setUploadStep('results');
+        await fetchUploads();
+        setPasteText('');
+
+        toast.success(
+          `Parsed ${result.conversations.length} conversations${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicates skipped)` : ''}`
+        );
+      } else if (result.upload) {
+        // Fallback: normal PDF flow
+        setUploadResult(result);
+        setUploadStep('preflight_passed');
+      }
+    } catch (err: any) {
+      setUploadStep('idle');
+      toast.error(err?.message || 'Failed to process text');
+    }
+  }
 
   async function processFile(file: File) {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -543,38 +585,84 @@ export default function TrainingDataPage() {
             </div>
           )}
 
-          {/* Step 1: Upload */}
+          {/* Step 1: Upload — toggle between Paste Text and Upload PDF */}
           {uploadStep === 'idle' && personaId && (
-            <label
-              className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-10 transition-colors ${
-                dragging
-                  ? 'border-primary bg-primary/5'
-                  : 'border-muted-foreground/25 hover:border-primary/50'
-              }`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-            >
-              <input
-                type='file'
-                accept='.pdf'
-                className='hidden'
-                onChange={handlePdfUpload}
-              />
-              <FileText className='text-muted-foreground mb-3 h-12 w-12' />
-              <p className='text-sm font-medium'>
-                {dragging
-                  ? 'Drop your PDF here'
-                  : 'Drop a PDF here or click to browse'}
-              </p>
-              <p className='text-muted-foreground mt-1 text-xs'>
-                PDF up to 3MB &middot; Instagram DM exports &middot;
-                Conversation histories
-              </p>
-            </label>
+            <div className='space-y-4'>
+              <div className='flex gap-2'>
+                <Button
+                  size='sm'
+                  variant={inputMode === 'paste' ? 'default' : 'outline'}
+                  onClick={() => setInputMode('paste')}
+                >
+                  Paste Text
+                </Button>
+                <Button
+                  size='sm'
+                  variant={inputMode === 'pdf' ? 'default' : 'outline'}
+                  onClick={() => setInputMode('pdf')}
+                >
+                  Upload PDF
+                </Button>
+              </div>
+
+              {inputMode === 'paste' && (
+                <div className='space-y-3'>
+                  <textarea
+                    className='border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-lg border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
+                    rows={10}
+                    placeholder='Paste your Instagram DM conversation text here...'
+                    value={pasteText}
+                    onChange={(e) => setPasteText(e.target.value)}
+                  />
+                  <div className='flex items-center justify-between'>
+                    <p className='text-muted-foreground text-xs'>
+                      {pasteText.length > 0
+                        ? `${pasteText.length.toLocaleString()} characters`
+                        : 'Supports Instagram DM exports with timestamps and sender names'}
+                    </p>
+                    <Button
+                      onClick={handleTextPaste}
+                      disabled={pasteText.trim().length < 50}
+                    >
+                      Process & Save
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {inputMode === 'pdf' && (
+                <label
+                  className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-10 transition-colors ${
+                    dragging
+                      ? 'border-primary bg-primary/5'
+                      : 'border-muted-foreground/25 hover:border-primary/50'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    type='file'
+                    accept='.pdf'
+                    className='hidden'
+                    onChange={handlePdfUpload}
+                  />
+                  <FileText className='text-muted-foreground mb-3 h-12 w-12' />
+                  <p className='text-sm font-medium'>
+                    {dragging
+                      ? 'Drop your PDF here'
+                      : 'Drop a PDF here or click to browse'}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    PDF up to 3MB &middot; Instagram DM exports &middot;
+                    Conversation histories
+                  </p>
+                </label>
+              )}
+            </div>
           )}
 
           {/* Uploading spinner */}

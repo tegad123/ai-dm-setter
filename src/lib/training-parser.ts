@@ -273,6 +273,151 @@ export function smartSplitText(
 }
 
 // ---------------------------------------------------------------------------
+// Rule-based conversation parser (no LLM needed)
+// ---------------------------------------------------------------------------
+
+const TIMESTAMP_RE =
+  /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4},?\s+\d{1,2}:\d{2}\s*(am|pm)/i;
+
+/**
+ * Parses raw conversation text into structured conversations without any LLM.
+ * Uses timestamp lines as anchors: sender is one line above, text is below.
+ */
+export function parseConversationsFromText(
+  rawText: string
+): ParsedConversation[] {
+  const chunks = detectConversationBoundaries(rawText);
+  const conversations: ParsedConversation[] = [];
+
+  for (const chunk of chunks) {
+    const conv = parseSingleConversation(chunk);
+    if (conv && conv.messages.length >= 2) {
+      conversations.push(conv);
+    }
+  }
+
+  return conversations;
+}
+
+function parseSingleConversation(text: string): ParsedConversation | null {
+  const lines = text.split('\n');
+
+  // Extract lead identifier from header
+  let leadIdentifier = 'Unknown';
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    const atMatch = lines[i]?.trim().match(/^@([\w._]+)/);
+    if (atMatch) {
+      leadIdentifier = '@' + atMatch[1];
+      break;
+    }
+    // Also check for "Display name: Foo | N messages" headers
+    const dnMatch = lines[i]?.trim().match(/^Display name:\s*(.+?)\s*\|/i);
+    if (dnMatch) {
+      leadIdentifier = dnMatch[1].trim();
+      break;
+    }
+  }
+
+  // Find all timestamp line indices
+  const tsIndices: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (TIMESTAMP_RE.test(lines[i].trim())) {
+      tsIndices.push(i);
+    }
+  }
+
+  if (tsIndices.length < 2) return null;
+
+  const messages: ParsedMessage[] = [];
+
+  for (let t = 0; t < tsIndices.length; t++) {
+    const tsIdx = tsIndices[t];
+    const senderIdx = tsIdx - 1;
+
+    if (senderIdx < 0) continue;
+    const senderLine = lines[senderIdx].trim();
+    if (!senderLine) continue;
+
+    const isCloser = /\(You\)/i.test(senderLine);
+
+    // Text: from line after timestamp up to next sender line (or end)
+    const textEndIdx =
+      t + 1 < tsIndices.length ? tsIndices[t + 1] - 1 : lines.length;
+
+    const textLines: string[] = [];
+    for (let j = tsIdx + 1; j < textEndIdx; j++) {
+      textLines.push(lines[j]);
+    }
+    const msgText = textLines.join('\n').trim();
+
+    // Classify message type
+    let messageType: ParsedMessage['messageType'] = 'TEXT';
+    if (/voice\s*(message|note)|click for audio|audio call/i.test(msgText)) {
+      messageType = 'VOICE_NOTE';
+    } else if (/liked a message|reacted.*to your message/i.test(msgText)) {
+      messageType = 'REACTION';
+    } else if (
+      /missed (video|voice) call|call started|shared a (post|reel|story)/i.test(
+        msgText
+      )
+    ) {
+      messageType = 'SYSTEM';
+    } else if (/^https?:\/\/\S+$/i.test(msgText.trim())) {
+      messageType = 'URL_DROP';
+    }
+
+    // Parse timestamp
+    let timestamp: Date | null = null;
+    try {
+      // Remove extra commas for Date parsing: "Jan 14, 2026, 10:09 am" → "Jan 14 2026 10:09 am"
+      const tsClean = lines[tsIdx].trim().replace(/,/g, '');
+      const d = new Date(tsClean);
+      if (!isNaN(d.getTime())) timestamp = d;
+    } catch {
+      /* ignore */
+    }
+
+    messages.push({
+      sender: isCloser ? 'CLOSER' : 'LEAD',
+      text: msgText || null,
+      timestamp,
+      messageType,
+      orderIndex: messages.length
+    });
+  }
+
+  if (messages.length < 2) return null;
+
+  // If messages are in reverse chronological order (newest first), reverse them
+  const validTs = messages
+    .filter((m) => m.timestamp)
+    .map((m) => m.timestamp!.getTime());
+  if (validTs.length >= 2 && validTs[0] > validTs[validTs.length - 1]) {
+    messages.reverse();
+    messages.forEach((m, i) => (m.orderIndex = i));
+  }
+
+  const closerMsgs = messages.filter((m) => m.sender === 'CLOSER');
+  const leadMsgs = messages.filter((m) => m.sender === 'LEAD');
+  const voiceNotes = messages.filter((m) => m.messageType === 'VOICE_NOTE');
+  const timestamps = messages
+    .filter((m) => m.timestamp)
+    .map((m) => m.timestamp!);
+
+  return {
+    leadIdentifier,
+    messages,
+    messageCount: messages.length,
+    closerMessageCount: closerMsgs.length,
+    leadMessageCount: leadMsgs.length,
+    voiceNoteCount: voiceNotes.length,
+    contentHash: computeContentHash(messages),
+    startedAt: timestamps.length > 0 ? timestamps[0] : null,
+    endedAt: timestamps.length > 0 ? timestamps[timestamps.length - 1] : null
+  };
+}
+
+// ---------------------------------------------------------------------------
 // LLM call chunking
 // ---------------------------------------------------------------------------
 
