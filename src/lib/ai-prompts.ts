@@ -1,4 +1,8 @@
 import prisma from '@/lib/prisma';
+import {
+  serializeBreakdownForPrompt,
+  buildDualLayerBlock
+} from '@/lib/persona-breakdown-serializer';
 
 // ---------------------------------------------------------------------------
 // Lead Context (passed from webhook processor / API routes)
@@ -1000,14 +1004,33 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
   );
 
   // ── Tenant data block ──────────────────────────────────────────────
-  // Script-first path: inject rawScript + styleAnalysis + supplemental data.
-  // Legacy path: build block from individual promptConfig fields.
+  // Three paths in priority order:
+  // 1. PersonaBreakdown (new script-driven system) — if active breakdown exists
+  // 2. Script-first (legacy) — if rawScript exists
+  // 3. Field-by-field (legacy) — fallback
+  const breakdownText = await serializeBreakdownForPrompt(accountId);
   const hasRawScript =
     !!(p as any).rawScript &&
     ((p as any).rawScript as string).trim().length > 100;
 
-  if (hasRawScript) {
-    // ── SCRIPT-FIRST PATH ───────────────────────────────────────────
+  if (breakdownText) {
+    // ── BREAKDOWN PATH (new dual-layer system) ──────────────────────
+    const voiceLayer = (p as any).styleAnalysis || null;
+    const dualBlock = buildDualLayerBlock(breakdownText, voiceLayer);
+
+    // Append supplemental data
+    const supplemental = buildSupplementalSections(
+      p as any,
+      trainingExamples,
+      config
+    );
+    const tenantBlock = supplemental
+      ? `${dualBlock}\n\n# SUPPLEMENTAL DATA\n${supplemental}`
+      : dualBlock;
+
+    prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, tenantBlock);
+  } else if (hasRawScript) {
+    // ── SCRIPT-FIRST PATH (legacy) ──────────────────────────────────
     const scriptBlock = buildScriptFirstTenantData(
       p as any,
       trainingExamples,
