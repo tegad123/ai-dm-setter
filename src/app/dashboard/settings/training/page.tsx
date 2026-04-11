@@ -16,7 +16,19 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
-import { Plus, Trash2, X, MessageSquareText, Upload } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  X,
+  MessageSquareText,
+  Upload,
+  FileText,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +42,81 @@ interface TrainingExample {
   idealResponse: string;
   createdAt: string;
 }
+
+// Upload pipeline types
+interface UploadResult {
+  upload: {
+    id: string;
+    fileName: string;
+    status: string;
+    tokenEstimate: number | null;
+    conversationCount: number | null;
+    createdAt: string;
+  };
+  preflight?: {
+    passed: boolean;
+    isConversationExport: boolean;
+    reason: string;
+    estimatedConversations: number;
+    closerName: string | null;
+  };
+  estimate?: {
+    inputTokens: number;
+    estimatedCostCents: number;
+    requiresConfirmation: boolean;
+  };
+}
+
+interface UploadConversation {
+  id: string;
+  leadIdentifier: string;
+  outcomeLabel: string;
+  messageCount: number;
+  closerMessageCount: number;
+  leadMessageCount: number;
+  voiceNoteCount: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  messages?: Array<{
+    id: string;
+    sender: string;
+    text: string | null;
+    timestamp: string | null;
+    messageType: string;
+    orderIndex: number;
+  }>;
+}
+
+interface UploadListItem {
+  id: string;
+  fileName: string;
+  status: string;
+  tokenEstimate: number | null;
+  conversationCount: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  conversations: UploadConversation[];
+}
+
+const OUTCOME_OPTIONS = [
+  { value: 'CLOSED_WIN', label: 'Closed (Won)' },
+  { value: 'GHOSTED', label: 'Ghosted' },
+  { value: 'OBJECTION_LOST', label: 'Lost to Objection' },
+  { value: 'HARD_NO', label: 'Hard No' },
+  { value: 'BOOKED_NO_SHOW', label: 'Booked - No Show' },
+  { value: 'UNKNOWN', label: 'Unknown' }
+];
+
+const OUTCOME_COLORS: Record<string, string> = {
+  CLOSED_WIN:
+    'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
+  GHOSTED: 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-300',
+  OBJECTION_LOST: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300',
+  HARD_NO: 'bg-red-200 text-red-900 dark:bg-red-950 dark:text-red-200',
+  BOOKED_NO_SHOW:
+    'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300',
+  UNKNOWN: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
+};
 
 const CATEGORIES = [
   'GREETING',
@@ -141,10 +228,44 @@ export default function TrainingDataPage() {
     }
   }, []);
 
+  // --------------------------------------------------
+  // Bulk import state
+  // --------------------------------------------------
+
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkImporting, setBulkImporting] = useState(false);
+
+  // PDF upload state
+  const [uploadStep, setUploadStep] = useState<
+    'idle' | 'uploading' | 'preflight_passed' | 'structuring' | 'results'
+  >('idle');
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [structuredConversations, setStructuredConversations] = useState<
+    UploadConversation[]
+  >([]);
+  const [expandedConvo, setExpandedConvo] = useState<string | null>(null);
+  const [uploads, setUploads] = useState<UploadListItem[]>([]);
+  const [showUploads, setShowUploads] = useState(false);
+  const [labelingAll, setLabelingAll] = useState(false);
+
+  // Fetch upload history
+  const fetchUploads = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ uploads: UploadListItem[] }>(
+        '/settings/training/upload'
+      );
+      setUploads(res.uploads ?? []);
+    } catch {
+      // silent
+    }
+  }, []);
+
   useEffect(() => {
     fetchPersona();
     fetchExamples();
-  }, [fetchPersona, fetchExamples]);
+    fetchUploads();
+  }, [fetchPersona, fetchExamples, fetchUploads]);
 
   // --------------------------------------------------
   // Save handler
@@ -206,12 +327,161 @@ export default function TrainingDataPage() {
   }
 
   // --------------------------------------------------
-  // Bulk import state & handler
+  // PDF Upload handlers
   // --------------------------------------------------
 
-  const [showBulkImport, setShowBulkImport] = useState(false);
-  const [bulkText, setBulkText] = useState('');
-  const [bulkImporting, setBulkImporting] = useState(false);
+  async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      toast.error('Please upload a PDF file');
+      return;
+    }
+
+    if (file.size > 3 * 1024 * 1024) {
+      toast.error('PDF too large. Maximum size is 3MB.');
+      return;
+    }
+
+    setUploadStep('uploading');
+    setUploadResult(null);
+    setStructuredConversations([]);
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          ''
+        )
+      );
+
+      const result = await apiFetch<UploadResult>('/settings/training/upload', {
+        method: 'POST',
+        body: JSON.stringify({ pdfBase64: base64, fileName: file.name })
+      });
+
+      setUploadResult(result);
+
+      if (result.preflight?.passed) {
+        setUploadStep('preflight_passed');
+        toast.success(
+          `Detected ~${result.preflight.estimatedConversations} conversations`
+        );
+      } else {
+        setUploadStep('idle');
+        toast.error(
+          result.preflight?.reason ||
+            'This does not appear to be a conversation export'
+        );
+      }
+    } catch (err: any) {
+      setUploadStep('idle');
+      toast.error(err?.message || 'Upload failed');
+    }
+  }
+
+  async function handleStructure() {
+    if (!uploadResult?.upload?.id) return;
+
+    setUploadStep('structuring');
+    try {
+      const result = await apiFetch<{
+        upload: { id: string; status: string; conversationCount: number };
+        conversations: UploadConversation[];
+        duplicatesSkipped: number;
+      }>(`/settings/training/upload/${uploadResult.upload.id}/structure`, {
+        method: 'POST'
+      });
+
+      setStructuredConversations(result.conversations);
+      setUploadStep('results');
+      await fetchUploads();
+
+      let msg = `Structured ${result.conversations.length} conversations`;
+      if (result.duplicatesSkipped > 0) {
+        msg += ` (${result.duplicatesSkipped} duplicates skipped)`;
+      }
+      toast.success(msg);
+    } catch (err: any) {
+      setUploadStep('preflight_passed');
+      toast.error(err?.message || 'Structuring failed. Please try again.');
+    }
+  }
+
+  async function handleLabelAll(outcomeLabel: string) {
+    if (!uploadResult?.upload?.id) return;
+
+    setLabelingAll(true);
+    try {
+      const result = await apiFetch<{ updated: number }>(
+        `/settings/training/upload/${uploadResult.upload.id}/label`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ outcomeLabel })
+        }
+      );
+      // Update local state
+      setStructuredConversations((prev) =>
+        prev.map((c) => ({ ...c, outcomeLabel }))
+      );
+      toast.success(
+        `Labeled ${result.updated} conversations as ${OUTCOME_OPTIONS.find((o) => o.value === outcomeLabel)?.label || outcomeLabel}`
+      );
+      await fetchUploads();
+    } catch {
+      toast.error('Failed to update labels');
+    } finally {
+      setLabelingAll(false);
+    }
+  }
+
+  async function handleLabelSingle(
+    conversationId: string,
+    outcomeLabel: string
+  ) {
+    if (!uploadResult?.upload?.id) return;
+    try {
+      await apiFetch(
+        `/settings/training/upload/${uploadResult.upload.id}/label`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({ conversationId, outcomeLabel })
+        }
+      );
+      setStructuredConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, outcomeLabel } : c))
+      );
+    } catch {
+      toast.error('Failed to update label');
+    }
+  }
+
+  async function handleViewUpload(uploadId: string) {
+    try {
+      const res = await apiFetch<{
+        upload: UploadListItem & { conversations: UploadConversation[] };
+      }>(`/settings/training/upload/${uploadId}`);
+      if (res.upload) {
+        setUploadResult({
+          upload: {
+            id: res.upload.id,
+            fileName: res.upload.fileName,
+            status: res.upload.status,
+            tokenEstimate: res.upload.tokenEstimate,
+            conversationCount: res.upload.conversationCount,
+            createdAt: res.upload.createdAt
+          }
+        });
+        setStructuredConversations(res.upload.conversations || []);
+        setUploadStep('results');
+      }
+    } catch {
+      toast.error('Failed to load upload details');
+    }
+  }
 
   function autoDetectCategory(leadMsg: string, response: string): Category {
     const combined = (leadMsg + ' ' + response).toLowerCase();
@@ -521,6 +791,297 @@ export default function TrainingDataPage() {
           )}
         </div>
       </div>
+
+      {/* ── PDF Upload Section ─────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-lg'>Upload Conversation Export</CardTitle>
+          <p className='text-muted-foreground text-sm'>
+            Upload a PDF of your real DM conversations (closed deals). The AI
+            will analyze and learn from your selling patterns.
+          </p>
+        </CardHeader>
+        <CardContent className='space-y-4'>
+          {/* Step 1: Upload */}
+          {uploadStep === 'idle' && (
+            <label className='border-muted-foreground/25 hover:border-primary/50 flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors'>
+              <input
+                type='file'
+                accept='.pdf'
+                className='hidden'
+                onChange={handlePdfUpload}
+              />
+              <FileText className='text-muted-foreground mb-3 h-10 w-10' />
+              <p className='text-sm font-medium'>
+                Drop a PDF here or click to browse
+              </p>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                PDF up to 3MB. Instagram DM exports, conversation histories.
+              </p>
+            </label>
+          )}
+
+          {/* Uploading spinner */}
+          {uploadStep === 'uploading' && (
+            <div className='flex flex-col items-center justify-center py-8'>
+              <Loader2 className='text-primary mb-3 h-8 w-8 animate-spin' />
+              <p className='text-sm font-medium'>Analyzing PDF...</p>
+              <p className='text-muted-foreground text-xs'>
+                Extracting text and running pre-flight check
+              </p>
+            </div>
+          )}
+
+          {/* Step 2: Pre-flight passed — show estimate + confirm */}
+          {uploadStep === 'preflight_passed' && uploadResult && (
+            <div className='space-y-4'>
+              <div className='flex items-start gap-3 rounded-lg bg-green-50 p-4 dark:bg-green-950/30'>
+                <CheckCircle2 className='mt-0.5 h-5 w-5 shrink-0 text-green-600' />
+                <div>
+                  <p className='text-sm font-medium text-green-800 dark:text-green-300'>
+                    Valid conversation export detected
+                  </p>
+                  <p className='mt-1 text-xs text-green-700 dark:text-green-400'>
+                    {uploadResult.upload.fileName}
+                    {uploadResult.preflight?.closerName &&
+                      ` — Closer: ${uploadResult.preflight.closerName}`}
+                  </p>
+                </div>
+              </div>
+
+              <div className='bg-muted rounded-lg p-4'>
+                <div className='grid grid-cols-2 gap-4 text-sm'>
+                  <div>
+                    <p className='text-muted-foreground text-xs'>
+                      Est. Conversations
+                    </p>
+                    <p className='font-medium'>
+                      {uploadResult.preflight?.estimatedConversations ?? '?'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className='text-muted-foreground text-xs'>Est. Cost</p>
+                    <p className='font-medium'>
+                      ~$
+                      {(
+                        (uploadResult.estimate?.estimatedCostCents ?? 0) / 100
+                      ).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className='flex gap-2'>
+                <Button onClick={handleStructure}>
+                  Structure Conversations
+                </Button>
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    setUploadStep('idle');
+                    setUploadResult(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Structuring in progress */}
+          {uploadStep === 'structuring' && (
+            <div className='flex flex-col items-center justify-center py-8'>
+              <Loader2 className='text-primary mb-3 h-8 w-8 animate-spin' />
+              <p className='text-sm font-medium'>
+                Structuring conversations...
+              </p>
+              <p className='text-muted-foreground text-xs'>
+                This may take 30-60 seconds for large exports
+              </p>
+            </div>
+          )}
+
+          {/* Step 4: Results + Labeling */}
+          {uploadStep === 'results' && structuredConversations.length > 0 && (
+            <div className='space-y-4'>
+              <div className='flex items-center justify-between'>
+                <p className='text-sm font-medium'>
+                  {structuredConversations.length} conversations structured
+                </p>
+                {/* Bulk label */}
+                <div className='flex items-center gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    Label all as:
+                  </span>
+                  <Select
+                    onValueChange={(val) => handleLabelAll(val)}
+                    disabled={labelingAll}
+                  >
+                    <SelectTrigger className='h-8 w-[160px] text-xs'>
+                      <SelectValue placeholder='Select...' />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {OUTCOME_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Conversation list */}
+              <div className='max-h-[500px] space-y-2 overflow-y-auto'>
+                {structuredConversations.map((conv) => (
+                  <div key={conv.id} className='rounded-lg border p-3'>
+                    <div className='flex items-center justify-between'>
+                      <div className='flex items-center gap-2'>
+                        <button
+                          className='text-muted-foreground hover:text-foreground'
+                          onClick={() =>
+                            setExpandedConvo(
+                              expandedConvo === conv.id ? null : conv.id
+                            )
+                          }
+                        >
+                          {expandedConvo === conv.id ? (
+                            <ChevronUp className='h-4 w-4' />
+                          ) : (
+                            <ChevronDown className='h-4 w-4' />
+                          )}
+                        </button>
+                        <span className='text-sm font-medium'>
+                          {conv.leadIdentifier}
+                        </span>
+                        <span className='text-muted-foreground text-xs'>
+                          {conv.messageCount} msgs ({conv.closerMessageCount}{' '}
+                          you / {conv.leadMessageCount} lead)
+                        </span>
+                        {conv.voiceNoteCount > 0 && (
+                          <Badge variant='outline' className='text-xs'>
+                            {conv.voiceNoteCount} voice notes
+                          </Badge>
+                        )}
+                      </div>
+                      <Select
+                        value={conv.outcomeLabel}
+                        onValueChange={(val) => handleLabelSingle(conv.id, val)}
+                      >
+                        <SelectTrigger className='h-7 w-[140px] text-xs'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {OUTCOME_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Expanded message list */}
+                    {expandedConvo === conv.id && conv.messages && (
+                      <div className='mt-3 max-h-[300px] space-y-1 overflow-y-auto border-t pt-3'>
+                        {conv.messages.map((msg) => (
+                          <div
+                            key={msg.id}
+                            className={`rounded px-2 py-1 text-xs ${
+                              msg.sender === 'CLOSER'
+                                ? 'bg-primary/10 ml-8'
+                                : 'bg-muted mr-8'
+                            }`}
+                          >
+                            <span className='text-muted-foreground font-medium'>
+                              {msg.sender === 'CLOSER' ? 'You' : 'Lead'}
+                              {msg.messageType !== 'TEXT' &&
+                                ` [${msg.messageType.toLowerCase().replace('_', ' ')}]`}
+                            </span>
+                            {msg.text && <p className='mt-0.5'>{msg.text}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                variant='outline'
+                onClick={() => {
+                  setUploadStep('idle');
+                  setUploadResult(null);
+                  setStructuredConversations([]);
+                }}
+              >
+                Upload Another
+              </Button>
+            </div>
+          )}
+
+          {/* Upload History */}
+          {uploads.length > 0 && uploadStep === 'idle' && (
+            <div className='border-t pt-4'>
+              <button
+                className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-sm'
+                onClick={() => setShowUploads(!showUploads)}
+              >
+                {showUploads ? (
+                  <ChevronUp className='h-4 w-4' />
+                ) : (
+                  <ChevronDown className='h-4 w-4' />
+                )}
+                {uploads.length} previous upload
+                {uploads.length !== 1 ? 's' : ''}
+              </button>
+              {showUploads && (
+                <div className='mt-2 space-y-2'>
+                  {uploads.map((u) => (
+                    <div
+                      key={u.id}
+                      className='flex items-center justify-between rounded-lg border p-3'
+                    >
+                      <div>
+                        <p className='text-sm font-medium'>{u.fileName}</p>
+                        <p className='text-muted-foreground text-xs'>
+                          {u.conversationCount ?? 0} conversations
+                          {' \u00B7 '}
+                          {new Date(u.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        <Badge
+                          variant='secondary'
+                          className={
+                            u.status === 'COMPLETE'
+                              ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
+                              : u.status === 'FAILED' ||
+                                  u.status === 'PREFLIGHT_FAILED'
+                                ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'
+                                : ''
+                          }
+                        >
+                          {u.status.replace(/_/g, ' ').toLowerCase()}
+                        </Badge>
+                        {u.status === 'COMPLETE' && (
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            onClick={() => handleViewUpload(u.id)}
+                          >
+                            View
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Add Example Form */}
       {showForm && (

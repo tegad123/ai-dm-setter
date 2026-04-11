@@ -139,6 +139,27 @@ enum DataSource {
   SEED
 }
 
+// ─── Training Upload Pipeline Enums ──────────────────────
+
+enum UploadStatus {
+  PENDING
+  EXTRACTING
+  PREFLIGHT_FAILED
+  AWAITING_CONFIRMATION
+  STRUCTURING
+  COMPLETE
+  FAILED
+}
+
+enum TrainingOutcome {
+  CLOSED_WIN
+  GHOSTED
+  OBJECTION_LOST
+  HARD_NO
+  BOOKED_NO_SHOW
+  UNKNOWN
+}
+
 // ─── Multi-Tenant Models ────────────────────────────────
 
 model Account {
@@ -161,6 +182,8 @@ model Account {
   notifications      Notification[]
   personas           AIPersona[]
   trainingExamples   TrainingExample[]
+  trainingUploads    TrainingUpload[]
+  trainingConversations TrainingConversation[]
   integrations       IntegrationCredential[]
   tags               Tag[]
   teamNotes          TeamNote[]
@@ -204,8 +227,10 @@ model AIPersona {
   updatedAt                DateTime @updatedAt
 
   // Relations
-  account          Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  trainingExamples TrainingExample[]
+  account               Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  trainingExamples      TrainingExample[]
+  trainingUploads       TrainingUpload[]
+  trainingConversations TrainingConversation[]
 
   @@index([accountId, isActive])
 }
@@ -226,6 +251,72 @@ model TrainingExample {
 
   @@index([accountId, personaId])
   @@index([category])
+}
+
+// ─── Training Upload Pipeline Models ─────────────────────
+
+model TrainingUpload {
+  id                String       @id @default(cuid())
+  accountId         String
+  personaId         String
+  fileName          String
+  fileHash          String       // SHA-256 of PDF bytes for dedup
+  blobUrl           String       // Vercel Blob URL for original PDF
+  rawText           String?      @db.Text
+  status            UploadStatus @default(PENDING)
+  tokenEstimate     Int?
+  conversationCount Int?
+  errorMessage      String?      @db.Text
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  account       Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona       AIPersona             @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  conversations TrainingConversation[]
+
+  @@unique([accountId, fileHash])
+  @@index([accountId, status])
+}
+
+model TrainingConversation {
+  id                 String          @id @default(cuid())
+  uploadId           String
+  accountId          String
+  personaId          String
+  leadIdentifier     String
+  outcomeLabel       TrainingOutcome @default(UNKNOWN)
+  contentHash        String          // SHA-256 of normalized message text
+  messageCount       Int             @default(0)
+  closerMessageCount Int             @default(0)
+  leadMessageCount   Int             @default(0)
+  voiceNoteCount     Int             @default(0)
+  startedAt          DateTime?
+  endedAt            DateTime?
+  createdAt          DateTime        @default(now())
+
+  upload   TrainingUpload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  account  Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona  AIPersona        @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  messages TrainingMessage[]
+
+  @@unique([accountId, contentHash])
+  @@index([uploadId])
+  @@index([accountId, personaId])
+}
+
+model TrainingMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  sender         String   // "CLOSER" | "LEAD"
+  text           String?  @db.Text
+  timestamp      DateTime?
+  messageType    String   @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
+  stage          String?  // OPENER, QUALIFYING, etc. (populated later)
+  orderIndex     Int
+
+  conversation TrainingConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, orderIndex])
 }
 
 model IntegrationCredential {

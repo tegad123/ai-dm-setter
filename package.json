@@ -87,6 +87,7 @@
     "nextjs-toploader": "^3.7.15",
     "nuqs": "^2.4.1",
     "openai": "^6.32.0",
+    "pdf-parse": "^1.1.1",
     "postcss": "8.4.49",
     "prisma": "^6.19.2",
     "react": "^19.2.0",
