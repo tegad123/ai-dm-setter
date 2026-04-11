@@ -125,6 +125,8 @@ export default function TrainingDataPage() {
   const [structuringUploadId, setStructuringUploadId] = useState<string | null>(
     null
   );
+  const [structureProgress, setStructureProgress] = useState(0);
+  const [structureMessage, setStructureMessage] = useState('');
 
   // --------------------------------------------------
   // Fetch persona ID on mount
@@ -161,6 +163,94 @@ export default function TrainingDataPage() {
     fetchPersona();
     fetchUploads();
   }, [fetchPersona, fetchUploads]);
+
+  // --------------------------------------------------
+  // Streaming structure helper
+  // --------------------------------------------------
+
+  async function streamStructure(uploadId: string): Promise<{
+    upload: { id: string; status: string; conversationCount: number };
+    conversations: UploadConversation[];
+    duplicatesSkipped: number;
+  }> {
+    const token =
+      typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+
+    const response = await fetch(
+      `/api/settings/training/upload/${uploadId}/structure`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers
+      }
+    );
+
+    if (!response.ok && !response.body) {
+      const body = await response
+        .json()
+        .catch(() => ({ error: response.statusText }));
+      throw new Error(body.error || `API error: ${response.status}`);
+    }
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          if (event.type === 'progress') {
+            setStructureProgress(event.percent);
+            setStructureMessage(event.message);
+          } else if (event.type === 'complete') {
+            setStructureProgress(100);
+            setStructureMessage('Done!');
+            finalResult = event;
+          } else if (event.type === 'error') {
+            throw new Error(event.message);
+          }
+        } catch (parseErr: any) {
+          if (parseErr.message && !parseErr.message.includes('JSON')) {
+            throw parseErr;
+          }
+          // Ignore JSON parse errors for partial lines
+        }
+      }
+    }
+
+    // Handle remaining buffer
+    if (buffer.trim()) {
+      try {
+        const event = JSON.parse(buffer);
+        if (event.type === 'complete') finalResult = event;
+        else if (event.type === 'error') throw new Error(event.message);
+      } catch (parseErr: any) {
+        if (parseErr.message && !parseErr.message.includes('JSON')) {
+          throw parseErr;
+        }
+      }
+    }
+
+    if (!finalResult) {
+      throw new Error('Structuring stream ended without a result');
+    }
+
+    return finalResult;
+  }
 
   // --------------------------------------------------
   // PDF Upload handlers
@@ -233,14 +323,10 @@ export default function TrainingDataPage() {
     if (!uploadResult?.upload?.id) return;
 
     setUploadStep('structuring');
+    setStructureProgress(0);
+    setStructureMessage('Starting...');
     try {
-      const result = await apiFetch<{
-        upload: { id: string; status: string; conversationCount: number };
-        conversations: UploadConversation[];
-        duplicatesSkipped: number;
-      }>(`/settings/training/upload/${uploadResult.upload.id}/structure`, {
-        method: 'POST'
-      });
+      const result = await streamStructure(uploadResult.upload.id);
 
       setStructuredConversations(result.conversations);
       setUploadStep('results');
@@ -253,6 +339,7 @@ export default function TrainingDataPage() {
       toast.success(msg);
     } catch (err: any) {
       setUploadStep('preflight_passed');
+      setStructureProgress(0);
       toast.error(err?.message || 'Structuring failed. Please try again.');
     }
   }
@@ -330,14 +417,11 @@ export default function TrainingDataPage() {
 
   async function handleStructureFromHistory(uploadId: string) {
     setStructuringUploadId(uploadId);
+    setUploadStep('structuring');
+    setStructureProgress(0);
+    setStructureMessage('Starting...');
     try {
-      const result = await apiFetch<{
-        upload: { id: string; status: string; conversationCount: number };
-        conversations: UploadConversation[];
-        duplicatesSkipped: number;
-      }>(`/settings/training/upload/${uploadId}/structure`, {
-        method: 'POST'
-      });
+      const result = await streamStructure(uploadId);
 
       setUploadResult({
         upload: {
@@ -360,6 +444,8 @@ export default function TrainingDataPage() {
       }
       toast.success(msg);
     } catch (err: any) {
+      setUploadStep('idle');
+      setStructureProgress(0);
       toast.error(err?.message || 'Structuring failed. Please try again.');
     } finally {
       setStructuringUploadId(null);
@@ -556,15 +642,25 @@ export default function TrainingDataPage() {
             </div>
           )}
 
-          {/* Step 3: Structuring in progress */}
+          {/* Step 3: Structuring in progress — progress bar */}
           {uploadStep === 'structuring' && (
-            <div className='flex flex-col items-center justify-center py-10'>
-              <Loader2 className='text-primary mb-3 h-8 w-8 animate-spin' />
-              <p className='text-sm font-medium'>
-                Structuring conversations...
-              </p>
-              <p className='text-muted-foreground text-xs'>
-                This may take 30-60 seconds for large exports
+            <div className='flex flex-col items-center justify-center gap-3 py-10'>
+              <div className='w-full max-w-md'>
+                <div className='bg-muted h-3 w-full overflow-hidden rounded-full'>
+                  <div
+                    className='bg-primary h-3 rounded-full transition-all duration-700 ease-out'
+                    style={{ width: `${structureProgress}%` }}
+                  />
+                </div>
+                <div className='mt-2 flex items-center justify-between'>
+                  <p className='text-muted-foreground text-xs'>
+                    {structureMessage || 'Starting...'}
+                  </p>
+                  <p className='text-xs font-medium'>{structureProgress}%</p>
+                </div>
+              </div>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                Large exports may take a few minutes
               </p>
             </div>
           )}

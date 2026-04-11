@@ -116,21 +116,26 @@ export function estimateTokens(text: string): TokenEstimate {
 /**
  * Splits extracted PDF text into chunks, one per conversation.
  *
- * Looks for `@username` header patterns commonly found in DM exports.
- * Falls back to splitting on 3+ consecutive blank lines if no header
- * pattern is detected.
+ * Tries multiple header patterns commonly found in DM exports, then
+ * falls back to smart text splitting if no pattern matches.
  */
 export function detectConversationBoundaries(rawText: string): string[] {
-  // Pattern 1: @username headers (e.g. "\n@adrianmiranda07\n")
-  const atHeaderPattern = /^@[\w.]+\s*$/m;
   const lines = rawText.split('\n');
 
-  if (atHeaderPattern.test(rawText)) {
+  // ── Pattern 1: @username headers ──────────────────────────
+  // Matches: @username, @user.name, @user_name (even with trailing content
+  // or leading whitespace from PDF extraction).
+  const atHeaderTest = (line: string): boolean =>
+    /^@[\w._]+(\s*$|\s+[—\-|:(])/.test(line.trim());
+
+  const hasAtHeaders = lines.filter((l) => atHeaderTest(l)).length >= 2;
+
+  if (hasAtHeaders) {
     const chunks: string[] = [];
     let currentChunk: string[] = [];
 
     for (const line of lines) {
-      if (/^@[\w.]+\s*$/.test(line) && currentChunk.length > 0) {
+      if (atHeaderTest(line) && currentChunk.length > 0) {
         chunks.push(currentChunk.join('\n'));
         currentChunk = [line];
       } else {
@@ -140,43 +145,131 @@ export function detectConversationBoundaries(rawText: string): string[] {
     if (currentChunk.length > 0) {
       chunks.push(currentChunk.join('\n'));
     }
-    // Filter out chunks that are likely headers/metadata (< 5 lines)
-    return chunks.filter((c) => c.split('\n').length > 5);
+    // Keep chunks with at least 3 non-empty lines (a header + 2 messages)
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
   }
 
-  // Pattern 2: "Display name:" headers with pipe separators
-  const displayNamePattern = /^Display name:.*\|\s*\d+\s*messages/m;
-  if (displayNamePattern.test(rawText)) {
+  // ── Pattern 2: "Display name:" headers ────────────────────
+  const displayNameTest = (line: string): boolean =>
+    /^Display name:.*\|\s*\d+\s*messages/i.test(line.trim());
+
+  if (lines.some((l) => displayNameTest(l))) {
     const chunks: string[] = [];
     let currentChunk: string[] = [];
 
     for (const line of lines) {
+      if (displayNameTest(line) && currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n'));
+        currentChunk = [line];
+      } else {
+        currentChunk.push(line);
+      }
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join('\n'));
+    }
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
+  }
+
+  // ── Pattern 3: "X messages" count lines ───────────────────
+  // Some exports have standalone "N messages" lines between conversations
+  const msgCountTest = (line: string): boolean =>
+    /^\d+\s+messages?\s*$/i.test(line.trim());
+
+  if (lines.filter((l) => msgCountTest(l)).length >= 2) {
+    // Split one line BEFORE each "N messages" line (the username is above it)
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      // Look ahead: if the NEXT line (or line after next) is a "N messages" line,
+      // and current line looks like a name/username, start new chunk
+      const nextIsCount = i + 1 < lines.length && msgCountTest(lines[i + 1]);
+      const nextNextIsCount =
+        i + 2 < lines.length && msgCountTest(lines[i + 2]);
+
+      const looksLikeHeader =
+        /^@[\w._]+/.test(lines[i].trim()) ||
+        (lines[i].trim().length > 0 &&
+          lines[i].trim().length < 40 &&
+          (nextIsCount || nextNextIsCount));
+
       if (
-        /^Display name:.*\|\s*\d+\s*messages/.test(line) &&
+        looksLikeHeader &&
+        (nextIsCount || nextNextIsCount) &&
         currentChunk.length > 0
       ) {
         chunks.push(currentChunk.join('\n'));
-        currentChunk = [line];
+        currentChunk = [lines[i]];
       } else {
-        currentChunk.push(line);
+        currentChunk.push(lines[i]);
       }
     }
     if (currentChunk.length > 0) {
       chunks.push(currentChunk.join('\n'));
     }
-    return chunks.filter((c) => c.split('\n').length > 5);
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
   }
 
-  // Fallback: split on 3+ blank lines
-  const fallbackChunks = rawText
-    .split(/\n{4,}/)
+  // ── Fallback: split on 2+ blank lines ────────────────────
+  const blankLineChunks = rawText
+    .split(/\n{3,}/)
     .filter((c) => c.trim().length > 100);
-  if (fallbackChunks.length > 1) {
-    return fallbackChunks;
+  if (blankLineChunks.length >= 2) {
+    return blankLineChunks;
   }
 
-  // No boundaries detected — return the full text as one chunk
-  return [rawText];
+  // ── Last resort: smart split into manageable chunks ───────
+  return smartSplitText(rawText);
+}
+
+/**
+ * Splits large text into manageable chunks at paragraph boundaries.
+ * Used when conversation boundary detection fails, so the LLM gets
+ * pieces small enough to reliably extract all conversations.
+ *
+ * Each chunk targets ~30K tokens (~120K chars) with ~2K char overlap
+ * so conversations at boundaries aren't lost.
+ */
+export function smartSplitText(
+  rawText: string,
+  maxChars: number = 120_000
+): string[] {
+  if (rawText.length <= maxChars) {
+    return [rawText];
+  }
+
+  const chunks: string[] = [];
+  // Split at paragraph boundaries (double newlines)
+  const paragraphs = rawText.split(/\n\n+/);
+  let current = '';
+
+  for (const para of paragraphs) {
+    if (current.length + para.length + 2 > maxChars && current.length > 0) {
+      chunks.push(current);
+      // Overlap: carry the last ~2000 chars into the next chunk so
+      // conversations that straddle a boundary are seen by both calls
+      const overlap = current.slice(-2000);
+      current = overlap + '\n\n' + para;
+    } else {
+      current += (current ? '\n\n' : '') + para;
+    }
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks.length > 0 ? chunks : [rawText];
 }
 
 // ---------------------------------------------------------------------------

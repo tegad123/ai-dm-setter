@@ -14,312 +14,42 @@ import { STRUCTURING_PROMPT } from '@/lib/training-prompts';
 export const maxDuration = 300; // Vercel Pro max — structuring many convos takes time
 
 // ---------------------------------------------------------------------------
-// POST — Trigger LLM structuring + validation on an uploaded PDF
+// Types for streaming events
+// ---------------------------------------------------------------------------
+
+type ProgressEvent = {
+  type: 'progress';
+  percent: number;
+  message: string;
+  conversationsFound?: number;
+};
+
+type CompleteEvent = {
+  type: 'complete';
+  upload: { id: string; status: string; conversationCount: number };
+  conversations: any[];
+  duplicatesSkipped: number;
+};
+
+type ErrorEvent = {
+  type: 'error';
+  message: string;
+};
+
+type StreamEvent = ProgressEvent | CompleteEvent | ErrorEvent;
+
+// ---------------------------------------------------------------------------
+// POST — Trigger LLM structuring with streaming progress
 // ---------------------------------------------------------------------------
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // ── Auth & validation (before streaming) ─────────────────
+  let auth: { accountId: string };
   try {
-    const auth = await requireAuth(req);
-    const { id } = await params;
-
-    // ── Fetch upload ────────────────────────────────────────
-    const upload = await prisma.trainingUpload.findFirst({
-      where: { id, accountId: auth.accountId }
-    });
-
-    if (!upload) {
-      return NextResponse.json({ error: 'Upload not found' }, { status: 404 });
-    }
-
-    if (
-      upload.status !== 'AWAITING_CONFIRMATION' &&
-      upload.status !== 'FAILED' &&
-      upload.status !== 'STRUCTURING'
-    ) {
-      return NextResponse.json(
-        {
-          error: `Upload is in status "${upload.status}" — expected "AWAITING_CONFIRMATION" or "FAILED"`
-        },
-        { status: 400 }
-      );
-    }
-
-    // ── Mark as structuring ─────────────────────────────────
-    await prisma.trainingUpload.update({
-      where: { id },
-      data: { status: 'STRUCTURING' }
-    });
-
-    // ── Init Anthropic ──────────────────────────────────────
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: {
-          status: 'FAILED',
-          errorMessage: 'ANTHROPIC_API_KEY not configured'
-        }
-      });
-      return NextResponse.json(
-        { error: 'Anthropic API key not configured' },
-        { status: 500 }
-      );
-    }
-    const client = new Anthropic({ apiKey });
-
-    // ── Decide structuring approach ─────────────────────────
-    // Native PDF (base64 document type) when feasible, text chunks as fallback
-    let allRawConversations: Array<{
-      leadIdentifier: string;
-      messages: Array<{
-        sender: string;
-        text: string | null;
-        timestamp: string | null;
-        messageType: string;
-        orderIndex: number;
-      }>;
-    }> = [];
-
-    const rawText = upload.rawText || '';
-    const estimatedTokens = Math.ceil(rawText.length / 4);
-
-    try {
-      let useNativePdf = estimatedTokens < 120_000 && Boolean(upload.pdfBase64);
-
-      // ── Strategy A: Try native PDF document support ────────
-      if (useNativePdf) {
-        try {
-          console.log(
-            `[training-structure] Using native PDF approach (${estimatedTokens} est. tokens)`
-          );
-
-          const message = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 16384,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'document',
-                    source: {
-                      type: 'base64',
-                      media_type: 'application/pdf',
-                      data: upload.pdfBase64!
-                    }
-                  },
-                  { type: 'text', text: STRUCTURING_PROMPT }
-                ]
-              }
-            ]
-          });
-
-          const responseText =
-            message.content[0].type === 'text' ? message.content[0].text : '';
-          const parsed = parseJsonResponse(responseText);
-          allRawConversations = parsed.conversations || [];
-        } catch (pdfErr: any) {
-          const msg = pdfErr?.message || '';
-          // Fall back to chunked text if PDF exceeds page limit or other PDF-specific error
-          if (
-            msg.includes('PDF pages') ||
-            msg.includes('pdf') ||
-            msg.includes('document')
-          ) {
-            console.log(
-              `[training-structure] Native PDF failed (${msg}), falling back to chunked text`
-            );
-            useNativePdf = false;
-          } else {
-            throw pdfErr; // Re-throw non-PDF errors
-          }
-        }
-      }
-
-      // ── Strategy B: Chunked text approach ──────────────────
-      if (!useNativePdf) {
-        console.log(
-          `[training-structure] Using chunked text approach (${estimatedTokens} est. tokens)`
-        );
-
-        const conversationTexts = detectConversationBoundaries(rawText);
-        const batches = chunkForLLM(conversationTexts);
-        console.log(
-          `[training-structure] Split into ${batches.length} batch(es) from ${conversationTexts.length} conversations`
-        );
-
-        for (let b = 0; b < batches.length; b++) {
-          const batchText = batches[b].join('\n\n---\n\n');
-          console.log(
-            `[training-structure] Processing batch ${b + 1}/${batches.length} (${Math.ceil(batchText.length / 4)} est. tokens)`
-          );
-
-          const message = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 16384,
-            messages: [
-              {
-                role: 'user',
-                content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
-              }
-            ]
-          });
-
-          const responseText =
-            message.content[0].type === 'text' ? message.content[0].text : '';
-          const parsed = parseJsonResponse(responseText);
-          allRawConversations.push(...(parsed.conversations || []));
-        }
-      }
-    } catch (llmErr: any) {
-      console.error('[training-structure] LLM structuring failed:', llmErr);
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: {
-          status: 'FAILED',
-          errorMessage: `LLM structuring failed: ${llmErr?.message || 'Unknown error'}`
-        }
-      });
-      const llmErrMsg = llmErr?.message || 'Unknown error';
-      return NextResponse.json(
-        { error: `Structuring failed: ${llmErrMsg}` },
-        { status: 500 }
-      );
-    }
-
-    if (allRawConversations.length === 0) {
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: {
-          status: 'FAILED',
-          errorMessage: 'No conversations found in the PDF'
-        }
-      });
-      return NextResponse.json(
-        { error: 'No conversations could be extracted from this PDF.' },
-        { status: 422 }
-      );
-    }
-
-    // ── Hydrate with computed fields ────────────────────────
-    const conversations = hydrateConversations(allRawConversations);
-
-    // ── Validate ────────────────────────────────────────────
-    const validation = validateConversations(conversations);
-    console.log(
-      `[training-structure] Validation: ${validation.conversationCount} convos, ` +
-        `${validation.errors.length} errors, ${validation.warnings.length} warnings`
-    );
-
-    // Filter out conversations that have critical errors (no speakers, < 2 messages)
-    const validConversations = conversations.filter((_, i) => {
-      return !validation.errors.some((e) => e.conversationIndex === i);
-    });
-
-    if (validConversations.length === 0) {
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: {
-          status: 'FAILED',
-          errorMessage: `All ${conversations.length} conversations failed validation`
-        }
-      });
-      return NextResponse.json(
-        { error: 'All conversations failed validation.', validation },
-        { status: 422 }
-      );
-    }
-
-    // ── Dedup against existing conversations ────────────────
-    const contentHashes = validConversations.map((c) => c.contentHash);
-    const existingConvos = await prisma.trainingConversation.findMany({
-      where: {
-        accountId: auth.accountId,
-        contentHash: { in: contentHashes }
-      },
-      select: { contentHash: true }
-    });
-    const existingHashes = new Set(existingConvos.map((c) => c.contentHash));
-    const newConversations = validConversations.filter(
-      (c) => !existingHashes.has(c.contentHash)
-    );
-    const duplicatesSkipped =
-      validConversations.length - newConversations.length;
-
-    // ── Persist to database ─────────────────────────────────
-    const createdConversations = await prisma.$transaction(async (tx) => {
-      const results = [];
-
-      for (const conv of newConversations) {
-        const convo = await tx.trainingConversation.create({
-          data: {
-            uploadId: id,
-            accountId: auth.accountId,
-            personaId: upload.personaId,
-            leadIdentifier: conv.leadIdentifier,
-            contentHash: conv.contentHash,
-            messageCount: conv.messageCount,
-            closerMessageCount: conv.closerMessageCount,
-            leadMessageCount: conv.leadMessageCount,
-            voiceNoteCount: conv.voiceNoteCount,
-            startedAt: conv.startedAt,
-            endedAt: conv.endedAt,
-            messages: {
-              createMany: {
-                data: conv.messages.map((m) => ({
-                  sender: m.sender,
-                  text: m.text,
-                  timestamp: m.timestamp,
-                  messageType: m.messageType,
-                  orderIndex: m.orderIndex
-                }))
-              }
-            }
-          },
-          select: {
-            id: true,
-            leadIdentifier: true,
-            outcomeLabel: true,
-            messageCount: true,
-            closerMessageCount: true,
-            leadMessageCount: true,
-            voiceNoteCount: true,
-            startedAt: true,
-            endedAt: true
-          }
-        });
-        results.push(convo);
-      }
-
-      return results;
-    });
-
-    // ── Update upload status ────────────────────────────────
-    await prisma.trainingUpload.update({
-      where: { id },
-      data: {
-        status: 'COMPLETE',
-        conversationCount: createdConversations.length
-      }
-    });
-
-    console.log(
-      `[training-structure] Complete: ${createdConversations.length} conversations created, ${duplicatesSkipped} duplicates skipped`
-    );
-
-    return NextResponse.json({
-      upload: {
-        id,
-        status: 'COMPLETE',
-        conversationCount: createdConversations.length
-      },
-      conversations: createdConversations,
-      validation,
-      duplicatesSkipped
-    });
+    auth = await requireAuth(req);
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(
@@ -327,16 +57,397 @@ export async function POST(
         { status: error.status }
       );
     }
-    console.error(
-      'POST /api/settings/training/upload/[id]/structure error:',
-      error
-    );
-    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { id } = await params;
+
+  const upload = await prisma.trainingUpload.findFirst({
+    where: { id, accountId: auth.accountId }
+  });
+
+  if (!upload) {
+    return NextResponse.json({ error: 'Upload not found' }, { status: 404 });
+  }
+
+  if (
+    upload.status !== 'AWAITING_CONFIRMATION' &&
+    upload.status !== 'FAILED' &&
+    upload.status !== 'STRUCTURING'
+  ) {
     return NextResponse.json(
-      { error: `Failed to structure conversations: ${errMsg}` },
+      {
+        error: `Upload is in status "${upload.status}" — expected "AWAITING_CONFIRMATION" or "FAILED"`
+      },
+      { status: 400 }
+    );
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    await prisma.trainingUpload.update({
+      where: { id },
+      data: {
+        status: 'FAILED',
+        errorMessage: 'ANTHROPIC_API_KEY not configured'
+      }
+    });
+    return NextResponse.json(
+      { error: 'Anthropic API key not configured' },
       { status: 500 }
     );
   }
+
+  // ── Create streaming response ────────────────────────────
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: StreamEvent) => {
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+        } catch {
+          // Stream may have been closed
+        }
+      };
+
+      try {
+        // Mark as structuring
+        await prisma.trainingUpload.update({
+          where: { id },
+          data: { status: 'STRUCTURING' }
+        });
+
+        send({ type: 'progress', percent: 2, message: 'Preparing...' });
+
+        const client = new Anthropic({ apiKey });
+        const rawText = upload.rawText || '';
+        const estimatedTokens = Math.ceil(rawText.length / 4);
+
+        let allRawConversations: Array<{
+          leadIdentifier: string;
+          messages: Array<{
+            sender: string;
+            text: string | null;
+            timestamp: string | null;
+            messageType: string;
+            orderIndex: number;
+          }>;
+        }> = [];
+
+        let useNativePdf =
+          estimatedTokens < 120_000 && Boolean(upload.pdfBase64);
+
+        // ── Strategy A: Try native PDF ──────────────────────
+        if (useNativePdf) {
+          try {
+            send({
+              type: 'progress',
+              percent: 5,
+              message: 'Analyzing PDF with AI...'
+            });
+
+            const message = await client.messages.create({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 16384,
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'document',
+                      source: {
+                        type: 'base64',
+                        media_type: 'application/pdf',
+                        data: upload.pdfBase64!
+                      }
+                    },
+                    { type: 'text', text: STRUCTURING_PROMPT }
+                  ]
+                }
+              ]
+            });
+
+            const responseText =
+              message.content[0].type === 'text' ? message.content[0].text : '';
+            const parsed = parseJsonResponse(responseText);
+            allRawConversations = parsed.conversations || [];
+
+            send({
+              type: 'progress',
+              percent: 85,
+              message: `Found ${allRawConversations.length} conversations`,
+              conversationsFound: allRawConversations.length
+            });
+          } catch (pdfErr: any) {
+            const msg = pdfErr?.message || '';
+            if (
+              msg.includes('PDF pages') ||
+              msg.includes('pdf') ||
+              msg.includes('document')
+            ) {
+              console.log(
+                `[training-structure] Native PDF failed (${msg}), falling back to chunked text`
+              );
+              useNativePdf = false;
+              send({
+                type: 'progress',
+                percent: 5,
+                message:
+                  'PDF too large for direct analysis, switching to text mode...'
+              });
+            } else {
+              throw pdfErr;
+            }
+          }
+        }
+
+        // ── Strategy B: Chunked text ────────────────────────
+        if (!useNativePdf) {
+          console.log(
+            `[training-structure] Using chunked text approach (${estimatedTokens} est. tokens)`
+          );
+
+          const conversationTexts = detectConversationBoundaries(rawText);
+          const batches = chunkForLLM(conversationTexts);
+          const totalBatches = batches.length;
+
+          console.log(
+            `[training-structure] Split into ${totalBatches} batch(es) from ${conversationTexts.length} chunk(s)`
+          );
+
+          send({
+            type: 'progress',
+            percent: 5,
+            message: `Analyzing ${totalBatches} batch${totalBatches > 1 ? 'es' : ''} of conversations...`
+          });
+
+          for (let b = 0; b < totalBatches; b++) {
+            const batchText = batches[b].join('\n\n---\n\n');
+            const batchPercent =
+              5 + Math.round(((b + 0.5) / totalBatches) * 80);
+
+            send({
+              type: 'progress',
+              percent: batchPercent,
+              message: `Processing batch ${b + 1} of ${totalBatches}...`,
+              conversationsFound: allRawConversations.length
+            });
+
+            console.log(
+              `[training-structure] Processing batch ${b + 1}/${totalBatches} (${Math.ceil(batchText.length / 4)} est. tokens)`
+            );
+
+            const message = await client.messages.create({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 16384,
+              messages: [
+                {
+                  role: 'user',
+                  content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
+                }
+              ]
+            });
+
+            const responseText =
+              message.content[0].type === 'text' ? message.content[0].text : '';
+            const parsed = parseJsonResponse(responseText);
+            allRawConversations.push(...(parsed.conversations || []));
+
+            const donePercent = 5 + Math.round(((b + 1) / totalBatches) * 80);
+            send({
+              type: 'progress',
+              percent: donePercent,
+              message: `Batch ${b + 1} complete — ${allRawConversations.length} conversations found so far`,
+              conversationsFound: allRawConversations.length
+            });
+          }
+        }
+
+        // ── No conversations found ──────────────────────────
+        if (allRawConversations.length === 0) {
+          await prisma.trainingUpload.update({
+            where: { id },
+            data: {
+              status: 'FAILED',
+              errorMessage: 'No conversations found in the PDF'
+            }
+          });
+          send({
+            type: 'error',
+            message: 'No conversations could be extracted from this PDF.'
+          });
+          controller.close();
+          return;
+        }
+
+        // ── Hydrate & validate ──────────────────────────────
+        send({
+          type: 'progress',
+          percent: 88,
+          message: 'Validating conversations...'
+        });
+
+        const conversations = hydrateConversations(allRawConversations);
+        const validation = validateConversations(conversations);
+
+        console.log(
+          `[training-structure] Validation: ${validation.conversationCount} convos, ` +
+            `${validation.errors.length} errors, ${validation.warnings.length} warnings`
+        );
+
+        const validConversations = conversations.filter((_, i) => {
+          return !validation.errors.some((e) => e.conversationIndex === i);
+        });
+
+        if (validConversations.length === 0) {
+          await prisma.trainingUpload.update({
+            where: { id },
+            data: {
+              status: 'FAILED',
+              errorMessage: `All ${conversations.length} conversations failed validation`
+            }
+          });
+          send({
+            type: 'error',
+            message: `All ${conversations.length} conversations failed validation.`
+          });
+          controller.close();
+          return;
+        }
+
+        // ── Dedup ───────────────────────────────────────────
+        send({
+          type: 'progress',
+          percent: 92,
+          message: 'Checking for duplicates...'
+        });
+
+        const contentHashes = validConversations.map((c) => c.contentHash);
+        const existingConvos = await prisma.trainingConversation.findMany({
+          where: {
+            accountId: auth.accountId,
+            contentHash: { in: contentHashes }
+          },
+          select: { contentHash: true }
+        });
+        const existingHashes = new Set(
+          existingConvos.map((c) => c.contentHash)
+        );
+        const newConversations = validConversations.filter(
+          (c) => !existingHashes.has(c.contentHash)
+        );
+        const duplicatesSkipped =
+          validConversations.length - newConversations.length;
+
+        // ── Persist ─────────────────────────────────────────
+        send({
+          type: 'progress',
+          percent: 95,
+          message: `Saving ${newConversations.length} conversations...`
+        });
+
+        const createdConversations = await prisma.$transaction(async (tx) => {
+          const results = [];
+
+          for (const conv of newConversations) {
+            const convo = await tx.trainingConversation.create({
+              data: {
+                uploadId: id,
+                accountId: auth.accountId,
+                personaId: upload.personaId,
+                leadIdentifier: conv.leadIdentifier,
+                contentHash: conv.contentHash,
+                messageCount: conv.messageCount,
+                closerMessageCount: conv.closerMessageCount,
+                leadMessageCount: conv.leadMessageCount,
+                voiceNoteCount: conv.voiceNoteCount,
+                startedAt: conv.startedAt,
+                endedAt: conv.endedAt,
+                messages: {
+                  createMany: {
+                    data: conv.messages.map((m) => ({
+                      sender: m.sender,
+                      text: m.text,
+                      timestamp: m.timestamp,
+                      messageType: m.messageType,
+                      orderIndex: m.orderIndex
+                    }))
+                  }
+                }
+              },
+              select: {
+                id: true,
+                leadIdentifier: true,
+                outcomeLabel: true,
+                messageCount: true,
+                closerMessageCount: true,
+                leadMessageCount: true,
+                voiceNoteCount: true,
+                startedAt: true,
+                endedAt: true
+              }
+            });
+            results.push(convo);
+          }
+
+          return results;
+        });
+
+        // ── Update upload status ────────────────────────────
+        await prisma.trainingUpload.update({
+          where: { id },
+          data: {
+            status: 'COMPLETE',
+            conversationCount: createdConversations.length
+          }
+        });
+
+        console.log(
+          `[training-structure] Complete: ${createdConversations.length} conversations created, ${duplicatesSkipped} duplicates skipped`
+        );
+
+        send({
+          type: 'complete',
+          upload: {
+            id,
+            status: 'COMPLETE',
+            conversationCount: createdConversations.length
+          },
+          conversations: createdConversations,
+          duplicatesSkipped
+        });
+      } catch (err: any) {
+        console.error('[training-structure] Error:', err);
+        const errMsg = err?.message || 'Unknown error';
+        try {
+          await prisma.trainingUpload.update({
+            where: { id },
+            data: {
+              status: 'FAILED',
+              errorMessage: `Structuring failed: ${errMsg}`
+            }
+          });
+        } catch {
+          // DB update may fail if already in terminal state
+        }
+        send({ type: 'error', message: `Structuring failed: ${errMsg}` });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          // Already closed
+        }
+      }
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

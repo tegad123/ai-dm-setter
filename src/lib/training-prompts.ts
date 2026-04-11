@@ -73,15 +73,17 @@ Return a JSON object with this exact structure:
 
 ## RULES
 
-1. **CRITICAL — Message ordering**: Output messages in FORWARD chronological order (oldest message first, orderIndex 0). Many exports list messages newest-first — reverse them.
-2. **Sender detection**: Messages from the account owner (marked "(You)" or similar) → "CLOSER". All other participants → "LEAD".
-3. **Timestamp parsing**: Convert to ISO 8601 format (e.g. "2026-01-14T10:09:00.000Z"). If a timestamp is ambiguous or missing, use null.
-4. **Corrupted characters**: The PDF may render emoji as ■ or □. Keep these characters as-is. Do not guess original emoji.
-5. **Multi-message handling**: Do NOT merge consecutive messages from the same sender. Keep each message as a separate entry.
-6. **orderIndex**: Sequential integer starting at 0 for each conversation independently. 0 = oldest/first message.
-7. **Skip tiny conversations**: Omit conversations with fewer than 2 total messages.
-8. **Duplicate messages**: If the same message text appears twice consecutively from the same sender (common with edited/resent messages), keep only one.
-9. **Voice note text**: For voice notes, set text to null and messageType to "VOICE_NOTE".
-10. **Reaction text**: For reactions, keep the reaction text (e.g. "Liked a message") and set messageType to "REACTION".
+1. **CRITICAL — Extract ALL conversations**: You MUST extract every distinct conversation in the input. Do NOT stop after the first few. If the input contains 20+ conversations, output all 20+. Each unique participant/lead is a separate conversation.
+2. **CRITICAL — Message ordering**: Output messages in FORWARD chronological order (oldest message first, orderIndex 0). Many exports list messages newest-first — reverse them.
+3. **Sender detection**: Messages from the account owner (marked "(You)" or similar) → "CLOSER". All other participants → "LEAD".
+4. **Timestamp parsing**: Convert to ISO 8601 format (e.g. "2026-01-14T10:09:00.000Z"). If a timestamp is ambiguous or missing, use null.
+5. **Corrupted characters**: The PDF may render emoji as ■ or □. Keep these characters as-is. Do not guess original emoji.
+6. **Multi-message handling**: Do NOT merge consecutive messages from the same sender. Keep each message as a separate entry.
+7. **orderIndex**: Sequential integer starting at 0 for each conversation independently. 0 = oldest/first message.
+8. **Skip tiny conversations**: Omit conversations with fewer than 2 total messages.
+9. **Duplicate messages**: If the same message text appears twice consecutively from the same sender (common with edited/resent messages), keep only one.
+10. **Voice note text**: For voice notes, set text to null and messageType to "VOICE_NOTE".
+11. **Reaction text**: For reactions, keep the reaction text (e.g. "Liked a message") and set messageType to "REACTION".
+12. **Partial conversations**: If the input starts or ends mid-conversation (text was split), still extract whatever messages you can. Use the available context to determine the leadIdentifier.
 
 Return ONLY valid JSON. No markdown code blocks. No explanation before or after.`;
