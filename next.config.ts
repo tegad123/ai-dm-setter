@@ -23,7 +23,7 @@ const baseConfig: NextConfig = {
     ]
   },
   transpilePackages: ['geist'],
-  serverExternalPackages: ['pdf-parse']
+  serverExternalPackages: ['pdf-parse', 'mammoth']
 };
 
 let configWithPlugins = baseConfig;

@@ -184,6 +184,7 @@ model Account {
   trainingExamples   TrainingExample[]
   trainingUploads    TrainingUpload[]
   trainingConversations TrainingConversation[]
+  personaBreakdowns  PersonaBreakdown[]
   integrations       IntegrationCredential[]
   tags               Tag[]
   teamNotes          TeamNote[]
@@ -231,8 +232,73 @@ model AIPersona {
   trainingExamples      TrainingExample[]
   trainingUploads       TrainingUpload[]
   trainingConversations TrainingConversation[]
+  breakdowns            PersonaBreakdown[]
 
   @@index([accountId, isActive])
+}
+
+enum BreakdownStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model PersonaBreakdown {
+  id                       String          @id @default(cuid())
+  accountId                String
+  personaId                String
+  sourceScriptHash         String
+  sourceFileName           String?
+  sourceText               String          @db.Text
+  methodologySummary       String          @db.Text
+  methodologySummaryEdited Boolean         @default(false)
+  gaps                     Json?
+  status                   BreakdownStatus @default(DRAFT)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  account     Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona     AIPersona            @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  sections    BreakdownSection[]
+  ambiguities BreakdownAmbiguity[]
+
+  @@index([accountId])
+  @@index([personaId])
+}
+
+model BreakdownSection {
+  id             String   @id @default(cuid())
+  breakdownId    String
+  sectionType    String
+  title          String
+  content        String   @db.Text
+  sourceExcerpts Json
+  confidence     String   @default("medium")
+  userEdited     Boolean  @default(false)
+  userApproved   Boolean  @default(false)
+  orderIndex     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  breakdown PersonaBreakdown @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
+
+  @@index([breakdownId, orderIndex])
+}
+
+model BreakdownAmbiguity {
+  id               String   @id @default(cuid())
+  breakdownId      String
+  question         String   @db.Text
+  suggestedDefault String   @db.Text
+  userAnswer       String?  @db.Text
+  resolved         Boolean  @default(false)
+  orderIndex       Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  breakdown PersonaBreakdown @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
+
+  @@index([breakdownId])
 }
 
 model TrainingExample {
