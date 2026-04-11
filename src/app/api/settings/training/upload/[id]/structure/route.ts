@@ -34,10 +34,14 @@ export async function POST(
       return NextResponse.json({ error: 'Upload not found' }, { status: 404 });
     }
 
-    if (upload.status !== 'AWAITING_CONFIRMATION') {
+    if (
+      upload.status !== 'AWAITING_CONFIRMATION' &&
+      upload.status !== 'FAILED' &&
+      upload.status !== 'STRUCTURING'
+    ) {
       return NextResponse.json(
         {
-          error: `Upload is in status "${upload.status}" — expected "AWAITING_CONFIRMATION"`
+          error: `Upload is in status "${upload.status}" — expected "AWAITING_CONFIRMATION" or "FAILED"`
         },
         { status: 400 }
       );
@@ -160,8 +164,9 @@ export async function POST(
           errorMessage: `LLM structuring failed: ${llmErr?.message || 'Unknown error'}`
         }
       });
+      const llmErrMsg = llmErr?.message || 'Unknown error';
       return NextResponse.json(
-        { error: 'Failed to structure conversations. Please try again.' },
+        { error: `Structuring failed: ${llmErrMsg}` },
         { status: 500 }
       );
     }
@@ -307,8 +312,9 @@ export async function POST(
       'POST /api/settings/training/upload/[id]/structure error:',
       error
     );
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to structure conversations' },
+      { error: `Failed to structure conversations: ${errMsg}` },
       { status: 500 }
     );
   }

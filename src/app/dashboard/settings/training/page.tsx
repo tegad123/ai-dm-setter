@@ -769,7 +769,8 @@ export default function TrainingDataPage() {
                     >
                       {u.status.replace(/_/g, ' ').toLowerCase()}
                     </Badge>
-                    {u.status === 'AWAITING_CONFIRMATION' && (
+                    {(u.status === 'AWAITING_CONFIRMATION' ||
+                      u.status === 'FAILED') && (
                       <Button
                         size='sm'
                         disabled={structuringUploadId === u.id}
@@ -780,6 +781,8 @@ export default function TrainingDataPage() {
                             <Loader2 className='mr-1 h-3 w-3 animate-spin' />
                             Structuring...
                           </>
+                        ) : u.status === 'FAILED' ? (
+                          'Retry'
                         ) : (
                           'Structure'
                         )}
