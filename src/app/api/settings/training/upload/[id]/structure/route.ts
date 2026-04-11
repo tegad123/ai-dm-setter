@@ -87,41 +87,60 @@ export async function POST(
     const estimatedTokens = Math.ceil(rawText.length / 4);
 
     try {
-      if (estimatedTokens < 120_000 && upload.pdfBase64) {
-        // ── Strategy A: Send PDF via native document support ──
-        console.log(
-          `[training-structure] Using native PDF approach (${estimatedTokens} est. tokens)`
-        );
+      let useNativePdf = estimatedTokens < 120_000 && Boolean(upload.pdfBase64);
 
-        const pdfBase64 = upload.pdfBase64;
+      // ── Strategy A: Try native PDF document support ────────
+      if (useNativePdf) {
+        try {
+          console.log(
+            `[training-structure] Using native PDF approach (${estimatedTokens} est. tokens)`
+          );
 
-        const message = await client.messages.create({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 16384,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'document',
-                  source: {
-                    type: 'base64',
-                    media_type: 'application/pdf',
-                    data: pdfBase64
-                  }
-                },
-                { type: 'text', text: STRUCTURING_PROMPT }
-              ]
-            }
-          ]
-        });
+          const message = await client.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 16384,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'document',
+                    source: {
+                      type: 'base64',
+                      media_type: 'application/pdf',
+                      data: upload.pdfBase64!
+                    }
+                  },
+                  { type: 'text', text: STRUCTURING_PROMPT }
+                ]
+              }
+            ]
+          });
 
-        const responseText =
-          message.content[0].type === 'text' ? message.content[0].text : '';
-        const parsed = parseJsonResponse(responseText);
-        allRawConversations = parsed.conversations || [];
-      } else {
-        // ── Strategy B: Chunked text approach ────────────────
+          const responseText =
+            message.content[0].type === 'text' ? message.content[0].text : '';
+          const parsed = parseJsonResponse(responseText);
+          allRawConversations = parsed.conversations || [];
+        } catch (pdfErr: any) {
+          const msg = pdfErr?.message || '';
+          // Fall back to chunked text if PDF exceeds page limit or other PDF-specific error
+          if (
+            msg.includes('PDF pages') ||
+            msg.includes('pdf') ||
+            msg.includes('document')
+          ) {
+            console.log(
+              `[training-structure] Native PDF failed (${msg}), falling back to chunked text`
+            );
+            useNativePdf = false;
+          } else {
+            throw pdfErr; // Re-throw non-PDF errors
+          }
+        }
+      }
+
+      // ── Strategy B: Chunked text approach ──────────────────
+      if (!useNativePdf) {
         console.log(
           `[training-structure] Using chunked text approach (${estimatedTokens} est. tokens)`
         );
