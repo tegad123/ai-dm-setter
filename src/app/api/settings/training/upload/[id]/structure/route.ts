@@ -148,7 +148,7 @@ export async function POST(
 
             const message = await client.messages.create({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 16384,
+              max_tokens: 32000,
               messages: [
                 {
                   role: 'user',
@@ -208,7 +208,8 @@ export async function POST(
           );
 
           const conversationTexts = detectConversationBoundaries(rawText);
-          const batches = chunkForLLM(conversationTexts);
+          // Use smaller batches (25K tokens) so output fits within max_tokens
+          const batches = chunkForLLM(conversationTexts, 25_000);
           const totalBatches = batches.length;
 
           console.log(
@@ -239,7 +240,7 @@ export async function POST(
 
             const message = await client.messages.create({
               model: 'claude-sonnet-4-20250514',
-              max_tokens: 16384,
+              max_tokens: 32000,
               messages: [
                 {
                   role: 'user',
@@ -247,6 +248,12 @@ export async function POST(
                 }
               ]
             });
+
+            if (message.stop_reason === 'max_tokens') {
+              console.warn(
+                `[training-structure] Batch ${b + 1} output truncated — hit max_tokens`
+              );
+            }
 
             const responseText =
               message.content[0].type === 'text' ? message.content[0].text : '';
@@ -495,9 +502,73 @@ function parseJsonResponse(text: string): {
     }
   }
 
+  // ── Truncated JSON recovery ──────────────────────────────
+  // If the LLM hit max_tokens, the JSON is cut off mid-stream.
+  // Try to salvage complete conversation objects by finding all
+  // {...leadIdentifier...messages:[...]...} blocks.
+  const salvaged = salvageTruncatedConversations(text);
+  if (salvaged.length > 0) {
+    console.log(
+      `[training-structure] Salvaged ${salvaged.length} conversations from truncated JSON`
+    );
+    return { conversations: salvaged };
+  }
+
   console.error(
     '[training-structure] Failed to parse LLM response:',
     text.slice(0, 500)
   );
   return { conversations: [] };
+}
+
+/**
+ * Attempts to extract complete conversation objects from truncated JSON.
+ * Finds each top-level object boundary within a "conversations" array.
+ */
+function salvageTruncatedConversations(text: string): Array<any> {
+  const results: Array<any> = [];
+
+  // Find the conversations array start
+  const arrStart = text.indexOf('"conversations"');
+  if (arrStart === -1) return results;
+
+  const bracketStart = text.indexOf('[', arrStart);
+  if (bracketStart === -1) return results;
+
+  // Walk through the text finding complete {...} objects
+  let depth = 0;
+  let objStart = -1;
+
+  for (let i = bracketStart + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{' && depth === 0) {
+      objStart = i;
+      depth = 1;
+    } else if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && objStart !== -1) {
+        const objStr = text.slice(objStart, i + 1);
+        try {
+          const obj = JSON.parse(objStr);
+          if (obj.leadIdentifier && Array.isArray(obj.messages)) {
+            results.push(obj);
+          }
+        } catch {
+          // Incomplete object, skip
+        }
+        objStart = -1;
+      }
+    } else if (ch === '"') {
+      // Skip string contents to avoid counting braces inside strings
+      i++;
+      while (i < text.length && text[i] !== '"') {
+        if (text[i] === '\\') i++; // skip escaped char
+        i++;
+      }
+    }
+  }
+
+  return results;
 }
