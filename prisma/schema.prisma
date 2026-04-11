@@ -261,7 +261,8 @@ model TrainingUpload {
   personaId         String
   fileName          String
   fileHash          String       // SHA-256 of PDF bytes for dedup
-  blobUrl           String       // Vercel Blob URL for original PDF
+  blobUrl           String       // placeholder identifier
+  pdfBase64         String?      @db.Text // original PDF as base64 for Claude native doc
   rawText           String?      @db.Text
   status            UploadStatus @default(PENDING)
   tokenEstimate     Int?

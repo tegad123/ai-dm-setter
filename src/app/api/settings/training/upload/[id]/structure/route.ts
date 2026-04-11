@@ -83,16 +83,13 @@ export async function POST(
     const estimatedTokens = Math.ceil(rawText.length / 4);
 
     try {
-      if (estimatedTokens < 120_000 && upload.blobUrl) {
+      if (estimatedTokens < 120_000 && upload.pdfBase64) {
         // ── Strategy A: Send PDF via native document support ──
         console.log(
           `[training-structure] Using native PDF approach (${estimatedTokens} est. tokens)`
         );
 
-        // Fetch the PDF from Blob storage to get base64
-        const pdfResponse = await fetch(upload.blobUrl);
-        const pdfBuffer = Buffer.from(await pdfResponse.arrayBuffer());
-        const pdfBase64 = pdfBuffer.toString('base64');
+        const pdfBase64 = upload.pdfBase64;
 
         const message = await client.messages.create({
           model: 'claude-sonnet-4-20250514',

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import prisma from '@/lib/prisma';
-import { put } from '@vercel/blob';
+// Vercel Blob removed — PDF base64 stored in DB directly
 import Anthropic from '@anthropic-ai/sdk';
 import { computeFileHash, estimateTokens } from '@/lib/training-parser';
 import { PREFLIGHT_PROMPT } from '@/lib/training-prompts';
@@ -76,22 +76,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Store PDF in Vercel Blob ─────────────────────────────
+    // ── Create upload record (store PDF base64 in DB) ───────
     const buffer = Buffer.from(pdfBase64, 'base64');
-    const blob = await put(
-      `training-uploads/${auth.accountId}/${Date.now()}.pdf`,
-      buffer,
-      { access: 'public', contentType: 'application/pdf' }
-    );
 
-    // ── Create upload record ────────────────────────────────
     const upload = await prisma.trainingUpload.create({
       data: {
         accountId: auth.accountId,
         personaId: persona.id,
         fileName,
         fileHash,
-        blobUrl: blob.url,
+        blobUrl: `data:pdf:${fileName}`, // placeholder — PDF stored in pdfBase64 field
+        pdfBase64,
         status: 'EXTRACTING'
       }
     });
