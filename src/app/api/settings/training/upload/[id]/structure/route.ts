@@ -238,20 +238,33 @@ export async function POST(
     const errMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('[training-structure] Error:', errMsg);
 
-    // Try to mark as failed
+    // Don't mark as FAILED for transient errors — keep STRUCTURING status
+    // so client retries can resume from the last saved batch.
+    // Only mark FAILED for clearly permanent errors (missing API key, etc.)
     const { id } = await params;
-    try {
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: {
-          status: 'FAILED',
-          errorMessage: `Structuring failed: ${errMsg}`
-        }
-      });
-    } catch {}
+    const isPermanent =
+      errMsg.includes('API key') ||
+      errMsg.includes('authentication') ||
+      errMsg.includes('not configured');
+
+    if (isPermanent) {
+      try {
+        await prisma.trainingUpload.update({
+          where: { id },
+          data: {
+            status: 'FAILED',
+            errorMessage: `Structuring failed: ${errMsg}`
+          }
+        });
+      } catch {}
+    }
 
     return NextResponse.json(
-      { type: 'error', message: `Structuring failed: ${errMsg}` },
+      {
+        type: 'error',
+        error: `Structuring failed: ${errMsg}`,
+        message: `Structuring failed: ${errMsg}`
+      },
       { status: 500 }
     );
   }
@@ -300,93 +313,6 @@ async function finalizeFromDb(uploadId: string, accountId: string) {
     },
     conversations,
     duplicatesSkipped: 0
-  });
-}
-
-async function finalizeConversations(
-  uploadId: string,
-  accountId: string,
-  personaId: string,
-  rawConversations: Array<any>
-) {
-  const hydrated = hydrateConversations(rawConversations);
-  const validation = validateConversations(hydrated);
-  const valid = hydrated.filter(
-    (_, i) => !validation.errors.some((e) => e.conversationIndex === i)
-  );
-
-  const hashes = valid.map((c) => c.contentHash);
-  const existing = await prisma.trainingConversation.findMany({
-    where: { accountId, contentHash: { in: hashes } },
-    select: { contentHash: true }
-  });
-  const existingSet = new Set(existing.map((c) => c.contentHash));
-  const newConvos = valid.filter((c) => !existingSet.has(c.contentHash));
-
-  const created = [];
-  for (const conv of newConvos) {
-    const convo = await prisma.trainingConversation.create({
-      data: {
-        uploadId,
-        accountId,
-        personaId,
-        leadIdentifier: conv.leadIdentifier,
-        contentHash: conv.contentHash,
-        messageCount: conv.messageCount,
-        closerMessageCount: conv.closerMessageCount,
-        leadMessageCount: conv.leadMessageCount,
-        voiceNoteCount: conv.voiceNoteCount,
-        startedAt: conv.startedAt,
-        endedAt: conv.endedAt,
-        messages: {
-          createMany: {
-            data: conv.messages.map((m: any) => ({
-              sender: m.sender,
-              text: m.text,
-              timestamp: m.timestamp,
-              messageType: m.messageType,
-              orderIndex: m.orderIndex
-            }))
-          }
-        }
-      },
-      select: {
-        id: true,
-        leadIdentifier: true,
-        outcomeLabel: true,
-        messageCount: true,
-        closerMessageCount: true,
-        leadMessageCount: true,
-        voiceNoteCount: true,
-        startedAt: true,
-        endedAt: true
-      }
-    });
-    created.push(convo);
-  }
-
-  await prisma.trainingUpload.update({
-    where: { id: uploadId },
-    data: {
-      status: 'COMPLETE',
-      conversationCount: created.length,
-      errorMessage: null
-    }
-  });
-
-  console.log(
-    `[training-structure] Complete (native PDF): ${created.length} conversations`
-  );
-
-  return NextResponse.json({
-    type: 'complete',
-    upload: {
-      id: uploadId,
-      status: 'COMPLETE',
-      conversationCount: created.length
-    },
-    conversations: created,
-    duplicatesSkipped: valid.length - newConvos.length
   });
 }
 

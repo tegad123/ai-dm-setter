@@ -17,7 +17,8 @@ export async function apiFetch<T = any>(
     ...(options?.headers || {})
   };
 
-  const finalUrl = url.startsWith('/api/') || url.startsWith('http') ? url : `/api${url}`;
+  const finalUrl =
+    url.startsWith('/api/') || url.startsWith('http') ? url : `/api${url}`;
 
   const res = await fetch(finalUrl, {
     credentials: 'include',
@@ -27,7 +28,7 @@ export async function apiFetch<T = any>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `API error: ${res.status}`);
+    throw new Error(body.error || body.message || `API error: ${res.status}`);
   }
 
   return res.json();
@@ -329,9 +330,7 @@ export async function createTag(
   color?: string
 ): Promise<Tag> {
   const payload =
-    typeof nameOrObj === 'string'
-      ? { name: nameOrObj, color }
-      : nameOrObj;
+    typeof nameOrObj === 'string' ? { name: nameOrObj, color } : nameOrObj;
   return apiFetch('/api/tags', {
     method: 'POST',
     body: JSON.stringify(payload)
@@ -342,9 +341,7 @@ export async function deleteTag(id: string): Promise<void> {
   await apiFetch(`/api/tags/${id}`, { method: 'DELETE' });
 }
 
-export async function getTeamNotes(
-  leadId: string
-): Promise<TeamNote[]> {
+export async function getTeamNotes(leadId: string): Promise<TeamNote[]> {
   const data = await apiFetch(`/api/leads/${leadId}/notes`);
   return data.notes || data;
 }
@@ -368,9 +365,7 @@ export async function deleteTeamNote(
   });
 }
 
-export async function getContentAttributions(): Promise<
-  ContentAttribution[]
-> {
+export async function getContentAttributions(): Promise<ContentAttribution[]> {
   const data = await apiFetch('/api/content');
   return data.attributions || data;
 }

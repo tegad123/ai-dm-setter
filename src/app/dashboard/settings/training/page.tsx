@@ -174,26 +174,62 @@ export default function TrainingDataPage() {
     conversations: UploadConversation[];
     duplicatesSkipped: number;
   }> {
+    let consecutiveErrors = 0;
+    const MAX_RETRIES = 3;
+    const BATCH_TIMEOUT_MS = 270_000; // 4.5 min — under Vercel 5-min limit
+
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const result = await apiFetch<any>(
-        `/settings/training/upload/${uploadId}/structure`,
-        { method: 'POST' }
-      );
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(
+          () => controller.abort(),
+          BATCH_TIMEOUT_MS
+        );
 
-      if (result.type === 'complete') {
-        setStructureProgress(100);
-        setStructureMessage('Done!');
-        return result;
+        const result = await apiFetch<any>(
+          `/settings/training/upload/${uploadId}/structure`,
+          { method: 'POST', signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
+
+        // Reset error counter on any successful response
+        consecutiveErrors = 0;
+
+        if (result.type === 'complete') {
+          setStructureProgress(100);
+          setStructureMessage('Done!');
+          return result;
+        }
+
+        if (result.type === 'error') {
+          throw new Error(result.message || result.error || 'Unknown error');
+        }
+
+        // type === 'processing' — update progress and loop for next batch
+        setStructureProgress(result.percent ?? 0);
+        setStructureMessage(result.message ?? 'Processing...');
+
+        // Brief pause between batch requests
+        await new Promise((r) => setTimeout(r, 500));
+      } catch (err: any) {
+        consecutiveErrors++;
+
+        if (consecutiveErrors >= MAX_RETRIES) {
+          throw new Error(
+            err?.name === 'AbortError'
+              ? 'Request timed out after multiple retries. Please try again in a few minutes.'
+              : err?.message || 'Structuring failed after multiple retries'
+          );
+        }
+
+        // Exponential backoff: 3s, 6s
+        const delaySec = Math.pow(2, consecutiveErrors) * 1.5;
+        setStructureMessage(
+          `Connection interrupted — retrying in ${Math.round(delaySec)}s (attempt ${consecutiveErrors + 1}/${MAX_RETRIES})...`
+        );
+        await new Promise((r) => setTimeout(r, delaySec * 1000));
       }
-
-      if (result.type === 'error') {
-        throw new Error(result.message);
-      }
-
-      // type === 'processing' — update progress and loop for next batch
-      setStructureProgress(result.percent ?? 0);
-      setStructureMessage(result.message ?? 'Processing...');
     }
   }
 
@@ -841,7 +877,8 @@ export default function TrainingDataPage() {
                       {u.status.replace(/_/g, ' ').toLowerCase()}
                     </Badge>
                     {(u.status === 'AWAITING_CONFIRMATION' ||
-                      u.status === 'FAILED') && (
+                      u.status === 'FAILED' ||
+                      u.status === 'STRUCTURING') && (
                       <Button
                         size='sm'
                         disabled={structuringUploadId === u.id}
@@ -852,8 +889,9 @@ export default function TrainingDataPage() {
                             <Loader2 className='mr-1 h-3 w-3 animate-spin' />
                             Structuring...
                           </>
-                        ) : u.status === 'FAILED' ? (
-                          'Retry'
+                        ) : u.status === 'FAILED' ||
+                          u.status === 'STRUCTURING' ? (
+                          'Resume'
                         ) : (
                           'Structure'
                         )}
