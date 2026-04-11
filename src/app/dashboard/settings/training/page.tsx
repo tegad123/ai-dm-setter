@@ -166,7 +166,9 @@ export default function TrainingDataPage() {
   }, [fetchPersona, fetchUploads]);
 
   // --------------------------------------------------
-  // Batch-by-batch structure helper (one LLM call per request)
+  // Structure helper — two calls:
+  //   1. POST → prepare batches (instant)
+  //   2. POST → process all with Haiku (30-90s)
   // --------------------------------------------------
 
   async function runStructure(uploadId: string): Promise<{
@@ -174,62 +176,56 @@ export default function TrainingDataPage() {
     conversations: UploadConversation[];
     duplicatesSkipped: number;
   }> {
-    let consecutiveErrors = 0;
-    const MAX_RETRIES = 3;
-    const BATCH_TIMEOUT_MS = 270_000; // 4.5 min — under Vercel 5-min limit
+    // Call 1: Prepare batches (returns instantly)
+    const prep = await apiFetch<any>(
+      `/settings/training/upload/${uploadId}/structure`,
+      { method: 'POST' }
+    );
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
-          BATCH_TIMEOUT_MS
-        );
+    if (prep.type === 'error') {
+      throw new Error(prep.message || prep.error || 'Preparation failed');
+    }
 
-        const result = await apiFetch<any>(
-          `/settings/training/upload/${uploadId}/structure`,
-          { method: 'POST', signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
+    if (prep.type === 'complete') {
+      setStructureProgress(100);
+      setStructureMessage('Done!');
+      return prep;
+    }
 
-        // Reset error counter on any successful response
-        consecutiveErrors = 0;
+    // Update UI with preparation info
+    setStructureProgress(prep.percent ?? 5);
+    setStructureMessage(prep.message ?? 'Preparing batches...');
 
-        if (result.type === 'complete') {
-          setStructureProgress(100);
-          setStructureMessage('Done!');
-          return result;
-        }
+    // Call 2: Process everything (30-90s with Haiku)
+    setStructureMessage(
+      'Processing all conversations with AI — this takes about 60 seconds...'
+    );
+    setStructureProgress(15);
 
-        if (result.type === 'error') {
-          throw new Error(result.message || result.error || 'Unknown error');
-        }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 270_000); // 4.5 min safety
 
-        // type === 'processing' — update progress and loop for next batch
-        setStructureProgress(result.percent ?? 0);
-        setStructureMessage(result.message ?? 'Processing...');
+    try {
+      const result = await apiFetch<any>(
+        `/settings/training/upload/${uploadId}/structure`,
+        { method: 'POST', signal: controller.signal }
+      );
+      clearTimeout(timeoutId);
 
-        // Brief pause between batch requests
-        await new Promise((r) => setTimeout(r, 500));
-      } catch (err: any) {
-        consecutiveErrors++;
-
-        if (consecutiveErrors >= MAX_RETRIES) {
-          throw new Error(
-            err?.name === 'AbortError'
-              ? 'Request timed out after multiple retries. Please try again in a few minutes.'
-              : err?.message || 'Structuring failed after multiple retries'
-          );
-        }
-
-        // Exponential backoff: 3s, 6s
-        const delaySec = Math.pow(2, consecutiveErrors) * 1.5;
-        setStructureMessage(
-          `Connection interrupted — retrying in ${Math.round(delaySec)}s (attempt ${consecutiveErrors + 1}/${MAX_RETRIES})...`
-        );
-        await new Promise((r) => setTimeout(r, delaySec * 1000));
+      if (result.type === 'error') {
+        throw new Error(result.message || result.error || 'Structuring failed');
       }
+
+      setStructureProgress(100);
+      setStructureMessage('Done!');
+      return result;
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      throw new Error(
+        err?.name === 'AbortError'
+          ? 'Request timed out. Please try again.'
+          : err?.message || 'Structuring failed'
+      );
     }
   }
 

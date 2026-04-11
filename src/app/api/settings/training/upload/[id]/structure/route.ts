@@ -13,30 +13,9 @@ import { STRUCTURING_PROMPT } from '@/lib/training-prompts';
 export const maxDuration = 300;
 
 // ---------------------------------------------------------------------------
-// Structuring metadata — stored in errorMessage field during STRUCTURING
-// ---------------------------------------------------------------------------
-
-interface StructuringMeta {
-  currentBatch: number;
-  totalBatches: number;
-}
-
-function parseMeta(raw: string | null): StructuringMeta | null {
-  if (!raw || !raw.startsWith('{')) return null;
-  try {
-    const m = JSON.parse(raw);
-    if (
-      typeof m.currentBatch === 'number' &&
-      typeof m.totalBatches === 'number'
-    ) {
-      return m;
-    }
-  } catch {}
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// POST — Process ONE batch per call. Client loops until complete.
+// POST — Two-call architecture:
+//   Call 1: Prepare batches → return immediately
+//   Call 2: Process ALL batches with Haiku (parallel) → return complete
 // ---------------------------------------------------------------------------
 
 export async function POST(
@@ -81,135 +60,143 @@ export async function POST(
       );
     }
 
-    const client = new Anthropic({ apiKey });
     const rawText = upload.rawText || '';
-    const estimatedTokens = Math.ceil(rawText.length / 4);
-
-    // ── Existing meta from a previous call? ────────────────
-    let meta = parseMeta(upload.errorMessage);
-
-    // ── FIRST CALL: Prepare batches and return immediately ──
-    if (upload.status !== 'STRUCTURING' || !meta) {
-      // Clean up any conversations from a previous failed attempt
-      await prisma.trainingConversation.deleteMany({ where: { uploadId: id } });
-
-      // Compute batches — 8K tokens per batch for reliable <2min LLM calls
-      const conversationTexts = detectConversationBoundaries(rawText);
-      const batches = chunkForLLM(conversationTexts, 8_000);
-
-      meta = { currentBatch: 0, totalBatches: batches.length };
-      await prisma.trainingUpload.update({
-        where: { id },
-        data: { status: 'STRUCTURING', errorMessage: JSON.stringify(meta) }
-      });
-
-      console.log(
-        `[training-structure] Initialized: ${batches.length} batch(es) from ${conversationTexts.length} chunk(s)`
-      );
-
-      // Return immediately — don't process any batch yet
-      return NextResponse.json({
-        type: 'processing',
-        percent: 3,
-        message: `Prepared ${batches.length} batches — starting analysis...`,
-        conversationsFound: 0
-      });
-    }
-
-    // ── PROCESS CURRENT BATCH ──────────────────────────────
     const conversationTexts = detectConversationBoundaries(rawText);
     const batches = chunkForLLM(conversationTexts, 8_000);
 
-    // Sync meta if batch size changed between deployments
-    if (meta.totalBatches !== batches.length) {
+    // ── FIRST CALL: Prepare and return immediately ──────────
+    if (upload.status !== 'STRUCTURING') {
+      await prisma.trainingConversation.deleteMany({ where: { uploadId: id } });
+
+      await prisma.trainingUpload.update({
+        where: { id },
+        data: { status: 'STRUCTURING', errorMessage: null }
+      });
+
       console.log(
-        `[training-structure] Batch count changed: ${meta.totalBatches} → ${batches.length}`
+        `[training-structure] Prepared: ${batches.length} batch(es) from ${conversationTexts.length} chunk(s)`
       );
-      meta.totalBatches = batches.length;
+
+      return NextResponse.json({
+        type: 'processing',
+        percent: 5,
+        message: `Analyzing ${conversationTexts.length} conversations in ${batches.length} batches...`
+      });
     }
 
-    if (meta.currentBatch >= batches.length) {
-      // All batches already done — finalize
-      return await finalizeFromDb(id, auth.accountId);
-    }
+    // ── SECOND CALL: Process ALL batches with Haiku ────────
+    const client = new Anthropic({ apiKey });
+    const CONCURRENCY = 3;
+    const allRawConvos: Array<any> = [];
+    let batchesDone = 0;
+    let batchesFailed = 0;
 
-    const batchText = batches[meta.currentBatch].join('\n\n---\n\n');
-    const estTokens = Math.ceil(batchText.length / 4);
     console.log(
-      `[training-structure] Processing batch ${meta.currentBatch + 1}/${meta.totalBatches} (${estTokens} est. tokens)`
+      `[training-structure] Processing ${batches.length} batches with Haiku (concurrency=${CONCURRENCY})`
     );
+    const totalStart = Date.now();
 
-    // 4-minute timeout on LLM call — prevents Vercel silent kill at 5min
-    const llmAbort = new AbortController();
-    const llmTimer = setTimeout(() => {
-      console.warn(
-        `[training-structure] Batch ${meta.currentBatch + 1} LLM call timed out at 240s`
-      );
-      llmAbort.abort();
-    }, 240_000);
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      const chunk = batches.slice(i, i + CONCURRENCY);
 
-    let message;
-    try {
-      const t0 = Date.now();
-      message = await client.messages
-        .stream(
-          {
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 16_000,
+      const results = await Promise.allSettled(
+        chunk.map(async (batch, j) => {
+          const batchNum = i + j + 1;
+          const batchText = batch.join('\n\n---\n\n');
+          const estTokens = Math.ceil(batchText.length / 4);
+          const t0 = Date.now();
+
+          console.log(
+            `[training-structure] Batch ${batchNum}/${batches.length} starting (${estTokens} tokens)`
+          );
+
+          const msg = await client.messages.create({
+            model: 'claude-3-5-haiku-20241022',
+            max_tokens: 8192,
             messages: [
               {
                 role: 'user',
                 content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
               }
             ]
-          },
-          { signal: llmAbort.signal }
-        )
-        .finalMessage();
-      clearTimeout(llmTimer);
-      console.log(
-        `[training-structure] Batch ${meta.currentBatch + 1} LLM done in ${((Date.now() - t0) / 1000).toFixed(1)}s — stop_reason: ${message.stop_reason}`
+          });
+
+          const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+          console.log(
+            `[training-structure] Batch ${batchNum}/${batches.length} done in ${elapsed}s (stop: ${msg.stop_reason})`
+          );
+
+          const text =
+            msg.content[0].type === 'text' ? msg.content[0].text : '';
+          return parseJsonResponse(text).conversations || [];
+        })
       );
-    } catch (llmErr) {
-      clearTimeout(llmTimer);
-      throw llmErr;
+
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          allRawConvos.push(...r.value);
+          batchesDone++;
+        } else {
+          batchesFailed++;
+          console.error(
+            `[training-structure] Batch failed:`,
+            r.reason?.message || r.reason
+          );
+        }
+      }
     }
 
-    if (message.stop_reason === 'max_tokens') {
-      console.warn(
-        `[training-structure] Batch ${meta.currentBatch + 1} output truncated`
-      );
-    }
-
-    const responseText =
-      message.content[0].type === 'text' ? message.content[0].text : '';
-    const parsed = parseJsonResponse(responseText);
-    const rawConvos = parsed.conversations || [];
-
-    // Hydrate, validate, dedup, save THIS batch
+    const totalElapsed = ((Date.now() - totalStart) / 1000).toFixed(1);
     console.log(
-      `[training-structure] Batch ${meta.currentBatch + 1} parsed ${rawConvos.length} conversations`
+      `[training-structure] All LLM calls done in ${totalElapsed}s — ${allRawConvos.length} raw conversations (${batchesDone} OK, ${batchesFailed} failed)`
     );
-    const saveStart = Date.now();
 
-    if (rawConvos.length > 0) {
-      const hydrated = hydrateConversations(rawConvos);
-      const validation = validateConversations(hydrated);
-      const valid = hydrated.filter(
-        (_, i) => !validation.errors.some((e) => e.conversationIndex === i)
+    if (allRawConvos.length === 0) {
+      await prisma.trainingUpload.update({
+        where: { id },
+        data: {
+          status: 'FAILED',
+          errorMessage: 'No conversations could be extracted'
+        }
+      });
+      return NextResponse.json(
+        {
+          type: 'error',
+          error: 'No conversations could be extracted from this PDF',
+          message: 'No conversations could be extracted from this PDF'
+        },
+        { status: 500 }
       );
+    }
 
-      if (valid.length > 0) {
-        const hashes = valid.map((c) => c.contentHash);
-        const existing = await prisma.trainingConversation.findMany({
-          where: { accountId: auth.accountId, contentHash: { in: hashes } },
-          select: { contentHash: true }
-        });
-        const existingSet = new Set(existing.map((c) => c.contentHash));
-        const newConvos = valid.filter((c) => !existingSet.has(c.contentHash));
+    // ── Hydrate, validate, dedup ───────────────────────────
+    const hydrated = hydrateConversations(allRawConvos);
+    const validation = validateConversations(hydrated);
+    const valid = hydrated.filter(
+      (_, i) => !validation.errors.some((e) => e.conversationIndex === i)
+    );
 
+    let savedCount = 0;
+    let dupsSkipped = 0;
+
+    if (valid.length > 0) {
+      const hashes = valid.map((c) => c.contentHash);
+      const existing = await prisma.trainingConversation.findMany({
+        where: { accountId: auth.accountId, contentHash: { in: hashes } },
+        select: { contentHash: true }
+      });
+      const existingSet = new Set(existing.map((c) => c.contentHash));
+      const newConvos = valid.filter((c) => !existingSet.has(c.contentHash));
+      dupsSkipped = valid.length - newConvos.length;
+
+      // Clean up any leftover conversations from a previous partial run
+      await prisma.trainingConversation.deleteMany({ where: { uploadId: id } });
+
+      // Save all in a transaction for speed
+      const saveStart = Date.now();
+      await prisma.$transaction(async (tx) => {
         for (const conv of newConvos) {
-          await prisma.trainingConversation.create({
+          await tx.trainingConversation.create({
             data: {
               uploadId: id,
               accountId: auth.accountId,
@@ -236,38 +223,53 @@ export async function POST(
             }
           });
         }
+      });
 
-        console.log(
-          `[training-structure] Batch ${meta.currentBatch + 1} saved ${newConvos.length} conversations in ${((Date.now() - saveStart) / 1000).toFixed(1)}s`
-        );
-      }
+      savedCount = newConvos.length;
+      console.log(
+        `[training-structure] Saved ${savedCount} conversations in ${((Date.now() - saveStart) / 1000).toFixed(1)}s`
+      );
     }
 
-    // Advance batch counter
-    meta.currentBatch++;
-    const totalSaved = await prisma.trainingConversation.count({
-      where: { uploadId: id }
+    // ── Finalize ───────────────────────────────────────────
+    const conversations = await prisma.trainingConversation.findMany({
+      where: { uploadId: id },
+      orderBy: { startedAt: 'asc' },
+      select: {
+        id: true,
+        leadIdentifier: true,
+        outcomeLabel: true,
+        messageCount: true,
+        closerMessageCount: true,
+        leadMessageCount: true,
+        voiceNoteCount: true,
+        startedAt: true,
+        endedAt: true
+      }
     });
 
-    // Check if all batches are done
-    if (meta.currentBatch >= meta.totalBatches) {
-      return await finalizeFromDb(id, auth.accountId);
-    }
-
-    // More batches to go — save progress
     await prisma.trainingUpload.update({
       where: { id },
-      data: { errorMessage: JSON.stringify(meta) }
+      data: {
+        status: 'COMPLETE',
+        conversationCount: conversations.length,
+        errorMessage: null
+      }
     });
 
-    const percent =
-      5 + Math.round((meta.currentBatch / meta.totalBatches) * 90);
+    console.log(
+      `[training-structure] Complete: ${conversations.length} conversations (${dupsSkipped} duplicates skipped)`
+    );
 
     return NextResponse.json({
-      type: 'processing',
-      percent,
-      message: `Batch ${meta.currentBatch} of ${meta.totalBatches} complete — ${totalSaved} conversations found`,
-      conversationsFound: totalSaved
+      type: 'complete',
+      upload: {
+        id,
+        status: 'COMPLETE',
+        conversationCount: conversations.length
+      },
+      conversations,
+      duplicatesSkipped: dupsSkipped
     });
   } catch (error) {
     if (error instanceof AuthError) {
@@ -279,26 +281,16 @@ export async function POST(
     const errMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('[training-structure] Error:', errMsg);
 
-    // Don't mark as FAILED for transient errors — keep STRUCTURING status
-    // so client retries can resume from the last saved batch.
-    // Only mark FAILED for clearly permanent errors (missing API key, etc.)
     const { id } = await params;
-    const isPermanent =
-      errMsg.includes('API key') ||
-      errMsg.includes('authentication') ||
-      errMsg.includes('not configured');
-
-    if (isPermanent) {
-      try {
-        await prisma.trainingUpload.update({
-          where: { id },
-          data: {
-            status: 'FAILED',
-            errorMessage: `Structuring failed: ${errMsg}`
-          }
-        });
-      } catch {}
-    }
+    try {
+      await prisma.trainingUpload.update({
+        where: { id },
+        data: {
+          status: 'FAILED',
+          errorMessage: `Structuring failed: ${errMsg}`
+        }
+      });
+    } catch {}
 
     return NextResponse.json(
       {
@@ -309,52 +301,6 @@ export async function POST(
       { status: 500 }
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Finalize — mark complete, return all conversations
-// ---------------------------------------------------------------------------
-
-async function finalizeFromDb(uploadId: string, accountId: string) {
-  const conversations = await prisma.trainingConversation.findMany({
-    where: { uploadId },
-    orderBy: { startedAt: 'asc' },
-    select: {
-      id: true,
-      leadIdentifier: true,
-      outcomeLabel: true,
-      messageCount: true,
-      closerMessageCount: true,
-      leadMessageCount: true,
-      voiceNoteCount: true,
-      startedAt: true,
-      endedAt: true
-    }
-  });
-
-  await prisma.trainingUpload.update({
-    where: { id: uploadId },
-    data: {
-      status: 'COMPLETE',
-      conversationCount: conversations.length,
-      errorMessage: null
-    }
-  });
-
-  console.log(
-    `[training-structure] Complete: ${conversations.length} conversations`
-  );
-
-  return NextResponse.json({
-    type: 'complete',
-    upload: {
-      id: uploadId,
-      status: 'COMPLETE',
-      conversationCount: conversations.length
-    },
-    conversations,
-    duplicatesSkipped: 0
-  });
 }
 
 // ---------------------------------------------------------------------------
