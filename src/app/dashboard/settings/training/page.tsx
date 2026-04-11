@@ -166,91 +166,35 @@ export default function TrainingDataPage() {
   }, [fetchPersona, fetchUploads]);
 
   // --------------------------------------------------
-  // Streaming structure helper
+  // Batch-by-batch structure helper (one LLM call per request)
   // --------------------------------------------------
 
-  async function streamStructure(uploadId: string): Promise<{
+  async function runStructure(uploadId: string): Promise<{
     upload: { id: string; status: string; conversationCount: number };
     conversations: UploadConversation[];
     duplicatesSkipped: number;
   }> {
-    const token =
-      typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    };
-
-    const response = await fetch(
-      `/api/settings/training/upload/${uploadId}/structure`,
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers
-      }
-    );
-
-    if (!response.ok && !response.body) {
-      const body = await response
-        .json()
-        .catch(() => ({ error: response.statusText }));
-      throw new Error(body.error || `API error: ${response.status}`);
-    }
-
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finalResult: any = null;
-
+    // eslint-disable-next-line no-constant-condition
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const result = await apiFetch<any>(
+        `/settings/training/upload/${uploadId}/structure`,
+        { method: 'POST' }
+      );
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'progress') {
-            setStructureProgress(event.percent);
-            setStructureMessage(event.message);
-          } else if (event.type === 'complete') {
-            setStructureProgress(100);
-            setStructureMessage('Done!');
-            finalResult = event;
-          } else if (event.type === 'error') {
-            throw new Error(event.message);
-          }
-        } catch (parseErr: any) {
-          if (parseErr.message && !parseErr.message.includes('JSON')) {
-            throw parseErr;
-          }
-          // Ignore JSON parse errors for partial lines
-        }
+      if (result.type === 'complete') {
+        setStructureProgress(100);
+        setStructureMessage('Done!');
+        return result;
       }
-    }
 
-    // Handle remaining buffer
-    if (buffer.trim()) {
-      try {
-        const event = JSON.parse(buffer);
-        if (event.type === 'complete') finalResult = event;
-        else if (event.type === 'error') throw new Error(event.message);
-      } catch (parseErr: any) {
-        if (parseErr.message && !parseErr.message.includes('JSON')) {
-          throw parseErr;
-        }
+      if (result.type === 'error') {
+        throw new Error(result.message);
       }
-    }
 
-    if (!finalResult) {
-      throw new Error('Structuring stream ended without a result');
+      // type === 'processing' — update progress and loop for next batch
+      setStructureProgress(result.percent ?? 0);
+      setStructureMessage(result.message ?? 'Processing...');
     }
-
-    return finalResult;
   }
 
   // --------------------------------------------------
@@ -327,7 +271,7 @@ export default function TrainingDataPage() {
     setStructureProgress(0);
     setStructureMessage('Starting...');
     try {
-      const result = await streamStructure(uploadResult.upload.id);
+      const result = await runStructure(uploadResult.upload.id);
 
       setStructuredConversations(result.conversations);
       setUploadStep('results');
@@ -422,7 +366,7 @@ export default function TrainingDataPage() {
     setStructureProgress(0);
     setStructureMessage('Starting...');
     try {
-      const result = await streamStructure(uploadId);
+      const result = await runStructure(uploadId);
 
       setUploadResult({
         upload: {
