@@ -22,7 +22,8 @@ const baseConfig: NextConfig = {
       }
     ]
   },
-  transpilePackages: ['geist']
+  transpilePackages: ['geist'],
+  serverExternalPackages: ['pdf-parse']
 };
 
 let configWithPlugins = baseConfig;
