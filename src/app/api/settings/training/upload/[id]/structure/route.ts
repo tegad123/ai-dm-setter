@@ -84,69 +84,55 @@ export async function POST(
       });
     }
 
-    // ── SECOND CALL: Process ALL batches with Haiku ────────
+    // ── SECOND CALL: Process ALL batches sequentially with Haiku ──
     const client = new Anthropic({ apiKey });
-    const CONCURRENCY = 3;
     const allRawConvos: Array<any> = [];
     let batchesDone = 0;
     let batchesFailed = 0;
 
     console.log(
-      `[training-structure] Processing ${batches.length} batches with Haiku (concurrency=${CONCURRENCY})`
+      `[training-structure] Processing ${batches.length} batches sequentially with claude-haiku-4-5-20251001`
     );
     const totalStart = Date.now();
 
-    for (let i = 0; i < batches.length; i += CONCURRENCY) {
-      const chunk = batches.slice(i, i + CONCURRENCY);
+    for (let i = 0; i < batches.length; i++) {
+      const batchText = batches[i].join('\n\n---\n\n');
+      const estTokens = Math.ceil(batchText.length / 4);
+      const t0 = Date.now();
 
-      const results = await Promise.allSettled(
-        chunk.map(async (batch, j) => {
-          const batchNum = i + j + 1;
-          const batchText = batch.join('\n\n---\n\n');
-          const estTokens = Math.ceil(batchText.length / 4);
-          const t0 = Date.now();
+      try {
+        console.log(
+          `[training-structure] Batch ${i + 1}/${batches.length} starting (${estTokens} tokens)`
+        );
 
-          console.log(
-            `[training-structure] Batch ${batchNum}/${batches.length} starting (${estTokens} tokens)`
-          );
+        const msg = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 4096,
+          messages: [
+            {
+              role: 'user',
+              content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
+            }
+          ]
+        });
 
-          // Must use streaming — SDK rejects non-streaming calls when
-          // max_tokens could exceed its 10-minute timeout calculation
-          const msg = await client.messages
-            .stream({
-              model: 'claude-3-5-haiku-20241022',
-              max_tokens: 8192,
-              messages: [
-                {
-                  role: 'user',
-                  content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
-                }
-              ]
-            })
-            .finalMessage();
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        console.log(
+          `[training-structure] Batch ${i + 1}/${batches.length} done in ${elapsed}s (stop: ${msg.stop_reason})`
+        );
 
-          const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-          console.log(
-            `[training-structure] Batch ${batchNum}/${batches.length} done in ${elapsed}s (stop: ${msg.stop_reason})`
-          );
-
-          const text =
-            msg.content[0].type === 'text' ? msg.content[0].text : '';
-          return parseJsonResponse(text).conversations || [];
-        })
-      );
-
-      for (const r of results) {
-        if (r.status === 'fulfilled') {
-          allRawConvos.push(...r.value);
-          batchesDone++;
-        } else {
-          batchesFailed++;
-          console.error(
-            `[training-structure] Batch failed:`,
-            r.reason?.message || r.reason
-          );
-        }
+        const text = msg.content[0].type === 'text' ? msg.content[0].text : '';
+        const convos = parseJsonResponse(text).conversations || [];
+        allRawConvos.push(...convos);
+        batchesDone++;
+      } catch (batchErr: any) {
+        batchesFailed++;
+        console.error(
+          `[training-structure] Batch ${i + 1} FAILED:`,
+          batchErr?.status || '',
+          batchErr?.message || batchErr
+        );
+        // Continue to next batch — don't let one failure kill everything
       }
     }
 
