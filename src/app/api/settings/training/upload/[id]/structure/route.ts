@@ -110,16 +110,20 @@ export async function POST(
             `[training-structure] Batch ${batchNum}/${batches.length} starting (${estTokens} tokens)`
           );
 
-          const msg = await client.messages.create({
-            model: 'claude-3-5-haiku-20241022',
-            max_tokens: 8192,
-            messages: [
-              {
-                role: 'user',
-                content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
-              }
-            ]
-          });
+          // Must use streaming — SDK rejects non-streaming calls when
+          // max_tokens could exceed its 10-minute timeout calculation
+          const msg = await client.messages
+            .stream({
+              model: 'claude-3-5-haiku-20241022',
+              max_tokens: 8192,
+              messages: [
+                {
+                  role: 'user',
+                  content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
+                }
+              ]
+            })
+            .finalMessage();
 
           const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
           console.log(
