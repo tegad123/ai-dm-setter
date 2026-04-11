@@ -245,9 +245,21 @@ export async function POST(req: NextRequest) {
         { status: error.status }
       );
     }
-    console.error('POST /api/settings/training/upload error:', error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const errStack =
+      error instanceof Error
+        ? error.stack?.split('\n').slice(0, 3).join(' | ')
+        : '';
+    console.error(
+      'POST /api/settings/training/upload error:',
+      errMsg,
+      errStack
+    );
     return NextResponse.json(
-      { error: 'Failed to process PDF upload' },
+      {
+        error: `Failed to process PDF upload: ${errMsg}`,
+        _debug: errStack
+      },
       { status: 500 }
     );
   }
