@@ -20,7 +20,8 @@ import {
   ChevronDown,
   ChevronUp,
   Upload,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -449,6 +450,31 @@ export default function TrainingDataPage() {
       toast.error(err?.message || 'Structuring failed. Please try again.');
     } finally {
       setStructuringUploadId(null);
+    }
+  }
+
+  async function handleDeleteUpload(uploadId: string) {
+    if (
+      !confirm(
+        'Delete this upload and all its conversations? This cannot be undone.'
+      )
+    ) {
+      return;
+    }
+    try {
+      await apiFetch(`/settings/training/upload/${uploadId}`, {
+        method: 'DELETE'
+      });
+      toast.success('Upload deleted');
+      // Clear current view if we're viewing the deleted upload
+      if (uploadResult?.upload?.id === uploadId) {
+        setUploadStep('idle');
+        setUploadResult(null);
+        setStructuredConversations([]);
+      }
+      await fetchUploads();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete upload');
     }
   }
 
@@ -893,6 +919,14 @@ export default function TrainingDataPage() {
                         View
                       </Button>
                     )}
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      className='text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/30'
+                      onClick={() => handleDeleteUpload(u.id)}
+                    >
+                      <Trash2 className='h-4 w-4' />
+                    </Button>
                   </div>
                 </div>
               ))}
