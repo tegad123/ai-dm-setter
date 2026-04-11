@@ -85,13 +85,46 @@ export async function POST(
     }
 
     // ── SECOND CALL: Process ALL batches sequentially with Haiku ──
-    const client = new Anthropic({ apiKey });
+    // Disable SDK retries + set short timeout so we see the REAL error
+    // instead of the SDK silently retrying until Vercel kills us at 300s
+    const client = new Anthropic({
+      apiKey,
+      maxRetries: 0,
+      timeout: 45_000 // 45s per call — Haiku should respond in <20s
+    });
+
+    // Quick API health check before processing batches
+    console.log('[training-structure] Testing API connection...');
+    const pingStart = Date.now();
+    try {
+      const ping = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'Say ok' }]
+      });
+      const pingText =
+        ping.content[0].type === 'text' ? ping.content[0].text : '?';
+      console.log(
+        `[training-structure] API OK in ${Date.now() - pingStart}ms: "${pingText}"`
+      );
+    } catch (pingErr: any) {
+      console.error(
+        `[training-structure] API FAILED in ${Date.now() - pingStart}ms:`,
+        pingErr?.status || '',
+        pingErr?.error?.type || '',
+        pingErr?.message || String(pingErr)
+      );
+      throw new Error(
+        `Anthropic API error: ${pingErr?.status || ''} ${pingErr?.message || pingErr}`
+      );
+    }
+
     const allRawConvos: Array<any> = [];
     let batchesDone = 0;
     let batchesFailed = 0;
 
     console.log(
-      `[training-structure] Processing ${batches.length} batches sequentially with claude-haiku-4-5-20251001`
+      `[training-structure] Processing ${batches.length} batches sequentially`
     );
     const totalStart = Date.now();
 
@@ -128,9 +161,10 @@ export async function POST(
       } catch (batchErr: any) {
         batchesFailed++;
         console.error(
-          `[training-structure] Batch ${i + 1} FAILED:`,
+          `[training-structure] Batch ${i + 1} FAILED after ${((Date.now() - t0) / 1000).toFixed(1)}s:`,
           batchErr?.status || '',
-          batchErr?.message || batchErr
+          batchErr?.error?.type || '',
+          batchErr?.message || String(batchErr)
         );
         // Continue to next batch — don't let one failure kill everything
       }
