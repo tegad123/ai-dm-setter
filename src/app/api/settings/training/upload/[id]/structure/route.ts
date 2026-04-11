@@ -146,26 +146,28 @@ export async function POST(
               message: 'Analyzing PDF with AI...'
             });
 
-            const message = await client.messages.create({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: 32000,
-              messages: [
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'document',
-                      source: {
-                        type: 'base64',
-                        media_type: 'application/pdf',
-                        data: upload.pdfBase64!
-                      }
-                    },
-                    { type: 'text', text: STRUCTURING_PROMPT }
-                  ]
-                }
-              ]
-            });
+            const message = await client.messages
+              .stream({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 32000,
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'document',
+                        source: {
+                          type: 'base64',
+                          media_type: 'application/pdf',
+                          data: upload.pdfBase64!
+                        }
+                      },
+                      { type: 'text', text: STRUCTURING_PROMPT }
+                    ]
+                  }
+                ]
+              })
+              .finalMessage();
 
             const responseText =
               message.content[0].type === 'text' ? message.content[0].text : '';
@@ -238,16 +240,18 @@ export async function POST(
               `[training-structure] Processing batch ${b + 1}/${totalBatches} (${Math.ceil(batchText.length / 4)} est. tokens)`
             );
 
-            const message = await client.messages.create({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: 32000,
-              messages: [
-                {
-                  role: 'user',
-                  content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
-                }
-              ]
-            });
+            const message = await client.messages
+              .stream({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 32000,
+                messages: [
+                  {
+                    role: 'user',
+                    content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
+                  }
+                ]
+              })
+              .finalMessage();
 
             if (message.stop_reason === 'max_tokens') {
               console.warn(
