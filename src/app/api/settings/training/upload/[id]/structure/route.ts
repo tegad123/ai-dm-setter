@@ -88,73 +88,12 @@ export async function POST(
     // ── Existing meta from a previous call? ────────────────
     let meta = parseMeta(upload.errorMessage);
 
-    // ── FIRST CALL: Try native PDF or initialize batches ───
+    // ── FIRST CALL: Prepare batches and return immediately ──
     if (upload.status !== 'STRUCTURING' || !meta) {
       // Clean up any conversations from a previous failed attempt
       await prisma.trainingConversation.deleteMany({ where: { uploadId: id } });
 
-      // Try Strategy A: native PDF (small PDFs only)
-      const useNativePdf =
-        estimatedTokens < 120_000 && Boolean(upload.pdfBase64);
-      if (useNativePdf) {
-        try {
-          await prisma.trainingUpload.update({
-            where: { id },
-            data: { status: 'STRUCTURING', errorMessage: null }
-          });
-
-          const message = await client.messages
-            .stream({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: 32000,
-              messages: [
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'document',
-                      source: {
-                        type: 'base64',
-                        media_type: 'application/pdf',
-                        data: upload.pdfBase64!
-                      }
-                    },
-                    { type: 'text', text: STRUCTURING_PROMPT }
-                  ]
-                }
-              ]
-            })
-            .finalMessage();
-
-          const responseText =
-            message.content[0].type === 'text' ? message.content[0].text : '';
-          const parsed = parseJsonResponse(responseText);
-
-          if (parsed.conversations.length > 0) {
-            // Strategy A succeeded — save all and finalize
-            return await finalizeConversations(
-              id,
-              auth.accountId,
-              upload.personaId,
-              parsed.conversations
-            );
-          }
-        } catch (pdfErr: any) {
-          const msg = pdfErr?.message || '';
-          if (
-            !msg.includes('PDF pages') &&
-            !msg.includes('pdf') &&
-            !msg.includes('document')
-          ) {
-            throw pdfErr;
-          }
-          console.log(
-            `[training-structure] Native PDF failed (${msg}), using text batches`
-          );
-        }
-      }
-
-      // Strategy B: initialize batches
+      // Compute batches
       const conversationTexts = detectConversationBoundaries(rawText);
       const batches = chunkForLLM(conversationTexts, 15_000);
 
@@ -167,6 +106,14 @@ export async function POST(
       console.log(
         `[training-structure] Initialized: ${batches.length} batch(es) from ${conversationTexts.length} chunk(s)`
       );
+
+      // Return immediately — don't process any batch yet
+      return NextResponse.json({
+        type: 'processing',
+        percent: 3,
+        message: `Prepared ${batches.length} batches — starting analysis...`,
+        conversationsFound: 0
+      });
     }
 
     // ── PROCESS CURRENT BATCH ──────────────────────────────

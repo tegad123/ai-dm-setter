@@ -616,21 +616,26 @@ export default function TrainingDataPage() {
           {uploadStep === 'structuring' && (
             <div className='flex flex-col items-center justify-center gap-3 py-10'>
               <div className='w-full max-w-md'>
-                <div className='bg-muted h-3 w-full overflow-hidden rounded-full'>
+                <div className='bg-muted relative h-3 w-full overflow-hidden rounded-full'>
+                  {/* Animated shimmer behind the progress bar */}
+                  <div className='absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/20 to-transparent' />
                   <div
-                    className='bg-primary h-3 rounded-full transition-all duration-700 ease-out'
-                    style={{ width: `${structureProgress}%` }}
+                    className='bg-primary relative h-3 rounded-full transition-all duration-700 ease-out'
+                    style={{ width: `${Math.max(structureProgress, 2)}%` }}
                   />
                 </div>
                 <div className='mt-2 flex items-center justify-between'>
-                  <p className='text-muted-foreground text-xs'>
-                    {structureMessage || 'Starting...'}
-                  </p>
+                  <div className='flex items-center gap-2'>
+                    <Loader2 className='text-muted-foreground h-3 w-3 animate-spin' />
+                    <p className='text-muted-foreground text-xs'>
+                      {structureMessage || 'Preparing...'}
+                    </p>
+                  </div>
                   <p className='text-xs font-medium'>{structureProgress}%</p>
                 </div>
               </div>
               <p className='text-muted-foreground mt-1 text-xs'>
-                Large exports may take a few minutes
+                Each batch takes 1-2 minutes to analyze
               </p>
             </div>
           )}
