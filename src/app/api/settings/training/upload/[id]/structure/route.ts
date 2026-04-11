@@ -93,9 +93,9 @@ export async function POST(
       // Clean up any conversations from a previous failed attempt
       await prisma.trainingConversation.deleteMany({ where: { uploadId: id } });
 
-      // Compute batches
+      // Compute batches — 8K tokens per batch for reliable <2min LLM calls
       const conversationTexts = detectConversationBoundaries(rawText);
-      const batches = chunkForLLM(conversationTexts, 15_000);
+      const batches = chunkForLLM(conversationTexts, 8_000);
 
       meta = { currentBatch: 0, totalBatches: batches.length };
       await prisma.trainingUpload.update({
@@ -118,7 +118,15 @@ export async function POST(
 
     // ── PROCESS CURRENT BATCH ──────────────────────────────
     const conversationTexts = detectConversationBoundaries(rawText);
-    const batches = chunkForLLM(conversationTexts, 15_000);
+    const batches = chunkForLLM(conversationTexts, 8_000);
+
+    // Sync meta if batch size changed between deployments
+    if (meta.totalBatches !== batches.length) {
+      console.log(
+        `[training-structure] Batch count changed: ${meta.totalBatches} → ${batches.length}`
+      );
+      meta.totalBatches = batches.length;
+    }
 
     if (meta.currentBatch >= batches.length) {
       // All batches already done — finalize
@@ -126,22 +134,46 @@ export async function POST(
     }
 
     const batchText = batches[meta.currentBatch].join('\n\n---\n\n');
+    const estTokens = Math.ceil(batchText.length / 4);
     console.log(
-      `[training-structure] Processing batch ${meta.currentBatch + 1}/${meta.totalBatches} (${Math.ceil(batchText.length / 4)} est. tokens)`
+      `[training-structure] Processing batch ${meta.currentBatch + 1}/${meta.totalBatches} (${estTokens} est. tokens)`
     );
 
-    const message = await client.messages
-      .stream({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 32000,
-        messages: [
+    // 4-minute timeout on LLM call — prevents Vercel silent kill at 5min
+    const llmAbort = new AbortController();
+    const llmTimer = setTimeout(() => {
+      console.warn(
+        `[training-structure] Batch ${meta.currentBatch + 1} LLM call timed out at 240s`
+      );
+      llmAbort.abort();
+    }, 240_000);
+
+    let message;
+    try {
+      const t0 = Date.now();
+      message = await client.messages
+        .stream(
           {
-            role: 'user',
-            content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
-          }
-        ]
-      })
-      .finalMessage();
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 16_000,
+            messages: [
+              {
+                role: 'user',
+                content: `${STRUCTURING_PROMPT}\n\nCONVERSATIONS:\n---\n${batchText}\n---`
+              }
+            ]
+          },
+          { signal: llmAbort.signal }
+        )
+        .finalMessage();
+      clearTimeout(llmTimer);
+      console.log(
+        `[training-structure] Batch ${meta.currentBatch + 1} LLM done in ${((Date.now() - t0) / 1000).toFixed(1)}s — stop_reason: ${message.stop_reason}`
+      );
+    } catch (llmErr) {
+      clearTimeout(llmTimer);
+      throw llmErr;
+    }
 
     if (message.stop_reason === 'max_tokens') {
       console.warn(
@@ -155,6 +187,11 @@ export async function POST(
     const rawConvos = parsed.conversations || [];
 
     // Hydrate, validate, dedup, save THIS batch
+    console.log(
+      `[training-structure] Batch ${meta.currentBatch + 1} parsed ${rawConvos.length} conversations`
+    );
+    const saveStart = Date.now();
+
     if (rawConvos.length > 0) {
       const hydrated = hydrateConversations(rawConvos);
       const validation = validateConversations(hydrated);
@@ -199,6 +236,10 @@ export async function POST(
             }
           });
         }
+
+        console.log(
+          `[training-structure] Batch ${meta.currentBatch + 1} saved ${newConvos.length} conversations in ${((Date.now() - saveStart) / 1000).toFixed(1)}s`
+        );
       }
     }
 
