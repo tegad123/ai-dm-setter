@@ -122,6 +122,9 @@ export default function TrainingDataPage() {
   const [showUploads, setShowUploads] = useState(false);
   const [labelingAll, setLabelingAll] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [structuringUploadId, setStructuringUploadId] = useState<string | null>(
+    null
+  );
 
   // --------------------------------------------------
   // Fetch persona ID on mount
@@ -322,6 +325,44 @@ export default function TrainingDataPage() {
       }
     } catch {
       toast.error('Failed to load upload details');
+    }
+  }
+
+  async function handleStructureFromHistory(uploadId: string) {
+    setStructuringUploadId(uploadId);
+    try {
+      const result = await apiFetch<{
+        upload: { id: string; status: string; conversationCount: number };
+        conversations: UploadConversation[];
+        duplicatesSkipped: number;
+      }>(`/settings/training/upload/${uploadId}/structure`, {
+        method: 'POST'
+      });
+
+      setUploadResult({
+        upload: {
+          id: result.upload.id,
+          fileName:
+            uploads.find((u) => u.id === uploadId)?.fileName ?? 'Upload',
+          status: result.upload.status,
+          tokenEstimate: null,
+          conversationCount: result.upload.conversationCount,
+          createdAt: ''
+        }
+      });
+      setStructuredConversations(result.conversations);
+      setUploadStep('results');
+      await fetchUploads();
+
+      let msg = `Structured ${result.conversations.length} conversations`;
+      if (result.duplicatesSkipped > 0) {
+        msg += ` (${result.duplicatesSkipped} duplicates skipped)`;
+      }
+      toast.success(msg);
+    } catch (err: any) {
+      toast.error(err?.message || 'Structuring failed. Please try again.');
+    } finally {
+      setStructuringUploadId(null);
     }
   }
 
@@ -721,11 +762,29 @@ export default function TrainingDataPage() {
                             : u.status === 'STRUCTURING' ||
                                 u.status === 'EXTRACTING'
                               ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'
-                              : ''
+                              : u.status === 'AWAITING_CONFIRMATION'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300'
+                                : ''
                       }
                     >
                       {u.status.replace(/_/g, ' ').toLowerCase()}
                     </Badge>
+                    {u.status === 'AWAITING_CONFIRMATION' && (
+                      <Button
+                        size='sm'
+                        disabled={structuringUploadId === u.id}
+                        onClick={() => handleStructureFromHistory(u.id)}
+                      >
+                        {structuringUploadId === u.id ? (
+                          <>
+                            <Loader2 className='mr-1 h-3 w-3 animate-spin' />
+                            Structuring...
+                          </>
+                        ) : (
+                          'Structure'
+                        )}
+                      </Button>
+                    )}
                     {u.status === 'COMPLETE' && (
                       <Button
                         variant='ghost'
