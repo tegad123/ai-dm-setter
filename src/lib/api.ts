@@ -377,3 +377,99 @@ export async function getContentAnalytics(): Promise<ContentAnalytics> {
 export async function getTeamAnalytics(): Promise<TeamAnalytics> {
   return apiFetch('/api/analytics/team');
 }
+
+// ---------------------------------------------------------------------------
+// Voice Note Library
+// ---------------------------------------------------------------------------
+
+export interface VoiceNoteLibraryItem {
+  id: string;
+  accountId: string;
+  audioFileUrl: string;
+  durationSeconds: number;
+  uploadedAt: string;
+  transcript: string | null;
+  summary: string | null;
+  useCases: string[];
+  leadTypes: string[];
+  conversationStages: string[];
+  emotionalTone: string | null;
+  triggerConditionsNatural: string | null;
+  boundToScriptStep: string | null;
+  userLabel: string | null;
+  userNotes: string | null;
+  priority: number;
+  active: boolean;
+  status: 'PROCESSING' | 'NEEDS_REVIEW' | 'ACTIVE' | 'DISABLED' | 'FAILED';
+  errorMessage: string | null;
+  createdAt: string;
+  lastEditedAt: string;
+}
+
+export async function getVoiceNotes(
+  search?: string
+): Promise<{ items: VoiceNoteLibraryItem[] }> {
+  const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+  return apiFetch(`/api/voice-notes${qs}`);
+}
+
+export async function getVoiceNote(
+  id: string
+): Promise<{ item: VoiceNoteLibraryItem }> {
+  return apiFetch(`/api/voice-notes/${id}`);
+}
+
+export async function updateVoiceNote(
+  id: string,
+  data: Partial<VoiceNoteLibraryItem>
+): Promise<{ item: VoiceNoteLibraryItem }> {
+  return apiFetch(`/api/voice-notes/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function deleteVoiceNote(
+  id: string
+): Promise<{ success: boolean }> {
+  return apiFetch(`/api/voice-notes/${id}`, { method: 'DELETE' });
+}
+
+export async function uploadVoiceNote(
+  file: File
+): Promise<{ item: VoiceNoteLibraryItem }> {
+  const formData = new FormData();
+  formData.append('audio', file);
+
+  const token =
+    typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const headers: HeadersInit = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
+
+  const res = await fetch('/api/voice-notes/upload', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: formData
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function processVoiceNote(
+  id: string
+): Promise<{ item: VoiceNoteLibraryItem }> {
+  return apiFetch(`/api/voice-notes/${id}/process`, { method: 'POST' });
+}
+
+export async function retryVoiceNote(
+  id: string
+): Promise<{ success: boolean }> {
+  return apiFetch(`/api/voice-notes/${id}/retry`, { method: 'POST' });
+}

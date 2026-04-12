@@ -41,7 +41,8 @@ import {
   IconChartBar,
   IconBell,
   IconBrandInstagram,
-  IconBrandFacebook
+  IconBrandFacebook,
+  IconMicrophone
 } from '@tabler/icons-react';
 
 export type Icon = React.ComponentType<IconProps>;
@@ -91,5 +92,6 @@ export const Icons = {
   analytics: IconChartBar,
   notifications: IconBell,
   instagram: IconBrandInstagram,
-  facebook: IconBrandFacebook
+  facebook: IconBrandFacebook,
+  voiceNotes: IconMicrophone
 };

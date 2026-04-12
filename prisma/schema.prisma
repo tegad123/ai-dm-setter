@@ -190,6 +190,7 @@ model Account {
   teamNotes          TeamNote[]
   contentAttributions ContentAttribution[]
   voiceNoteSlots     VoiceNoteSlot[]
+  voiceNoteLibrary   VoiceNoteLibraryItem[]
 
   @@index([slug])
 }
@@ -341,6 +342,47 @@ model VoiceNoteSlot {
   @@index([accountId])
   @@index([breakdownId])
   @@index([accountId, status])
+}
+
+// ─── Voice Note Library ─────────────────────────────────
+
+enum VoiceNoteLibraryStatus {
+  PROCESSING
+  NEEDS_REVIEW
+  ACTIVE
+  DISABLED
+  FAILED
+}
+
+model VoiceNoteLibraryItem {
+  id                      String                   @id @default(cuid())
+  accountId               String
+  audioFileUrl            String
+  durationSeconds         Float
+  uploadedAt              DateTime                 @default(now())
+  transcript              String?                  @db.Text
+  summary                 String?                  @db.Text
+  useCases                String[]                 @default([])
+  leadTypes               String[]                 @default([])
+  conversationStages      String[]                 @default([])
+  emotionalTone           String?
+  triggerConditionsNatural String?                  @db.Text
+  boundToScriptStep       String?
+  userLabel               String?
+  userNotes               String?                  @db.Text
+  priority                Int                      @default(0)
+  active                  Boolean                  @default(false)
+  embeddingVector         Json?
+  status                  VoiceNoteLibraryStatus   @default(PROCESSING)
+  errorMessage            String?
+  createdAt               DateTime                 @default(now())
+  lastEditedAt            DateTime                 @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([accountId, status])
+  @@index([accountId, active])
 }
 
 model TrainingExample {
