@@ -289,10 +289,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use streaming to avoid Anthropic SDK timeout on large max_tokens requests
-    const stream = client.messages.stream({
+    // Use explicit stream: true to avoid Anthropic SDK timeout error
+    let responseText = '';
+    const stream = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 16384,
+      stream: true,
       messages: [
         {
           role: 'user',
@@ -301,11 +303,14 @@ export async function POST(request: NextRequest) {
       ]
     });
 
-    const message = await stream.finalMessage();
-
-    // Extract the text response
-    const responseText =
-      message.content[0].type === 'text' ? message.content[0].text : '';
+    for await (const event of stream) {
+      if (
+        event.type === 'content_block_delta' &&
+        event.delta.type === 'text_delta'
+      ) {
+        responseText += event.delta.text;
+      }
+    }
 
     // Parse the JSON response
     let extracted;

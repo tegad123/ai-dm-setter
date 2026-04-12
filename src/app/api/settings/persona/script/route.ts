@@ -132,17 +132,24 @@ export async function POST(req: NextRequest) {
       ];
     }
 
-    // Use streaming to avoid Anthropic SDK timeout on large max_tokens requests
-    const stream = client.messages.stream({
+    // Use explicit stream: true to avoid Anthropic SDK timeout error
+    // ("Streaming is required for operations that may take longer than 10 minutes")
+    let responseText = '';
+    const stream = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 32768,
+      max_tokens: 16384,
+      stream: true,
       messages: [{ role: 'user', content: messageContent }]
     });
 
-    const message = await stream.finalMessage();
-
-    const responseText =
-      message.content[0].type === 'text' ? message.content[0].text : '';
+    for await (const event of stream) {
+      if (
+        event.type === 'content_block_delta' &&
+        event.delta.type === 'text_delta'
+      ) {
+        responseText += event.delta.text;
+      }
+    }
 
     // --- Parse JSON response (handle markdown wrapping) ---
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
