@@ -51,33 +51,44 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const durationSeconds = estimateAudioDuration(buffer.byteLength);
 
-    // Create the library item record first (so we have an ID for the blob path)
+    // Upload to Vercel Blob FIRST (most likely failure point — no orphaned DB records)
+    const ext = audioExtFromMime(file.type);
+    const tempId = Date.now().toString(36);
+    const blobPath = `voice-note-library/${auth.accountId}/${tempId}/${Date.now()}.${ext}`;
+
+    let blob;
+    try {
+      blob = await put(blobPath, buffer, {
+        access: 'public',
+        contentType: file.type
+      });
+    } catch (blobErr) {
+      console.error('Vercel Blob upload failed:', blobErr);
+      return NextResponse.json(
+        {
+          error:
+            'Failed to upload audio file. Blob storage may not be configured.'
+        },
+        { status: 500 }
+      );
+    }
+
+    // Create the library item record with the real URL
     const item = await prisma.voiceNoteLibraryItem.create({
       data: {
         accountId: auth.accountId,
-        audioFileUrl: '', // placeholder, updated after blob upload
+        audioFileUrl: blob.url,
         durationSeconds,
         status: 'PROCESSING'
       }
     });
 
-    // Upload to Vercel Blob
-    const ext = audioExtFromMime(file.type);
-    const blobPath = `voice-note-library/${auth.accountId}/${item.id}/${Date.now()}.${ext}`;
-    const blob = await put(blobPath, buffer, { access: 'public' });
-
-    // Update item with the real URL
-    const updated = await prisma.voiceNoteLibraryItem.update({
-      where: { id: item.id },
-      data: { audioFileUrl: blob.url }
-    });
-
     return NextResponse.json({
       item: {
-        id: updated.id,
-        audioFileUrl: updated.audioFileUrl,
-        durationSeconds: updated.durationSeconds,
-        status: updated.status
+        id: item.id,
+        audioFileUrl: item.audioFileUrl,
+        durationSeconds: item.durationSeconds,
+        status: item.status
       }
     });
   } catch (err) {
