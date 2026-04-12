@@ -81,9 +81,26 @@ export async function POST(
       if (!audioRes.ok) throw new Error('Failed to download audio file');
       const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
 
-      // Create a File-like object for the SDK
-      const audioFile = new File([audioBuffer], 'audio.mp3', {
-        type: 'audio/mpeg'
+      // Extract real extension from blob URL (e.g. .m4a, .wav, .webm)
+      const urlPath = new URL(item.audioFileUrl).pathname;
+      const ext = urlPath.split('.').pop()?.toLowerCase() || 'mp3';
+      const mimeMap: Record<string, string> = {
+        mp3: 'audio/mpeg',
+        m4a: 'audio/mp4',
+        mp4: 'audio/mp4',
+        wav: 'audio/wav',
+        ogg: 'audio/ogg',
+        oga: 'audio/ogg',
+        webm: 'audio/webm',
+        flac: 'audio/flac',
+        mpeg: 'audio/mpeg',
+        mpga: 'audio/mpeg'
+      };
+      const mimeType = mimeMap[ext] || 'audio/mpeg';
+
+      // Create a File-like object with the correct name + type for Whisper
+      const audioFile = new File([audioBuffer], `audio.${ext}`, {
+        type: mimeType
       });
 
       const transcription = await openai.audio.transcriptions.create({
