@@ -289,7 +289,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const message = await client.messages.create({
+    // Use streaming to avoid Anthropic SDK timeout on large max_tokens requests
+    const stream = client.messages.stream({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 16384,
       messages: [
@@ -299,6 +300,8 @@ export async function POST(request: NextRequest) {
         }
       ]
     });
+
+    const message = await stream.finalMessage();
 
     // Extract the text response
     const responseText =
