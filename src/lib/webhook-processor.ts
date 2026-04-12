@@ -1094,6 +1094,7 @@ async function sendAIReply(
     selectedSlotIso?: string | null;
     leadEmail?: string | null;
     shouldVoiceNote?: boolean;
+    voiceNoteAction?: { slot_id: string } | null;
     suggestedTag: string;
     suggestedTags: string[];
     suggestedDelay: number;
@@ -1435,8 +1436,87 @@ async function sendAIReply(
   if (lead.platformUserId) {
     let voiceNoteSent = false;
 
-    // ── Voice note generation (if AI recommends it) ──────────────
-    if (result.shouldVoiceNote) {
+    // ── Pre-recorded voice note (VoiceNoteSlot system) ────────────
+    if (result.voiceNoteAction?.slot_id) {
+      try {
+        const slot = await prisma.voiceNoteSlot.findFirst({
+          where: { id: result.voiceNoteAction.slot_id, accountId }
+        });
+
+        if (
+          slot?.audioFileUrl &&
+          (slot.status === 'UPLOADED' || slot.status === 'APPROVED')
+        ) {
+          // Send pre-recorded audio
+          await prisma.message.update({
+            where: { id: aiMessage.id },
+            data: { isVoiceNote: true, voiceNoteUrl: slot.audioFileUrl }
+          });
+
+          if (lead.platform === 'INSTAGRAM') {
+            const { sendAudioDM } = await import('@/lib/instagram');
+            await sendAudioDM(
+              lead.accountId,
+              lead.platformUserId,
+              slot.audioFileUrl
+            );
+          } else if (lead.platform === 'FACEBOOK') {
+            const { sendAudioMessage } = await import('@/lib/facebook');
+            await sendAudioMessage(
+              lead.accountId,
+              lead.platformUserId,
+              slot.audioFileUrl
+            );
+          }
+
+          voiceNoteSent = true;
+          console.log(
+            `[webhook-processor] Pre-recorded voice note (slot: ${slot.slotName}) sent to ${lead.platformUserId}`
+          );
+        } else if (
+          slot &&
+          slot.fallbackBehavior === 'SEND_TEXT_EQUIVALENT' &&
+          slot.fallbackText
+        ) {
+          // Use fallback text instead of audio
+          result.reply = slot.fallbackText;
+          console.log(
+            `[webhook-processor] Voice note slot "${slot.slotName}" empty — using fallback text`
+          );
+        } else if (slot && slot.fallbackBehavior === 'BLOCK_UNTIL_FILLED') {
+          // Halt: create notification and pause AI
+          console.warn(
+            `[webhook-processor] Voice note slot "${slot.slotName}" blocked — halting conversation`
+          );
+          await prisma.conversation.update({
+            where: { id: conversationId },
+            data: { aiActive: false }
+          });
+          await prisma.notification.create({
+            data: {
+              accountId,
+              type: 'SYSTEM',
+              title: 'Voice note required',
+              body: `AI paused: voice note slot "${slot.slotName}" needs an audio upload before the conversation can continue.`,
+              leadId: lead.id
+            }
+          });
+          return; // Do not send anything
+        }
+        // SKIP_ACTION: fall through, send AI's generated text as normal
+      } catch (slotErr: unknown) {
+        const errMsg =
+          slotErr instanceof Error ? slotErr.message : String(slotErr);
+        console.error(
+          '[webhook-processor] Pre-recorded voice note error:',
+          errMsg
+        );
+        // Fall through to ElevenLabs or text
+      }
+    }
+
+    // ── Voice note generation via ElevenLabs (if AI recommends it) ──
+    if (!voiceNoteSent && result.shouldVoiceNote) {
       try {
         const { generateVoiceNote } = await import('@/lib/elevenlabs');
         const { audioUrl } = await generateVoiceNote(accountId, result.reply);

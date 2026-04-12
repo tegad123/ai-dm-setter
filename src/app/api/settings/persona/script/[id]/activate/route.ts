@@ -45,6 +45,29 @@ export async function POST(
       );
     }
 
+    // Validate: all voice note slots must be ready (uploaded or have approved fallback)
+    const unreadySlots = await prisma.voiceNoteSlot.findMany({
+      where: {
+        breakdownId,
+        status: 'EMPTY',
+        fallbackBehavior: 'BLOCK_UNTIL_FILLED'
+      }
+    });
+    if (unreadySlots.length > 0) {
+      const n = unreadySlots.length;
+      const noun = n === 1 ? 'voice note slot' : 'voice note slots';
+      return NextResponse.json(
+        {
+          error: `${n} ${noun} need audio uploads or an approved fallback.`,
+          unreadySlots: unreadySlots.map((s) => ({
+            id: s.id,
+            name: s.slotName
+          }))
+        },
+        { status: 400 }
+      );
+    }
+
     // Activate within a transaction
     const activated = await prisma.$transaction(async (tx) => {
       // Archive any other ACTIVE breakdowns for this account

@@ -35,6 +35,7 @@ export interface GenerateReplyResult {
   suggestedTag: string;
   suggestedTags: string[];
   shouldVoiceNote: boolean;
+  voiceNoteAction: { slot_id: string } | null;
   qualityScore: number;
   suggestedDelay: number;
   systemPromptVersion: string;
@@ -141,6 +142,7 @@ export async function generateReply(
     suggestedTag: parsed.suggestedTag,
     suggestedTags: parsed.suggestedTags,
     shouldVoiceNote,
+    voiceNoteAction: parsed.voiceNoteAction,
     qualityScore: Math.round(parsed.stageConfidence * 100),
     suggestedDelay,
     systemPromptVersion
@@ -313,6 +315,7 @@ interface ParsedAIResponse {
   leadEmail: string | null;
   suggestedTag: string;
   suggestedTags: string[];
+  voiceNoteAction: { slot_id: string } | null;
 }
 
 function parseAIResponse(raw: string): ParsedAIResponse {
@@ -333,7 +336,8 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     selectedSlotIso: null,
     leadEmail: null,
     suggestedTag: '',
-    suggestedTags: []
+    suggestedTags: [],
+    voiceNoteAction: null
   };
 
   try {
@@ -381,7 +385,10 @@ function parseAIResponse(raw: string): ParsedAIResponse {
           ? obj.lead_email.trim()
           : null,
       suggestedTag: obj.suggested_tag || '',
-      suggestedTags: Array.isArray(obj.suggested_tags) ? obj.suggested_tags : []
+      suggestedTags: Array.isArray(obj.suggested_tags)
+        ? obj.suggested_tags
+        : [],
+      voiceNoteAction: obj.voice_note_action || null
     };
   } catch {
     // If JSON parsing fails, treat the whole response as a plain text message

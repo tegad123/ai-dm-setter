@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
 
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 16384,
+      max_tokens: 32768,
       messages: [{ role: 'user', content: messageContent }]
     });
 
@@ -173,7 +173,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // --- Create PersonaBreakdown with nested sections and ambiguities ---
+    // --- Create PersonaBreakdown with nested sections, ambiguities, and script steps ---
     const breakdown = await prisma.personaBreakdown.create({
       data: {
         accountId: auth.accountId,
@@ -183,6 +183,7 @@ export async function POST(req: NextRequest) {
         sourceText: scriptText,
         methodologySummary: parsed.methodology_summary,
         gaps: parsed.gaps || [],
+        scriptSteps: parsed.script_steps || [],
         status: 'DRAFT',
         sections: {
           create: (parsed.sections || []).map(
@@ -214,7 +215,91 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    return NextResponse.json({ breakdown });
+    // --- Create VoiceNoteSlots from LLM detections ---
+    const voiceNoteDetections = parsed.voice_note_detections || [];
+    const slotIdMap: Record<string, string> = {};
+
+    for (const detection of voiceNoteDetections) {
+      // Check for existing slot with same name (preserves audio across re-parses)
+      const existingSlot = await prisma.voiceNoteSlot.findFirst({
+        where: { accountId: auth.accountId, slotName: detection.slot_name }
+      });
+
+      if (existingSlot) {
+        // Reuse existing slot — update breakdown reference and trigger condition
+        await prisma.voiceNoteSlot.update({
+          where: { id: existingSlot.id },
+          data: {
+            breakdownId: breakdown.id,
+            description: detection.description,
+            triggerCondition: {
+              natural_language: detection.trigger_condition_natural_language,
+              structured: detection.trigger_condition_structured
+            },
+            fallbackText:
+              existingSlot.fallbackText || detection.suggested_fallback_text
+          }
+        });
+        slotIdMap[detection.ref_id] = existingSlot.id;
+      } else {
+        // Create new slot
+        const slot = await prisma.voiceNoteSlot.create({
+          data: {
+            accountId: auth.accountId,
+            breakdownId: breakdown.id,
+            slotName: detection.slot_name,
+            description: detection.description,
+            triggerCondition: {
+              natural_language: detection.trigger_condition_natural_language,
+              structured: detection.trigger_condition_structured
+            },
+            fallbackText: detection.suggested_fallback_text,
+            status: 'EMPTY'
+          }
+        });
+        slotIdMap[detection.ref_id] = slot.id;
+      }
+    }
+
+    // --- Replace ref_id placeholders with real DB slot IDs in scriptSteps ---
+    if (
+      Object.keys(slotIdMap).length > 0 &&
+      Array.isArray(parsed.script_steps)
+    ) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updatedSteps = (parsed.script_steps as any[]).map((step: any) => ({
+        ...step,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        branches: (step.branches || []).map((branch: any) => ({
+          ...branch,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          actions: (branch.actions || []).map((action: any) => ({
+            ...action,
+            voice_note_slot_id: action.voice_note_slot_id
+              ? slotIdMap[action.voice_note_slot_id] ||
+                action.voice_note_slot_id
+              : null
+          }))
+        }))
+      }));
+
+      await prisma.personaBreakdown.update({
+        where: { id: breakdown.id },
+        data: { scriptSteps: updatedSteps }
+      });
+    }
+
+    // --- Fetch final breakdown with voice note slots ---
+    const finalBreakdown = await prisma.personaBreakdown.findUnique({
+      where: { id: breakdown.id },
+      include: {
+        sections: { orderBy: { orderIndex: 'asc' } },
+        ambiguities: { orderBy: { orderIndex: 'asc' } },
+        voiceNoteSlots: { orderBy: { createdAt: 'asc' } }
+      }
+    });
+
+    return NextResponse.json({ breakdown: finalBreakdown });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(
@@ -249,7 +334,8 @@ export async function GET(req: NextRequest) {
       orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
       include: {
         sections: { orderBy: { orderIndex: 'asc' } },
-        ambiguities: { orderBy: { orderIndex: 'asc' } }
+        ambiguities: { orderBy: { orderIndex: 'asc' } },
+        voiceNoteSlots: { orderBy: { createdAt: 'asc' } }
       }
     });
 

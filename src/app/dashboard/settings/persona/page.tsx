@@ -26,6 +26,7 @@ import {
   TooltipTrigger,
   TooltipContent
 } from '@/components/ui/tooltip';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import {
   Loader2,
@@ -41,8 +42,12 @@ import {
   Plus,
   Settings,
   X,
-  Save
+  Save,
+  Mic
 } from 'lucide-react';
+import ScriptFrameworkView from '@/components/persona/script-framework-view';
+import VoiceNoteSlotsView from '@/components/persona/voice-note-slots-view';
+import type { ScriptStep } from '@/lib/script-framework-types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,15 +73,41 @@ interface BreakdownAmbiguity {
   resolved: boolean;
 }
 
+interface VoiceNoteSlotData {
+  id: string;
+  slotName: string;
+  description: string;
+  triggerCondition: {
+    natural_language?: string;
+    structured?: {
+      step_id?: string;
+      branch_id?: string;
+      action_id?: string;
+    };
+  };
+  audioFileUrl: string | null;
+  audioDurationSecs: number | null;
+  uploadedAt: string | null;
+  fallbackBehavior:
+    | 'BLOCK_UNTIL_FILLED'
+    | 'SEND_TEXT_EQUIVALENT'
+    | 'SKIP_ACTION';
+  fallbackText: string | null;
+  status: 'EMPTY' | 'UPLOADED' | 'APPROVED';
+  userApproved: boolean;
+}
+
 interface Breakdown {
   id: string;
   sourceFileName: string | null;
   methodologySummary: string;
   methodologySummaryEdited: boolean;
   gaps: string[] | unknown;
+  scriptSteps: ScriptStep[] | null;
   status: string;
   sections: BreakdownSection[];
   ambiguities: BreakdownAmbiguity[];
+  voiceNoteSlots: VoiceNoteSlotData[];
   createdAt: string;
   updatedAt: string;
 }
@@ -162,6 +193,9 @@ export default function PersonaPage() {
 
   // Activation
   const [activating, setActivating] = useState(false);
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState('behavior');
 
   // Basic settings
   const [personaName, setPersonaName] = useState('');
@@ -542,7 +576,12 @@ export default function PersonaPage() {
   const gaps = Array.isArray(breakdown?.gaps)
     ? (breakdown.gaps as string[])
     : [];
-  const canActivate = unresolvedCount === 0 && approvedCount > 0;
+  const blockingSlotCount =
+    breakdown?.voiceNoteSlots?.filter(
+      (s) => s.status === 'EMPTY' && s.fallbackBehavior === 'BLOCK_UNTIL_FILLED'
+    ).length ?? 0;
+  const canActivate =
+    unresolvedCount === 0 && approvedCount > 0 && blockingSlotCount === 0;
   const isActive = breakdown?.status === 'ACTIVE';
 
   let activateTooltip = '';
@@ -550,6 +589,8 @@ export default function PersonaPage() {
     activateTooltip = `Resolve ${unresolvedCount} ambiguity item(s) first`;
   else if (approvedCount === 0)
     activateTooltip = 'Approve at least one section first';
+  else if (blockingSlotCount > 0)
+    activateTooltip = `${blockingSlotCount} voice note slot(s) need audio or a fallback`;
 
   // -------------------------------------------------------------------------
   // Loading
@@ -702,312 +743,387 @@ export default function PersonaPage() {
             </CardContent>
           </Card>
 
-          {/* 3b. Ambiguity Panel */}
-          {breakdown.ambiguities.length > 0 && (
-            <Card className='border-amber-300 bg-amber-50/50'>
-              <CardHeader>
-                <CardTitle className='flex items-center gap-2 text-amber-800'>
-                  <AlertCircle className='h-5 w-5' />I need your input on{' '}
-                  {unresolvedCount} item{unresolvedCount !== 1 ? 's' : ''}{' '}
-                  before I can represent you accurately
-                </CardTitle>
-              </CardHeader>
-              <CardContent className='space-y-4'>
-                {breakdown.ambiguities.map((a) => (
-                  <div
-                    key={a.id}
-                    className='space-y-2 rounded-lg border bg-white p-4'
-                  >
-                    {a.resolved ? (
-                      <div className='flex items-start gap-2'>
-                        <CheckCircle2 className='mt-0.5 h-5 w-5 shrink-0 text-green-600' />
-                        <div>
-                          <p className='font-medium'>{a.question}</p>
-                          <p className='text-muted-foreground mt-1 text-sm'>
-                            {a.userAnswer}
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <p className='font-medium'>{a.question}</p>
-                        <p className='text-muted-foreground text-sm'>
-                          If you don&apos;t answer, I&apos;ll:{' '}
-                          {a.suggestedDefault}
-                        </p>
-                        <Textarea
-                          rows={2}
-                          value={ambiguityAnswers[a.id] ?? a.suggestedDefault}
-                          onChange={(e) =>
-                            setAmbiguityAnswers((prev) => ({
-                              ...prev,
-                              [a.id]: e.target.value
-                            }))
-                          }
-                        />
-                        <Button
-                          size='sm'
-                          onClick={() => handleResolveAmbiguity(a.id)}
-                          disabled={resolvingAmbiguityId === a.id}
-                        >
-                          {resolvingAmbiguityId === a.id && (
-                            <Loader2 className='mr-1 h-4 w-4 animate-spin' />
-                          )}
-                          Resolve
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* 3c. Methodology Summary */}
-          {breakdown.methodologySummary && (
-            <Card>
-              <CardHeader>
-                <CardTitle className='text-base'>Methodology Summary</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className='text-sm leading-relaxed'>
-                  {breakdown.methodologySummary}
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* 3d. Sections */}
-          <div className='space-y-4'>
-            <h2 className='text-lg font-semibold'>Sections</h2>
-            {breakdown.sections
-              .sort((a, b) => a.orderIndex - b.orderIndex)
-              .map((section) => {
-                const isEditing = editingSectionId === section.id;
-                const isRegenerating = regeneratingSectionId === section.id;
-                const excerpts = Array.isArray(section.sourceExcerpts)
-                  ? (section.sourceExcerpts as string[])
-                  : [];
-                return (
-                  <Card
-                    key={section.id}
-                    className={
-                      section.userApproved
-                        ? 'border-l-4 border-l-green-500'
-                        : ''
+          {/* Tabs: Behavior | Script Framework | Voice Notes */}
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className='w-full'>
+              <TabsTrigger value='behavior' className='flex-1'>
+                Behavior Settings
+              </TabsTrigger>
+              <TabsTrigger value='framework' className='flex-1'>
+                Script Framework
+                {(breakdown.scriptSteps?.length ?? 0) > 0 && (
+                  <Badge variant='secondary' className='ml-1.5 text-xs'>
+                    {breakdown.scriptSteps?.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value='voice-notes' className='flex-1'>
+                <Mic className='mr-1 h-3.5 w-3.5' />
+                Voice Notes
+                {(breakdown.voiceNoteSlots?.length ?? 0) > 0 && (
+                  <Badge
+                    variant={
+                      blockingSlotCount > 0 ? 'destructive' : 'secondary'
                     }
+                    className='ml-1.5 text-xs'
                   >
-                    <CardHeader className='pb-2'>
-                      <div className='flex flex-wrap items-center gap-3'>
-                        {isEditing ? (
-                          <Input
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            className='max-w-xs'
-                          />
+                    {breakdown.voiceNoteSlots.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ── Behavior Settings Tab ── */}
+            <TabsContent value='behavior' className='mt-4 space-y-6'>
+              {/* 3b. Ambiguity Panel */}
+              {breakdown.ambiguities.length > 0 && (
+                <Card className='border-amber-300 bg-amber-50/50'>
+                  <CardHeader>
+                    <CardTitle className='flex items-center gap-2 text-amber-800'>
+                      <AlertCircle className='h-5 w-5' />I need your input on{' '}
+                      {unresolvedCount} item{unresolvedCount !== 1 ? 's' : ''}{' '}
+                      before I can represent you accurately
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className='space-y-4'>
+                    {breakdown.ambiguities.map((a) => (
+                      <div
+                        key={a.id}
+                        className='space-y-2 rounded-lg border bg-white p-4'
+                      >
+                        {a.resolved ? (
+                          <div className='flex items-start gap-2'>
+                            <CheckCircle2 className='mt-0.5 h-5 w-5 shrink-0 text-green-600' />
+                            <div>
+                              <p className='font-medium'>{a.question}</p>
+                              <p className='text-muted-foreground mt-1 text-sm'>
+                                {a.userAnswer}
+                              </p>
+                            </div>
+                          </div>
                         ) : (
-                          <CardTitle className='text-base'>
-                            {section.title}
-                          </CardTitle>
-                        )}
-                        <Badge className={confidenceColor(section.confidence)}>
-                          {section.confidence}
-                        </Badge>
-                        {section.userEdited && (
-                          <Badge variant='secondary' className='text-xs'>
-                            Edited
-                          </Badge>
-                        )}
-                        <div className='ml-auto flex items-center gap-2'>
-                          <label className='flex cursor-pointer items-center gap-1.5 text-sm'>
-                            <Checkbox
-                              checked={section.userApproved}
-                              onCheckedChange={() =>
-                                handleApproveSection(
-                                  section.id,
-                                  section.userApproved
-                                )
+                          <>
+                            <p className='font-medium'>{a.question}</p>
+                            <p className='text-muted-foreground text-sm'>
+                              If you don&apos;t answer, I&apos;ll:{' '}
+                              {a.suggestedDefault}
+                            </p>
+                            <Textarea
+                              rows={2}
+                              value={
+                                ambiguityAnswers[a.id] ?? a.suggestedDefault
+                              }
+                              onChange={(e) =>
+                                setAmbiguityAnswers((prev) => ({
+                                  ...prev,
+                                  [a.id]: e.target.value
+                                }))
                               }
                             />
-                            Approved
-                          </label>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className='space-y-3'>
-                      {isEditing ? (
-                        <Textarea
-                          value={editContent}
-                          onChange={(e) => setEditContent(e.target.value)}
-                          rows={6}
-                        />
-                      ) : (
-                        <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-                          {section.content}
-                        </p>
-                      )}
-
-                      {/* Source excerpts */}
-                      {excerpts.length > 0 && (
-                        <Collapsible>
-                          <CollapsibleTrigger className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs transition-colors'>
-                            <ChevronRight className='h-3 w-3' />
-                            Based on your script
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className='mt-2 space-y-1'>
-                            {excerpts.map((ex, i) => (
-                              <p
-                                key={i}
-                                className='text-muted-foreground border-muted border-l-2 pl-4 text-xs italic'
-                              >
-                                {ex}
-                              </p>
-                            ))}
-                          </CollapsibleContent>
-                        </Collapsible>
-                      )}
-
-                      {/* Action buttons */}
-                      <div className='flex items-center gap-2 pt-1'>
-                        {isEditing ? (
-                          <>
                             <Button
                               size='sm'
-                              onClick={() => handleSaveSection(section.id)}
+                              onClick={() => handleResolveAmbiguity(a.id)}
+                              disabled={resolvingAmbiguityId === a.id}
                             >
-                              <Save className='mr-1 h-3.5 w-3.5' /> Save
-                            </Button>
-                            <Button
-                              size='sm'
-                              variant='ghost'
-                              onClick={() => setEditingSectionId(null)}
-                            >
-                              Cancel
+                              {resolvingAmbiguityId === a.id && (
+                                <Loader2 className='mr-1 h-4 w-4 animate-spin' />
+                              )}
+                              Resolve
                             </Button>
                           </>
-                        ) : (
-                          <Button
-                            size='sm'
-                            variant='outline'
-                            onClick={() => {
-                              setEditingSectionId(section.id);
-                              setEditTitle(section.title);
-                              setEditContent(section.content);
-                            }}
-                          >
-                            <Pencil className='mr-1 h-3.5 w-3.5' /> Edit
-                          </Button>
                         )}
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* 3c. Methodology Summary */}
+              {breakdown.methodologySummary && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className='text-base'>
+                      Methodology Summary
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className='text-sm leading-relaxed'>
+                      {breakdown.methodologySummary}
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* 3d. Sections */}
+              <div className='space-y-4'>
+                <h2 className='text-lg font-semibold'>Sections</h2>
+                {breakdown.sections
+                  .sort((a, b) => a.orderIndex - b.orderIndex)
+                  .map((section) => {
+                    const isEditing = editingSectionId === section.id;
+                    const isRegenerating = regeneratingSectionId === section.id;
+                    const excerpts = Array.isArray(section.sourceExcerpts)
+                      ? (section.sourceExcerpts as string[])
+                      : [];
+                    return (
+                      <Card
+                        key={section.id}
+                        className={
+                          section.userApproved
+                            ? 'border-l-4 border-l-green-500'
+                            : ''
+                        }
+                      >
+                        <CardHeader className='pb-2'>
+                          <div className='flex flex-wrap items-center gap-3'>
+                            {isEditing ? (
+                              <Input
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                className='max-w-xs'
+                              />
+                            ) : (
+                              <CardTitle className='text-base'>
+                                {section.title}
+                              </CardTitle>
+                            )}
+                            <Badge
+                              className={confidenceColor(section.confidence)}
+                            >
+                              {section.confidence}
+                            </Badge>
+                            {section.userEdited && (
+                              <Badge variant='secondary' className='text-xs'>
+                                Edited
+                              </Badge>
+                            )}
+                            <div className='ml-auto flex items-center gap-2'>
+                              <label className='flex cursor-pointer items-center gap-1.5 text-sm'>
+                                <Checkbox
+                                  checked={section.userApproved}
+                                  onCheckedChange={() =>
+                                    handleApproveSection(
+                                      section.id,
+                                      section.userApproved
+                                    )
+                                  }
+                                />
+                                Approved
+                              </label>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent className='space-y-3'>
+                          {isEditing ? (
+                            <Textarea
+                              value={editContent}
+                              onChange={(e) => setEditContent(e.target.value)}
+                              rows={6}
+                            />
+                          ) : (
+                            <p className='text-sm leading-relaxed whitespace-pre-wrap'>
+                              {section.content}
+                            </p>
+                          )}
+
+                          {/* Source excerpts */}
+                          {excerpts.length > 0 && (
+                            <Collapsible>
+                              <CollapsibleTrigger className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs transition-colors'>
+                                <ChevronRight className='h-3 w-3' />
+                                Based on your script
+                              </CollapsibleTrigger>
+                              <CollapsibleContent className='mt-2 space-y-1'>
+                                {excerpts.map((ex, i) => (
+                                  <p
+                                    key={i}
+                                    className='text-muted-foreground border-muted border-l-2 pl-4 text-xs italic'
+                                  >
+                                    {ex}
+                                  </p>
+                                ))}
+                              </CollapsibleContent>
+                            </Collapsible>
+                          )}
+
+                          {/* Action buttons */}
+                          <div className='flex items-center gap-2 pt-1'>
+                            {isEditing ? (
+                              <>
+                                <Button
+                                  size='sm'
+                                  onClick={() => handleSaveSection(section.id)}
+                                >
+                                  <Save className='mr-1 h-3.5 w-3.5' /> Save
+                                </Button>
+                                <Button
+                                  size='sm'
+                                  variant='ghost'
+                                  onClick={() => setEditingSectionId(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() => {
+                                  setEditingSectionId(section.id);
+                                  setEditTitle(section.title);
+                                  setEditContent(section.content);
+                                }}
+                              >
+                                <Pencil className='mr-1 h-3.5 w-3.5' /> Edit
+                              </Button>
+                            )}
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              disabled={isRegenerating}
+                              onClick={() =>
+                                handleRegenerateSection(section.id)
+                              }
+                            >
+                              {isRegenerating ? (
+                                <Loader2 className='mr-1 h-3.5 w-3.5 animate-spin' />
+                              ) : (
+                                <RotateCw className='mr-1 h-3.5 w-3.5' />
+                              )}
+                              Regenerate
+                            </Button>
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              className='text-destructive hover:text-destructive'
+                              onClick={() => handleDeleteSection(section.id)}
+                            >
+                              <Trash2 className='mr-1 h-3.5 w-3.5' /> Delete
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+
+                {/* 3e. Add Section */}
+                {showAddSection ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className='text-base'>
+                        Add Custom Section
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className='space-y-3'>
+                      <div className='space-y-1.5'>
+                        <Label>Title</Label>
+                        <Input
+                          value={newSectionTitle}
+                          onChange={(e) => setNewSectionTitle(e.target.value)}
+                          placeholder='Section title'
+                        />
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Content</Label>
+                        <Textarea
+                          value={newSectionContent}
+                          onChange={(e) => setNewSectionContent(e.target.value)}
+                          placeholder='Section content...'
+                          rows={4}
+                        />
+                      </div>
+                      <div className='flex gap-2'>
                         <Button
                           size='sm'
-                          variant='outline'
-                          disabled={isRegenerating}
-                          onClick={() => handleRegenerateSection(section.id)}
+                          onClick={handleAddSection}
+                          disabled={
+                            !newSectionTitle.trim() || !newSectionContent.trim()
+                          }
                         >
-                          {isRegenerating ? (
-                            <Loader2 className='mr-1 h-3.5 w-3.5 animate-spin' />
-                          ) : (
-                            <RotateCw className='mr-1 h-3.5 w-3.5' />
-                          )}
-                          Regenerate
+                          <Save className='mr-1 h-3.5 w-3.5' /> Save
                         </Button>
                         <Button
                           size='sm'
-                          variant='outline'
-                          className='text-destructive hover:text-destructive'
-                          onClick={() => handleDeleteSection(section.id)}
+                          variant='ghost'
+                          onClick={() => {
+                            setShowAddSection(false);
+                            setNewSectionTitle('');
+                            setNewSectionContent('');
+                          }}
                         >
-                          <Trash2 className='mr-1 h-3.5 w-3.5' /> Delete
+                          Cancel
                         </Button>
                       </div>
                     </CardContent>
                   </Card>
-                );
-              })}
+                ) : (
+                  <Button
+                    variant='outline'
+                    onClick={() => setShowAddSection(true)}
+                  >
+                    <Plus className='mr-1 h-4 w-4' /> Add Section
+                  </Button>
+                )}
+              </div>
 
-            {/* 3e. Add Section */}
-            {showAddSection ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle className='text-base'>
-                    Add Custom Section
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className='space-y-3'>
-                  <div className='space-y-1.5'>
-                    <Label>Title</Label>
-                    <Input
-                      value={newSectionTitle}
-                      onChange={(e) => setNewSectionTitle(e.target.value)}
-                      placeholder='Section title'
-                    />
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label>Content</Label>
-                    <Textarea
-                      value={newSectionContent}
-                      onChange={(e) => setNewSectionContent(e.target.value)}
-                      placeholder='Section content...'
-                      rows={4}
-                    />
-                  </div>
-                  <div className='flex gap-2'>
-                    <Button
-                      size='sm'
-                      onClick={handleAddSection}
-                      disabled={
-                        !newSectionTitle.trim() || !newSectionContent.trim()
-                      }
-                    >
-                      <Save className='mr-1 h-3.5 w-3.5' /> Save
-                    </Button>
-                    <Button
-                      size='sm'
-                      variant='ghost'
-                      onClick={() => {
-                        setShowAddSection(false);
-                        setNewSectionTitle('');
-                        setNewSectionContent('');
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : (
-              <Button variant='outline' onClick={() => setShowAddSection(true)}>
-                <Plus className='mr-1 h-4 w-4' /> Add Section
-              </Button>
-            )}
-          </div>
+              {/* 3f. Gaps Panel */}
+              {gaps.length > 0 && (
+                <Collapsible>
+                  <Card>
+                    <CollapsibleTrigger asChild>
+                      <CardHeader className='hover:bg-muted/50 cursor-pointer transition-colors'>
+                        <CardTitle className='flex items-center gap-2 text-base'>
+                          <ChevronDown className='h-4 w-4' />
+                          What your script doesn&apos;t cover ({gaps.length})
+                        </CardTitle>
+                      </CardHeader>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <CardContent>
+                        <ul className='list-disc space-y-1 pl-5'>
+                          {gaps.map((g, i) => (
+                            <li
+                              key={i}
+                              className='text-muted-foreground text-sm'
+                            >
+                              {g}
+                            </li>
+                          ))}
+                        </ul>
+                      </CardContent>
+                    </CollapsibleContent>
+                  </Card>
+                </Collapsible>
+              )}
+            </TabsContent>
 
-          {/* 3f. Gaps Panel */}
-          {gaps.length > 0 && (
-            <Collapsible>
-              <Card>
-                <CollapsibleTrigger asChild>
-                  <CardHeader className='hover:bg-muted/50 cursor-pointer transition-colors'>
-                    <CardTitle className='flex items-center gap-2 text-base'>
-                      <ChevronDown className='h-4 w-4' />
-                      What your script doesn&apos;t cover ({gaps.length})
-                    </CardTitle>
-                  </CardHeader>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <CardContent>
-                    <ul className='list-disc space-y-1 pl-5'>
-                      {gaps.map((g, i) => (
-                        <li key={i} className='text-muted-foreground text-sm'>
-                          {g}
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </CollapsibleContent>
-              </Card>
-            </Collapsible>
-          )}
+            {/* ── Script Framework Tab ── */}
+            <TabsContent value='framework' className='mt-4'>
+              <ScriptFrameworkView
+                breakdownId={breakdown.id}
+                scriptSteps={(breakdown.scriptSteps as ScriptStep[]) || []}
+                voiceNoteSlots={(breakdown.voiceNoteSlots || []).map((s) => ({
+                  id: s.id,
+                  slotName: s.slotName,
+                  status: s.status
+                }))}
+                onStepsChange={(steps) =>
+                  setBreakdown({ ...breakdown, scriptSteps: steps })
+                }
+                onSwitchToVoiceNotes={() => setActiveTab('voice-notes')}
+              />
+            </TabsContent>
+
+            {/* ── Voice Notes Tab ── */}
+            <TabsContent value='voice-notes' className='mt-4'>
+              <VoiceNoteSlotsView
+                slots={breakdown.voiceNoteSlots || []}
+                onSlotsChange={(slots) =>
+                  setBreakdown({ ...breakdown, voiceNoteSlots: slots })
+                }
+              />
+            </TabsContent>
+          </Tabs>
 
           {/* 3g. Global Actions */}
           <Card>

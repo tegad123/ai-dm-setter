@@ -81,8 +81,11 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
   "selected_slot_iso": null | "2026-04-09T14:00:00.000Z",
   "lead_email": null | "lead@example.com",
   "suggested_tag": "HIGH_INTENT" | "RESISTANT" | "UNQUALIFIED" | "NEUTRAL" | "",
-  "suggested_tags": ["tag1", "tag2"]
+  "suggested_tags": ["tag1", "tag2"],
+  "voice_note_action": null | { "slot_id": "<voice_note_slot_id>" }
 }
+
+**voice_note_action**: When your Script Framework indicates a "send_voice_note" action at the current conversation point AND a matching voice note slot is listed in "Available Voice Note Slots", set voice_note_action to { "slot_id": "<id>" }. The system will send the pre-recorded audio file. Set "message" to a brief transition line or empty string — the voice note IS the message. Only use this for pre-recorded slots; for AI-generated voice notes, use "format": "voice_note" instead.
 
 ## CONVERSATION STAGES
 Progress through these stages IN ORDER. Never skip a stage. Never jump ahead because the lead volunteered information early — acknowledge it, reference it later, but complete every required stage.

@@ -189,6 +189,7 @@ model Account {
   tags               Tag[]
   teamNotes          TeamNote[]
   contentAttributions ContentAttribution[]
+  voiceNoteSlots     VoiceNoteSlot[]
 
   @@index([slug])
 }
@@ -253,14 +254,16 @@ model PersonaBreakdown {
   methodologySummary       String          @db.Text
   methodologySummaryEdited Boolean         @default(false)
   gaps                     Json?
+  scriptSteps              Json?                     // Array of ScriptStep objects (sequential flow view)
   status                   BreakdownStatus @default(DRAFT)
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 
-  account     Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  persona     AIPersona            @relation(fields: [personaId], references: [id], onDelete: Cascade)
-  sections    BreakdownSection[]
-  ambiguities BreakdownAmbiguity[]
+  account        Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona        AIPersona            @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  sections       BreakdownSection[]
+  ambiguities    BreakdownAmbiguity[]
+  voiceNoteSlots VoiceNoteSlot[]
 
   @@index([accountId])
   @@index([personaId])
@@ -299,6 +302,45 @@ model BreakdownAmbiguity {
   breakdown PersonaBreakdown @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
 
   @@index([breakdownId])
+}
+
+// ─── Voice Note Slot System ─────────────────────────────
+
+enum VoiceNoteSlotStatus {
+  EMPTY
+  UPLOADED
+  APPROVED
+}
+
+enum VoiceNoteFallback {
+  BLOCK_UNTIL_FILLED
+  SEND_TEXT_EQUIVALENT
+  SKIP_ACTION
+}
+
+model VoiceNoteSlot {
+  id                String              @id @default(cuid())
+  accountId         String
+  breakdownId       String?
+  slotName          String
+  description       String              @db.Text
+  triggerCondition  Json                // { natural_language, structured: { step_id, branch_id, action_id } }
+  audioFileUrl      String?
+  audioDurationSecs Float?
+  uploadedAt        DateTime?
+  fallbackBehavior  VoiceNoteFallback   @default(SEND_TEXT_EQUIVALENT)
+  fallbackText      String?             @db.Text
+  status            VoiceNoteSlotStatus @default(EMPTY)
+  userApproved      Boolean             @default(false)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  account   Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  breakdown PersonaBreakdown? @relation(fields: [breakdownId], references: [id], onDelete: SetNull)
+
+  @@index([accountId])
+  @@index([breakdownId])
+  @@index([accountId, status])
 }
 
 model TrainingExample {

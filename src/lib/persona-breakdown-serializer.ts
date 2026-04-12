@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import type { ScriptStep } from '@/lib/script-framework-types';
 
 // ---------------------------------------------------------------------------
 // serializeBreakdownForPrompt
@@ -21,7 +22,8 @@ export async function serializeBreakdownForPrompt(
       },
       ambiguities: {
         where: { resolved: true }
-      }
+      },
+      voiceNoteSlots: true
     }
   });
 
@@ -34,7 +36,7 @@ export async function serializeBreakdownForPrompt(
   // Methodology summary
   parts.push(`## Sales Methodology\n${breakdown.methodologySummary}`);
 
-  // Approved sections
+  // Approved sections (behavioral view)
   for (const section of breakdown.sections) {
     parts.push(`## ${section.title}\n${section.content}`);
   }
@@ -47,7 +49,78 @@ export async function serializeBreakdownForPrompt(
     parts.push(`## User-Specified Rules\n${bullets}`);
   }
 
+  // Script Framework (sequential flow view) — approved steps only
+  const scriptSteps = (breakdown.scriptSteps as ScriptStep[] | null) || [];
+  const approvedSteps = scriptSteps.filter((s) => s.user_approved);
+  if (approvedSteps.length > 0) {
+    const stepLines = serializeStepsCompact(approvedSteps);
+    parts.push(`## Script Framework (Follow this sequence)\n${stepLines}`);
+  }
+
+  // Voice Note Slots — show available pre-recorded audio slots
+  const readySlots = breakdown.voiceNoteSlots.filter(
+    (s) => s.status === 'UPLOADED' || s.status === 'APPROVED'
+  );
+  const fallbackSlots = breakdown.voiceNoteSlots.filter(
+    (s) =>
+      s.status === 'EMPTY' &&
+      s.fallbackBehavior !== 'BLOCK_UNTIL_FILLED' &&
+      s.fallbackText
+  );
+  const allUsableSlots = [...readySlots, ...fallbackSlots];
+
+  if (allUsableSlots.length > 0) {
+    const slotLines = allUsableSlots.map((s) => {
+      const hasAudio = s.status === 'UPLOADED' || s.status === 'APPROVED';
+      const tag = hasAudio ? '[AUDIO READY]' : `[FALLBACK: text equivalent]`;
+      return `- ${s.slotName} (slot_id: ${s.id}): ${s.description} ${tag}`;
+    });
+    parts.push(
+      `## Available Voice Note Slots\nWhen the conversation reaches these trigger points, output voice_note_action with the slot_id.\n${slotLines.join('\n')}`
+    );
+  }
+
   return parts.join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
+// serializeStepsCompact
+// ---------------------------------------------------------------------------
+// Converts ScriptStep[] into compact numbered text for the system prompt.
+// Keeps it concise to avoid bloating the prompt.
+// ---------------------------------------------------------------------------
+
+function serializeStepsCompact(steps: ScriptStep[]): string {
+  const lines: string[] = [];
+  for (const step of steps) {
+    let stepText = `Step ${step.step_number}: ${step.title}`;
+    for (const branch of step.branches) {
+      if (branch.condition !== 'default') {
+        stepText += `\n  IF ${branch.condition}:`;
+      }
+      for (const action of branch.actions) {
+        const prefix =
+          action.action_type === 'send_voice_note'
+            ? '[VOICE NOTE]'
+            : action.action_type === 'wait_for_response'
+              ? '[WAIT]'
+              : action.action_type === 'ask_question'
+                ? '[ASK]'
+                : action.action_type === 'send_link'
+                  ? '[LINK]'
+                  : action.action_type === 'branch_decision'
+                    ? '[DECIDE]'
+                    : '[DO]';
+        const content = action.content || action.action_type;
+        const slotRef = action.voice_note_slot_id
+          ? ` (slot_id: ${action.voice_note_slot_id})`
+          : '';
+        stepText += `\n    ${prefix} ${content}${slotRef}`;
+      }
+    }
+    lines.push(stepText);
+  }
+  return lines.join('\n\n');
 }
 
 // ---------------------------------------------------------------------------

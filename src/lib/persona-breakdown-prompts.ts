@@ -61,7 +61,77 @@ SECTION TYPE GUIDE — only create sections that are actually present in the scr
 - commitment_locking: How to lock in verbal commitments before the call
 - custom: Anything else that doesn't fit the above categories
 
-IMPORTANT: Generate between 3-15 sections depending on how detailed the script is. A simple script might only have 4-5 sections. A comprehensive SOP might have 12-15. Do NOT pad with thin sections.`;
+IMPORTANT: Generate between 3-15 sections depending on how detailed the script is. A simple script might only have 4-5 sections. A comprehensive SOP might have 12-15. Do NOT pad with thin sections.
+
+## SCRIPT STEPS (Sequential Flow View)
+
+In addition to behavioral sections, you MUST also output a sequential step-by-step flow of the script. This represents the same content as the behavioral sections but as a linear conversation flow rather than topical groupings.
+
+Add a "script_steps" array to your output with this structure:
+
+  "script_steps": [
+    {
+      "step_id": "step_1",
+      "step_number": 1,
+      "title": "Human-readable title (e.g. 'Open the conversation')",
+      "branches": [
+        {
+          "branch_id": "step_1_branch_default",
+          "condition": "default",
+          "actions": [
+            {
+              "action_id": "step_1_branch_default_action_1",
+              "action_type": "send_message",
+              "content": "The message text or question to ask",
+              "voice_note_slot_id": null,
+              "metadata": {}
+            }
+          ]
+        }
+      ],
+      "user_edited": false,
+      "user_approved": false
+    }
+  ]
+
+SCRIPT STEPS RULES:
+1. Convert the script into 5-25 sequential steps representing the natural conversation flow.
+2. Each step is a distinct phase (e.g. "Open conversation", "Ask qualifying question", "Deliver soft pitch", "Handle objection", "Book the call").
+3. Within each step, create branches for different conditional paths. Use a single "default" branch for steps without branching. Use descriptive conditions like "Lead is experienced" or "Lead objects with trust concern".
+4. Each branch contains ordered actions — what the setter does in that branch.
+5. action_type values: "send_message" (text DM), "send_voice_note" (audio), "send_link" (URL), "send_video" (video link), "ask_question" (question to the lead), "wait_for_response" (pause for lead reply), "trigger_followup" (schedule later message), "branch_decision" (routing based on lead response).
+6. For "send_voice_note" actions, set voice_note_slot_id to the ref_id from a matching voice_note_detection (see below). Set content to null for voice notes.
+7. For "wait_for_response" actions, set content to null.
+8. For "branch_decision" actions, set content to a description of what determines the branch.
+9. IDs must be unique and follow the pattern: step_{N}, step_{N}_branch_{name}, step_{N}_branch_{name}_action_{N}.
+
+## VOICE NOTE DETECTIONS
+
+Also output a "voice_note_detections" array identifying moments where voice notes should be used:
+
+  "voice_note_detections": [
+    {
+      "ref_id": "vn_ref_1",
+      "slot_name": "Short name (e.g. 'Opener Voice Note')",
+      "description": "When and why to send this voice note",
+      "trigger_condition_natural_language": "Send after the lead answers the opening question positively",
+      "trigger_condition_structured": {
+        "step_id": "step_2",
+        "branch_id": "step_2_branch_default",
+        "action_id": "step_2_branch_default_action_2"
+      },
+      "detection_type": "explicit",
+      "suggested_fallback_text": "Text equivalent if no audio is uploaded"
+    }
+  ]
+
+VOICE NOTE DETECTION RULES:
+1. EXPLICIT detections: The script literally says "send voice note", "record audio", "VN here", "voice message", etc. Set detection_type to "explicit".
+2. IMPLICIT detections: High-leverage moments where audio would significantly outperform text — emotional connections, trust-building, post-commitment warmth, personalized follow-ups. Set detection_type to "implicit".
+3. For each detection, provide suggested_fallback_text — what the AI could send as text if no audio is uploaded.
+4. Link each detection to its corresponding script step action via trigger_condition_structured. The matching action in script_steps should have action_type "send_voice_note" and voice_note_slot_id set to this detection's ref_id.
+5. Typically detect 2-8 voice note opportunities per script. Do NOT pad with low-value detections.
+6. Do NOT create ambiguities for voice note content. Voice notes are handled separately — the user will upload their own audio recordings.`;
 
 /**
  * Section regeneration prompt — sent with the script + one section to re-analyze.
