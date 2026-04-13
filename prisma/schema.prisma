@@ -191,6 +191,7 @@ model Account {
   contentAttributions ContentAttribution[]
   voiceNoteSlots     VoiceNoteSlot[]
   voiceNoteLibrary   VoiceNoteLibraryItem[]
+  voiceNoteTimingSettings VoiceNoteTimingSettings?
 
   @@index([slug])
 }
@@ -917,16 +918,35 @@ enum ScheduledReplyStatus {
 }
 
 model ScheduledReply {
-  id             String               @id @default(cuid())
-  conversationId String
-  accountId      String
-  scheduledFor   DateTime             // Absolute time when reply should be sent
-  status         ScheduledReplyStatus @default(PENDING)
-  attempts       Int                  @default(0)
-  lastError      String?              @db.Text
-  createdAt      DateTime             @default(now())
-  processedAt    DateTime?
+  id              String               @id @default(cuid())
+  conversationId  String
+  accountId       String
+  scheduledFor    DateTime             // Absolute time when reply should be sent
+  status          ScheduledReplyStatus @default(PENDING)
+  attempts        Int                  @default(0)
+  lastError       String?              @db.Text
+  messageType     String?              // 'text' | 'voice_note' | null (null = legacy pre-generation)
+  generatedResult Json?                // Pre-generated AI result (for VN-aware path)
+  createdAt       DateTime             @default(now())
+  processedAt     DateTime?
 
   @@index([status, scheduledFor])
   @@index([conversationId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Voice Note Timing Settings (independent from AI Persona text delay)
+// ---------------------------------------------------------------------------
+
+model VoiceNoteTimingSettings {
+  id                String   @id @default(cuid())
+  accountId         String   @unique
+  recordingSpeedMin Float    @default(0.7)  // Multiplier: 0.7 = AI waits 70% of note duration
+  recordingSpeedMax Float    @default(1.0)  // Multiplier: 1.0 = AI waits full note duration
+  thinkingBufferMin Float    @default(3.0)  // Extra pre-recording delay (seconds)
+  thinkingBufferMax Float    @default(8.0)  // Extra pre-recording delay (seconds)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 }

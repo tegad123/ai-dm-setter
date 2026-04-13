@@ -473,3 +473,27 @@ export async function retryVoiceNote(
 ): Promise<{ success: boolean }> {
   return apiFetch(`/api/voice-notes/${id}/retry`, { method: 'POST' });
 }
+
+// ---------------------------------------------------------------------------
+// Voice Note Timing Settings
+// ---------------------------------------------------------------------------
+
+export interface VoiceNoteTimingSettings {
+  recordingSpeedMin: number;
+  recordingSpeedMax: number;
+  thinkingBufferMin: number;
+  thinkingBufferMax: number;
+}
+
+export async function getVoiceNoteTimingSettings(): Promise<VoiceNoteTimingSettings> {
+  return apiFetch('/api/voice-notes/timing-settings');
+}
+
+export async function updateVoiceNoteTimingSettings(
+  data: Partial<VoiceNoteTimingSettings>
+): Promise<VoiceNoteTimingSettings> {
+  return apiFetch('/api/voice-notes/timing-settings', {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}

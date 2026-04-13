@@ -74,7 +74,11 @@ export async function GET(req: NextRequest) {
         `[cron] processing reply ${reply.id} convo=${reply.conversationId}`
       );
       try {
-        await processScheduledReply(reply.conversationId, reply.accountId);
+        await processScheduledReply(reply.conversationId, reply.accountId, {
+          messageType: reply.messageType,
+          generatedResult: reply.generatedResult,
+          createdAt: reply.createdAt
+        });
         console.log(`[cron] processed reply ${reply.id} OK`);
 
         await prisma.scheduledReply.update({

@@ -37,9 +37,20 @@ export const navItems: NavItem[] = [
     title: 'Voice Notes',
     url: '/dashboard/voice-notes',
     icon: 'voiceNotes',
-    isActive: false,
+    isActive: true,
     shortcut: ['v', 'n'],
-    items: []
+    items: [
+      {
+        title: 'Library',
+        url: '/dashboard/voice-notes',
+        icon: 'voiceNotes'
+      },
+      {
+        title: 'Timing',
+        url: '/dashboard/voice-notes/timing',
+        icon: 'settings'
+      }
+    ]
   },
   {
     title: 'Analytics',

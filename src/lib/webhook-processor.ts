@@ -777,6 +777,14 @@ export async function scheduleAIReply(
   //     lead sends another message during the delay window.
   //   - The reply is generated against the most up-to-date conversation
   //     state at delivery time, not at trigger time.
+  // Voice-note-aware delay path state: when voice notes are enabled,
+  // we generate first (to know the message type), then apply the
+  // appropriate delay system. These variables carry state from step 3.5
+  // into step 4d.
+  let vnAwarePath = false;
+  let vnTextMinDelay = 0;
+  let vnTextMaxDelay = 0;
+
   if (
     !options?.skipDelayQueue &&
     !leadContext.testModeSkipToBooking &&
@@ -794,17 +802,37 @@ export async function scheduleAIReply(
         (await prisma.aIPersona.findFirst({
           where: { accountId, isActive: true },
           orderBy: { updatedAt: 'desc' },
-          select: { responseDelayMin: true, responseDelayMax: true }
+          select: {
+            responseDelayMin: true,
+            responseDelayMax: true,
+            voiceNotesEnabled: true
+          }
         })) ??
         (await prisma.aIPersona.findFirst({
           where: { accountId },
           orderBy: { updatedAt: 'desc' },
-          select: { responseDelayMin: true, responseDelayMax: true }
+          select: {
+            responseDelayMin: true,
+            responseDelayMax: true,
+            voiceNotesEnabled: true
+          }
         }));
       const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
       const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
 
-      if (maxDelay > 0) {
+      // If voice notes are enabled, generate the reply FIRST so we can
+      // apply the correct delay system per message type. Fall through to
+      // Step 4 generation — delay will be applied in Step 4d.
+      if (persona?.voiceNotesEnabled) {
+        vnAwarePath = true;
+        vnTextMinDelay = minDelay;
+        vnTextMaxDelay = maxDelay;
+        log(
+          'sched.step3.5.vnAwarePath',
+          'voice notes enabled — generating first to determine message type'
+        );
+      } else if (maxDelay > 0) {
+        // EXISTING TEXT-ONLY PATH: delay before generation (unchanged)
         const { humanResponseDelay } = await import('@/lib/delay-utils');
         const delaySeconds = humanResponseDelay(minDelay, maxDelay);
         const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
@@ -1030,6 +1058,68 @@ export async function scheduleAIReply(
       '[webhook-processor] Dash sanitization failed (non-fatal):',
       err
     );
+  }
+
+  // ── Step 4d: Voice-note-aware delay ──────────────────────────────
+  // If we're in the VN-aware path (generated first, delay not yet applied),
+  // now we know the message type. Apply the appropriate delay system.
+  if (vnAwarePath && shouldAutoSend) {
+    const {
+      calculateVoiceNoteDelay,
+      estimateVoiceNoteDuration,
+      getVoiceNoteTimingSettings,
+      serializeResult
+    } = await import('@/lib/voice-note-timing');
+
+    const isVoiceNote = !!(
+      result.shouldVoiceNote || result.voiceNoteAction?.slot_id
+    );
+
+    if (isVoiceNote) {
+      // Voice note: compute delay from duration × speed + thinking
+      const vnSettings = await getVoiceNoteTimingSettings(accountId);
+      const duration = await estimateVoiceNoteDuration(result, accountId);
+      const delaySeconds = calculateVoiceNoteDelay(duration, vnSettings);
+      const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
+
+      await prisma.scheduledReply.create({
+        data: {
+          conversationId,
+          accountId,
+          scheduledFor,
+          status: 'PENDING',
+          messageType: 'voice_note',
+          generatedResult: serializeResult(result) as object
+        }
+      });
+      log(
+        'sched.step4d.vnDelay',
+        `voice note queued (duration: ${Math.round(duration)}s, delay: ${delaySeconds}s, scheduledFor: ${scheduledFor.toISOString()})`
+      );
+      return;
+    } else if (vnTextMaxDelay > 0) {
+      // Text from VN-enabled account: use existing persona text delay
+      const { humanResponseDelay } = await import('@/lib/delay-utils');
+      const delaySeconds = humanResponseDelay(vnTextMinDelay, vnTextMaxDelay);
+      const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
+
+      await prisma.scheduledReply.create({
+        data: {
+          conversationId,
+          accountId,
+          scheduledFor,
+          status: 'PENDING',
+          messageType: 'text',
+          generatedResult: serializeResult(result) as object
+        }
+      });
+      log(
+        'sched.step4d.textDelay',
+        `text reply queued from VN-aware path (delay: ${delaySeconds}s, range: ${vnTextMinDelay}-${vnTextMaxDelay}s)`
+      );
+      return;
+    }
+    // No delay configured — fall through to immediate send
   }
 
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
@@ -2106,9 +2196,87 @@ async function updateLeadStatusFromStage(
 
 export async function processScheduledReply(
   conversationId: string,
-  accountId: string
+  accountId: string,
+  storedResult?: {
+    messageType?: string | null;
+    generatedResult?: unknown;
+    createdAt?: Date | null;
+  }
 ): Promise<void> {
+  if (storedResult?.generatedResult) {
+    // Staleness check: if the lead sent new messages after the scheduled
+    // reply was created, the pre-generated result may be outdated. In that
+    // case, discard and regenerate fresh.
+    if (storedResult.createdAt) {
+      const newerLeadMsg = await prisma.message.findFirst({
+        where: {
+          conversation: { id: conversationId },
+          sender: 'LEAD',
+          timestamp: { gt: storedResult.createdAt }
+        },
+        select: { id: true }
+      });
+      if (newerLeadMsg) {
+        console.log(
+          `[webhook-processor] Stale pre-generated result for ${conversationId} — lead sent new message, regenerating`
+        );
+        await scheduleAIReply(conversationId, accountId, {
+          skipDelayQueue: true
+        });
+        return;
+      }
+    }
+
+    // Deliver the pre-generated result directly
+    await deliverStoredReply(
+      conversationId,
+      accountId,
+      storedResult.generatedResult
+    );
+    return;
+  }
+
+  // Legacy path: no stored result, generate fresh (existing behavior)
   await scheduleAIReply(conversationId, accountId, { skipDelayQueue: true });
+}
+
+/**
+ * Deliver a pre-generated AI reply stored in ScheduledReply.generatedResult.
+ * Re-fetches the conversation/lead and calls sendAIReply directly.
+ */
+async function deliverStoredReply(
+  conversationId: string,
+  accountId: string,
+  generatedResult: unknown
+): Promise<void> {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { lead: true }
+  });
+
+  if (!conversation?.lead) {
+    console.warn(
+      `[webhook-processor] deliverStoredReply: conversation ${conversationId} not found`
+    );
+    return;
+  }
+
+  // Check AI is still active and conversation not manually taken over
+  if (!conversation.aiActive) {
+    console.log(
+      `[webhook-processor] deliverStoredReply: AI paused for ${conversationId} — skipping`
+    );
+    return;
+  }
+
+  const { lead } = conversation;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = generatedResult as any;
+
+  console.log(
+    `[webhook-processor] Delivering pre-generated ${result.shouldVoiceNote || result.voiceNoteAction?.slot_id ? 'voice note' : 'text'} reply for ${conversationId}`
+  );
+  await sendAIReply(conversationId, accountId, lead, result);
 }
 
 // ---------------------------------------------------------------------------
