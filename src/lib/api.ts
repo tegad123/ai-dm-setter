@@ -479,10 +479,8 @@ export async function retryVoiceNote(
 // ---------------------------------------------------------------------------
 
 export interface VoiceNoteTimingSettings {
-  recordingSpeedMin: number;
-  recordingSpeedMax: number;
-  thinkingBufferMin: number;
-  thinkingBufferMax: number;
+  minDelay: number;
+  maxDelay: number;
 }
 
 export async function getVoiceNoteTimingSettings(): Promise<VoiceNoteTimingSettings> {

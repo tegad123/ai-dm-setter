@@ -35,53 +35,28 @@ export async function PUT(req: NextRequest) {
     const auth = await requireAuth(req);
     const body = await req.json();
 
-    const {
-      recordingSpeedMin,
-      recordingSpeedMax,
-      thinkingBufferMin,
-      thinkingBufferMax
-    } = body as {
-      recordingSpeedMin?: number;
-      recordingSpeedMax?: number;
-      thinkingBufferMin?: number;
-      thinkingBufferMax?: number;
+    const { minDelay, maxDelay } = body as {
+      minDelay?: number;
+      maxDelay?: number;
     };
+
+    // Merge with existing
+    const current = await getVoiceNoteTimingSettings(auth.accountId);
+    const min = minDelay ?? current.minDelay;
+    const max = maxDelay ?? current.maxDelay;
 
     // Validate
     const errors: string[] = [];
-    if (recordingSpeedMin !== undefined && recordingSpeedMin <= 0)
-      errors.push('recordingSpeedMin must be > 0');
-    if (recordingSpeedMax !== undefined && recordingSpeedMax <= 0)
-      errors.push('recordingSpeedMax must be > 0');
-    if (recordingSpeedMax !== undefined && recordingSpeedMax > 2.0)
-      errors.push('recordingSpeedMax must be <= 2.0');
-    if (thinkingBufferMin !== undefined && thinkingBufferMin < 0)
-      errors.push('thinkingBufferMin must be >= 0');
-    if (thinkingBufferMax !== undefined && thinkingBufferMax < 0)
-      errors.push('thinkingBufferMax must be >= 0');
-
-    // Cross-field validation (use incoming values or existing defaults)
-    const current = await getVoiceNoteTimingSettings(auth.accountId);
-    const sMin = recordingSpeedMin ?? current.recordingSpeedMin;
-    const sMax = recordingSpeedMax ?? current.recordingSpeedMax;
-    const tMin = thinkingBufferMin ?? current.thinkingBufferMin;
-    const tMax = thinkingBufferMax ?? current.thinkingBufferMax;
-
-    if (sMin > sMax)
-      errors.push('recordingSpeedMin must be <= recordingSpeedMax');
-    if (tMin > tMax)
-      errors.push('thinkingBufferMin must be <= thinkingBufferMax');
+    if (min < 0) errors.push('minDelay must be >= 0');
+    if (max < 0) errors.push('maxDelay must be >= 0');
+    if (min > max) errors.push('minDelay must be <= maxDelay');
+    if (max > 600) errors.push('maxDelay must be <= 600 seconds');
 
     if (errors.length > 0) {
       return NextResponse.json({ error: errors.join('; ') }, { status: 400 });
     }
 
-    const data = {
-      recordingSpeedMin: sMin,
-      recordingSpeedMax: sMax,
-      thinkingBufferMin: tMin,
-      thinkingBufferMax: tMax
-    };
+    const data = { minDelay: min, maxDelay: max };
 
     const updated = await prisma.voiceNoteTimingSettings.upsert({
       where: { accountId: auth.accountId },
@@ -90,10 +65,8 @@ export async function PUT(req: NextRequest) {
     });
 
     return NextResponse.json({
-      recordingSpeedMin: updated.recordingSpeedMin,
-      recordingSpeedMax: updated.recordingSpeedMax,
-      thinkingBufferMin: updated.thinkingBufferMin,
-      thinkingBufferMax: updated.thinkingBufferMax
+      minDelay: updated.minDelay,
+      maxDelay: updated.maxDelay
     });
   } catch (err) {
     if (err instanceof AuthError) {

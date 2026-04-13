@@ -939,14 +939,12 @@ model ScheduledReply {
 // ---------------------------------------------------------------------------
 
 model VoiceNoteTimingSettings {
-  id                String   @id @default(cuid())
-  accountId         String   @unique
-  recordingSpeedMin Float    @default(0.7)  // Multiplier: 0.7 = AI waits 70% of note duration
-  recordingSpeedMax Float    @default(1.0)  // Multiplier: 1.0 = AI waits full note duration
-  thinkingBufferMin Float    @default(3.0)  // Extra pre-recording delay (seconds)
-  thinkingBufferMax Float    @default(8.0)  // Extra pre-recording delay (seconds)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id        String   @id @default(cuid())
+  accountId String   @unique
+  minDelay  Float    @default(10)   // Minimum delay in seconds before sending
+  maxDelay  Float    @default(60)   // Maximum delay in seconds before sending
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 }

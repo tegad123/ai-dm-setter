@@ -5,24 +5,17 @@ import prisma from '@/lib/prisma';
 // ---------------------------------------------------------------------------
 
 const DEFAULTS = {
-  recordingSpeedMin: 0.7,
-  recordingSpeedMax: 1.0,
-  thinkingBufferMin: 3,
-  thinkingBufferMax: 8
+  minDelay: 10,
+  maxDelay: 60
 };
-
-const FLOOR_SECONDS = 10;
-const CEILING_SECONDS = 180;
 
 // ---------------------------------------------------------------------------
 // Settings helpers
 // ---------------------------------------------------------------------------
 
 export interface VoiceNoteTimingConfig {
-  recordingSpeedMin: number;
-  recordingSpeedMax: number;
-  thinkingBufferMin: number;
-  thinkingBufferMax: number;
+  minDelay: number;
+  maxDelay: number;
 }
 
 /**
@@ -36,10 +29,8 @@ export async function getVoiceNoteTimingSettings(
   });
   if (!row) return DEFAULTS;
   return {
-    recordingSpeedMin: row.recordingSpeedMin,
-    recordingSpeedMax: row.recordingSpeedMax,
-    thinkingBufferMin: row.thinkingBufferMin,
-    thinkingBufferMax: row.thinkingBufferMax
+    minDelay: row.minDelay,
+    maxDelay: row.maxDelay
   };
 }
 
@@ -49,51 +40,14 @@ export async function getVoiceNoteTimingSettings(
 
 /**
  * Calculate the voice note delay in seconds.
- *
- * Formula: (duration × random(speedMin, speedMax)) + random(thinkingMin, thinkingMax)
- * Clamped to [10, 180] seconds.
+ * Simply picks a random value between minDelay and maxDelay.
  */
 export function calculateVoiceNoteDelay(
-  durationSeconds: number,
   settings: VoiceNoteTimingConfig
 ): number {
-  const speed =
-    settings.recordingSpeedMin +
-    Math.random() * (settings.recordingSpeedMax - settings.recordingSpeedMin);
-  const thinking =
-    settings.thinkingBufferMin +
-    Math.random() * (settings.thinkingBufferMax - settings.thinkingBufferMin);
-  const raw = durationSeconds * speed + thinking;
-  return Math.max(FLOOR_SECONDS, Math.min(CEILING_SECONDS, Math.round(raw)));
-}
-
-// ---------------------------------------------------------------------------
-// Duration estimation
-// ---------------------------------------------------------------------------
-
-/**
- * Estimate the voice note duration based on the AI result.
- *
- * - Pre-recorded slot → look up VoiceNoteSlot.audioDurationSecs
- * - TTS fallback → estimate from text word count (~2.5 words/sec)
- */
-export async function estimateVoiceNoteDuration(
-  result: {
-    voiceNoteAction?: { slot_id: string } | null;
-    reply: string;
-  },
-  accountId: string
-): Promise<number> {
-  if (result.voiceNoteAction?.slot_id) {
-    const slot = await prisma.voiceNoteSlot.findFirst({
-      where: { id: result.voiceNoteAction.slot_id, accountId },
-      select: { audioDurationSecs: true }
-    });
-    if (slot?.audioDurationSecs) return slot.audioDurationSecs;
-  }
-  // TTS estimate: ~2.5 words/sec at normal speech rate
-  const wordCount = result.reply.split(/\s+/).length;
-  return Math.max(5, wordCount / 2.5);
+  const raw =
+    settings.minDelay + Math.random() * (settings.maxDelay - settings.minDelay);
+  return Math.round(raw);
 }
 
 // ---------------------------------------------------------------------------

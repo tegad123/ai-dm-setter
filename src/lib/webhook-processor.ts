@@ -1066,7 +1066,6 @@ export async function scheduleAIReply(
   if (vnAwarePath && shouldAutoSend) {
     const {
       calculateVoiceNoteDelay,
-      estimateVoiceNoteDuration,
       getVoiceNoteTimingSettings,
       serializeResult
     } = await import('@/lib/voice-note-timing');
@@ -1076,10 +1075,9 @@ export async function scheduleAIReply(
     );
 
     if (isVoiceNote) {
-      // Voice note: compute delay from duration × speed + thinking
+      // Voice note: pick random delay between min and max
       const vnSettings = await getVoiceNoteTimingSettings(accountId);
-      const duration = await estimateVoiceNoteDuration(result, accountId);
-      const delaySeconds = calculateVoiceNoteDelay(duration, vnSettings);
+      const delaySeconds = calculateVoiceNoteDelay(vnSettings);
       const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
 
       await prisma.scheduledReply.create({
@@ -1094,7 +1092,7 @@ export async function scheduleAIReply(
       });
       log(
         'sched.step4d.vnDelay',
-        `voice note queued (duration: ${Math.round(duration)}s, delay: ${delaySeconds}s, scheduledFor: ${scheduledFor.toISOString()})`
+        `voice note queued (delay: ${delaySeconds}s, scheduledFor: ${scheduledFor.toISOString()})`
       );
       return;
     } else if (vnTextMaxDelay > 0) {
