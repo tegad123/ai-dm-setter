@@ -35,6 +35,8 @@ export interface ScriptAction {
   action_type: ScriptActionType;
   content: string | null;
   voice_note_slot_id: string | null;
+  /** Sprint 3: Reference to ScriptSlot.id for any slot type */
+  slot_id: string | null;
   metadata: Record<string, unknown>;
 }
 

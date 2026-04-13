@@ -401,6 +401,8 @@ export interface VoiceNoteLibraryItem {
   triggerDescription: string | null;
   legacyTriggerText: string | null;
   boundToScriptStep: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scriptBindings: any[] | null;
   userLabel: string | null;
   userNotes: string | null;
   priority: number;

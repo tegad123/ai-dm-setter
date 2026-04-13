@@ -33,7 +33,6 @@ import {
   Upload,
   FileText,
   AlertCircle,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Pencil,
@@ -42,12 +41,13 @@ import {
   Plus,
   Settings,
   X,
-  Save,
-  Mic
+  Save
 } from 'lucide-react';
 import ScriptFrameworkView from '@/components/persona/script-framework-view';
-import VoiceNoteSlotsView from '@/components/persona/voice-note-slots-view';
+import { SlotStatusSummary } from '@/components/persona/script-slot-cards';
 import type { ScriptStep } from '@/lib/script-framework-types';
+import type { ScriptSlot } from '@/lib/script-slot-types';
+import type { VoiceNoteLibraryItem } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -108,6 +108,7 @@ interface Breakdown {
   sections: BreakdownSection[];
   ambiguities: BreakdownAmbiguity[];
   voiceNoteSlots: VoiceNoteSlotData[];
+  scriptSlots: ScriptSlot[];
   createdAt: string;
   updatedAt: string;
 }
@@ -183,19 +184,16 @@ export default function PersonaPage() {
   const [newSectionTitle, setNewSectionTitle] = useState('');
   const [newSectionContent, setNewSectionContent] = useState('');
 
-  // Ambiguity answers (local state while typing)
-  const [ambiguityAnswers, setAmbiguityAnswers] = useState<
-    Record<string, string>
-  >({});
-  const [resolvingAmbiguityId, setResolvingAmbiguityId] = useState<
-    string | null
-  >(null);
-
   // Activation
   const [activating, setActivating] = useState(false);
 
   // Tabs
   const [activeTab, setActiveTab] = useState('behavior');
+
+  // Library voice notes (for slot picker)
+  const [libraryVoiceNotes, setLibraryVoiceNotes] = useState<
+    VoiceNoteLibraryItem[]
+  >([]);
 
   // Basic settings
   const [personaName, setPersonaName] = useState('');
@@ -214,10 +212,16 @@ export default function PersonaPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [personaRes, scriptRes] = await Promise.all([
+        const [personaRes, scriptRes, vnRes] = await Promise.all([
           apiFetch<{ persona: Persona | null }>('/settings/persona'),
-          apiFetch<{ breakdown: Breakdown | null }>('/settings/persona/script')
+          apiFetch<{ breakdown: Breakdown | null }>('/settings/persona/script'),
+          apiFetch<{ items: VoiceNoteLibraryItem[] }>('/voice-notes').catch(
+            () => ({ items: [] })
+          )
         ]);
+        setLibraryVoiceNotes(
+          vnRes.items.filter((vn) => vn.status === 'ACTIVE')
+        );
         if (personaRes.persona) {
           const p = personaRes.persona;
           setPersonaName(p.personaName || '');
@@ -460,38 +464,19 @@ export default function PersonaPage() {
     }
   }, [breakdown, newSectionTitle, newSectionContent]);
 
-  const handleResolveAmbiguity = useCallback(
-    async (ambiguityId: string) => {
-      if (!breakdown) return;
-      const answer = ambiguityAnswers[ambiguityId]?.trim();
-      if (!answer) return;
-      setResolvingAmbiguityId(ambiguityId);
-      try {
-        await apiFetch(`/settings/persona/script/${breakdown.id}/ambiguity`, {
-          method: 'PUT',
-          body: JSON.stringify({ ambiguityId, userAnswer: answer })
-        });
-        setBreakdown((prev) =>
-          prev
-            ? {
-                ...prev,
-                ambiguities: prev.ambiguities.map((a) =>
-                  a.id === ambiguityId
-                    ? { ...a, userAnswer: answer, resolved: true }
-                    : a
-                )
-              }
-            : prev
-        );
-        toast.success('Resolved');
-      } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : 'Failed to resolve');
-      } finally {
-        setResolvingAmbiguityId(null);
-      }
-    },
-    [breakdown, ambiguityAnswers]
-  );
+  // Sprint 3: Handle slot updates from inline slot cards
+  const handleSlotUpdate = useCallback((updatedSlot: ScriptSlot) => {
+    setBreakdown((prev) =>
+      prev
+        ? {
+            ...prev,
+            scriptSlots: prev.scriptSlots.map((s) =>
+              s.id === updatedSlot.id ? updatedSlot : s
+            )
+          }
+        : prev
+    );
+  }, []);
 
   const handleActivate = useCallback(async () => {
     if (!breakdown) return;
@@ -569,8 +554,6 @@ export default function PersonaPage() {
   // Derived
   // -------------------------------------------------------------------------
 
-  const unresolvedCount =
-    breakdown?.ambiguities.filter((a) => !a.resolved).length ?? 0;
   const approvedCount =
     breakdown?.sections.filter((s) => s.userApproved).length ?? 0;
   const gaps = Array.isArray(breakdown?.gaps)
@@ -580,14 +563,19 @@ export default function PersonaPage() {
     breakdown?.voiceNoteSlots?.filter(
       (s) => s.status === 'EMPTY' && s.fallbackBehavior === 'BLOCK_UNTIL_FILLED'
     ).length ?? 0;
-  const canActivate =
-    unresolvedCount === 0 && approvedCount > 0 && blockingSlotCount === 0;
+
+  // Sprint 3: Lenient activation — only blocking VN slots and no approved sections gate activation.
+  const canActivate = approvedCount > 0 && blockingSlotCount === 0;
   const isActive = breakdown?.status === 'ACTIVE';
 
+  // Count unfilled slots for warning
+  const unfilledSlotCount =
+    breakdown?.scriptSlots?.filter(
+      (s) => s.status === 'unfilled' && s.slotType !== 'runtime_judgment'
+    ).length ?? 0;
+
   let activateTooltip = '';
-  if (unresolvedCount > 0)
-    activateTooltip = `Resolve ${unresolvedCount} ambiguity item(s) first`;
-  else if (approvedCount === 0)
+  if (approvedCount === 0)
     activateTooltip = 'Approve at least one section first';
   else if (blockingSlotCount > 0)
     activateTooltip = `${blockingSlotCount} voice note slot(s) need audio or a fallback`;
@@ -744,7 +732,7 @@ export default function PersonaPage() {
             </CardContent>
           </Card>
 
-          {/* Tabs: Behavior | Script Framework | Voice Notes */}
+          {/* Tabs: Behavior | Script Framework */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className='w-full'>
               <TabsTrigger value='behavior' className='flex-1'>
@@ -758,85 +746,26 @@ export default function PersonaPage() {
                   </Badge>
                 )}
               </TabsTrigger>
-              <TabsTrigger value='voice-notes' className='flex-1'>
-                <Mic className='mr-1 h-3.5 w-3.5' />
-                Voice Notes
-                {(breakdown.voiceNoteSlots?.length ?? 0) > 0 && (
-                  <Badge
-                    variant={
-                      blockingSlotCount > 0 ? 'destructive' : 'secondary'
-                    }
-                    className='ml-1.5 text-xs'
-                  >
-                    {breakdown.voiceNoteSlots.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
             </TabsList>
 
             {/* ── Behavior Settings Tab ── */}
             <TabsContent value='behavior' className='mt-4 space-y-6'>
-              {/* 3b. Ambiguity Panel */}
-              {breakdown.ambiguities.length > 0 && (
-                <Card className='border-amber-300 bg-amber-50/50'>
-                  <CardHeader>
-                    <CardTitle className='flex items-center gap-2 text-amber-800'>
-                      <AlertCircle className='h-5 w-5' />I need your input on{' '}
-                      {unresolvedCount} item{unresolvedCount !== 1 ? 's' : ''}{' '}
-                      before I can represent you accurately
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className='space-y-4'>
-                    {breakdown.ambiguities.map((a) => (
-                      <div
-                        key={a.id}
-                        className='space-y-2 rounded-lg border bg-white p-4'
-                      >
-                        {a.resolved ? (
-                          <div className='flex items-start gap-2'>
-                            <CheckCircle2 className='mt-0.5 h-5 w-5 shrink-0 text-green-600' />
-                            <div>
-                              <p className='font-medium'>{a.question}</p>
-                              <p className='text-muted-foreground mt-1 text-sm'>
-                                {a.userAnswer}
-                              </p>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <p className='font-medium'>{a.question}</p>
-                            <p className='text-muted-foreground text-sm'>
-                              If you don&apos;t answer, I&apos;ll:{' '}
-                              {a.suggestedDefault}
-                            </p>
-                            <Textarea
-                              rows={2}
-                              value={
-                                ambiguityAnswers[a.id] ?? a.suggestedDefault
-                              }
-                              onChange={(e) =>
-                                setAmbiguityAnswers((prev) => ({
-                                  ...prev,
-                                  [a.id]: e.target.value
-                                }))
-                              }
-                            />
-                            <Button
-                              size='sm'
-                              onClick={() => handleResolveAmbiguity(a.id)}
-                              disabled={resolvingAmbiguityId === a.id}
-                            >
-                              {resolvingAmbiguityId === a.id && (
-                                <Loader2 className='mr-1 h-4 w-4 animate-spin' />
-                              )}
-                              Resolve
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
+              {/* Sprint 3: Slot Status Summary */}
+              {(breakdown.scriptSlots?.length ?? 0) > 0 && (
+                <SlotStatusSummary slots={breakdown.scriptSlots} />
+              )}
+
+              {/* Sprint 3: Warning banner for unfilled slots */}
+              {unfilledSlotCount > 0 && (
+                <div className='flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50/50 px-4 py-3'>
+                  <AlertCircle className='h-4 w-4 shrink-0 text-amber-600' />
+                  <p className='text-sm text-amber-800'>
+                    You have {unfilledSlotCount} unfilled slot
+                    {unfilledSlotCount !== 1 ? 's' : ''}. The AI will fall back
+                    to text or skip these actions at runtime. Fill them in the
+                    Script Framework tab for best results.
+                  </p>
+                </div>
               )}
 
               {/* 3c. Methodology Summary */}
@@ -1103,25 +1032,12 @@ export default function PersonaPage() {
               <ScriptFrameworkView
                 breakdownId={breakdown.id}
                 scriptSteps={(breakdown.scriptSteps as ScriptStep[]) || []}
-                voiceNoteSlots={(breakdown.voiceNoteSlots || []).map((s) => ({
-                  id: s.id,
-                  slotName: s.slotName,
-                  status: s.status
-                }))}
+                scriptSlots={breakdown.scriptSlots || []}
+                libraryVoiceNotes={libraryVoiceNotes}
                 onStepsChange={(steps) =>
                   setBreakdown({ ...breakdown, scriptSteps: steps })
                 }
-                onSwitchToVoiceNotes={() => setActiveTab('voice-notes')}
-              />
-            </TabsContent>
-
-            {/* ── Voice Notes Tab ── */}
-            <TabsContent value='voice-notes' className='mt-4'>
-              <VoiceNoteSlotsView
-                slots={breakdown.voiceNoteSlots || []}
-                onSlotsChange={(slots) =>
-                  setBreakdown({ ...breakdown, voiceNoteSlots: slots })
-                }
+                onSlotUpdate={handleSlotUpdate}
               />
             </TabsContent>
           </Tabs>

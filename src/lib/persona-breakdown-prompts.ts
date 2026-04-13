@@ -4,40 +4,45 @@
 
 /**
  * Full analysis prompt — sent with the user's complete script.
- * Returns a PersonaBreakdown JSON with dynamic sections, ambiguities, and gaps.
+ * Returns a PersonaBreakdown JSON with sections, gaps, script_steps, and slots.
  */
 export const SCRIPT_ANALYSIS_PROMPT = `You are an expert sales methodology analyst. You will read a user's sales script/playbook/SOP and produce a structured behavioral breakdown that will configure an AI to sell exactly like this script describes.
+
+ABSOLUTE RULE — READ THIS FIRST:
+Your output MUST contain a "slots" array. Your output MUST NOT contain an "ambiguities" array.
+Every piece of missing/configurable content (voice notes, links, URLs, videos, forms, FAQs, runtime instructions) MUST be output as a structured slot in the "slots" array — NEVER as a free-text question.
 
 CRITICAL RULES:
 1. Extract ONLY what is actually in the script. Do NOT fabricate sections or add generic sales advice that isn't in the source material.
 2. Every section MUST include source_excerpts — verbatim quotes from the script that justify the section. If you cannot cite the script, the section should not exist.
-3. Flag ambiguities explicitly rather than guessing. If the script says "qualify them properly" without explaining HOW, that is an ambiguity, not a qualifying flow.
-4. Identify gaps — things a complete sales methodology would cover that this script does not.
-5. Set confidence: "low" for sections inferred from thin evidence. Set confidence: "high" ONLY when the script explicitly spells out the behavior. Set confidence: "medium" for sections with moderate but not explicit support.
+3. Identify gaps — things a complete sales methodology would cover that this script does not.
+4. Set confidence: "low" for sections inferred from thin evidence. Set confidence: "high" ONLY when the script explicitly spells out the behavior. Set confidence: "medium" for sections with moderate but not explicit support.
+5. NEVER output an "ambiguities" key. Output "slots" instead. If you feel tempted to ask "what content should..." or "what is the...", create a slot instead.
 
-OUTPUT FORMAT: Return a single JSON object (no markdown wrapping) with this exact structure:
+OUTPUT FORMAT: Return a single JSON object (no markdown wrapping) with EXACTLY these four top-level keys:
 
 {
-  "methodology_summary": "2-3 sentence summary of the user's overall sales approach and methodology",
-  "sections": [
-    {
-      "section_type": "string — one of: opener_strategy, qualifying_flow, situation_discovery, emotional_engagement, objection_handling, financial_screening, close_sequence, follow_up_cadence, voice_note_triggers, disqualification_criteria, tone_rules, proof_deployment, stall_handling, no_show_protocol, pre_call_sequence, booking_flow, downsell_strategy, urgency_building, commitment_locking, custom",
-      "title": "Human-readable title for this section",
-      "content": "Detailed breakdown of what the AI should do for this section. Write in second person ('You should...', 'When the lead says X, you respond with...'). Be specific — include exact phrasing, decision trees, branching logic. This will be injected directly into the AI's system prompt.",
-      "source_excerpts": ["Verbatim quote 1 from script", "Verbatim quote 2"],
-      "confidence": "high | medium | low"
-    }
-  ],
-  "ambiguities": [
-    {
-      "question": "A specific question asking the user to clarify something the script is vague about",
-      "suggested_default": "What the AI will do by default if the user doesn't answer"
-    }
-  ],
-  "gaps": [
-    "Description of something a complete sales methodology would cover that this script does not address. E.g. 'Your script does not specify how to handle leads who say they need to ask their spouse.'"
-  ]
+  "methodology_summary": "2-3 sentence summary",
+  "sections": [ ... ],
+  "gaps": [ ... ],
+  "script_steps": [ ... ],
+  "slots": [ ... ]
 }
+
+DO NOT include any other top-level keys. DO NOT include "ambiguities". DO NOT include "voice_note_detections".
+
+SECTIONS ARRAY:
+Each element:
+{
+  "section_type": "opener_strategy | qualifying_flow | situation_discovery | emotional_engagement | objection_handling | financial_screening | close_sequence | follow_up_cadence | voice_note_triggers | disqualification_criteria | tone_rules | proof_deployment | stall_handling | no_show_protocol | pre_call_sequence | booking_flow | downsell_strategy | urgency_building | commitment_locking | custom",
+  "title": "Human-readable title",
+  "content": "Detailed 2nd-person instructions for the AI. Be specific — exact phrasing, decision trees, branching logic.",
+  "source_excerpts": ["Verbatim quote from script"],
+  "confidence": "high | medium | low"
+}
+
+GAPS ARRAY:
+["Description of missing methodology element"]
 
 SECTION TYPE GUIDE — only create sections that are actually present in the script:
 - opener_strategy: How to open conversations (inbound vs outbound, first message patterns)
@@ -61,13 +66,11 @@ SECTION TYPE GUIDE — only create sections that are actually present in the scr
 - commitment_locking: How to lock in verbal commitments before the call
 - custom: Anything else that doesn't fit the above categories
 
-IMPORTANT: Generate between 3-15 sections depending on how detailed the script is. A simple script might only have 4-5 sections. A comprehensive SOP might have 12-15. Do NOT pad with thin sections.
+IMPORTANT: Generate between 3-15 sections depending on how detailed the script is. Do NOT pad with thin sections.
 
 ## SCRIPT STEPS (Sequential Flow View)
 
-In addition to behavioral sections, you MUST also output a sequential step-by-step flow of the script. This represents the same content as the behavioral sections but as a linear conversation flow rather than topical groupings.
-
-Add a "script_steps" array to your output with this structure:
+Output a "script_steps" array representing the conversation as a linear flow:
 
   "script_steps": [
     {
@@ -84,6 +87,7 @@ Add a "script_steps" array to your output with this structure:
               "action_type": "send_message",
               "content": "The message text or question to ask",
               "voice_note_slot_id": null,
+              "slot_id": null,
               "metadata": {}
             }
           ]
@@ -95,43 +99,139 @@ Add a "script_steps" array to your output with this structure:
   ]
 
 SCRIPT STEPS RULES:
-1. Convert the script into 5-25 sequential steps representing the natural conversation flow.
-2. Each step is a distinct phase (e.g. "Open conversation", "Ask qualifying question", "Deliver soft pitch", "Handle objection", "Book the call").
+1. Convert the script into 5-25 sequential steps representing the natural conversation flow. Count ALL distinct phases — including FAQ sections, resource delivery, homework links, and follow-up cadences. If the script has 10 phases, output 10 steps.
+2. Each step is a distinct phase (e.g. "Open conversation", "Ask qualifying question", "Deliver soft pitch", "Handle objection", "Book the call", "Trading FAQs").
 3. Within each step, create branches for different conditional paths. Use a single "default" branch for steps without branching. Use descriptive conditions like "Lead is experienced" or "Lead objects with trust concern".
 4. Each branch contains ordered actions — what the setter does in that branch.
 5. action_type values: "send_message" (text DM), "send_voice_note" (audio), "send_link" (URL), "send_video" (video link), "ask_question" (question to the lead), "wait_for_response" (pause for lead reply), "trigger_followup" (schedule later message), "branch_decision" (routing based on lead response).
-6. For "send_voice_note" actions, set voice_note_slot_id to the ref_id from a matching voice_note_detection (see below). Set content to null for voice notes.
-7. For "wait_for_response" actions, set content to null.
-8. For "branch_decision" actions, set content to a description of what determines the branch.
-9. IDs must be unique and follow the pattern: step_{N}, step_{N}_branch_{name}, step_{N}_branch_{name}_action_{N}.
+6. For "send_voice_note" actions, set voice_note_slot_id to the matching slot_id from the slots array. Set content to null.
+7. For "send_link" and "send_video" actions, set slot_id to the matching link slot's slot_id. Keep the content field as the descriptive text.
+8. For "wait_for_response" actions, set content to null.
+9. For "branch_decision" actions, set content to a description of what determines the branch.
+10. IDs must be unique and follow the pattern: step_{N}, step_{N}_branch_{name}, step_{N}_branch_{name}_action_{N}.
 
-## VOICE NOTE DETECTIONS
+CRITICAL STEP COMPLETENESS RULES:
+- If the script has a FAQ section or Q&A pairs, create a SEPARATE step for it. The actions should use send_message for each Q&A pair. Also create a form slot (slot_type: "form") for this step with qa_pair fields — one pair for each FAQ entry, pre-populated with any Q&A content that exists in the script, plus 2-3 empty pairs for the user to add more.
+- If the script mentions sending a link, URL, video, page, or resource AT ANY POINT, that instruction MUST become a send_link or send_video action with a corresponding link slot. Common patterns: "[BOOKING LINK]", "[DOWNSELL / YT VIDEO]", "Send RESULTS VIDEO", "Send HOMEWORK PAGE", "here's the page", any ALL-CAPS resource name. Do NOT skip any of these.
+- If the script mentions "personalise this", "customize to what they said", "adjust based on", "tailor this", those instructions become runtime_judgment slots.
 
-Also output a "voice_note_detections" array identifying moments where voice notes should be used:
+## SLOT DETECTION (CRITICAL — replaces the old ambiguity system)
 
-  "voice_note_detections": [
-    {
-      "ref_id": "vn_ref_1",
-      "slot_name": "Short name (e.g. 'Opener Voice Note')",
-      "description": "When and why to send this voice note",
-      "trigger_condition_natural_language": "Send after the lead answers the opening question positively",
-      "trigger_condition_structured": {
-        "step_id": "step_2",
-        "branch_id": "step_2_branch_default",
-        "action_id": "step_2_branch_default_action_2"
+Instead of generating free-text ambiguity questions, you MUST detect and categorize every piece of configurable content into one of five structured slot types. Output a "slots" array:
+
+### Slot Type 1: voice_note
+Detected when the script references a voice note to be sent (e.g., "Send VOICE NOTE BREAKDOWN", "send a voice note saying...", "[VN]", "voice note here", or any phrasing indicating audio).
+
+CRITICAL: Create ONE slot per (step_id, branch_id, action_id) combination. If the script says "Send VOICE NOTE BREAKDOWN" in three different branches, create THREE separate voice_note slots even though the name is the same. Each can be bound to a different audio file.
+
+{
+  "slot_type": "voice_note",
+  "slot_id": "vn_slot_1",
+  "step_id": "step_3",
+  "branch_id": "step_3_branch_beginner",
+  "action_id": "step_3_branch_beginner_action_2",
+  "detected_name": "Session Liquidity Breakdown — Beginner",
+  "context_description": "Voice note explaining the session liquidity model to beginner traders, sent after qualifying their experience level",
+  "suggested_trigger": {
+    "type": "conversational_move",
+    "suggested_moments": ["After qualifying lead as beginner"],
+    "required_pipeline_stages": ["QUALIFYING"],
+    "cooldown": { "type": "conversation", "value": 1 }
+  },
+  "suggested_fallback_text": "Text equivalent if no audio is uploaded"
+}
+
+Do NOT ask what content should be in voice notes. Voice notes are pre-recorded audio files. The user uploads them separately. You only detect WHERE in the script they should fire.
+
+### Slot Type 2: link
+Detected when the script references a URL, link, video, page, or external resource (e.g., "[BOOKING LINK]", "[DOWNSELL / YT VIDEO]", "[HOMEWORK PAGE]", "Send RESULTS VIDEO", "here's the page with the videos", any bracketed placeholder that is clearly a URL).
+
+{
+  "slot_type": "link",
+  "slot_id": "link_slot_1",
+  "step_id": "step_7",
+  "branch_id": "step_7_branch_default",
+  "action_id": "step_7_branch_default_action_3",
+  "detected_name": "BOOKING LINK",
+  "link_description": "The calendar booking page URL for scheduling the lead's strategy call"
+}
+
+Do NOT ask what the link points to or what its content is. Detect the placeholder and create a URL input slot for the user to paste the actual URL.
+
+### Slot Type 3: form
+Detected when the script has structured data gaps with clearly-delineated fields (e.g., blank Question/Answer pairs, FAQ sections with empty entries, lists of items to fill in, budget ranges, qualification criteria).
+
+{
+  "slot_type": "form",
+  "slot_id": "form_slot_1",
+  "step_id": "step_5",
+  "form_schema": {
+    "fields": [
+      {
+        "field_id": "faq_1_q",
+        "field_type": "text",
+        "label": "FAQ Question 1",
+        "placeholder": "e.g., What prop firms do you use?",
+        "required": false
       },
-      "detection_type": "explicit",
-      "suggested_fallback_text": "Text equivalent if no audio is uploaded"
-    }
-  ]
+      {
+        "field_id": "faq_1_a",
+        "field_type": "text",
+        "label": "FAQ Answer 1",
+        "placeholder": "Your answer to this FAQ",
+        "required": false
+      }
+    ]
+  }
+}
 
-VOICE NOTE DETECTION RULES:
-1. EXPLICIT detections: The script literally says "send voice note", "record audio", "VN here", "voice message", etc. Set detection_type to "explicit".
-2. IMPLICIT detections: High-leverage moments where audio would significantly outperform text — emotional connections, trust-building, post-commitment warmth, personalized follow-ups. Set detection_type to "implicit".
-3. For each detection, provide suggested_fallback_text — what the AI could send as text if no audio is uploaded.
-4. Link each detection to its corresponding script step action via trigger_condition_structured. The matching action in script_steps should have action_type "send_voice_note" and voice_note_slot_id set to this detection's ref_id.
-5. Typically detect 2-8 voice note opportunities per script. Do NOT pad with low-value detections.
-6. Do NOT create ambiguities for voice note content. Voice notes are handled separately — the user will upload their own audio recordings.`;
+Use field_type "qa_pair" for FAQ-style entries, "list" for multi-item lists, "text" for free-form text fields, "number" for numeric values.
+
+### Slot Type 4: runtime_judgment
+Detected when the script explicitly tells the setter to use judgment at runtime. Key phrases: "personalise this based on...", "customize to what they said", "based on the conversation so far", "adjust based on", "depending on the lead", "use your judgment", "tailor this to...".
+
+CRITICAL: These are NOT ambiguities. They are intentional instructions that the AI should follow dynamically at runtime. Do NOT ask the user to fill anything in — pass the instruction through unchanged.
+
+{
+  "slot_type": "runtime_judgment",
+  "slot_id": "rj_slot_1",
+  "step_id": "step_9",
+  "instruction": "Personalise this based on the resource you send out / questions the lead had / testimonials similar to lead etc",
+  "context": "Day-before reminder message should be customized based on the lead's specific interests, concerns raised in conversation, and relevant social proof"
+}
+
+### Slot Type 5: text_gap
+Detected ONLY when the script has a genuine empty placeholder where the user clearly forgot to write content (e.g., the literal "x" placeholder, an empty message template, a blank response field that should have content but doesn't). This is the ONLY slot type that represents "the user forgot to write something."
+
+{
+  "slot_type": "text_gap",
+  "slot_id": "tg_slot_1",
+  "step_id": "step_4",
+  "branch_id": "step_4_branch_yes",
+  "action_id": "step_4_branch_yes_action_1",
+  "context_description": "Response after the lead agrees to proceed — the script has a placeholder 'x' here instead of an actual message",
+  "suggested_content": "That's great to hear! Let me walk you through how we can help you specifically..."
+}
+
+## SLOT DETECTION RULES (CRITICAL):
+1. NEVER generate a free-text ambiguity question. The output must NOT contain an "ambiguities" array.
+2. Voice note references ALWAYS become voice_note slots. NEVER ask what content should be in a voice note.
+3. Bracketed placeholders that look like link/URL/resource names ALWAYS become link slots. NEVER ask what a link points to.
+4. Instructions telling the setter to "personalise", "customize", "use judgment", or "adjust based on" ALWAYS become runtime_judgment slots. These are features, not gaps.
+5. Only genuine empty placeholders (the user literally left content blank) become text_gap slots.
+6. Structured data gaps (FAQ pairs, lists, forms) become form slots with proper field schemas. Include fields pre-populated with content from the script (e.g., existing Q&A pairs), plus empty fields for the user to add more.
+7. Create ONE slot per (step_id, branch_id, action_id) even if multiple slots share a detected_name.
+8. Each slot must reference back to its step_id (and branch_id + action_id where applicable).
+9. For voice_note and link slots, the corresponding action in script_steps must have its slot_id set to the slot's slot_id.
+10. Typically a script produces 5-20 slots total across all types. Do NOT miss voice note or link references.
+
+LINK SLOT DETECTION PATTERNS — if ANY of these appear in the script, create a link slot:
+- "[BOOKING LINK]" or any bracketed placeholder with LINK/URL/PAGE
+- "[DOWNSELL / YT VIDEO]" or any bracketed video/downsell reference
+- "Send RESULTS VIDEO" or "Send HOMEWORK PAGE" or "Send [RESOURCE NAME]"
+- "here's the page", "check out this video", any reference to sending a URL
+- ALL-CAPS resource names followed by instructions to send them
+Each of these MUST produce a send_link or send_video action in script_steps AND a link slot in the slots array.`;
 
 /**
  * Section regeneration prompt — sent with the script + one section to re-analyze.

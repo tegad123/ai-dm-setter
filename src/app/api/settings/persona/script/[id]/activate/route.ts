@@ -32,20 +32,9 @@ export async function POST(
       );
     }
 
-    // Validate: all ambiguities must be resolved
-    const unresolvedAmbiguities = breakdown.ambiguities.filter(
-      (a) => !a.resolved
-    );
-    if (unresolvedAmbiguities.length > 0) {
-      const n = unresolvedAmbiguities.length;
-      const noun = n === 1 ? 'ambiguity' : 'ambiguities';
-      return NextResponse.json(
-        { error: `${n} ${noun} must be resolved before activation.` },
-        { status: 400 }
-      );
-    }
-
-    // Validate: all voice note slots must be ready (uploaded or have approved fallback)
+    // Sprint 3: Lenient activation — ambiguities and unfilled slots do NOT
+    // block activation. The AI falls back to text or skips actions at runtime.
+    // Only blocking voice note slots (BLOCK_UNTIL_FILLED) still gate activation.
     const unreadySlots = await prisma.voiceNoteSlot.findMany({
       where: {
         breakdownId,
@@ -84,7 +73,24 @@ export async function POST(
       const updated = await tx.personaBreakdown.update({
         where: { id: breakdownId },
         data: { status: 'ACTIVE' },
-        include: { sections: true, ambiguities: true }
+        include: {
+          sections: true,
+          ambiguities: true,
+          scriptSlots: {
+            orderBy: { orderIndex: 'asc' },
+            include: {
+              boundVoiceNote: {
+                select: {
+                  id: true,
+                  userLabel: true,
+                  audioFileUrl: true,
+                  durationSeconds: true,
+                  summary: true
+                }
+              }
+            }
+          }
+        }
       });
 
       // Update the AIPersona record

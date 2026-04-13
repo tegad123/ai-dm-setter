@@ -31,23 +31,26 @@ import {
   GitBranch
 } from 'lucide-react';
 import type { ScriptStep, ScriptAction } from '@/lib/script-framework-types';
+import type { ScriptSlot } from '@/lib/script-slot-types';
+import type { VoiceNoteLibraryItem } from '@/lib/api';
+import {
+  ScriptSlotCard,
+  SlotStatusSummary
+} from '@/components/persona/script-slot-cards';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface VoiceNoteSlotRef {
-  id: string;
-  slotName: string;
-  status: string;
-}
-
 interface ScriptFrameworkViewProps {
   breakdownId: string;
   scriptSteps: ScriptStep[];
-  voiceNoteSlots: VoiceNoteSlotRef[];
+  /** Sprint 3: Structured script slots */
+  scriptSlots?: ScriptSlot[];
+  /** Sprint 3: Library voice notes for the picker */
+  libraryVoiceNotes?: VoiceNoteLibraryItem[];
   onStepsChange: (steps: ScriptStep[]) => void;
-  onSwitchToVoiceNotes?: () => void;
+  onSlotUpdate?: (updatedSlot: ScriptSlot) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,26 +91,6 @@ function actionLabel(type: string): string {
   }
 }
 
-function slotStatusBadge(status: string) {
-  if (status === 'APPROVED')
-    return (
-      <Badge className='border-green-300 bg-green-100 text-xs text-green-800'>
-        Audio ready
-      </Badge>
-    );
-  if (status === 'UPLOADED')
-    return (
-      <Badge className='border-amber-300 bg-amber-100 text-xs text-amber-800'>
-        Uploaded
-      </Badge>
-    );
-  return (
-    <Badge className='border-red-300 bg-red-100 text-xs text-red-800'>
-      No audio
-    </Badge>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -115,9 +98,10 @@ function slotStatusBadge(status: string) {
 export default function ScriptFrameworkView({
   breakdownId,
   scriptSteps,
-  voiceNoteSlots,
+  scriptSlots = [],
+  libraryVoiceNotes = [],
   onStepsChange,
-  onSwitchToVoiceNotes
+  onSlotUpdate
 }: ScriptFrameworkViewProps) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
@@ -216,12 +200,6 @@ export default function ScriptFrameworkView({
     }
   };
 
-  // Find slot info
-  const getSlotInfo = (slotId: string | null): VoiceNoteSlotRef | undefined => {
-    if (!slotId) return undefined;
-    return voiceNoteSlots.find((s) => s.id === slotId);
-  };
-
   // Empty state
   if (!scriptSteps || scriptSteps.length === 0) {
     return (
@@ -239,8 +217,37 @@ export default function ScriptFrameworkView({
 
   const approvedCount = scriptSteps.filter((s) => s.user_approved).length;
 
+  // Find "orphaned" slots — slots that don't match any step/action
+  // (e.g., converted from ambiguities with step_id = 'unknown')
+  const matchedSlotIds = new Set<string>();
+  for (const step of scriptSteps) {
+    for (const branch of step.branches) {
+      for (const action of branch.actions) {
+        const matched = scriptSlots.find(
+          (s) =>
+            s.actionId === action.action_id ||
+            (action.slot_id && s.id === action.slot_id)
+        );
+        if (matched) matchedSlotIds.add(matched.id);
+      }
+    }
+    // Step-level slots
+    scriptSlots
+      .filter(
+        (s) =>
+          s.stepId === step.step_id &&
+          !s.actionId &&
+          (s.slotType === 'form' || s.slotType === 'runtime_judgment')
+      )
+      .forEach((s) => matchedSlotIds.add(s.id));
+  }
+  const unmatchedSlots = scriptSlots.filter((s) => !matchedSlotIds.has(s.id));
+
   return (
     <div className='space-y-3'>
+      {/* Slot status summary (Sprint 3) */}
+      {scriptSlots.length > 0 && <SlotStatusSummary slots={scriptSlots} />}
+
       {/* Summary bar */}
       <Card>
         <CardContent className='flex flex-wrap items-center gap-4 py-3'>
@@ -387,10 +394,6 @@ export default function ScriptFrameworkView({
                       {/* Actions */}
                       <div className='space-y-1.5 pl-2'>
                         {branch.actions.map((action: ScriptAction) => {
-                          const slotInfo = getSlotInfo(
-                            action.voice_note_slot_id
-                          );
-
                           return (
                             <div
                               key={action.action_id}
@@ -433,25 +436,26 @@ export default function ScriptFrameworkView({
                                   </p>
                                 ) : null}
 
-                                {/* Voice note slot reference */}
-                                {slotInfo && (
-                                  <div className='mt-1 flex items-center gap-2'>
-                                    {slotStatusBadge(slotInfo.status)}
-                                    <span className='text-xs text-purple-700'>
-                                      {slotInfo.slotName}
-                                    </span>
-                                    {onSwitchToVoiceNotes && (
-                                      <Button
-                                        variant='link'
-                                        size='sm'
-                                        className='h-auto p-0 text-xs text-purple-600'
-                                        onClick={onSwitchToVoiceNotes}
-                                      >
-                                        Manage
-                                      </Button>
-                                    )}
-                                  </div>
-                                )}
+                                {/* Sprint 3: Inline ScriptSlot card */}
+                                {(() => {
+                                  const actionSlot = scriptSlots.find(
+                                    (s) =>
+                                      s.actionId === action.action_id ||
+                                      (action.slot_id &&
+                                        s.id === action.slot_id)
+                                  );
+                                  if (!actionSlot || !onSlotUpdate) return null;
+                                  return (
+                                    <div className='mt-2'>
+                                      <ScriptSlotCard
+                                        slot={actionSlot}
+                                        breakdownId={breakdownId}
+                                        onSlotUpdate={onSlotUpdate}
+                                        libraryVoiceNotes={libraryVoiceNotes}
+                                      />
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           );
@@ -459,12 +463,65 @@ export default function ScriptFrameworkView({
                       </div>
                     </div>
                   ))}
+
+                  {/* Sprint 3: Step-level slots (form, runtime_judgment) — no specific action */}
+                  {scriptSlots.length > 0 &&
+                    onSlotUpdate &&
+                    (() => {
+                      const stepLevelSlots = scriptSlots.filter(
+                        (s) =>
+                          s.stepId === step.step_id &&
+                          !s.actionId &&
+                          (s.slotType === 'form' ||
+                            s.slotType === 'runtime_judgment')
+                      );
+                      if (stepLevelSlots.length === 0) return null;
+                      return (
+                        <div className='space-y-2 pt-2'>
+                          {stepLevelSlots.map((sl) => (
+                            <ScriptSlotCard
+                              key={sl.id}
+                              slot={sl}
+                              breakdownId={breakdownId}
+                              onSlotUpdate={onSlotUpdate}
+                              libraryVoiceNotes={libraryVoiceNotes}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })()}
                 </CardContent>
               </CollapsibleContent>
             </Collapsible>
           </Card>
         );
       })}
+
+      {/* Unmatched / orphaned slots panel */}
+      {unmatchedSlots.length > 0 && onSlotUpdate && (
+        <Card className='border-amber-200 bg-amber-50/30'>
+          <CardHeader className='py-3'>
+            <CardTitle className='text-sm font-semibold text-amber-800'>
+              Additional Content Slots ({unmatchedSlots.length})
+            </CardTitle>
+            <p className='text-xs text-amber-700'>
+              These were detected from your script but couldn&apos;t be matched
+              to a specific step. Fill them in to give the AI more context.
+            </p>
+          </CardHeader>
+          <CardContent className='space-y-2 pt-0'>
+            {unmatchedSlots.map((slot) => (
+              <ScriptSlotCard
+                key={slot.id}
+                slot={slot}
+                breakdownId={breakdownId}
+                onSlotUpdate={onSlotUpdate}
+                libraryVoiceNotes={libraryVoiceNotes}
+              />
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

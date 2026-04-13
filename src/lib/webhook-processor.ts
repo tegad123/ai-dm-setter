@@ -89,6 +89,22 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
         }
       }
     }
+
+    // Sprint 3: Add link slot URLs from ScriptSlots
+    const linkSlots = await prisma.scriptSlot.findMany({
+      where: {
+        accountId,
+        slotType: 'link',
+        status: 'filled',
+        url: { not: null }
+      },
+      select: { url: true }
+    });
+    for (const slot of linkSlots) {
+      if (slot.url && /^https?:\/\//i.test(slot.url)) {
+        allowed.add(slot.url.trim());
+      }
+    }
   } catch (err) {
     console.error('[webhook-processor] getAllowedUrls failed:', err);
   }

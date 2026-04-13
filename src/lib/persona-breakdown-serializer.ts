@@ -23,7 +23,15 @@ export async function serializeBreakdownForPrompt(
       ambiguities: {
         where: { resolved: true }
       },
-      voiceNoteSlots: true
+      voiceNoteSlots: true,
+      scriptSlots: {
+        orderBy: { orderIndex: 'asc' },
+        include: {
+          boundVoiceNote: {
+            select: { id: true, audioFileUrl: true, userLabel: true }
+          }
+        }
+      }
     }
   });
 
@@ -78,6 +86,94 @@ export async function serializeBreakdownForPrompt(
     parts.push(
       `## Available Voice Note Slots\nWhen the conversation reaches these trigger points, output voice_note_action with the slot_id.\n${slotLines.join('\n')}`
     );
+  }
+
+  // Sprint 3: Inject ScriptSlot data into the system prompt
+  if (breakdown.scriptSlots && breakdown.scriptSlots.length > 0) {
+    // Voice note slots bound to library items
+    const boundVnSlots = breakdown.scriptSlots.filter(
+      (s) =>
+        s.slotType === 'voice_note' && s.boundVoiceNoteId && s.boundVoiceNote
+    );
+    if (boundVnSlots.length > 0) {
+      const vnLines = boundVnSlots.map((s) => {
+        const label =
+          s.boundVoiceNote?.userLabel || s.detectedName || 'Voice Note';
+        return `- ${label} (slot_id: ${s.id}): ${s.description || ''} [AUDIO READY]`;
+      });
+      parts.push(
+        `## Bound Voice Notes (Library)\nThese voice notes are pre-recorded and ready to send.\n${vnLines.join('\n')}`
+      );
+    }
+
+    // Link slots with filled URLs
+    const filledLinks = breakdown.scriptSlots.filter(
+      (s) => s.slotType === 'link' && s.url
+    );
+    if (filledLinks.length > 0) {
+      const linkLines = filledLinks.map(
+        (s) => `- ${s.detectedName || 'Link'}: ${s.url}`
+      );
+      parts.push(
+        `## Available Links & URLs\nUse these EXACT URLs when the script calls for them. NEVER make up or hallucinate URLs.\n${linkLines.join('\n')}`
+      );
+    }
+
+    // Form slot data (FAQ answers, etc.)
+    const filledForms = breakdown.scriptSlots.filter(
+      (s) =>
+        s.slotType === 'form' &&
+        s.formValues &&
+        Object.keys(s.formValues as object).length > 0
+    );
+    if (filledForms.length > 0) {
+      const formParts: string[] = [];
+      for (const form of filledForms) {
+        const schema = form.formSchema as {
+          fields: Array<{ field_id: string; label: string }>;
+        } | null;
+        const vals = form.formValues as Record<string, string>;
+        if (schema?.fields && vals) {
+          const entries = schema.fields
+            .filter((f) => vals[f.field_id])
+            .map((f) => `  - ${f.label}: ${vals[f.field_id]}`);
+          if (entries.length > 0) {
+            formParts.push(
+              `${form.detectedName || 'Form Data'}:\n${entries.join('\n')}`
+            );
+          }
+        }
+      }
+      if (formParts.length > 0) {
+        parts.push(`## Configured Data\n${formParts.join('\n\n')}`);
+      }
+    }
+
+    // Runtime judgment instructions
+    const rjSlots = breakdown.scriptSlots.filter(
+      (s) => s.slotType === 'runtime_judgment' && s.instruction
+    );
+    if (rjSlots.length > 0) {
+      const rjLines = rjSlots.map(
+        (s) =>
+          `- At ${s.stepId}: ${s.instruction}${s.context ? ` (Context: ${s.context})` : ''}`
+      );
+      parts.push(
+        `## Runtime Judgment Instructions\nAt these points, use your judgment based on the conversation context:\n${rjLines.join('\n')}`
+      );
+    }
+
+    // Filled text gaps
+    const filledTexts = breakdown.scriptSlots.filter(
+      (s) => s.slotType === 'text_gap' && (s.userContent || s.suggestedContent)
+    );
+    if (filledTexts.length > 0) {
+      const textLines = filledTexts.map(
+        (s) =>
+          `- ${s.description || s.stepId}: ${s.userContent || s.suggestedContent}`
+      );
+      parts.push(`## Script Content Fills\n${textLines.join('\n')}`);
+    }
   }
 
   return parts.join('\n\n');

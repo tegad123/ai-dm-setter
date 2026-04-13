@@ -194,6 +194,7 @@ model Account {
   voiceNoteSlots     VoiceNoteSlot[]
   voiceNoteLibrary   VoiceNoteLibraryItem[]
   voiceNoteTimingSettings VoiceNoteTimingSettings?
+  scriptSlots        ScriptSlot[]
 
   @@index([slug])
 }
@@ -268,6 +269,7 @@ model PersonaBreakdown {
   sections       BreakdownSection[]
   ambiguities    BreakdownAmbiguity[]
   voiceNoteSlots VoiceNoteSlot[]
+  scriptSlots    ScriptSlot[]
 
   @@index([accountId])
   @@index([personaId])
@@ -374,6 +376,7 @@ model VoiceNoteLibraryItem {
   triggerDescription      String?                  @db.Text
   legacyTriggerText       String?                  @db.Text
   boundToScriptStep       String?
+  scriptBindings          Json?                    // Array of { script_id, step_id, branch_id, action_id, bound_at }
   userLabel               String?
   userNotes               String?                  @db.Text
   priority                Int                      @default(0)
@@ -384,11 +387,60 @@ model VoiceNoteLibraryItem {
   createdAt               DateTime                 @default(now())
   lastEditedAt            DateTime                 @updatedAt
 
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  scriptSlotBindings ScriptSlot[]
 
   @@index([accountId])
   @@index([accountId, status])
   @@index([accountId, active])
+}
+
+// ─── Script Slot System (Sprint 3) ─────────────────────
+
+model ScriptSlot {
+  id                String   @id @default(cuid())
+  accountId         String
+  breakdownId       String
+  slotType          String                           // "voice_note" | "link" | "form" | "runtime_judgment" | "text_gap"
+  stepId            String                           // which script step this slot belongs to
+  branchId          String?                          // which branch within the step (null for step-level)
+  actionId          String?                          // which action within the branch (null for step-level)
+  detectedName      String?                          // e.g., "BREAKDOWN", "BOOKING LINK"
+  description       String?  @db.Text                // AI-generated context description
+
+  // Voice note specific
+  suggestedTrigger  Json?                            // AI-suggested structured trigger from script context
+  boundVoiceNoteId  String?                          // FK to VoiceNoteLibraryItem once bound
+
+  // Link specific
+  linkDescription   String?  @db.Text                // AI-generated description of what link should point to
+  url               String?                          // user-provided URL
+
+  // Form specific
+  formSchema        Json?                            // { fields: [{ field_id, field_type, label, placeholder, required }] }
+  formValues        Json?                            // user-provided values keyed by field_id
+
+  // Text gap specific
+  suggestedContent  String?  @db.Text                // AI-generated best-guess content
+  userContent       String?  @db.Text                // user-provided content
+
+  // Runtime judgment specific
+  instruction       String?  @db.Text                // verbatim instruction from script
+  context           String?  @db.Text                // AI-generated context for what factors to consider
+
+  // Status
+  status            String   @default("unfilled")    // "unfilled" | "filled" | "bound" | "partially_filled" | "complete"
+  orderIndex        Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  account        Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  breakdown      PersonaBreakdown     @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
+  boundVoiceNote VoiceNoteLibraryItem? @relation(fields: [boundVoiceNoteId], references: [id], onDelete: SetNull)
+
+  @@index([accountId])
+  @@index([breakdownId])
+  @@index([breakdownId, slotType])
 }
 
 model VoiceNoteSendLog {
