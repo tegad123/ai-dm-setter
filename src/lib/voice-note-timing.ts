@@ -79,6 +79,7 @@ export function serializeResult(result: Record<string, any>): object {
     suggestedTag: result.suggestedTag ?? '',
     suggestedTags: result.suggestedTags ?? [],
     shouldVoiceNote: result.shouldVoiceNote ?? false,
-    voiceNoteAction: result.voiceNoteAction ?? null
+    voiceNoteAction: result.voiceNoteAction ?? null,
+    _libraryVoiceNote: result._libraryVoiceNote ?? null
   };
 }

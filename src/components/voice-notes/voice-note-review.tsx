@@ -59,6 +59,12 @@ import {
   retryVoiceNote
 } from '@/lib/api';
 import type { VoiceNoteLibraryItem } from '@/lib/api';
+import {
+  parseTriggerJson,
+  generateTriggerDescription
+} from '@/lib/voice-note-triggers';
+import type { VoiceNoteTrigger } from '@/lib/voice-note-triggers';
+import TriggerBuilder from './trigger-builder';
 import ChipSelector from './chip-selector';
 
 const USE_CASE_SUGGESTIONS = [
@@ -170,6 +176,7 @@ export default function VoiceNoteReview({ id }: { id: string }) {
   const [conversationStages, setConversationStages] = useState<string[]>([]);
   const [emotionalTone, setEmotionalTone] = useState('');
   const [triggerConditions, setTriggerConditions] = useState('');
+  const [triggers, setTriggers] = useState<VoiceNoteTrigger[]>([]);
   const [userLabel, setUserLabel] = useState('');
   const [userNotes, setUserNotes] = useState('');
   const [priority, setPriority] = useState(0);
@@ -197,6 +204,7 @@ export default function VoiceNoteReview({ id }: { id: string }) {
     setConversationStages(i.conversationStages || []);
     setEmotionalTone(i.emotionalTone || '');
     setTriggerConditions(i.triggerConditionsNatural || '');
+    setTriggers(parseTriggerJson(i.triggers));
     setUserLabel(i.userLabel || '');
     setUserNotes(i.userNotes || '');
     setPriority(i.priority || 0);
@@ -235,6 +243,9 @@ export default function VoiceNoteReview({ id }: { id: string }) {
         conversationStages,
         emotionalTone,
         triggerConditionsNatural: triggerConditions,
+        triggers: triggers.length > 0 ? triggers : null,
+        triggerDescription:
+          triggers.length > 0 ? generateTriggerDescription(triggers) : null,
         userLabel,
         userNotes,
         priority,
@@ -452,6 +463,54 @@ export default function VoiceNoteReview({ id }: { id: string }) {
             </CardContent>
           </Card>
 
+          {/* Migration Review Banner */}
+          {item?.status === 'NEEDS_REVIEW' && item?.legacyTriggerText && (
+            <Card className='border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30'>
+              <CardHeader className='pb-3'>
+                <CardTitle className='text-base'>
+                  Trigger Migration Review
+                </CardTitle>
+                <CardDescription>
+                  This voice note&apos;s triggers were auto-converted from free
+                  text. Review and approve below.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className='space-y-4'>
+                <div className='space-y-1.5'>
+                  <Label className='text-muted-foreground text-xs'>
+                    Original Trigger Text
+                  </Label>
+                  <p className='rounded-md border bg-white p-3 text-sm dark:bg-black'>
+                    {item.legacyTriggerText}
+                  </p>
+                </div>
+                <div className='flex gap-2'>
+                  <Button
+                    size='sm'
+                    onClick={() => handleSave(true)}
+                    disabled={saving}
+                  >
+                    <CheckCircle2 className='mr-1.5 h-4 w-4' />
+                    Looks Good — Activate
+                  </Button>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => {
+                      // Scroll to triggers section
+                      document
+                        .getElementById('trigger-builder-section')
+                        ?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                  >
+                    <Pencil className='mr-1.5 h-4 w-4' />
+                    Edit Triggers
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Metadata */}
           <Card>
             <CardHeader className='pb-3'>
@@ -520,14 +579,12 @@ export default function VoiceNoteReview({ id }: { id: string }) {
                 </div>
               </div>
 
-              {/* Trigger conditions */}
-              <div className='space-y-1.5'>
-                <Label>Trigger Conditions</Label>
-                <Textarea
-                  value={triggerConditions}
-                  onChange={(e) => setTriggerConditions(e.target.value)}
-                  rows={2}
-                  placeholder='When should this voice note be sent? e.g., "When a beginner lead asks about risk and seems nervous"'
+              {/* Structured triggers */}
+              <div id='trigger-builder-section' className='sm:col-span-2'>
+                <TriggerBuilder
+                  triggers={triggers}
+                  onChange={setTriggers}
+                  legacyText={item?.legacyTriggerText}
                 />
               </div>
 

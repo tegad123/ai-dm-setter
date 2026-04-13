@@ -397,6 +397,9 @@ export interface VoiceNoteLibraryItem {
   conversationStages: string[];
   emotionalTone: string | null;
   triggerConditionsNatural: string | null;
+  triggers: any[] | null;
+  triggerDescription: string | null;
+  legacyTriggerText: string | null;
   boundToScriptStep: string | null;
   userLabel: string | null;
   userNotes: string | null;

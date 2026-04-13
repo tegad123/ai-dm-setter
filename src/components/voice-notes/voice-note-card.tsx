@@ -138,6 +138,12 @@ export default function VoiceNoteCard({
             </p>
           )}
 
+          {item.triggerDescription && (
+            <p className='text-muted-foreground mt-1 text-xs italic'>
+              {item.triggerDescription}
+            </p>
+          )}
+
           {visibleCases.length > 0 && (
             <div className='mt-2 flex flex-wrap gap-1'>
               {visibleCases.map((uc) => (

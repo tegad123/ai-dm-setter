@@ -13,7 +13,13 @@ Analyze the transcript below and return a JSON object with these fields:
   "conversation_stages": ["array of 1-3 conversation stage tags"],
   "emotional_tone": "single tone descriptor",
   "trigger_conditions_natural": "Plain English description of when this voice note should be sent. E.g. 'When a beginner lead expresses fear about risk and seems nervous about losing money'",
-  "suggested_label": "Short user-friendly name for this voice note, like 'Risk Management Pep Talk' or 'Success Story - Sarah'"
+  "suggested_label": "Short user-friendly name for this voice note, like 'Risk Management Pep Talk' or 'Success Story - Sarah'",
+  "structured_triggers": [
+    // Array of 1-3 trigger objects. Pick from these types:
+    // { "type": "stage_transition", "from_stage": "any" or LeadStage, "to_stage": LeadStage }
+    // { "type": "content_intent", "intent": one of: price_objection, time_concern, skepticism_or_scam_concern, past_failure, complexity_concern, need_to_think, not_interested, ready_to_buy, budget_question, experience_question, timeline_question }
+    // { "type": "conversational_move", "suggested_moments": ["moment description"], "required_pipeline_stages": [LeadStages], "cooldown": { "type": "messages", "value": 5 } }
+  ]
 }
 
 FIELD GUIDELINES:
@@ -34,6 +40,15 @@ conversation_stages — pick from this list:
 emotional_tone — pick ONE from:
   confident, empathetic, urgent, casual, serious, motivational,
   storytelling, educational, direct, reassuring
+
+structured_triggers — create 1-3 trigger objects. Pick the most appropriate type:
+  - stage_transition: when the voice note clearly responds to a pipeline event (e.g. no-show, booking)
+  - content_intent: when it responds to a specific objection or intent
+  - conversational_move: when it's situational/contextual (social proof, motivation, rapport)
+  For conversational_move, required_pipeline_stages should be the stages where this voice note
+  is relevant. LeadStage values: NEW_LEAD, ENGAGED, QUALIFYING, QUALIFIED, CALL_PROPOSED,
+  BOOKED, SHOWED, NO_SHOWED, RESCHEDULED, CLOSED_WON, CLOSED_LOST, UNQUALIFIED, GHOSTED, NURTURE
+  Default cooldown: { "type": "messages", "value": 5 }
 
 RULES:
 - Be conservative: 2 accurate tags are better than 8 noisy ones

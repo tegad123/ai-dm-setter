@@ -5,9 +5,17 @@ import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Mic, Plus, Search } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import { Clock, Mic, Plus, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { getVoiceNotes, updateVoiceNote } from '@/lib/api';
+import { parseTriggerJson } from '@/lib/voice-note-triggers';
 import type { VoiceNoteLibraryItem } from '@/lib/api';
 import VoiceNoteCard from './voice-note-card';
 import UploadVoiceNoteDialog from './upload-voice-note-dialog';
@@ -18,6 +26,7 @@ export default function VoiceNotesHub() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showUpload, setShowUpload] = useState(false);
+  const [triggerFilter, setTriggerFilter] = useState('all');
 
   const load = useCallback(async (q?: string) => {
     try {
@@ -72,11 +81,46 @@ export default function VoiceNotesHub() {
     );
   }
 
+  // Client-side trigger type filtering
+  const needsReviewCount = items.filter(
+    (i) => i.status === 'NEEDS_REVIEW'
+  ).length;
+
+  const filteredItems = items.filter((item) => {
+    if (triggerFilter === 'all') return true;
+    if (triggerFilter === 'needs_review') return item.status === 'NEEDS_REVIEW';
+    const triggers = parseTriggerJson(item.triggers);
+    if (triggerFilter === 'no_triggers') return triggers.length === 0;
+    return triggers.some((t) => t.type === triggerFilter);
+  });
+
   return (
     <div className='space-y-4'>
-      {/* Search + Add */}
-      <div className='flex items-center gap-3'>
-        <div className='relative flex-1'>
+      {/* Needs Review Banner */}
+      {needsReviewCount > 0 && (
+        <Card className='border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30'>
+          <CardContent className='flex items-center gap-3 py-3'>
+            <Clock className='h-5 w-5 text-amber-600' />
+            <span className='text-sm font-medium'>
+              {needsReviewCount} voice note
+              {needsReviewCount > 1 ? 's' : ''} migrated and need
+              {needsReviewCount === 1 ? 's' : ''} review
+            </span>
+            <Button
+              variant='outline'
+              size='sm'
+              className='ml-auto'
+              onClick={() => setTriggerFilter('needs_review')}
+            >
+              Review Now
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Search + Filter + Add */}
+      <div className='flex flex-wrap items-center gap-3'>
+        <div className='relative min-w-[200px] flex-1'>
           <Search className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
           <Input
             placeholder='Search voice notes...'
@@ -85,6 +129,21 @@ export default function VoiceNotesHub() {
             className='pl-9'
           />
         </div>
+        <Select value={triggerFilter} onValueChange={setTriggerFilter}>
+          <SelectTrigger className='w-[180px]'>
+            <SelectValue placeholder='Filter triggers' />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='all'>All Voice Notes</SelectItem>
+            <SelectItem value='stage_transition'>Stage Transition</SelectItem>
+            <SelectItem value='content_intent'>Content Intent</SelectItem>
+            <SelectItem value='conversational_move'>
+              Conversational Move
+            </SelectItem>
+            <SelectItem value='needs_review'>Needs Review</SelectItem>
+            <SelectItem value='no_triggers'>No Triggers</SelectItem>
+          </SelectContent>
+        </Select>
         <Button onClick={() => setShowUpload(true)}>
           <Plus className='mr-1.5 h-4 w-4' />
           Add Voice Note
@@ -92,7 +151,7 @@ export default function VoiceNotesHub() {
       </div>
 
       {/* List */}
-      {items.length === 0 ? (
+      {filteredItems.length === 0 ? (
         <Card>
           <CardContent className='flex flex-col items-center gap-4 py-16'>
             <div className='bg-muted flex h-16 w-16 items-center justify-center rounded-full'>
@@ -112,7 +171,7 @@ export default function VoiceNotesHub() {
         </Card>
       ) : (
         <div className='space-y-3'>
-          {items.map((item) => (
+          {filteredItems.map((item) => (
             <VoiceNoteCard
               key={item.id}
               item={item}

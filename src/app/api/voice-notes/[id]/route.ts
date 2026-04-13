@@ -69,6 +69,8 @@ export async function PUT(
       conversationStages,
       emotionalTone,
       triggerConditionsNatural,
+      triggers,
+      triggerDescription,
       userLabel,
       userNotes,
       priority,
@@ -87,6 +89,9 @@ export async function PUT(
     if (emotionalTone !== undefined) data.emotionalTone = emotionalTone;
     if (triggerConditionsNatural !== undefined)
       data.triggerConditionsNatural = triggerConditionsNatural;
+    if (triggers !== undefined) data.triggers = triggers;
+    if (triggerDescription !== undefined)
+      data.triggerDescription = triggerDescription;
     if (userLabel !== undefined) data.userLabel = userLabel;
     if (userNotes !== undefined) data.userNotes = userNotes;
     if (priority !== undefined) data.priority = priority;

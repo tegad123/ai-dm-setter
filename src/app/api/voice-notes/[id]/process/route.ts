@@ -190,6 +190,25 @@ export async function POST(
       triggerConditionsNatural = parsed.trigger_conditions_natural || '';
       userLabel = parsed.suggested_label || '';
 
+      // Parse structured triggers from LLM response
+      let triggers = null;
+      let triggerDescription = null;
+      try {
+        if (Array.isArray(parsed.structured_triggers)) {
+          const { validateTriggers, generateTriggerDescription } = await import(
+            '@/lib/voice-note-triggers'
+          );
+          triggers = validateTriggers(parsed.structured_triggers);
+          triggerDescription = generateTriggerDescription(triggers);
+        }
+      } catch (triggerErr) {
+        console.warn(
+          `[voice-note-process] Structured trigger parsing failed for ${id}:`,
+          triggerErr
+        );
+        // Non-fatal: structured triggers are optional
+      }
+
       await prisma.voiceNoteLibraryItem.update({
         where: { id },
         data: {
@@ -199,7 +218,13 @@ export async function POST(
           conversationStages,
           emotionalTone,
           triggerConditionsNatural,
-          userLabel
+          userLabel,
+          ...(triggers
+            ? {
+                triggers: triggers as unknown as any[], // Prisma Json type
+                triggerDescription
+              }
+            : {})
         }
       });
     } catch (err) {

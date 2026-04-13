@@ -370,6 +370,9 @@ model VoiceNoteLibraryItem {
   conversationStages      String[]                 @default([])
   emotionalTone           String?
   triggerConditionsNatural String?                  @db.Text
+  triggers                Json?                    // Structured trigger objects array
+  triggerDescription      String?                  @db.Text
+  legacyTriggerText       String?                  @db.Text
   boundToScriptStep       String?
   userLabel               String?
   userNotes               String?                  @db.Text
@@ -386,6 +389,19 @@ model VoiceNoteLibraryItem {
   @@index([accountId])
   @@index([accountId, status])
   @@index([accountId, active])
+}
+
+model VoiceNoteSendLog {
+  id           String   @id @default(cuid())
+  accountId    String
+  leadId       String
+  voiceNoteId  String
+  sentAt       DateTime @default(now())
+  messageIndex Int
+  triggerType  String // "stage_transition" | "content_intent" | "conversational_move"
+
+  @@index([leadId, voiceNoteId, sentAt(sort: Desc)])
+  @@index([accountId])
 }
 
 model TrainingExample {

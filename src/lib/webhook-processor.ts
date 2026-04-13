@@ -1000,6 +1000,52 @@ export async function scheduleAIReply(
     return;
   }
 
+  // ── Step 4a: Voice Note Library Trigger Evaluation ──────────────
+  // Check if any library voice note should be sent based on structured
+  // triggers (stage transition, content intent, conversational move).
+  // Non-fatal: if evaluation fails, fall through to existing behavior.
+  try {
+    const { evaluateTriggers } = await import(
+      '@/lib/voice-note-trigger-engine'
+    );
+
+    const triggerResult = await evaluateTriggers({
+      accountId,
+      leadId: lead.id,
+      leadStage: lead.stage,
+      conversationId,
+      lastLeadMessage: messages[messages.length - 1]?.content || '',
+      recentMessages: messages.slice(-5).map((m) => ({
+        sender: m.sender,
+        content: m.content
+      })),
+      currentMessageIndex: messages.length
+    });
+
+    if (triggerResult.matchedVoiceNote) {
+      // Override the LLM's voice note decision with the library match
+      result.shouldVoiceNote = true;
+      result.voiceNoteAction = null; // Clear slot-based action
+      // Attach library voice note info for sendAIReply to use
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (result as any)._libraryVoiceNote = triggerResult.matchedVoiceNote;
+      log(
+        'sched.step4a.triggerMatch',
+        `voiceNote=${triggerResult.matchedVoiceNote.id} trigger=${triggerResult.matchedVoiceNote.triggerType}`
+      );
+    } else {
+      log(
+        'sched.step4a.noMatch',
+        `evaluated=${triggerResult.candidatesEvaluated} intent=${triggerResult.intentDetected}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Trigger evaluation failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 4b: Strip hallucinated URLs (R16 enforcement) ─────────
   // Last line of defense: even if the AI ignores R16 and fabricates a
   // booking URL like "cal.com/foo/30min", strip it before delivery so
@@ -1529,6 +1575,70 @@ async function sendAIReply(
   // ── Send to platform ────────────────────────────────────────────
   if (lead.platformUserId) {
     let voiceNoteSent = false;
+
+    // ── Pre-recorded voice note (Library trigger system) ──────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const libraryVN = (result as any)?._libraryVoiceNote as
+      | { id: string; audioFileUrl: string; triggerType: string }
+      | undefined;
+
+    if (libraryVN && !voiceNoteSent) {
+      try {
+        await prisma.message.update({
+          where: { id: aiMessage.id },
+          data: { isVoiceNote: true, voiceNoteUrl: libraryVN.audioFileUrl }
+        });
+
+        if (lead.platform === 'INSTAGRAM') {
+          const { sendAudioDM } = await import('@/lib/instagram');
+          await sendAudioDM(
+            lead.accountId,
+            lead.platformUserId,
+            libraryVN.audioFileUrl
+          );
+        } else if (lead.platform === 'FACEBOOK') {
+          const { sendAudioMessage } = await import('@/lib/facebook');
+          await sendAudioMessage(
+            lead.accountId,
+            lead.platformUserId,
+            libraryVN.audioFileUrl
+          );
+        }
+
+        voiceNoteSent = true;
+
+        // Log the send for cooldown tracking
+        try {
+          const { logVoiceNoteSend } = await import(
+            '@/lib/voice-note-send-log'
+          );
+          await logVoiceNoteSend({
+            accountId,
+            leadId: lead.id,
+            voiceNoteId: libraryVN.id,
+            messageIndex: await prisma.message.count({
+              where: { conversationId }
+            }),
+            triggerType: libraryVN.triggerType
+          });
+        } catch (logErr) {
+          console.error(
+            '[webhook-processor] Failed to log VN send (non-fatal):',
+            logErr
+          );
+        }
+
+        console.log(
+          `[webhook-processor] Library voice note (id: ${libraryVN.id}) sent to ${lead.platformUserId}`
+        );
+      } catch (err) {
+        console.error(
+          '[webhook-processor] Library voice note send failed:',
+          err
+        );
+        // Fall through to slot system
+      }
+    }
 
     // ── Pre-recorded voice note (VoiceNoteSlot system) ────────────
     if (result.voiceNoteAction?.slot_id) {
