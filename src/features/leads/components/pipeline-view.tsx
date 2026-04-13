@@ -354,7 +354,10 @@ export function PipelineView() {
   }
 
   return (
-    <div className='overflow-x-auto'>
+    <div
+      className='overflow-x-auto'
+      style={{ maxHeight: 'calc(100dvh - 180px)' }}
+    >
       <DndContext
         sensors={sensors}
         modifiers={[restrictToWindowEdges]}

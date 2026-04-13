@@ -8,6 +8,7 @@ export const metadata = {
 export default function LeadsPage() {
   return (
     <PageContainer
+      scrollable={false}
       pageTitle='Lead Pipeline'
       pageDescription='All leads organized by stage'
     >
