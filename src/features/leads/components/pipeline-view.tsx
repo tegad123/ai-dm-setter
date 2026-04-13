@@ -322,7 +322,7 @@ export function PipelineView() {
   // Loading state
   if (loading) {
     return (
-      <div className='flex gap-4 overflow-x-auto p-4'>
+      <div className='flex w-max gap-4 p-4'>
         {PIPELINE_STAGES.slice(0, 6).map((s) => (
           <div
             key={s.key}
@@ -354,38 +354,40 @@ export function PipelineView() {
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      modifiers={[restrictToWindowEdges]}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <div className='flex gap-4 overflow-x-auto pb-4'>
-        {PIPELINE_STAGES.map((stage) => {
-          const columnLeads = groupedLeads[stage.key] ?? [];
-          return (
-            <DroppableColumn
-              key={stage.key}
-              stageKey={stage.key}
-              label={stage.label}
-              count={columnLeads.length}
-            >
-              {columnLeads.map((lead) => (
-                <DraggableCard
-                  key={lead.id}
-                  lead={lead}
-                  onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
-                />
-              ))}
-            </DroppableColumn>
-          );
-        })}
-      </div>
+    <div className='overflow-x-auto'>
+      <DndContext
+        sensors={sensors}
+        modifiers={[restrictToWindowEdges]}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <div className='flex w-max gap-4 pb-4'>
+          {PIPELINE_STAGES.map((stage) => {
+            const columnLeads = groupedLeads[stage.key] ?? [];
+            return (
+              <DroppableColumn
+                key={stage.key}
+                stageKey={stage.key}
+                label={stage.label}
+                count={columnLeads.length}
+              >
+                {columnLeads.map((lead) => (
+                  <DraggableCard
+                    key={lead.id}
+                    lead={lead}
+                    onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
+                  />
+                ))}
+              </DroppableColumn>
+            );
+          })}
+        </div>
 
-      <DragOverlay dropAnimation={null}>
-        {activeLead ? <LeadCardOverlay lead={activeLead} /> : null}
-      </DragOverlay>
-    </DndContext>
+        <DragOverlay dropAnimation={null}>
+          {activeLead ? <LeadCardOverlay lead={activeLead} /> : null}
+        </DragOverlay>
+      </DndContext>
+    </div>
   );
 }
