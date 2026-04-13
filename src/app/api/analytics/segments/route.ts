@@ -18,7 +18,7 @@ interface SegmentMetric {
 
 interface LeadRow {
   id: string;
-  status: string;
+  stage: string;
   showedUp: boolean;
   closedAt: Date | null;
   revenue: number | null;
@@ -67,16 +67,16 @@ function computeMetrics(
   const totalLeads = leads.length;
   const booked = leads.filter(
     (l) =>
-      l.status === 'BOOKED' ||
-      l.status === 'SHOWED_UP' ||
-      l.status === 'NO_SHOW' ||
-      l.status === 'CLOSED'
+      l.stage === 'BOOKED' ||
+      l.stage === 'SHOWED' ||
+      l.stage === 'NO_SHOWED' ||
+      l.stage === 'CLOSED_WON'
   ).length;
   const showed = leads.filter(
-    (l) => l.showedUp || l.status === 'SHOWED_UP' || l.status === 'CLOSED'
+    (l) => l.showedUp || l.stage === 'SHOWED' || l.stage === 'CLOSED_WON'
   ).length;
   const closed = leads.filter(
-    (l) => l.status === 'CLOSED' && l.closedAt !== null
+    (l) => l.stage === 'CLOSED_WON' && l.closedAt !== null
   ).length;
   const revenues = leads
     .filter((l) => l.revenue !== null && l.revenue !== undefined)
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
       where: { accountId: auth.accountId },
       select: {
         id: true,
-        status: true,
+        stage: true,
         showedUp: true,
         closedAt: true,
         revenue: true,

@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       leadName: leadName || 'Test Lead',
       handle: 'testlead',
       platform: platform || 'INSTAGRAM',
-      status: 'NEW_LEAD',
+      status: 'NEW_LEAD', // LeadContext interface still uses 'status' field name for the AI prompt
       triggerType: triggerType || 'DM',
       triggerSource: null,
       qualityScore: 50

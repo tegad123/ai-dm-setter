@@ -9,19 +9,19 @@ export async function GET(request: NextRequest) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const [totalLeads, leadsToday, statusCounts, revenueResult] =
+    const [totalLeads, leadsToday, stageCounts, revenueResult] =
       await Promise.all([
         prisma.lead.count({ where: { accountId: auth.accountId } }),
         prisma.lead.count({
           where: { accountId: auth.accountId, createdAt: { gte: todayStart } }
         }),
         prisma.lead.groupBy({
-          by: ['status'],
+          by: ['stage'],
           _count: { id: true },
           where: {
             accountId: auth.accountId,
-            status: {
-              in: ['BOOKED', 'SHOWED_UP', 'NO_SHOW', 'CLOSED']
+            stage: {
+              in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON']
             }
           }
         }),
@@ -32,14 +32,14 @@ export async function GET(request: NextRequest) {
       ]);
 
     const counts: Record<string, number> = {};
-    for (const row of statusCounts) {
-      counts[row.status] = row._count.id;
+    for (const row of stageCounts) {
+      counts[row.stage] = row._count.id;
     }
 
     const booked = counts['BOOKED'] || 0;
-    const showedUp = counts['SHOWED_UP'] || 0;
-    const noShow = counts['NO_SHOW'] || 0;
-    const closed = counts['CLOSED'] || 0;
+    const showedUp = counts['SHOWED'] || 0;
+    const noShow = counts['NO_SHOWED'] || 0;
+    const closed = counts['CLOSED_WON'] || 0;
 
     const callsBooked = booked + showedUp + noShow + closed;
     const showDenominator = callsBooked;

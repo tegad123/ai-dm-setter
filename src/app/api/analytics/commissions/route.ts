@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     const closedDeals = await prisma.lead.findMany({
       where: {
         accountId: auth.accountId,
-        status: 'CLOSED',
+        stage: 'CLOSED_WON',
         revenue: { not: null },
         ...(hasDateFilter ? { closedAt: dateFilter } : {})
       },

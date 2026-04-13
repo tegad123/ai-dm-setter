@@ -22,20 +22,21 @@ enum Platform {
   FACEBOOK
 }
 
-enum LeadStatus {
+enum LeadStage {
   NEW_LEAD
-  IN_QUALIFICATION
-  HOT_LEAD
+  ENGAGED
+  QUALIFYING
   QUALIFIED
+  CALL_PROPOSED
   BOOKED
-  SHOWED_UP
-  NO_SHOW
-  CLOSED
-  SERIOUS_NOT_READY
-  MONEY_OBJECTION
-  TRUST_OBJECTION
-  GHOSTED
+  SHOWED
+  NO_SHOWED
+  RESCHEDULED
+  CLOSED_WON
+  CLOSED_LOST
   UNQUALIFIED
+  GHOSTED
+  NURTURE
 }
 
 enum TriggerType {
@@ -173,6 +174,7 @@ model Account {
   plan               AccountPlan @default(FREE)
   awayMode           Boolean     @default(false)     // Global AI takeover toggle
   awayModeEnabledAt  DateTime?                       // When away mode was last enabled
+  ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
@@ -526,7 +528,9 @@ model Lead {
   name                   String
   handle                 String
   platform               Platform
-  status                 LeadStatus @default(NEW_LEAD)
+  stage                  LeadStage  @default(NEW_LEAD)
+  previousStage          LeadStage?
+  stageEnteredAt         DateTime   @default(now())
   qualityScore           Int        @default(0)
   triggerType            TriggerType
   triggerSource          String?              // Which post/DM triggered entry
@@ -552,8 +556,9 @@ model Lead {
   contentAttribution   ContentAttribution?  @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
   crmOutcomes          CrmOutcome[]
   abTestAssignments    ABTestAssignment[]
+  stageTransitions     LeadStageTransition[]
 
-  @@index([accountId, status])
+  @@index([accountId, stage])
   @@index([accountId, platform])
   @@index([accountId, createdAt])
   @@index([contentAttributionId])
@@ -947,4 +952,22 @@ model VoiceNoteTimingSettings {
   updatedAt DateTime @updatedAt
 
   account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Lead Stage Transition History
+// ---------------------------------------------------------------------------
+
+model LeadStageTransition {
+  id             String    @id @default(cuid())
+  leadId         String
+  fromStage      LeadStage
+  toStage        LeadStage
+  transitionedBy String    // "ai" | "user" | "system"
+  reason         String?
+  createdAt      DateTime  @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
 }

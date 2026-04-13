@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
             handle: true,
             platformUserId: true,
             platform: true,
-            status: true,
+            stage: true,
             qualityScore: true,
             tags: {
               include: {
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
         c.lead.name || c.lead.handle || c.lead.platformUserId || 'Unknown',
       leadHandle: c.lead.handle || c.lead.platformUserId || '',
       platform: c.lead.platform.toLowerCase(),
-      status: c.lead.status,
+      stage: c.lead.stage,
       aiActive: c.aiActive,
       lastMessage: c.messages[0]?.content ?? '',
       lastMessageAt: c.lastMessageAt?.toISOString() ?? null,

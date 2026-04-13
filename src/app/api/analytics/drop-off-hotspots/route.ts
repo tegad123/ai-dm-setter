@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const droppedConversations = await prisma.conversation.findMany({
       where: {
         lead: { accountId: auth.accountId },
-        OR: [{ outcome: 'LEFT_ON_READ' }, { lead: { status: 'GHOSTED' } }]
+        OR: [{ outcome: 'LEFT_ON_READ' }, { lead: { stage: 'GHOSTED' } }]
       },
       include: {
         messages: {

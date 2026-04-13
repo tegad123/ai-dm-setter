@@ -41,15 +41,15 @@ export async function POST(
       }
     });
 
-    // Update lead status based on outcome
+    // Update lead stage based on outcome
     const leadUpdate: Record<string, unknown> = { showedUp: showed };
-    if (showed) leadUpdate.status = 'SHOWED_UP';
+    if (showed) leadUpdate.stage = 'SHOWED';
     if (closed) {
-      leadUpdate.status = 'CLOSED';
+      leadUpdate.stage = 'CLOSED_WON';
       leadUpdate.closedAt = new Date();
       if (dealValue) leadUpdate.revenue = dealValue;
     }
-    if (!showed) leadUpdate.status = 'NO_SHOW';
+    if (!showed) leadUpdate.stage = 'NO_SHOWED';
 
     const updatedLead = await prisma.lead.update({
       where: { id },

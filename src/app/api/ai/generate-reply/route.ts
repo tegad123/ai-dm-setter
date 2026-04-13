@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       leadName: lead.name,
       handle: lead.handle,
       platform: lead.platform,
-      status: lead.status,
+      status: lead.stage,
       triggerType: lead.triggerType,
       triggerSource: lead.triggerSource,
       qualityScore: lead.qualityScore

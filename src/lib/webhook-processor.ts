@@ -337,7 +337,7 @@ export async function processIncomingMessage(
         platformUserId,
         triggerType,
         triggerSource: triggerSource || null,
-        status: 'NEW_LEAD',
+        stage: 'NEW_LEAD',
         conversation: {
           create: {
             aiActive: shouldEnableAI,
@@ -455,7 +455,9 @@ export async function processIncomingMessage(
     await prisma.lead.update({
       where: { id: lead.id },
       data: {
-        status: 'NEW_LEAD',
+        stage: 'NEW_LEAD',
+        previousStage: null,
+        stageEnteredAt: new Date(),
         qualityScore: 0,
         bookedAt: null,
         showedUp: false,
@@ -684,7 +686,7 @@ export async function scheduleAIReply(
     leadName: lead.name,
     handle: lead.handle,
     platform: lead.platform,
-    status: lead.status,
+    status: lead.stage,
     triggerType: lead.triggerType,
     triggerSource: lead.triggerSource,
     qualityScore: lead.qualityScore,
@@ -728,7 +730,7 @@ export async function scheduleAIReply(
     leadContext.testModeSkipToBooking = true;
 
     // Fast-forward all qualification stage timestamps so analytics +
-    // updateLeadStatusFromStage see the conversation as fully qualified.
+    // updateLeadStageFromConversation see the conversation as fully qualified.
     // recordStageTimestamp is idempotent — only writes the first time.
     const stagesToRecord = [
       'OPENING',
@@ -1163,7 +1165,7 @@ async function sendAIReply(
     platform: string;
     platformUserId: string | null;
     accountId: string;
-    status: string;
+    stage: string;
   },
   result: {
     reply: string;
@@ -1359,7 +1361,7 @@ async function sendAIReply(
             });
             await prisma.lead.update({
               where: { id: lead.id },
-              data: { status: 'BOOKED', bookedAt: new Date() }
+              data: { stage: 'BOOKED' as any, bookedAt: new Date() }
             });
             await prisma.notification.create({
               data: {
@@ -1506,9 +1508,13 @@ async function sendAIReply(
     ).catch((err) => console.error('[webhook-processor] Auto-tag error:', err));
   }
 
-  // ── Update lead status based on stage ──────────────────────────
-  await updateLeadStatusFromStage(lead.id, lead.status, result.stage).catch(
-    (err) => console.error('[webhook-processor] Lead status update error:', err)
+  // ── Update lead stage based on conversation stage ──────────────
+  await updateLeadStageFromConversation(
+    lead.id,
+    lead.stage,
+    result.stage
+  ).catch((err) =>
+    console.error('[webhook-processor] Lead stage update error:', err)
   );
 
   // ── Broadcast real-time events ─────────────────────────────────
@@ -2111,72 +2117,73 @@ function getTagColor(tagName: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: Update Lead Status from AI Stage
+// Helper: Update Lead Stage from Conversation Stage
 // ---------------------------------------------------------------------------
 
-async function updateLeadStatusFromStage(
+async function updateLeadStageFromConversation(
   leadId: string,
-  currentStatus: string,
-  stage: string
+  currentStage: string,
+  conversationStage: string
 ): Promise<void> {
-  // Map AI stages to lead statuses (only upgrade, never downgrade).
+  // Map AI conversation stages to lead stages (only upgrade, never downgrade).
   //
-  // CRITICAL: BOOKING stage caps at QUALIFIED, NOT 'BOOKED'.
-  // The 'BOOKED' status must ONLY be set inside the success branch of
-  // bookUnifiedAppointment() in sendAIReply (search for `lead.status: 'BOOKED'`).
+  // CRITICAL: BOOKING conversation stage caps at CALL_PROPOSED, NOT 'BOOKED'.
+  // The 'BOOKED' stage must ONLY be set inside the success branch of
+  // bookUnifiedAppointment() in sendAIReply (search for `lead.stage: 'BOOKED'`).
   // Setting it here would create a phantom "BOOKED" lead even when the
   // calendar booking silently failed (e.g. R14 anti-hallucination guard
   // rejected the AI's slot pick), which is exactly the bug we hit on
   // 2026-04-08 with conversation cmngzdbbu0002if04jjxlm35i.
-  const stageToStatus: Record<string, string> = {
+  const stageToLeadStage: Record<string, string> = {
     // New 7-stage SOP sequence
     OPENING: 'NEW_LEAD',
-    SITUATION_DISCOVERY: 'IN_QUALIFICATION',
-    GOAL_EMOTIONAL_WHY: 'IN_QUALIFICATION',
-    URGENCY: 'HOT_LEAD',
+    SITUATION_DISCOVERY: 'QUALIFYING',
+    GOAL_EMOTIONAL_WHY: 'QUALIFYING',
+    URGENCY: 'QUALIFYING',
     SOFT_PITCH_COMMITMENT: 'QUALIFIED',
     FINANCIAL_SCREENING: 'QUALIFIED',
-    BOOKING: 'QUALIFIED', // ← capped at QUALIFIED — only real booking promotes to BOOKED
+    BOOKING: 'CALL_PROPOSED', // ← capped at CALL_PROPOSED — only real booking promotes to BOOKED
     // Legacy stage names (backward compat)
     GREETING: 'NEW_LEAD',
-    QUALIFICATION: 'IN_QUALIFICATION',
-    VISION_BUILDING: 'IN_QUALIFICATION',
-    PAIN_IDENTIFICATION: 'IN_QUALIFICATION',
-    SOLUTION_OFFER: 'HOT_LEAD',
+    QUALIFICATION: 'QUALIFYING',
+    VISION_BUILDING: 'QUALIFYING',
+    PAIN_IDENTIFICATION: 'QUALIFYING',
+    SOLUTION_OFFER: 'QUALIFYING',
     CAPITAL_QUALIFICATION: 'QUALIFIED'
   };
 
-  const newStatus = stageToStatus[stage];
-  if (!newStatus) return;
+  const newStage = stageToLeadStage[conversationStage];
+  if (!newStage) return;
 
-  // Status priority order (only upgrade)
-  const statusPriority: Record<string, number> = {
+  // Stage priority order (only upgrade)
+  const stagePriority: Record<string, number> = {
     NEW_LEAD: 0,
-    IN_QUALIFICATION: 1,
-    HOT_LEAD: 2,
+    ENGAGED: 1,
+    QUALIFYING: 2,
     QUALIFIED: 3,
-    BOOKED: 4,
-    SHOWED_UP: 5,
-    CLOSED: 6,
-    // These are terminal/side statuses — don't override
-    SERIOUS_NOT_READY: 10,
-    MONEY_OBJECTION: 10,
-    TRUST_OBJECTION: 10,
-    GHOSTED: 10,
+    CALL_PROPOSED: 4,
+    BOOKED: 5,
+    SHOWED: 6,
+    CLOSED_WON: 7,
+    // These are terminal/side stages — don't override
+    CLOSED_LOST: 10,
     UNQUALIFIED: 10,
-    NO_SHOW: 10
+    GHOSTED: 10,
+    NURTURE: 10,
+    NO_SHOWED: 10,
+    RESCHEDULED: 10
   };
 
-  const currentPriority = statusPriority[currentStatus] ?? 0;
-  const newPriority = statusPriority[newStatus] ?? 0;
+  const currentPriority = stagePriority[currentStage] ?? 0;
+  const newPriority = stagePriority[newStage] ?? 0;
 
   if (newPriority > currentPriority && currentPriority < 10) {
     await prisma.lead.update({
       where: { id: leadId },
-      data: { status: newStatus as any }
+      data: { stage: newStage as any }
     });
     console.log(
-      `[webhook-processor] Lead ${leadId} status: ${currentStatus} → ${newStatus}`
+      `[webhook-processor] Lead ${leadId} stage: ${currentStage} → ${newStage}`
     );
   }
 }

@@ -2,7 +2,7 @@
 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
+import { LeadStageBadge } from '@/features/shared/lead-stage-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
@@ -18,7 +18,7 @@ import {
   IconCheck
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
-import type { LeadStatus } from '@/features/shared/lead-status-badge';
+import type { LeadStage } from '@/features/shared/lead-stage-badge';
 
 interface ConversationDetail {
   outcome?: string;
@@ -178,7 +178,7 @@ export function SummaryTab({
             </div>
           </div>
           <div className='mt-2 flex flex-wrap gap-1.5'>
-            <LeadStatusBadge status={status as LeadStatus} />
+            <LeadStageBadge stage={status as LeadStage} />
             {detail?.leadSource && (
               <Badge variant='outline' className='text-[10px]'>
                 {detail.leadSource === 'INBOUND' ? 'Inbound' : 'Outbound'}

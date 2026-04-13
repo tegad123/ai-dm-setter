@@ -19,28 +19,25 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
-import {
-  LeadStatusBadge,
-  allStatuses
-} from '@/features/shared/lead-status-badge';
+import { LeadStageBadge, allStages } from '@/features/shared/lead-stage-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { useState, useMemo } from 'react';
 import { IconSearch } from '@tabler/icons-react';
 import { useLeads, useTags } from '@/hooks/use-api';
-import type { LeadStatus } from '@/features/shared/lead-status-badge';
+import type { LeadStage } from '@/features/shared/lead-stage-badge';
 
 export function LeadsTable() {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [stageFilter, setStageFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [platformFilter, setPlatformFilter] = useState<string>('all');
 
   const { tags: availableTags } = useTags();
 
-  // Map lowercase status filter to UPPER_CASE for the API
-  const apiStatus =
-    statusFilter !== 'all' ? statusFilter.toUpperCase() : undefined;
+  // Map lowercase stage filter to UPPER_CASE for the API
+  const apiStage =
+    stageFilter !== 'all' ? stageFilter.toUpperCase() : undefined;
 
   const {
     leads: apiLeads,
@@ -48,7 +45,7 @@ export function LeadsTable() {
     loading,
     error
   } = useLeads({
-    status: apiStatus,
+    stage: apiStage,
     search: search || undefined,
     tag: tagFilter !== 'all' ? tagFilter : undefined,
     platform: platformFilter !== 'all' ? platformFilter : undefined,
@@ -62,7 +59,7 @@ export function LeadsTable() {
       fullName: lead.name,
       username: lead.handle,
       platform: lead.platform.toLowerCase() as 'instagram' | 'facebook',
-      status: lead.status.toLowerCase() as LeadStatus,
+      stage: lead.stage.toLowerCase() as LeadStage,
       qualityScore: lead.qualityScore ?? 0,
       triggerType: lead.triggerType === 'DM' ? 'direct_dm' : 'comment',
       tags: (lead.tags ?? []).map((lt: any) => ({
@@ -98,7 +95,7 @@ export function LeadsTable() {
           </div>
           <Select disabled>
             <SelectTrigger className='w-[200px]'>
-              <SelectValue placeholder='Filter by status' />
+              <SelectValue placeholder='Filter by stage' />
             </SelectTrigger>
           </Select>
         </div>
@@ -122,13 +119,13 @@ export function LeadsTable() {
             className='pl-9'
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select value={stageFilter} onValueChange={setStageFilter}>
           <SelectTrigger className='w-[200px]'>
-            <SelectValue placeholder='Filter by status' />
+            <SelectValue placeholder='Filter by stage' />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value='all'>All Statuses</SelectItem>
-            {allStatuses.map((s) => (
+            <SelectItem value='all'>All Stages</SelectItem>
+            {allStages.map((s) => (
               <SelectItem key={s.value} value={s.value}>
                 {s.label}
               </SelectItem>
@@ -182,7 +179,7 @@ export function LeadsTable() {
             <TableRow>
               <TableHead>Lead</TableHead>
               <TableHead>Platform</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>Stage</TableHead>
               <TableHead>Tags</TableHead>
               <TableHead>Quality</TableHead>
               <TableHead>Trigger</TableHead>
@@ -216,7 +213,7 @@ export function LeadsTable() {
                     <PlatformIcon platform={lead.platform} />
                   </TableCell>
                   <TableCell>
-                    <LeadStatusBadge status={lead.status} />
+                    <LeadStageBadge stage={lead.stage} />
                   </TableCell>
                   <TableCell>
                     <div className='flex flex-wrap gap-1'>

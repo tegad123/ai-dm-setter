@@ -27,7 +27,7 @@ function toLocalConvo(
     leadName: c.leadName,
     leadUsername: c.leadHandle,
     platform: c.platform as 'instagram' | 'facebook',
-    status: c.status,
+    stage: c.stage,
     aiActive: c.aiActive,
     lastMessage: c.lastMessage ?? '',
     lastMessageTime: c.lastMessageAt
@@ -177,7 +177,7 @@ export function ConversationsView() {
             leadName={activeApiConvo.leadName}
             leadHandle={activeApiConvo.leadHandle}
             platform={activeApiConvo.platform}
-            status={activeApiConvo.status}
+            status={activeApiConvo.stage}
             aiActive={activeApiConvo.aiActive}
             qualityScore={activeApiConvo.qualityScore ?? 0}
             priorityScore={activeApiConvo.priorityScore ?? 0}

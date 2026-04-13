@@ -40,14 +40,14 @@ export async function POST(req: NextRequest) {
       slotEnd,
       notes:
         notes ??
-        `Auto-booked via DM Setter. Platform: ${lead.platform}. Lead status: ${lead.status}.`
+        `Auto-booked via DM Setter. Platform: ${lead.platform}. Lead stage: ${lead.stage}.`
     });
 
-    // Update lead status to BOOKED
+    // Update lead stage to BOOKED
     await prisma.lead.update({
       where: { id: leadId },
       data: {
-        status: 'BOOKED',
+        stage: 'BOOKED',
         bookedAt: new Date()
       }
     });

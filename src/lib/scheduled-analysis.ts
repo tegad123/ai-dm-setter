@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { updateConversationOutcome } from '@/lib/conversation-state-machine';
+import { transitionLeadStage } from '@/lib/lead-stage';
 
 /**
  * Run daily analysis for all active accounts.
@@ -8,14 +9,24 @@ import { updateConversationOutcome } from '@/lib/conversation-state-machine';
 export async function runAnalysisForAllAccounts(): Promise<{
   accountsProcessed: number;
   conversationsUpdated: number;
-  results: Array<{ accountId: string; success: boolean; conversationsUpdated: number; error?: string }>;
+  results: Array<{
+    accountId: string;
+    success: boolean;
+    conversationsUpdated: number;
+    error?: string;
+  }>;
 }> {
   const accounts = await prisma.account.findMany({
-    select: { id: true }
+    select: { id: true, ghostThresholdDays: true }
   });
 
   let conversationsUpdated = 0;
-  const results: Array<{ accountId: string; success: boolean; conversationsUpdated: number; error?: string }> = [];
+  const results: Array<{
+    accountId: string;
+    success: boolean;
+    conversationsUpdated: number;
+    error?: string;
+  }> = [];
 
   for (const account of accounts) {
     let accountUpdated = 0;
@@ -40,21 +51,44 @@ export async function runAnalysisForAllAccounts(): Promise<{
       }
     }
 
-    // Detect and mark ghosted leads (no response in 7+ days)
-    const ghostThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    await prisma.lead.updateMany({
+    // Detect and mark ghosted leads (no response within ghostThresholdDays)
+    const ghostThreshold = new Date(
+      Date.now() - account.ghostThresholdDays * 24 * 60 * 60 * 1000
+    );
+    const ghostCandidates = await prisma.lead.findMany({
       where: {
         accountId: account.id,
-        status: { in: ['NEW_LEAD', 'IN_QUALIFICATION', 'HOT_LEAD'] },
+        stage: {
+          in: [
+            'NEW_LEAD',
+            'ENGAGED',
+            'QUALIFYING',
+            'QUALIFIED',
+            'CALL_PROPOSED'
+          ]
+        },
         conversation: {
           lastMessageAt: { lt: ghostThreshold },
           outcome: 'LEFT_ON_READ'
         }
       },
-      data: { status: 'GHOSTED' }
+      select: { id: true }
     });
 
-    results.push({ accountId: account.id, success: true, conversationsUpdated: accountUpdated });
+    for (const lead of ghostCandidates) {
+      await transitionLeadStage(
+        lead.id,
+        'GHOSTED',
+        'system',
+        `No reply in ${account.ghostThresholdDays} days`
+      );
+    }
+
+    results.push({
+      accountId: account.id,
+      success: true,
+      conversationsUpdated: accountUpdated
+    });
   }
 
   return {

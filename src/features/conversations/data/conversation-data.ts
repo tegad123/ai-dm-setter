@@ -18,7 +18,7 @@ export interface Conversation {
   leadName: string;
   leadUsername: string;
   platform: 'instagram' | 'facebook';
-  status: string;
+  stage: string;
   aiActive: boolean;
   lastMessage: string;
   lastMessageTime: string;
@@ -35,7 +35,7 @@ export const conversations: Conversation[] = [
     leadName: 'Marcus Johnson',
     leadUsername: 'marcus_johnson',
     platform: 'instagram',
-    status: 'booked',
+    stage: 'booked',
     aiActive: true,
     lastMessage: "Perfect, you're all set for tomorrow at 2 PM!",
     lastMessageTime: '9:30 AM',
@@ -117,7 +117,7 @@ export const conversations: Conversation[] = [
     leadName: 'Sarah Mitchell',
     leadUsername: 'sarah_mitchell',
     platform: 'instagram',
-    status: 'hot_lead',
+    stage: 'engaged',
     aiActive: true,
     lastMessage: 'That sounds amazing, tell me more about the results',
     lastMessageTime: '10:15 AM',
@@ -162,7 +162,7 @@ export const conversations: Conversation[] = [
     leadName: 'Jaylen Williams',
     leadUsername: 'jaylen_williams',
     platform: 'instagram',
-    status: 'trust_objection',
+    stage: 'qualifying',
     aiActive: false,
     lastMessage: 'I\'ve been burned before by these "gurus"...',
     lastMessageTime: 'Yesterday',
@@ -209,7 +209,7 @@ export const conversations: Conversation[] = [
     leadName: 'Alex Rodriguez',
     leadUsername: 'alex.rodriguez',
     platform: 'instagram',
-    status: 'in_qualification',
+    stage: 'qualifying',
     aiActive: true,
     lastMessage: 'I currently work a 9-5 but I want to go full time trading',
     lastMessageTime: '11:00 AM',
@@ -241,7 +241,7 @@ export const conversations: Conversation[] = [
     leadName: 'David Kim',
     leadUsername: 'david.kim',
     platform: 'facebook',
-    status: 'booked',
+    stage: 'booked',
     aiActive: true,
     lastMessage: 'Awesome, Wed 10 AM works. See you then!',
     lastMessageTime: '8:00 AM',

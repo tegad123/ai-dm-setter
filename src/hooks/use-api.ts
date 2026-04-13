@@ -17,7 +17,8 @@ import {
   getTeamNotes,
   getContentAttributions,
   getContentAnalytics,
-  getTeamAnalytics
+  getTeamAnalytics,
+  getLeadStageHistory
 } from '@/lib/api';
 import type {
   Lead,
@@ -89,7 +90,7 @@ function useApiFetch<T>(fetcher: () => Promise<T>, deps: unknown[] = []) {
 // ---------------------------------------------------------------------------
 
 export function useLeads(params?: {
-  status?: string;
+  stage?: string;
   platform?: string;
   search?: string;
   tag?: string;
@@ -106,7 +107,7 @@ export function useLeads(params?: {
       : undefined;
     return getLeads(stringParams);
   }, [
-    params?.status,
+    params?.stage,
     params?.platform,
     params?.search,
     params?.tag,
@@ -462,5 +463,35 @@ export function useTeamAnalytics(from?: string, to?: string) {
     analytics: data as TeamAnalytics | null,
     loading,
     error
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lead Stage History
+// ---------------------------------------------------------------------------
+
+export function useLeadStageHistory(leadId: string | undefined) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(
+    () =>
+      leadId
+        ? getLeadStageHistory(leadId)
+        : Promise.resolve({ transitions: [] }),
+    [leadId]
+  );
+
+  const transitions = Array.isArray(raw)
+    ? raw
+    : ((raw as any)?.transitions ?? []);
+
+  return {
+    transitions,
+    loading,
+    error,
+    refetch
   };
 }

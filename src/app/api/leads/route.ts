@@ -1,14 +1,14 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
-import { LeadStatus, Platform } from '@prisma/client';
+import { LeadStage, Platform } from '@prisma/client';
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
 
     const { searchParams } = req.nextUrl;
-    const status = searchParams.get('status') as LeadStatus | null;
+    const stage = searchParams.get('stage') as LeadStage | null;
     const platform = searchParams.get('platform') as Platform | null;
     const search = searchParams.get('search');
     const tag = searchParams.get('tag'); // Filter by tag name
@@ -21,8 +21,8 @@ export async function GET(req: NextRequest) {
 
     const where: Record<string, unknown> = { accountId: auth.accountId };
 
-    if (status) {
-      where.status = status;
+    if (stage) {
+      where.stage = stage;
     }
     if (platform) {
       where.platform = platform;
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
     const auth = await requireAuth(req);
 
     const body = await req.json();
-    const { name, handle, platform, triggerType, triggerSource, status } = body;
+    const { name, handle, platform, triggerType, triggerSource, stage } = body;
 
     if (!name || !handle || !platform || !triggerType) {
       return NextResponse.json(
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
         platform,
         triggerType,
         triggerSource: triggerSource || null,
-        status: status || 'NEW_LEAD',
+        stage: (stage as any) || 'NEW_LEAD',
         conversation: {
           create: {
             aiActive: true

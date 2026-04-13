@@ -1,5 +1,5 @@
 import PageContainer from '@/components/layout/page-container';
-import { LeadsTable } from '@/features/leads/components/leads-table';
+import { LeadsViewToggle } from '@/features/leads/components/leads-view-toggle';
 
 export const metadata = {
   title: 'DMsetter — Leads'
@@ -9,9 +9,9 @@ export default function LeadsPage() {
   return (
     <PageContainer
       pageTitle='Lead Pipeline'
-      pageDescription='All leads organized by status with quality scores'
+      pageDescription='All leads organized by stage'
     >
-      <LeadsTable />
+      <LeadsViewToggle />
     </PageContainer>
   );
 }

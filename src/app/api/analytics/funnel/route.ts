@@ -12,14 +12,14 @@ export async function GET(request: NextRequest) {
         prisma.lead.count({
           where: {
             accountId: auth.accountId,
-            status: {
+            stage: {
               in: [
                 'QUALIFIED',
                 'BOOKED',
-                'SHOWED_UP',
-                'NO_SHOW',
-                'CLOSED',
-                'SERIOUS_NOT_READY'
+                'SHOWED',
+                'NO_SHOWED',
+                'CLOSED_WON',
+                'NURTURE'
               ]
             }
           }
@@ -27,17 +27,17 @@ export async function GET(request: NextRequest) {
         prisma.lead.count({
           where: {
             accountId: auth.accountId,
-            status: { in: ['BOOKED', 'SHOWED_UP', 'NO_SHOW', 'CLOSED'] }
+            stage: { in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON'] }
           }
         }),
         prisma.lead.count({
           where: {
             accountId: auth.accountId,
-            status: { in: ['SHOWED_UP', 'CLOSED'] }
+            stage: { in: ['SHOWED', 'CLOSED_WON'] }
           }
         }),
         prisma.lead.count({
-          where: { accountId: auth.accountId, status: 'CLOSED' }
+          where: { accountId: auth.accountId, stage: 'CLOSED_WON' }
         })
       ]
     );

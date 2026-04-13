@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
 import { Skeleton } from '@/components/ui/skeleton';
-import { LeadStatusBadge } from '@/features/shared/lead-status-badge';
+import { LeadStageBadge } from '@/features/shared/lead-stage-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
@@ -19,7 +19,7 @@ import {
   IconBolt
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
-import type { LeadStatus } from '@/features/shared/lead-status-badge';
+import type { LeadStage } from '@/features/shared/lead-stage-badge';
 
 interface ConversationThreadProps {
   conversation: Conversation;
@@ -88,7 +88,7 @@ export function ConversationThread({
               @{conversation.leadUsername}
             </p>
           </div>
-          <LeadStatusBadge status={conversation.status as LeadStatus} />
+          <LeadStageBadge stage={conversation.stage as LeadStage} />
           {/* Quality Score */}
           {conversation.qualityScore !== undefined &&
             conversation.qualityScore > 0 && (

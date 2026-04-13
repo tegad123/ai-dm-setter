@@ -27,7 +27,7 @@ export async function updateConversationOutcome(
         }
       },
       lead: {
-        select: { status: true }
+        select: { stage: true }
       }
     }
   });
@@ -46,16 +46,16 @@ export async function updateConversationOutcome(
 
   let newOutcome = currentOutcome;
 
-  // Check for BOOKED — lead status or booking stage reached
+  // Check for BOOKED — lead stage or booking stage reached
   if (
-    lead.status === 'BOOKED' ||
-    lead.status === 'SHOWED_UP' ||
-    lead.status === 'CLOSED'
+    lead.stage === 'BOOKED' ||
+    lead.stage === 'SHOWED' ||
+    lead.stage === 'CLOSED_WON'
   ) {
     newOutcome = 'BOOKED';
   }
   // Check for UNQUALIFIED — lead explicitly unqualified
-  else if (lead.status === 'UNQUALIFIED') {
+  else if (lead.stage === 'UNQUALIFIED') {
     newOutcome = 'UNQUALIFIED_REDIRECT';
   }
   // Check for LEFT_ON_READ — no lead response after 2+ AI messages

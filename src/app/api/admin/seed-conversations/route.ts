@@ -19,7 +19,7 @@ interface SeedConversation {
   messages: SeedMessage[];
 }
 
-function outcomeToLeadStatus(outcome: string): string {
+function outcomeToLeadStage(outcome: string): string {
   switch (outcome) {
     case 'BOOKED':
       return 'BOOKED';
@@ -28,13 +28,13 @@ function outcomeToLeadStatus(outcome: string): string {
     case 'LEFT_ON_READ':
       return 'GHOSTED';
     case 'RESISTANT_EXIT':
-      return 'TRUST_OBJECTION';
+      return 'QUALIFYING';
     case 'SOFT_OBJECTION':
-      return 'SERIOUS_NOT_READY';
+      return 'NURTURE';
     case 'PRICE_QUESTION_DEFLECTED':
-      return 'MONEY_OBJECTION';
+      return 'QUALIFYING';
     default:
-      return 'IN_QUALIFICATION';
+      return 'QUALIFYING';
   }
 }
 
@@ -86,14 +86,14 @@ export async function POST(req: NextRequest) {
         continue; // Skip invalid entries
       }
 
-      // 1. Create Lead with status derived from outcome
+      // 1. Create Lead with stage derived from outcome
       const lead = await prisma.lead.create({
         data: {
           accountId: auth.accountId,
           name: leadName,
           handle: leadHandle,
           platform,
-          status: outcomeToLeadStatus(outcome) as any,
+          stage: outcomeToLeadStage(outcome) as any,
           triggerType: 'DM',
           triggerSource: 'seed-import'
         }

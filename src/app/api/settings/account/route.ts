@@ -16,7 +16,8 @@ export async function GET(req: NextRequest) {
         brandName: true,
         primaryColor: true,
         plan: true,
-        onboardingComplete: true
+        onboardingComplete: true,
+        ghostThresholdDays: true
       }
     });
 
@@ -53,7 +54,14 @@ export async function PUT(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { name, brandName, logoUrl, primaryColor, onboardingComplete } = body;
+    const {
+      name,
+      brandName,
+      logoUrl,
+      primaryColor,
+      onboardingComplete,
+      ghostThresholdDays
+    } = body;
 
     const data: Record<string, unknown> = {};
     if (name !== undefined) data.name = name;
@@ -62,6 +70,8 @@ export async function PUT(req: NextRequest) {
     if (primaryColor !== undefined) data.primaryColor = primaryColor;
     if (onboardingComplete !== undefined)
       data.onboardingComplete = onboardingComplete;
+    if (ghostThresholdDays !== undefined)
+      data.ghostThresholdDays = ghostThresholdDays;
 
     const account = await prisma.account.update({
       where: { id: auth.accountId },
@@ -74,7 +84,8 @@ export async function PUT(req: NextRequest) {
         brandName: true,
         primaryColor: true,
         plan: true,
-        onboardingComplete: true
+        onboardingComplete: true,
+        ghostThresholdDays: true
       }
     });
 

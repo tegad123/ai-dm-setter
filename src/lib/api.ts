@@ -43,7 +43,9 @@ export interface Lead {
   name: string;
   handle: string;
   platform: string;
-  status: string;
+  stage: string;
+  previousStage?: string | null;
+  stageEnteredAt?: string;
   qualityScore: number;
   triggerType: string;
   triggerSource?: string | null;
@@ -59,7 +61,7 @@ export interface Conversation {
   leadName: string;
   leadHandle: string;
   platform: string;
-  status: string;
+  stage: string;
   aiActive: boolean;
   lastMessage: string;
   lastMessageAt: string | null;
@@ -494,4 +496,23 @@ export async function updateVoiceNoteTimingSettings(
     method: 'PUT',
     body: JSON.stringify(data)
   });
+}
+
+// ---------------------------------------------------------------------------
+// Lead Stage Transitions
+// ---------------------------------------------------------------------------
+
+export async function transitionLeadStage(
+  leadId: string,
+  stage: string,
+  reason?: string
+): Promise<any> {
+  return apiFetch(`/api/leads/${leadId}/stage`, {
+    method: 'PUT',
+    body: JSON.stringify({ stage, reason })
+  });
+}
+
+export async function getLeadStageHistory(leadId: string): Promise<any> {
+  return apiFetch(`/api/leads/${leadId}/stage`);
 }

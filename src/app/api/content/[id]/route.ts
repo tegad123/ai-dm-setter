@@ -20,7 +20,7 @@ export async function GET(
             name: true,
             handle: true,
             platform: true,
-            status: true,
+            stage: true,
             qualityScore: true,
             revenue: true,
             bookedAt: true,

@@ -15,7 +15,7 @@ interface RecentLead {
   name: string;
   handle: string;
   platform: string;
-  status: string;
+  stage: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -29,20 +29,24 @@ function getInitials(name: string) {
     .slice(0, 2);
 }
 
-function getStatusAction(status: string) {
+function getStageAction(stage: string) {
   const map: Record<string, string> = {
     NEW_LEAD: 'New lead',
-    IN_QUALIFICATION: 'In qualification',
-    HOT_LEAD: 'Hot lead detected',
+    ENGAGED: 'Engaged',
+    QUALIFYING: 'In qualification',
     QUALIFIED: 'Qualified',
-    BOOKED: 'Call booked',
-    SHOWED_UP: 'Showed up',
-    NO_SHOW: 'No show',
-    CLOSED: 'Closed',
-    GHOSTED: 'Ghosted',
-    UNQUALIFIED: 'Unqualified'
+    CALL_PROPOSED: 'Call proposed',
+    BOOKED: 'Booked a call',
+    SHOWED: 'Showed up',
+    NO_SHOWED: 'No show',
+    RESCHEDULED: 'Rescheduled',
+    CLOSED_WON: 'Closed won',
+    CLOSED_LOST: 'Closed lost',
+    UNQUALIFIED: 'Unqualified',
+    GHOSTED: 'Went dark',
+    NURTURE: 'In nurture'
   };
-  return map[status] || status.replace(/_/g, ' ').toLowerCase();
+  return map[stage] || stage.replace(/_/g, ' ').toLowerCase();
 }
 
 function timeAgo(dateStr: string) {
@@ -122,7 +126,7 @@ export function RecentSales() {
                     </span>
                   </p>
                   <p className='text-muted-foreground text-xs'>
-                    {getStatusAction(lead.status)}
+                    {getStageAction(lead.stage)}
                   </p>
                 </div>
                 <div className='text-muted-foreground text-xs'>

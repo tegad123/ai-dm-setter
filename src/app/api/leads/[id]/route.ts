@@ -66,7 +66,9 @@ export async function PATCH(
     }
 
     const allowedFields = [
-      'status',
+      'stage',
+      'previousStage',
+      'stageEnteredAt',
       'qualityScore',
       'bookedAt',
       'showedUp',
@@ -89,7 +91,7 @@ export async function PATCH(
     broadcastLeadUpdate({
       id: lead.id,
       name: lead.name,
-      status: lead.status,
+      stage: lead.stage,
       qualityScore: lead.qualityScore
     });
 
