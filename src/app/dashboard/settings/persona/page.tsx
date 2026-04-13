@@ -705,17 +705,18 @@ export default function PersonaPage() {
         </Card>
       )}
 
-      {/* Analyzing spinner */}
+      {/* Analyzing progress */}
       {uploadStep === 'analyzing' && (
         <Card>
           <CardContent className='flex flex-col items-center justify-center gap-4 py-16'>
-            <Loader2 className='text-primary h-10 w-10 animate-spin' />
-            <p className='text-muted-foreground font-medium'>
-              Analyzing your script...
-            </p>
-            <p className='text-muted-foreground text-sm'>
-              This usually takes 30-60 seconds
-            </p>
+            <div className='w-full max-w-xs space-y-3'>
+              <div className='bg-secondary h-2 w-full overflow-hidden rounded-full'>
+                <div className='bg-primary h-full animate-[progress_90s_ease-in-out_forwards] rounded-full' />
+              </div>
+              <p className='text-muted-foreground text-center font-medium'>
+                Analyzing your script...
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
