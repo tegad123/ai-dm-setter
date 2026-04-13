@@ -5,7 +5,7 @@ import prisma from '@/lib/prisma';
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ---------------------------------------------------------------------------
 // POST /api/settings/persona/script
