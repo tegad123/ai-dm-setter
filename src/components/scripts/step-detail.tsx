@@ -8,7 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import BranchList from './branch-list';
 import ActionList from './action-list';
-import FormManager from './form-manager';
 import { updateStep } from '@/lib/api';
 import type {
   ScriptStep,
@@ -23,15 +22,13 @@ interface StepDetailProps {
   scriptId: string;
   forms: ScriptForm[];
   onStepChange: (step: ScriptStep) => void;
-  onFormsChange: (forms: ScriptForm[]) => void;
 }
 
 export default function StepDetail({
   step,
   scriptId,
   forms,
-  onStepChange,
-  onFormsChange
+  onStepChange
 }: StepDetailProps) {
   const hasBranches = step.branches.length > 0;
   // Direct actions = actions with no branchId
@@ -136,15 +133,6 @@ export default function StepDetail({
           />
         )}
       </div>
-
-      <Separator />
-
-      {/* Forms Section */}
-      <FormManager
-        forms={forms}
-        scriptId={scriptId}
-        onFormsChange={onFormsChange}
-      />
     </div>
   );
 }

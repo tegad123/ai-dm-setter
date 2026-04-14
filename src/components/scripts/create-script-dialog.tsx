@@ -265,7 +265,7 @@ export default function CreateScriptDialog({
                         Steps
                       </p>
                       <p className='text-muted-foreground font-sans text-[11px]'>
-                        Each step starts with a heading:
+                        Each step = one exchange or decision point:
                       </p>
                       <pre className='bg-background/60 mt-1 rounded px-2 py-1.5'>
                         {'# STEP 1: Intro\n# STEP 2: Qualification'}
@@ -278,7 +278,7 @@ export default function CreateScriptDialog({
                         Branches
                       </p>
                       <p className='text-muted-foreground font-sans text-[11px]'>
-                        Each branch within a step:
+                        Different paths based on prospect response:
                       </p>
                       <pre className='bg-background/60 mt-1 rounded px-2 py-1.5'>
                         {'## BRANCH: Default\n## BRANCH: Already interested'}
@@ -314,7 +314,7 @@ export default function CreateScriptDialog({
                           </span>
                           <span className='font-semibold'>[FORM]:</span>
                           <span className='font-sans opacity-70'>
-                            Form name
+                            Global form reference
                           </span>
                           <span className='font-semibold'>[JUDGE]:</span>
                           <span className='font-sans opacity-70'>
@@ -332,6 +332,20 @@ export default function CreateScriptDialog({
                       </div>
                     </div>
 
+                    {/* Placeholders */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        {'{{Placeholders}}'}
+                      </p>
+                      <p className='text-muted-foreground font-sans text-[11px]'>
+                        Use {'{{...}}'} for content the AI fills at runtime:
+                      </p>
+                      <pre className='bg-background/60 mt-1 rounded px-2 py-1.5 leading-relaxed whitespace-pre-wrap'>
+                        {`[MSG]: It typically takes $2-3K to {{customize to their stated goal}}.
+[Q]: What's your experience with {{their industry}}?`}
+                      </pre>
+                    </div>
+
                     {/* Example */}
                     <div>
                       <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
@@ -346,9 +360,39 @@ export default function CreateScriptDialog({
 
 # STEP 2: Qualify
 ## BRANCH: Default
-[MSG]: Great — let me ask a few questions.
-[FORM]: Qualification Questions`}
+[MSG]: Great, {{respond to their answer}}.
+[Q]: Are you looking to replace or supplement?
+[WAIT]:`}
                       </pre>
+                    </div>
+
+                    {/* Rules */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        Key Rules
+                      </p>
+                      <ul className='bg-background/60 list-inside list-disc space-y-1 rounded px-2 py-1.5 font-sans'>
+                        <li>
+                          <strong>1 step = 1 exchange.</strong> Split sequential
+                          flows into multiple steps.
+                        </li>
+                        <li>
+                          <strong>Objection handling</strong> goes in the Voice
+                          Note Library, not in steps.
+                        </li>
+                        <li>
+                          <strong>Forms/FAQs</strong> are global reference data,
+                          available throughout the whole conversation.
+                        </li>
+                        <li>
+                          <strong>Follow-up cadences</strong> (day-by-day
+                          sequences) are a separate feature, not script steps.
+                        </li>
+                        <li>
+                          <strong>Alternatives</strong> (send voice note OR
+                          text): use two branches and the AI picks one.
+                        </li>
+                      </ul>
                     </div>
                   </div>
                 </div>

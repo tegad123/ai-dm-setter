@@ -7,9 +7,11 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Loader2, Check } from 'lucide-react';
+import { ArrowLeft, Loader2, Check, FileText, ListChecks } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import StepSidebar from './step-sidebar';
 import StepDetail from './step-detail';
+import FormManager from './form-manager';
 import ParseSummaryBanner from './parse-summary-banner';
 import ReuploadScriptDialog from './reupload-script-dialog';
 import { fetchScript, updateScript, activateScript } from '@/lib/api';
@@ -26,6 +28,7 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
   const [loading, setLoading] = useState(true);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [reuploadOpen, setReuploadOpen] = useState(false);
+  const [viewTab, setViewTab] = useState<'steps' | 'forms'>('steps');
 
   const load = useCallback(async () => {
     try {
@@ -160,39 +163,85 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
         />
       )}
 
-      {/* Main content: sidebar + detail */}
-      <div className='flex flex-1 overflow-hidden'>
-        {/* Left sidebar */}
-        <div className='border-border w-64 shrink-0 overflow-y-auto border-r py-3'>
-          <StepSidebar
-            steps={script.steps}
-            scriptId={scriptId}
-            activeStepId={activeStepId}
-            onSelectStep={setActiveStepId}
-            onStepsChange={handleStepsChange}
-          />
-        </div>
+      {/* Tab bar: Steps / Forms */}
+      <div className='border-border border-b px-4'>
+        <Tabs
+          value={viewTab}
+          onValueChange={(v) => setViewTab(v as 'steps' | 'forms')}
+        >
+          <TabsList className='h-10 bg-transparent p-0'>
+            <TabsTrigger
+              value='steps'
+              className='data-[state=active]:border-primary rounded-none border-b-2 border-transparent px-4 data-[state=active]:shadow-none'
+            >
+              <ListChecks className='mr-1.5 h-4 w-4' />
+              Steps ({script.steps.length})
+            </TabsTrigger>
+            <TabsTrigger
+              value='forms'
+              className='data-[state=active]:border-primary rounded-none border-b-2 border-transparent px-4 data-[state=active]:shadow-none'
+            >
+              <FileText className='mr-1.5 h-4 w-4' />
+              Reference Data ({script.forms.length})
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
 
-        {/* Right detail area */}
-        <div className='flex-1 overflow-y-auto p-6'>
-          {activeStep ? (
-            <StepDetail
-              key={activeStep.id}
-              step={activeStep}
+      {/* Main content */}
+      {viewTab === 'steps' && (
+        <div className='flex flex-1 overflow-hidden'>
+          {/* Left sidebar */}
+          <div className='border-border w-64 shrink-0 overflow-y-auto border-r py-3'>
+            <StepSidebar
+              steps={script.steps}
               scriptId={scriptId}
-              forms={script.forms}
-              onStepChange={handleStepChange}
-              onFormsChange={handleFormsChange}
+              activeStepId={activeStepId}
+              onSelectStep={setActiveStepId}
+              onStepsChange={handleStepsChange}
             />
-          ) : (
-            <div className='flex h-full items-center justify-center'>
-              <p className='text-muted-foreground'>
-                Select a step from the sidebar to edit it.
+          </div>
+
+          {/* Right detail area */}
+          <div className='flex-1 overflow-y-auto p-6'>
+            {activeStep ? (
+              <StepDetail
+                key={activeStep.id}
+                step={activeStep}
+                scriptId={scriptId}
+                forms={script.forms}
+                onStepChange={handleStepChange}
+              />
+            ) : (
+              <div className='flex h-full items-center justify-center'>
+                <p className='text-muted-foreground'>
+                  Select a step from the sidebar to edit it.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {viewTab === 'forms' && (
+        <div className='flex-1 overflow-y-auto p-6'>
+          <div className='mx-auto max-w-2xl'>
+            <div className='mb-4'>
+              <h2 className='text-lg font-semibold'>Reference Data & Forms</h2>
+              <p className='text-muted-foreground text-sm'>
+                Forms are available to the AI throughout the entire conversation
+                — not tied to any specific step. Use them for FAQs, pricing
+                data, qualification criteria, and other reference material.
               </p>
             </div>
-          )}
+            <FormManager
+              forms={script.forms}
+              scriptId={scriptId}
+              onFormsChange={handleFormsChange}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Re-upload dialog */}
       {script.createdVia === 'upload_parsed' && (

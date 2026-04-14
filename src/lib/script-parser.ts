@@ -61,11 +61,20 @@ const PARSER_SYSTEM_PROMPT = `You are parsing a sales/DM-setter script into a st
 The script may be written in either a STANDARDIZED markdown format or a FREEFORM natural format.
 Your job is to extract the step-by-step conversation flow and output JSON matching the schema below.
 
+IMPORTANT RULES:
+1. Scripts define FORWARD conversation flow only — the sequential progression of a sales conversation.
+2. Each step should represent ONE exchange or decision point. If a step contains multiple sequential phases (e.g., ask about work → branch on answer → deliver video), split it into separate steps. Add a warning if you detect a step that contains multiple sequential exchanges.
+3. {{placeholder}} syntax: Text inside double curly braces like {{customize to their goal}} is a RUNTIME PLACEHOLDER. The AI fills this dynamically at runtime based on conversation context. Preserve these exactly as-is in the content field. Mark the action status as "filled" (not needs_user_input) since the AI handles the substitution.
+4. Time-based follow-up cadences (e.g., "Day 1: send X, Day 2: send Y, Day 3-5: check in") are OUT OF SCOPE for this format. If you detect a follow-up schedule, still parse the individual messages but add a warning: "Follow-up cadences with day-based timing are not supported in the script format. These should be configured as a separate follow-up sequence."
+5. Objection handling lists (e.g., "If they say too expensive → respond with X, If they say no time → respond with Y") are NOT script steps. They should be voice notes in the voice note library with content_intent triggers. If you detect a step that is primarily a list of objection responses, add a warning: "This step appears to be an objection handling list. Objection responses work better as voice notes in the Voice Note Library with intent-based triggers, not as script steps."
+6. Forms/reference data (FAQs, pricing tables, data sheets) are GLOBAL — they are available to the AI throughout the entire conversation, not tied to a specific step. Parse them into the top-level "forms" array.
+
 STANDARDIZED FORMAT (high confidence):
 If the script uses these explicit tags, parsing is straightforward:
 - "# STEP N:" headings for steps
 - "## BRANCH:" headings for branches
 - "[MSG]:", "[Q]:", "[VN]:", "[LINK]:", "[VIDEO]:", "[FORM]:", "[JUDGE]:", "[WAIT]:", "[DELAY]:" action tags
+- {{placeholder}} inside any content = runtime AI substitution
 
 FREEFORM FORMAT (medium confidence):
 If the script does NOT use explicit tags, you must infer the structure:
@@ -84,14 +93,15 @@ If the script does NOT use explicit tags, you must infer the structure:
   - Time delays → "wait_duration" (extract seconds)
 - When inferring structure from freeform text, assign "medium" or "low" confidence.
 - Add a "wait_for_response" action at the end of each step where the setter is expected to wait for the prospect to reply before continuing.
+- If a step offers alternative opening moves (e.g., "send either a voice note OR a text"), create separate branches for each alternative so the AI can pick one based on context.
 
 ACTION TAG REFERENCE (for standardized format):
-- [MSG]: send_message — the message text
-- [Q]: ask_question — the question text
+- [MSG]: send_message — the message text (may contain {{placeholders}})
+- [Q]: ask_question — the question text (may contain {{placeholders}})
 - [VN]: send_voice_note — voice note label (needs_user_input)
 - [LINK]: send_link — link label (needs_user_input if no URL)
 - [VIDEO]: send_video — video label (needs_user_input)
-- [FORM]: form_reference — form name
+- [FORM]: form_reference — form name (global, not step-specific)
 - [JUDGE]: runtime_judgment — judgment instruction
 - [WAIT]: wait_for_response — no content needed
 - [DELAY]: wait_duration — duration in seconds
@@ -102,7 +112,7 @@ CONFIDENCE SCORING:
 - "low": significant inference was needed, content may be incorrect
 
 STATUS:
-- "filled": content is complete and usable
+- "filled": content is complete and usable (includes messages with {{placeholders}} — the AI fills those at runtime)
 - "needs_review": content exists but may need human verification (e.g., inferred from freeform)
 - "needs_user_input": content references something that can't be determined from text alone (e.g., a link label with no URL, a voice note reference)
 
@@ -123,7 +133,7 @@ OUTPUT SCHEMA:
           "actions": [
             {
               "action_type": "send_message" | "ask_question" | "send_voice_note" | "send_link" | "send_video" | "form_reference" | "runtime_judgment" | "wait_for_response" | "wait_duration",
-              "content": "string or null",
+              "content": "string or null (preserve {{placeholders}} exactly as-is)",
               "label": "string or null (for VN, LINK, VIDEO, FORM — the descriptive label)",
               "wait_duration_seconds": "number or null (only for wait_duration)",
               "form_ref_name": "string or null (for form_reference — the form name)",
@@ -434,6 +444,90 @@ export async function parseScriptMarkdown(
     }
 
     steps.push({ stepNumber, title, confidence, branches });
+
+    // --- Post-step validation warnings ---
+
+    // Warn: branch ends with JUDGE that implies continuation (sequential flow)
+    for (const branch of branches) {
+      if (branch.actions.length > 0) {
+        const lastAction = branch.actions[branch.actions.length - 1];
+        if (
+          lastAction.actionType === 'runtime_judgment' &&
+          lastAction.content
+        ) {
+          const lower = lastAction.content.toLowerCase();
+          if (
+            lower.includes('then') ||
+            lower.includes('continue') ||
+            lower.includes('proceed') ||
+            lower.includes('next') ||
+            lower.includes('follow up')
+          ) {
+            warnings.push(
+              `Step ${stepNumber}, branch "${branch.label}": ends with a judgment that implies continuation. Consider splitting sequential phases into separate steps.`
+            );
+          }
+        }
+      }
+
+      // Warn: too many wait_for_response actions suggests multiple exchanges
+      const waitCount = branch.actions.filter(
+        (a) => a.actionType === 'wait_for_response'
+      ).length;
+      if (waitCount > 1) {
+        warnings.push(
+          `Step ${stepNumber}, branch "${branch.label}": has ${waitCount} wait-for-response actions. Each wait usually means a new exchange — consider splitting into ${waitCount} separate steps.`
+        );
+      }
+    }
+
+    // Warn: step looks like an objection handling list
+    const allBranchLabels = branches.map((b) => b.label.toLowerCase());
+    const objectionPatterns = [
+      'objection',
+      'too expensive',
+      'no time',
+      'not interested',
+      'think about it',
+      'already have',
+      "can't afford",
+      'no money'
+    ];
+    const objectionBranchCount = allBranchLabels.filter((label) =>
+      objectionPatterns.some((p) => label.includes(p))
+    ).length;
+    if (
+      objectionBranchCount >= 2 ||
+      title.toLowerCase().includes('objection')
+    ) {
+      warnings.push(
+        `Step ${stepNumber} ("${title}") appears to be an objection handling list. Objection responses work better as voice notes in the Voice Note Library with intent-based triggers, not as script steps.`
+      );
+    }
+
+    // Warn: step looks like a follow-up cadence
+    const titleLower = title.toLowerCase();
+    if (
+      titleLower.includes('follow up') ||
+      titleLower.includes('follow-up') ||
+      titleLower.includes('day 1') ||
+      titleLower.includes('cadence')
+    ) {
+      const branchContent = branches
+        .flatMap((b) => b.actions.map((a) => a.content || ''))
+        .join(' ')
+        .toLowerCase();
+      if (
+        branchContent.includes('day 1') ||
+        branchContent.includes('day 2') ||
+        branchContent.includes('24 hours') ||
+        branchContent.includes('48 hours')
+      ) {
+        warnings.push(
+          `Step ${stepNumber} ("${title}") appears to be a follow-up cadence with day-based timing. Follow-up sequences are not supported in the script format and will be a separate feature.`
+        );
+      }
+    }
   }
 
   // Build forms from references

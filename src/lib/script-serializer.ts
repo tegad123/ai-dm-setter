@@ -119,7 +119,7 @@ export async function serializeScriptForPrompt(
   }
 
   parts.push(
-    `## Script Framework (Follow this sequence)\n${stepLines.join('\n')}`
+    `## Script Framework (Follow this sequence)\nIMPORTANT: Text inside {{double curly braces}} is a runtime placeholder. Replace it with contextually appropriate content based on the conversation so far. For example, "{{customize to their stated goal}}" means you should insert language specific to what the prospect told you about their goal.\n${stepLines.join('\n')}`
   );
 
   // ── Voice Notes ───────────────────────────────────────────
@@ -186,7 +186,7 @@ export async function serializeScriptForPrompt(
     );
   }
 
-  // ── Configured Data (Forms) ───────────────────────────────
+  // ── Configured Data (Forms — Global Reference) ────────────
   const filledForms = script.forms.filter((f) =>
     f.fields.some((fld) => fld.fieldValue && fld.fieldValue.trim().length > 0)
   );
@@ -202,7 +202,9 @@ export async function serializeScriptForPrompt(
       }
     }
     if (formParts.length > 0) {
-      parts.push(`## Configured Data\n${formParts.join('\n\n')}`);
+      parts.push(
+        `## Reference Data (Available Throughout Entire Conversation)\nThese forms contain reference data you can draw from at ANY point in the conversation — not just specific steps. Use them whenever relevant.\n${formParts.join('\n\n')}`
+      );
     }
   }
 
