@@ -920,14 +920,42 @@ export async function scheduleAIReply(
       const now = new Date();
       const end = new Date(now);
       end.setDate(end.getDate() + 7);
+
+      console.log(
+        `[BOOKING_FLOW] Availability.start`,
+        JSON.stringify({
+          conversationId,
+          leadTimezone: conversation.leadTimezone,
+          rangeStart: now.toISOString(),
+          rangeEnd: end.toISOString(),
+          ts: new Date().toISOString()
+        })
+      );
+
       const avail = await getUnifiedAvailability(
         accountId,
         now.toISOString(),
         end.toISOString(),
         conversation.leadTimezone
       );
+
+      console.log(
+        `[BOOKING_FLOW] Availability.rawSlots`,
+        JSON.stringify({
+          conversationId,
+          provider: avail.provider,
+          rawSlotCount: avail.slots?.length || 0,
+          rawSlots: (avail.slots || []).slice(0, 20).map((s) => ({
+            start: s.start,
+            end: s.end
+          })),
+          ts: new Date().toISOString()
+        })
+      );
+
       // Filter to business hours 9am-7pm in the lead's tz
-      availableSlots = (avail.slots || [])
+      const preFilterSlots = avail.slots || [];
+      availableSlots = preFilterSlots
         .filter((s) => {
           const d = new Date(s.start);
           const hour = Number(
@@ -942,7 +970,18 @@ export async function scheduleAIReply(
         .slice(0, 12);
 
       console.log(
-        `[webhook-processor] Fetched ${avail.slots?.length || 0} raw slots from ${avail.provider}, ${availableSlots.length} after business-hours filter (lead tz: ${conversation.leadTimezone})`
+        `[BOOKING_FLOW] Availability.filtered`,
+        JSON.stringify({
+          conversationId,
+          preFilterCount: preFilterSlots.length,
+          postFilterCount: availableSlots.length,
+          filteredSlots: availableSlots.map((s) => ({
+            start: s.start,
+            end: s.end
+          })),
+          filterTimezone: conversation.leadTimezone,
+          ts: new Date().toISOString()
+        })
       );
     } else if (hasCalendarIntegration) {
       console.log(
@@ -1372,6 +1411,20 @@ async function sendAIReply(
         (s) => s.start === result.selectedSlotIso
       );
 
+      console.log(
+        `[BOOKING_FLOW] BookingConfirm.slotMatch`,
+        JSON.stringify({
+          conversationId,
+          selectedSlotIso: result.selectedSlotIso,
+          leadEmail: result.leadEmail,
+          proposedSlotCount: proposed.length,
+          proposedSlots: proposed.map((s) => s.start),
+          matched: !!matchedSlot,
+          matchedSlot: matchedSlot || null,
+          ts: new Date().toISOString()
+        })
+      );
+
       if (!matchedSlot) {
         // R14 hallucination guard tripped — AI picked a slot we never proposed.
         // Pause AI and surface to the team instead of silently dropping the book.
@@ -1400,7 +1453,7 @@ async function sendAIReply(
         }
       } else {
         try {
-          const bookingResult = await bookUnifiedAppointment(accountId, {
+          const bookingParams = {
             leadName: lead.name,
             leadHandle: lead.handle,
             leadEmail: result.leadEmail,
@@ -1409,7 +1462,39 @@ async function sendAIReply(
             slotEnd: matchedSlot.end,
             timezone: convoForBooking?.leadTimezone || undefined,
             notes: `Auto-booked via DMsetter AI. Platform: ${lead.platform}, handle: @${lead.handle}.`
-          });
+          };
+
+          console.log(
+            `[BOOKING_FLOW] BookingCall.start`,
+            JSON.stringify({
+              conversationId,
+              leadId: lead.id,
+              bookingParams: {
+                ...bookingParams,
+                leadEmail: bookingParams.leadEmail ? '[PRESENT]' : '[MISSING]'
+              },
+              ts: new Date().toISOString()
+            })
+          );
+
+          const bookingResult = await bookUnifiedAppointment(
+            accountId,
+            bookingParams
+          );
+
+          console.log(
+            `[BOOKING_FLOW] BookingCall.result`,
+            JSON.stringify({
+              conversationId,
+              success: bookingResult.success,
+              provider: bookingResult.provider,
+              appointmentId: bookingResult.appointmentId,
+              contactId: bookingResult.contactId,
+              meetingUrl: bookingResult.meetingUrl,
+              error: bookingResult.error || null,
+              ts: new Date().toISOString()
+            })
+          );
 
           if (bookingResult.success) {
             await prisma.conversation.update({
@@ -1442,6 +1527,17 @@ async function sendAIReply(
             });
             console.log(
               `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
+            );
+            console.log(
+              `[BOOKING_FLOW] StageTransition.success`,
+              JSON.stringify({
+                conversationId,
+                leadId: lead.id,
+                newStage: 'BOOKED',
+                appointmentId: bookingResult.appointmentId,
+                notificationCreated: true,
+                ts: new Date().toISOString()
+              })
             );
           } else {
             // Provider returned a structured failure — pause AI + notify team.

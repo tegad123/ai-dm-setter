@@ -1,4 +1,29 @@
 import { getCredentials } from '@/lib/credential-store';
+import { randomUUID } from 'crypto';
+
+// ---------------------------------------------------------------------------
+// Diagnostic logging — temporary verbose logging for booking diagnosis.
+// Remove or reduce after the bug is found.
+// ---------------------------------------------------------------------------
+
+function redactHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const safe = { ...headers };
+  if (safe.Authorization) safe.Authorization = 'Bearer [REDACTED]';
+  return safe;
+}
+
+function calLog(
+  phase: string,
+  data: Record<string, unknown>,
+  requestId?: string
+) {
+  console.log(
+    `[CALENDAR_ADAPTER] ${phase}`,
+    JSON.stringify({ requestId, ts: new Date().toISOString(), ...data })
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -80,25 +105,45 @@ export async function getUnifiedAvailability(
   endDate?: string,
   timezone?: string
 ): Promise<AvailabilityResult> {
+  const reqId = randomUUID().slice(0, 8);
+  calLog(
+    'UnifiedAvailability.start',
+    { accountId, startDate, endDate, timezone },
+    reqId
+  );
+
   const range =
     startDate && endDate ? { start: startDate, end: endDate } : undefined;
 
   // 1. LeadConnector first
   const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
+  calLog(
+    'UnifiedAvailability.credsCheck',
+    {
+      hasApiKey: !!lcCreds?.apiKey,
+      hasCalendarId: !!lcCreds?.calendarId,
+      hasLocationId: !!lcCreds?.locationId
+    },
+    reqId
+  );
+
   if (lcCreds?.apiKey && lcCreds?.calendarId) {
     try {
       const slots = await getLeadConnectorAvailability(
         lcCreds.apiKey as string,
         lcCreds.calendarId as string,
         range,
-        timezone
+        timezone,
+        reqId
+      );
+      calLog(
+        'UnifiedAvailability.lcSuccess',
+        { slotCount: slots.length },
+        reqId
       );
       return { provider: 'leadconnector', slots, timezone };
     } catch (err) {
-      console.error(
-        '[calendar-adapter] LeadConnector availability failed:',
-        err
-      );
+      calLog('UnifiedAvailability.lcFailed', { error: String(err) }, reqId);
     }
   }
 
@@ -133,19 +178,56 @@ export async function bookUnifiedAppointment(
   accountId: string,
   params: BookingParams
 ): Promise<BookingResult> {
+  const reqId = randomUUID().slice(0, 8);
+  calLog(
+    'UnifiedBooking.start',
+    {
+      accountId,
+      leadName: params.leadName,
+      leadHandle: params.leadHandle,
+      slotStart: params.slotStart,
+      slotEnd: params.slotEnd,
+      timezone: params.timezone
+    },
+    reqId
+  );
+
   // 1. LeadConnector first
   const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
+  calLog(
+    'UnifiedBooking.credsCheck',
+    {
+      hasApiKey: !!lcCreds?.apiKey,
+      hasCalendarId: !!lcCreds?.calendarId,
+      hasLocationId: !!lcCreds?.locationId
+    },
+    reqId
+  );
+
   if (lcCreds?.apiKey && lcCreds?.calendarId && lcCreds?.locationId) {
     try {
-      return await bookLeadConnectorAppointment(
+      const result = await bookLeadConnectorAppointment(
         {
           apiKey: lcCreds.apiKey as string,
           calendarId: lcCreds.calendarId as string,
           locationId: lcCreds.locationId as string
         },
-        params
+        params,
+        reqId
       );
+      calLog(
+        'UnifiedBooking.lcResult',
+        {
+          success: result.success,
+          appointmentId: result.appointmentId,
+          contactId: result.contactId,
+          error: result.error
+        },
+        reqId
+      );
+      return result;
     } catch (err) {
+      calLog('UnifiedBooking.lcThrew', { error: String(err) }, reqId);
       return {
         success: false,
         provider: 'leadconnector',
@@ -201,8 +283,10 @@ export async function getLeadConnectorAvailability(
   apiKey: string,
   calendarId: string,
   dateRange?: { start: string; end: string },
-  timezone?: string
+  timezone?: string,
+  requestId?: string
 ): Promise<TimeSlot[]> {
+  const reqId = requestId || randomUUID().slice(0, 8);
   try {
     // Default to next 7 days if no range supplied
     const now = new Date();
@@ -226,16 +310,42 @@ export async function getLeadConnectorAvailability(
       calendarId
     )}/free-slots?${qs.toString()}`;
 
+    calLog(
+      'LC.Availability.request',
+      {
+        url,
+        headers: redactHeaders(lcHeaders(apiKey)),
+        queryParams: {
+          startDate: startMs,
+          endDate: endMs,
+          timezone: timezone || null
+        },
+        dateRangeHuman: {
+          start: new Date(startMs).toISOString(),
+          end: new Date(endMs).toISOString()
+        }
+      },
+      reqId
+    );
+
     const res = await fetch(url, { headers: lcHeaders(apiKey) });
+    const bodyText = await res.text();
+
+    calLog(
+      'LC.Availability.response',
+      {
+        status: res.status,
+        statusText: res.statusText,
+        body: bodyText.slice(0, 3000)
+      },
+      reqId
+    );
+
     if (!res.ok) {
-      console.error(
-        `[calendar-adapter] LeadConnector free-slots ${res.status}:`,
-        await res.text().catch(() => '')
-      );
       return [];
     }
 
-    const data = (await res.json()) as Record<
+    const data = JSON.parse(bodyText) as Record<
       string,
       { slots?: string[] } | string[] | undefined
     >;
@@ -263,9 +373,27 @@ export async function getLeadConnectorAvailability(
         result.push({ start: start.toISOString(), end: end.toISOString() });
       }
     }
+
+    calLog(
+      'LC.Availability.parsed',
+      {
+        totalDateKeys: Object.keys(data).filter((k) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(k)
+        ).length,
+        totalSlots: result.length,
+        firstSlot: result[0] || null,
+        lastSlot: result[result.length - 1] || null
+      },
+      reqId
+    );
+
     return result;
   } catch (err) {
-    console.error('[calendar-adapter] getLeadConnectorAvailability:', err);
+    calLog(
+      'LC.Availability.error',
+      { error: String(err), stack: (err as Error)?.stack?.slice(0, 500) },
+      reqId
+    );
     return [];
   }
 }
@@ -279,8 +407,10 @@ export async function getLeadConnectorAvailability(
  */
 export async function bookLeadConnectorAppointment(
   creds: { apiKey: string; calendarId: string; locationId: string },
-  params: BookingParams
+  params: BookingParams,
+  requestId?: string
 ): Promise<BookingResult> {
+  const reqId = requestId || randomUUID().slice(0, 8);
   const { apiKey, calendarId, locationId } = creds;
 
   // Split leadName into first/last for GHL contact payload
@@ -297,18 +427,27 @@ export async function bookLeadConnectorAppointment(
     params.leadEmail ||
     `${safeHandle || 'lead'}+${(params.platform || 'dm').toLowerCase()}@dmsetter-leads.local`;
 
-  // 1. Create contact (GHL will return existing id if duplicate)
-  //
-  // Duplicate handling: when the location has "Allow Duplicate Contacts"
-  // disabled (the default), POST /contacts/ returns 400 with a body shaped
-  // like:
-  //   { statusCode: 400, message: "This location does not allow duplicated contacts.",
-  //     meta: { contactId: "...", contactName: "...", matchingField: "email" } }
-  // We extract meta.contactId directly so we don't need a second API call.
-  // The previous fallback used GET /contacts/lookup?email=... which LC routes
-  // as /contacts/{id=lookup} and returns 400 "Contact with id lookup not
-  // found" — that endpoint doesn't exist on the v2 API, which is why the
-  // 2026-04-08 booking failed even though the contact already existed.
+  // ── Step 1: Create contact ──────────────────────────────────────
+  const contactBody = {
+    locationId,
+    firstName,
+    lastName,
+    email,
+    phone: params.leadPhone || undefined,
+    source: params.platform ? `DMsetter ${params.platform}` : 'DMsetter DM',
+    tags: ['dmsetter', 'auto-booked']
+  };
+
+  calLog(
+    'LC.ContactCreate.request',
+    {
+      url: `${LC_BASE}/contacts/`,
+      headers: redactHeaders(lcHeaders(apiKey)),
+      body: contactBody
+    },
+    reqId
+  );
+
   let contactId: string | undefined;
   let contactErrText: string | undefined;
   let contactErrStatus: number | undefined;
@@ -316,27 +455,28 @@ export async function bookLeadConnectorAppointment(
     const contactRes = await fetch(`${LC_BASE}/contacts/`, {
       method: 'POST',
       headers: lcHeaders(apiKey),
-      body: JSON.stringify({
-        locationId,
-        firstName,
-        lastName,
-        email,
-        phone: params.leadPhone || undefined,
-        source: params.platform ? `DMsetter ${params.platform}` : 'DMsetter DM',
-        tags: ['dmsetter', 'auto-booked']
-      })
+      body: JSON.stringify(contactBody)
     });
 
+    const contactResText = await contactRes.text();
+
+    calLog(
+      'LC.ContactCreate.response',
+      {
+        status: contactRes.status,
+        statusText: contactRes.statusText,
+        body: contactResText.slice(0, 2000)
+      },
+      reqId
+    );
+
     if (contactRes.ok) {
-      const contactData = (await contactRes.json()) as any;
+      const contactData = JSON.parse(contactResText) as any;
       contactId = contactData?.contact?.id || contactData?.id;
+      calLog('LC.ContactCreate.success', { contactId }, reqId);
     } else {
       contactErrStatus = contactRes.status;
-      contactErrText = await contactRes.text().catch(() => '');
-      console.error(
-        `[calendar-adapter] LC contact create ${contactRes.status}:`,
-        contactErrText
-      );
+      contactErrText = contactResText;
 
       // Try to parse meta.contactId from the duplicate-error body first
       try {
@@ -347,51 +487,68 @@ export async function bookLeadConnectorAppointment(
           errBody?.contactId;
         if (dupId) {
           contactId = dupId;
-          console.log(
-            `[calendar-adapter] LC duplicate contact resolved from error meta: ${dupId}`
+          calLog(
+            'LC.ContactCreate.duplicateResolved',
+            { contactId, source: 'error_meta' },
+            reqId
           );
         }
       } catch {
         // body wasn't JSON — fall through to the search-by-duplicate path
       }
 
-      // Defensive fallback: hit the actual v2 search endpoint if meta didn't
-      // give us an id. This is the correct LC v2 endpoint
-      // (the old /contacts/lookup path is broken — see comment above).
+      // Defensive fallback: hit the actual v2 search endpoint
       if (!contactId) {
+        const searchUrl = `${LC_BASE}/contacts/search/duplicate?locationId=${encodeURIComponent(
+          locationId
+        )}&email=${encodeURIComponent(email)}`;
+
+        calLog('LC.ContactSearch.request', { url: searchUrl }, reqId);
+
         try {
-          const searchRes = await fetch(
-            `${LC_BASE}/contacts/search/duplicate?locationId=${encodeURIComponent(
-              locationId
-            )}&email=${encodeURIComponent(email)}`,
-            { headers: lcHeaders(apiKey) }
+          const searchRes = await fetch(searchUrl, {
+            headers: lcHeaders(apiKey)
+          });
+          const searchText = await searchRes.text();
+
+          calLog(
+            'LC.ContactSearch.response',
+            {
+              status: searchRes.status,
+              body: searchText.slice(0, 2000)
+            },
+            reqId
           );
+
           if (searchRes.ok) {
-            const searchData = (await searchRes.json()) as any;
+            const searchData = JSON.parse(searchText) as any;
             contactId =
               searchData?.contact?.id ||
               searchData?.contacts?.[0]?.id ||
               undefined;
             if (contactId) {
-              console.log(
-                `[calendar-adapter] LC duplicate contact resolved via /contacts/search/duplicate: ${contactId}`
-              );
+              calLog('LC.ContactSearch.resolved', { contactId }, reqId);
             }
           }
         } catch (searchErr) {
-          console.error(
-            '[calendar-adapter] LC search/duplicate fallback failed:',
-            searchErr
-          );
+          calLog('LC.ContactSearch.error', { error: String(searchErr) }, reqId);
         }
       }
     }
   } catch (err) {
-    console.error('[calendar-adapter] LC contact create threw:', err);
+    calLog('LC.ContactCreate.threw', { error: String(err) }, reqId);
     contactErrText = err instanceof Error ? err.message : String(err);
   }
 
   if (!contactId) {
+    calLog(
+      'LC.ContactCreate.failed',
+      {
+        errStatus: contactErrStatus,
+        errText: (contactErrText || '').slice(0, 300)
+      },
+      reqId
+    );
     return {
       success: false,
       provider: 'leadconnector',
@@ -401,40 +558,63 @@ export async function bookLeadConnectorAppointment(
     };
   }
 
-  // 2. Create appointment
+  // ── Step 2: Create appointment ──────────────────────────────────
+  const apptBody = {
+    calendarId,
+    locationId,
+    contactId,
+    startTime: params.slotStart,
+    endTime:
+      params.slotEnd ||
+      new Date(
+        new Date(params.slotStart).getTime() + 30 * 60_000
+      ).toISOString(),
+    title: `Call with ${params.leadName}`,
+    appointmentStatus: 'confirmed',
+    notes: params.notes,
+    ignoreDateRange: false,
+    toNotify: true
+  };
+
+  calLog(
+    'LC.AppointmentCreate.request',
+    {
+      url: `${LC_BASE}/calendars/events/appointments`,
+      headers: redactHeaders(lcHeaders(apiKey)),
+      body: apptBody
+    },
+    reqId
+  );
+
   try {
     const apptRes = await fetch(`${LC_BASE}/calendars/events/appointments`, {
       method: 'POST',
       headers: lcHeaders(apiKey),
-      body: JSON.stringify({
-        calendarId,
-        locationId,
-        contactId,
-        startTime: params.slotStart,
-        endTime:
-          params.slotEnd ||
-          new Date(
-            new Date(params.slotStart).getTime() + 30 * 60_000
-          ).toISOString(),
-        title: `Call with ${params.leadName}`,
-        appointmentStatus: 'confirmed',
-        notes: params.notes,
-        ignoreDateRange: false,
-        toNotify: true
-      })
+      body: JSON.stringify(apptBody)
     });
 
+    const apptResText = await apptRes.text();
+
+    calLog(
+      'LC.AppointmentCreate.response',
+      {
+        status: apptRes.status,
+        statusText: apptRes.statusText,
+        body: apptResText.slice(0, 2000)
+      },
+      reqId
+    );
+
     if (!apptRes.ok) {
-      const errText = await apptRes.text().catch(() => '');
       return {
         success: false,
         provider: 'leadconnector',
         contactId,
-        error: `LC appointment create ${apptRes.status}: ${errText}`
+        error: `LC appointment create ${apptRes.status}: ${apptResText}`
       };
     }
 
-    const apptData = (await apptRes.json()) as any;
+    const apptData = JSON.parse(apptResText) as any;
     const appointmentId =
       apptData?.id ||
       apptData?.appointment?.id ||
@@ -442,6 +622,12 @@ export async function bookLeadConnectorAppointment(
       undefined;
     const meetingUrl =
       apptData?.address || apptData?.meetingUrl || apptData?.location || '';
+
+    calLog(
+      'LC.AppointmentCreate.success',
+      { appointmentId, meetingUrl },
+      reqId
+    );
 
     return {
       success: true,
@@ -452,6 +638,7 @@ export async function bookLeadConnectorAppointment(
       startTime: params.slotStart
     };
   } catch (err) {
+    calLog('LC.AppointmentCreate.threw', { error: String(err) }, reqId);
     return {
       success: false,
       provider: 'leadconnector',
