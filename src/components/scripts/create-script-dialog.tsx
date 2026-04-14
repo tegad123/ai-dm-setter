@@ -18,9 +18,11 @@ import {
   Plus,
   ArrowLeft,
   Loader2,
-  ExternalLink,
+  ChevronDown,
+  ChevronUp,
   AlertCircle,
-  File
+  File,
+  BookOpen
 } from 'lucide-react';
 import { createScript, parseScript } from '@/lib/api';
 
@@ -42,6 +44,7 @@ export default function CreateScriptDialog({
   const [pasteText, setPasteText] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [guideOpen, setGuideOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = useCallback(() => {
@@ -50,6 +53,7 @@ export default function CreateScriptDialog({
     setPasteText('');
     setSelectedFile(null);
     setErrorMessage('');
+    setGuideOpen(false);
   }, []);
 
   const handleOpenChange = (v: boolean) => {
@@ -234,25 +238,121 @@ export default function CreateScriptDialog({
               </DialogDescription>
             </DialogHeader>
 
-            {/* PDF Guide Link */}
-            <div className='bg-muted/50 flex items-center gap-2 rounded-lg p-3'>
-              <FileText className='text-primary h-4 w-4 shrink-0' />
-              <span className='text-sm'>
-                New to the format?{' '}
-                <a
-                  href='#'
-                  className='text-primary inline-flex items-center gap-1 font-medium hover:underline'
-                  onClick={(e) => {
-                    e.preventDefault();
-                    toast.info(
-                      'PDF guide coming soon — contact support for the formatting guide.'
-                    );
-                  }}
-                >
-                  Download the Script Formatting Guide (PDF)
-                  <ExternalLink className='h-3 w-3' />
-                </a>
-              </span>
+            {/* Inline Format Guide */}
+            <div className='rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/20'>
+              <button
+                type='button'
+                onClick={() => setGuideOpen(!guideOpen)}
+                className='flex w-full items-center gap-2 p-3 text-left'
+              >
+                <BookOpen className='h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400' />
+                <span className='flex-1 text-sm font-medium text-blue-800 dark:text-blue-300'>
+                  Script Formatting Guide
+                </span>
+                {guideOpen ? (
+                  <ChevronUp className='h-4 w-4 text-blue-600 dark:text-blue-400' />
+                ) : (
+                  <ChevronDown className='h-4 w-4 text-blue-600 dark:text-blue-400' />
+                )}
+              </button>
+
+              {guideOpen && (
+                <div className='border-t border-blue-200 px-3 pt-2 pb-3 dark:border-blue-900'>
+                  <div className='space-y-2.5 font-mono text-xs text-blue-900 dark:text-blue-200'>
+                    {/* Steps */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        Steps
+                      </p>
+                      <p className='text-muted-foreground font-sans text-[11px]'>
+                        Each step starts with a heading:
+                      </p>
+                      <pre className='bg-background/60 mt-1 rounded px-2 py-1.5'>
+                        {'# STEP 1: Intro\n# STEP 2: Qualification'}
+                      </pre>
+                    </div>
+
+                    {/* Branches */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        Branches
+                      </p>
+                      <p className='text-muted-foreground font-sans text-[11px]'>
+                        Each branch within a step:
+                      </p>
+                      <pre className='bg-background/60 mt-1 rounded px-2 py-1.5'>
+                        {'## BRANCH: Default\n## BRANCH: Already interested'}
+                      </pre>
+                    </div>
+
+                    {/* Action Tags */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        Action Tags
+                      </p>
+                      <div className='bg-background/60 rounded px-2 py-1.5'>
+                        <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5'>
+                          <span className='font-semibold'>[MSG]:</span>
+                          <span className='font-sans opacity-70'>
+                            Send a message
+                          </span>
+                          <span className='font-semibold'>[Q]:</span>
+                          <span className='font-sans opacity-70'>
+                            Ask a question
+                          </span>
+                          <span className='font-semibold'>[VN]:</span>
+                          <span className='font-sans opacity-70'>
+                            Voice note label
+                          </span>
+                          <span className='font-semibold'>[LINK]:</span>
+                          <span className='font-sans opacity-70'>
+                            Link label
+                          </span>
+                          <span className='font-semibold'>[VIDEO]:</span>
+                          <span className='font-sans opacity-70'>
+                            Video label
+                          </span>
+                          <span className='font-semibold'>[FORM]:</span>
+                          <span className='font-sans opacity-70'>
+                            Form name
+                          </span>
+                          <span className='font-semibold'>[JUDGE]:</span>
+                          <span className='font-sans opacity-70'>
+                            AI judgment instruction
+                          </span>
+                          <span className='font-semibold'>[WAIT]:</span>
+                          <span className='font-sans opacity-70'>
+                            Wait for reply
+                          </span>
+                          <span className='font-semibold'>[DELAY]:</span>
+                          <span className='font-sans opacity-70'>
+                            Wait N seconds
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Example */}
+                    <div>
+                      <p className='mb-1 font-sans text-[11px] font-semibold tracking-wide text-blue-600 uppercase dark:text-blue-400'>
+                        Example
+                      </p>
+                      <pre className='bg-background/60 rounded px-2 py-1.5 leading-relaxed whitespace-pre-wrap'>
+                        {`# STEP 1: Intro
+## BRANCH: Default
+[MSG]: Hey! Thanks for reaching out.
+[Q]: What made you interested?
+[WAIT]:
+
+# STEP 2: Qualify
+## BRANCH: Default
+[MSG]: Great — let me ask a few questions.
+[FORM]: Qualification Questions`}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <Tabs defaultValue='upload' className='mt-2'>

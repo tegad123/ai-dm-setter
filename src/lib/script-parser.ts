@@ -57,37 +57,58 @@ export interface ParsedScript {
 // Parser Prompt
 // ---------------------------------------------------------------------------
 
-const PARSER_SYSTEM_PROMPT = `You are parsing a sales script written in a standardized markdown format.
-Extract structured data from the script and output JSON matching the schema below.
-Do not guess or infer content not explicitly marked in the script.
+const PARSER_SYSTEM_PROMPT = `You are parsing a sales/DM-setter script into a structured JSON format.
+The script may be written in either a STANDARDIZED markdown format or a FREEFORM natural format.
+Your job is to extract the step-by-step conversation flow and output JSON matching the schema below.
 
-FORMAT RULES:
-- Lines starting with "# STEP N:" are step headings. N is the step number, text after the colon is the step title.
-- Lines starting with "## BRANCH:" are branch headings. Text after the colon is the branch name.
-- Lines starting with "[TAG]:" are actions. The tag indicates the action type. Text after the colon is the content.
+STANDARDIZED FORMAT (high confidence):
+If the script uses these explicit tags, parsing is straightforward:
+- "# STEP N:" headings for steps
+- "## BRANCH:" headings for branches
+- "[MSG]:", "[Q]:", "[VN]:", "[LINK]:", "[VIDEO]:", "[FORM]:", "[JUDGE]:", "[WAIT]:", "[DELAY]:" action tags
 
-ACTION TAGS:
-- [MSG]: send_message action, content is the message text
-- [Q]: ask_question action, content is the question text
-- [VN]: send_voice_note action, content is the voice note label (voice_note_id should be null)
-- [LINK]: send_link action, content is the link label (link_url should be null)
-- [VIDEO]: send_video action, content is the video label (video_url should be null)
-- [FORM]: form_reference action, content is the form name (form_id should be null but capture the name)
-- [JUDGE]: runtime_judgment action, content is the judgment instruction
-- [WAIT]: wait_for_response action, no content needed
-- [DELAY]: wait_duration action, content is the duration in seconds as a number
+FREEFORM FORMAT (medium confidence):
+If the script does NOT use explicit tags, you must infer the structure:
+- Look for numbered sections, headings, or labeled phases (e.g., "Step 1", "1.", "Phase 1", "Intro", "Qualification") to identify steps.
+- Each distinct stage of the conversation flow is a step.
+- Within each step, if the script describes different paths based on the prospect's response, create separate branches. Otherwise create a single "Default" branch.
+- For each piece of content within a step/branch, determine the action type:
+  - Messages the setter sends → "send_message"
+  - Questions the setter asks the prospect → "ask_question"
+  - References to voice notes or audio → "send_voice_note" (label only, mark as needs_user_input)
+  - References to links or URLs → "send_link" (if URL present, include it; otherwise mark needs_user_input)
+  - References to videos → "send_video" (label only, mark as needs_user_input)
+  - References to forms or questionnaires → "form_reference" (capture form name)
+  - Instructions for the AI to judge/decide something at runtime → "runtime_judgment"
+  - "Wait for reply" or similar → "wait_for_response"
+  - Time delays → "wait_duration" (extract seconds)
+- When inferring structure from freeform text, assign "medium" or "low" confidence.
+- Add a "wait_for_response" action at the end of each step where the setter is expected to wait for the prospect to reply before continuing.
 
-For every field you extract, assign a confidence score:
-- "high" if the field is clearly and unambiguously present in the script
-- "medium" if the field is present but the content is incomplete, ambiguous, or partially filled
-- "low" if you had to make inferences or the content seems incorrect
+ACTION TAG REFERENCE (for standardized format):
+- [MSG]: send_message — the message text
+- [Q]: ask_question — the question text
+- [VN]: send_voice_note — voice note label (needs_user_input)
+- [LINK]: send_link — link label (needs_user_input if no URL)
+- [VIDEO]: send_video — video label (needs_user_input)
+- [FORM]: form_reference — form name
+- [JUDGE]: runtime_judgment — judgment instruction
+- [WAIT]: wait_for_response — no content needed
+- [DELAY]: wait_duration — duration in seconds
 
-If a step or branch is missing required fields (e.g., a branch with no actions), flag it with status "needs_review".
-If the script references content that can't be determined from the format alone (e.g., [LINK]: Booking Calendar Link with no URL provided), mark the field as "unfilled" with status "needs_user_input".
+CONFIDENCE SCORING:
+- "high": field is clearly and unambiguously present (explicit tags or obvious structure)
+- "medium": field is present but inferred from context, or content is incomplete/ambiguous
+- "low": significant inference was needed, content may be incorrect
+
+STATUS:
+- "filled": content is complete and usable
+- "needs_review": content exists but may need human verification (e.g., inferred from freeform)
+- "needs_user_input": content references something that can't be determined from text alone (e.g., a link label with no URL, a voice note reference)
 
 OUTPUT SCHEMA:
 {
-  "script_name": "string, inferred from first step title or 'Imported Script'",
+  "script_name": "string, inferred from script title/context or 'Imported Script'",
   "steps": [
     {
       "step_number": number,
@@ -96,7 +117,7 @@ OUTPUT SCHEMA:
       "branches": [
         {
           "name": "string",
-          "condition_description": "string or null — a brief explanation of when this branch applies",
+          "condition_description": "string or null — when this branch applies",
           "is_default": boolean,
           "confidence": "high" | "medium" | "low",
           "actions": [
@@ -244,11 +265,11 @@ export async function parseScriptMarkdown(
   accountId: string,
   text: string
 ): Promise<ParsedScript> {
-  // 1. Validate the text has at least one STEP heading
-  if (!/^#\s*STEP\s+\d+/im.test(text)) {
+  // 1. Basic validation — the text should look like a script (not random junk)
+  const trimmed = text.trim();
+  if (trimmed.length < 50) {
     throw new Error(
-      "Your script doesn't appear to follow the formatting guide. " +
-        'Please make sure it contains at least one "# STEP N:" heading.'
+      'Your script is too short. Please paste the full script content.'
     );
   }
 
