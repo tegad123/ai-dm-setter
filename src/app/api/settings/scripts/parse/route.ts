@@ -216,6 +216,8 @@ export async function POST(req: NextRequest) {
       err?.message?.includes('too short') ||
       err?.message?.includes('No AI provider') ||
       err?.message?.includes('Failed to parse') ||
+      err?.message?.includes('failed to return') ||
+      err?.message?.includes('could not identify') ||
       err?.message?.includes('no steps')
     ) {
       return NextResponse.json({ error: err.message }, { status: 400 });

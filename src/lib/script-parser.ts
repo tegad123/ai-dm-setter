@@ -207,6 +207,8 @@ async function callParserLLM(
   model: string,
   text: string
 ): Promise<string> {
+  const userMessage = `Parse the following sales/DM script into the JSON structure described in your instructions. The script may use standardized tags or freeform natural language — handle either.\n\n---BEGIN SCRIPT---\n${text}\n---END SCRIPT---\n\nRespond with valid JSON only. No commentary.`;
+
   if (provider === 'openai') {
     const { default: OpenAI } = await import('openai');
     const client = new OpenAI({ apiKey });
@@ -215,9 +217,10 @@ async function callParserLLM(
       model,
       temperature: 0.1,
       max_tokens: 8192,
+      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: PARSER_SYSTEM_PROMPT },
-        { role: 'user', content: text }
+        { role: 'user', content: userMessage }
       ]
     });
 
@@ -231,7 +234,7 @@ async function callParserLLM(
       system: PARSER_SYSTEM_PROMPT,
       temperature: 0.1,
       max_tokens: 8192,
-      messages: [{ role: 'user', content: text }]
+      messages: [{ role: 'user', content: userMessage }]
     });
 
     const textBlock = response.content.find(
@@ -246,15 +249,27 @@ async function callParserLLM(
 // ---------------------------------------------------------------------------
 
 function extractJSON(raw: string): any {
-  let jsonStr = raw;
-
-  // Strip markdown code fences if present
-  const jsonMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
+  // Try direct parse first (cleanest case)
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Continue to extraction attempts
   }
 
-  return JSON.parse(jsonStr);
+  // Strip markdown code fences if present (greedy to handle full block)
+  const fenceMatch = raw.match(/```(?:json)?\s*\n([\s\S]+?)\n\s*```/);
+  if (fenceMatch) {
+    return JSON.parse(fenceMatch[1].trim());
+  }
+
+  // Try to find the first { ... } block (handles leading/trailing text)
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+  }
+
+  throw new Error('No JSON object found in response');
 }
 
 // ---------------------------------------------------------------------------
@@ -294,14 +309,22 @@ export async function parseScriptMarkdown(
   let parsed: any;
   try {
     parsed = extractJSON(rawResponse);
-  } catch {
+  } catch (firstErr) {
+    console.warn(
+      '[script-parser] First JSON extraction failed, retrying LLM call...',
+      { responseLength: rawResponse.length, preview: rawResponse.slice(0, 200) }
+    );
     // Retry once on JSON parse failure
     try {
       rawResponse = await callParserLLM(provider, apiKey, model, text);
       parsed = extractJSON(rawResponse);
-    } catch {
+    } catch (retryErr) {
+      console.error('[script-parser] Second JSON extraction also failed', {
+        responseLength: rawResponse.length,
+        preview: rawResponse.slice(0, 500)
+      });
       throw new Error(
-        'Failed to parse AI response as JSON. The script may have unusual formatting. Please check the formatting guide and try again.'
+        'The AI failed to return structured data for your script. This can happen with very long or complex scripts. Try breaking it into fewer steps or pasting a shorter section first.'
       );
     }
   }
@@ -316,7 +339,7 @@ export async function parseScriptMarkdown(
 
   if (rawSteps.length === 0) {
     throw new Error(
-      'The parser detected no steps in your script. Please check the formatting guide.'
+      'The AI could not identify any steps in your script. Try adding clearer step divisions (e.g., "Step 1: Intro", "Step 2: Qualify") and try again.'
     );
   }
 
