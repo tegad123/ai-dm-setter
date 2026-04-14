@@ -521,3 +521,248 @@ export async function transitionLeadStage(
 export async function getLeadStageHistory(leadId: string): Promise<any> {
   return apiFetch(`/api/leads/${leadId}/stage`);
 }
+
+// ---------------------------------------------------------------------------
+// Script Template System
+// ---------------------------------------------------------------------------
+
+import type { Script, ScriptListItem } from '@/lib/script-types';
+
+export async function fetchScripts(): Promise<ScriptListItem[]> {
+  return apiFetch('/api/settings/scripts');
+}
+
+export async function fetchScript(scriptId: string): Promise<Script> {
+  return apiFetch(`/api/settings/scripts/${scriptId}`);
+}
+
+export async function createScript(data: {
+  name?: string;
+  description?: string;
+  fromDefault?: boolean;
+}): Promise<Script> {
+  return apiFetch('/api/settings/scripts', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateScript(
+  scriptId: string,
+  data: { name?: string; description?: string }
+): Promise<Script> {
+  return apiFetch(`/api/settings/scripts/${scriptId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function deleteScript(scriptId: string): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}`, { method: 'DELETE' });
+}
+
+export async function activateScript(scriptId: string): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/activate`, {
+    method: 'POST'
+  });
+}
+
+export async function duplicateScript(scriptId: string): Promise<Script> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/duplicate`, {
+    method: 'POST'
+  });
+}
+
+// Steps
+
+export async function createStep(
+  scriptId: string,
+  data: { title: string; description?: string; objective?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/steps`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateStep(
+  scriptId: string,
+  stepId: string,
+  data: { title?: string; description?: string; objective?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/steps/${stepId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function deleteStep(
+  scriptId: string,
+  stepId: string
+): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/steps/${stepId}`, {
+    method: 'DELETE'
+  });
+}
+
+export async function reorderSteps(
+  scriptId: string,
+  stepIds: string[]
+): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/steps`, {
+    method: 'PUT',
+    body: JSON.stringify({ stepIds })
+  });
+}
+
+// Branches
+
+export async function createBranch(
+  scriptId: string,
+  stepId: string,
+  data: { branchLabel: string; conditionDescription?: string }
+): Promise<any> {
+  return apiFetch(
+    `/api/settings/scripts/${scriptId}/steps/${stepId}/branches`,
+    { method: 'POST', body: JSON.stringify(data) }
+  );
+}
+
+export async function updateBranch(
+  scriptId: string,
+  stepId: string,
+  branchId: string,
+  data: { branchLabel?: string; conditionDescription?: string }
+): Promise<any> {
+  return apiFetch(
+    `/api/settings/scripts/${scriptId}/steps/${stepId}/branches/${branchId}`,
+    { method: 'PUT', body: JSON.stringify(data) }
+  );
+}
+
+export async function deleteBranch(
+  scriptId: string,
+  stepId: string,
+  branchId: string
+): Promise<void> {
+  await apiFetch(
+    `/api/settings/scripts/${scriptId}/steps/${stepId}/branches/${branchId}`,
+    { method: 'DELETE' }
+  );
+}
+
+// Actions
+
+export async function createAction(
+  scriptId: string,
+  data: {
+    stepId: string;
+    branchId?: string | null;
+    actionType: string;
+    content?: string | null;
+    voiceNoteId?: string | null;
+    linkUrl?: string | null;
+    linkLabel?: string | null;
+    formId?: string | null;
+    waitDuration?: number | null;
+    sortOrder?: number;
+  }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/actions`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateAction(
+  scriptId: string,
+  actionId: string,
+  data: Record<string, unknown>
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/actions`, {
+    method: 'PUT',
+    body: JSON.stringify({ actionId, ...data })
+  });
+}
+
+export async function deleteAction(
+  scriptId: string,
+  actionId: string
+): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/actions`, {
+    method: 'DELETE',
+    body: JSON.stringify({ actionId })
+  });
+}
+
+// Forms
+
+export async function fetchForms(scriptId: string): Promise<any[]> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/forms`);
+}
+
+export async function createForm(
+  scriptId: string,
+  data: { name: string; description?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/forms`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateForm(
+  scriptId: string,
+  formId: string,
+  data: { name?: string; description?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/forms/${formId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function deleteForm(
+  scriptId: string,
+  formId: string
+): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/forms/${formId}`, {
+    method: 'DELETE'
+  });
+}
+
+// Form Fields
+
+export async function createFormField(
+  scriptId: string,
+  formId: string,
+  data: { fieldLabel: string; fieldValue?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/forms/${formId}/fields`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function updateFormField(
+  scriptId: string,
+  formId: string,
+  fieldId: string,
+  data: { fieldLabel?: string; fieldValue?: string }
+): Promise<any> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/forms/${formId}/fields`, {
+    method: 'PUT',
+    body: JSON.stringify({ fieldId, ...data })
+  });
+}
+
+export async function deleteFormField(
+  scriptId: string,
+  formId: string,
+  fieldId: string
+): Promise<void> {
+  await apiFetch(`/api/settings/scripts/${scriptId}/forms/${formId}/fields`, {
+    method: 'DELETE',
+    body: JSON.stringify({ fieldId })
+  });
+}

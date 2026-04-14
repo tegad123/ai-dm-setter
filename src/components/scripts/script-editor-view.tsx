@@ -1,0 +1,187 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
+import { ArrowLeft, Loader2, Check } from 'lucide-react';
+import StepSidebar from './step-sidebar';
+import StepDetail from './step-detail';
+import { fetchScript, updateScript, activateScript } from '@/lib/api';
+import type { Script, ScriptStep, ScriptForm } from '@/lib/script-types';
+import { toast } from 'sonner';
+
+interface ScriptEditorViewProps {
+  scriptId: string;
+}
+
+export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
+  const router = useRouter();
+  const [script, setScript] = useState<Script | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeStepId, setActiveStepId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchScript(scriptId);
+      setScript(data);
+      if (!activeStepId && data.steps.length > 0) {
+        setActiveStepId(data.steps[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load script:', err);
+      toast.error('Failed to load script');
+    } finally {
+      setLoading(false);
+    }
+  }, [scriptId, activeStepId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleNameSave = async (name: string) => {
+    if (!script || name === script.name) return;
+    try {
+      await updateScript(scriptId, { name });
+      setScript({ ...script, name });
+    } catch {
+      toast.error('Failed to save name');
+    }
+  };
+
+  const handleToggleActive = async () => {
+    if (!script) return;
+    try {
+      await activateScript(scriptId);
+      setScript({ ...script, isActive: true });
+      toast.success('Script activated');
+    } catch {
+      toast.error('Failed to activate script');
+    }
+  };
+
+  const handleStepsChange = (steps: ScriptStep[]) => {
+    if (!script) return;
+    setScript({ ...script, steps });
+  };
+
+  const handleStepChange = (updatedStep: ScriptStep) => {
+    if (!script) return;
+    setScript({
+      ...script,
+      steps: script.steps.map((s) =>
+        s.id === updatedStep.id ? updatedStep : s
+      )
+    });
+  };
+
+  const handleFormsChange = (forms: ScriptForm[]) => {
+    if (!script) return;
+    setScript({ ...script, forms });
+  };
+
+  if (loading) {
+    return (
+      <div className='flex items-center justify-center py-20'>
+        <Loader2 className='text-muted-foreground h-6 w-6 animate-spin' />
+      </div>
+    );
+  }
+
+  if (!script) {
+    return (
+      <div className='py-20 text-center'>
+        <p className='text-muted-foreground'>Script not found.</p>
+        <Button
+          variant='link'
+          onClick={() => router.push('/dashboard/settings/persona')}
+        >
+          Back to scripts
+        </Button>
+      </div>
+    );
+  }
+
+  const activeStep = script.steps.find((s) => s.id === activeStepId) || null;
+
+  return (
+    <div className='flex h-[calc(100vh-4rem)] flex-col'>
+      {/* Top bar */}
+      <div className='border-border flex items-center gap-3 border-b px-4 py-3'>
+        <Button
+          variant='ghost'
+          size='icon'
+          onClick={() => router.push('/dashboard/settings/persona')}
+        >
+          <ArrowLeft className='h-4 w-4' />
+        </Button>
+
+        <Input
+          defaultValue={script.name}
+          className='max-w-sm border-none px-0 text-lg font-semibold shadow-none focus-visible:ring-0'
+          onBlur={(e) => handleNameSave(e.target.value)}
+        />
+
+        {script.isDefault && (
+          <Badge variant='secondary'>Default Template</Badge>
+        )}
+
+        <div className='ml-auto flex items-center gap-3'>
+          <div className='flex items-center gap-2'>
+            <span className='text-muted-foreground text-sm'>
+              {script.isActive ? 'Active' : 'Inactive'}
+            </span>
+            <Switch
+              checked={script.isActive}
+              onCheckedChange={handleToggleActive}
+            />
+          </div>
+          {script.isActive && (
+            <Badge variant='default'>
+              <Check className='mr-1 h-3 w-3' />
+              Active
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Main content: sidebar + detail */}
+      <div className='flex flex-1 overflow-hidden'>
+        {/* Left sidebar */}
+        <div className='border-border w-64 shrink-0 overflow-y-auto border-r py-3'>
+          <StepSidebar
+            steps={script.steps}
+            scriptId={scriptId}
+            activeStepId={activeStepId}
+            onSelectStep={setActiveStepId}
+            onStepsChange={handleStepsChange}
+          />
+        </div>
+
+        {/* Right detail area */}
+        <div className='flex-1 overflow-y-auto p-6'>
+          {activeStep ? (
+            <StepDetail
+              key={activeStep.id}
+              step={activeStep}
+              scriptId={scriptId}
+              forms={script.forms}
+              onStepChange={handleStepChange}
+              onFormsChange={handleFormsChange}
+            />
+          ) : (
+            <div className='flex h-full items-center justify-center'>
+              <p className='text-muted-foreground'>
+                Select a step from the sidebar to edit it.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -195,6 +195,7 @@ model Account {
   voiceNoteLibrary   VoiceNoteLibraryItem[]
   voiceNoteTimingSettings VoiceNoteTimingSettings?
   scriptSlots        ScriptSlot[]
+  scripts            Script[]
 
   @@index([slug])
 }
@@ -389,6 +390,7 @@ model VoiceNoteLibraryItem {
 
   account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
   scriptSlotBindings ScriptSlot[]
+  scriptActions      ScriptAction[] @relation("ActionVoiceNote")
 
   @@index([accountId])
   @@index([accountId, status])
@@ -625,6 +627,7 @@ model Lead {
   crmOutcomes          CrmOutcome[]
   abTestAssignments    ABTestAssignment[]
   stageTransitions     LeadStageTransition[]
+  scriptPositions      LeadScriptPosition[]
 
   @@index([accountId, stage])
   @@index([accountId, platform])
@@ -1038,4 +1041,149 @@ model LeadStageTransition {
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   @@index([leadId, createdAt])
+}
+
+// ─── Script Template System (Sprint 3 Revised) ──────────
+
+enum ScriptActionType {
+  send_message
+  ask_question
+  send_voice_note
+  send_link
+  send_video
+  form_reference
+  runtime_judgment
+  wait_for_response
+  wait_duration
+}
+
+enum LeadScriptStatus {
+  active
+  completed
+  stalled
+}
+
+model Script {
+  id          String   @id @default(cuid())
+  accountId   String
+  name        String
+  description String?  @db.Text
+  isActive    Boolean  @default(false)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  steps         ScriptStep[]
+  forms         ScriptForm[]
+  leadPositions LeadScriptPosition[]
+
+  @@index([accountId])
+  @@index([accountId, isActive])
+}
+
+model ScriptStep {
+  id          String   @id @default(cuid())
+  scriptId    String
+  stepNumber  Int
+  title       String
+  description String?  @db.Text
+  objective   String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  script        Script               @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  branches      ScriptBranch[]
+  actions       ScriptAction[]
+  leadPositions LeadScriptPosition[]
+
+  @@index([scriptId, stepNumber])
+}
+
+model ScriptBranch {
+  id                   String   @id @default(cuid())
+  stepId               String
+  branchLabel          String
+  conditionDescription String?  @db.Text
+  sortOrder            Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  step          ScriptStep           @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  actions       ScriptAction[]
+  leadPositions LeadScriptPosition[]
+
+  @@index([stepId, sortOrder])
+}
+
+model ScriptAction {
+  id           String           @id @default(cuid())
+  stepId       String
+  branchId     String?
+  actionType   ScriptActionType
+  content      String?          @db.Text
+  voiceNoteId  String?
+  linkUrl      String?
+  linkLabel    String?
+  formId       String?
+  waitDuration Int?
+  sortOrder    Int              @default(0)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  step      ScriptStep            @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  branch    ScriptBranch?         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  voiceNote VoiceNoteLibraryItem? @relation("ActionVoiceNote", fields: [voiceNoteId], references: [id], onDelete: SetNull)
+  form      ScriptForm?           @relation(fields: [formId], references: [id], onDelete: SetNull)
+
+  @@index([stepId, sortOrder])
+  @@index([branchId, sortOrder])
+}
+
+model ScriptForm {
+  id          String   @id @default(cuid())
+  scriptId    String
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  script  Script            @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  fields  ScriptFormField[]
+  actions ScriptAction[]
+
+  @@index([scriptId])
+}
+
+model ScriptFormField {
+  id         String   @id @default(cuid())
+  formId     String
+  fieldLabel String
+  fieldValue String?  @db.Text
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  form ScriptForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([formId, sortOrder])
+}
+
+model LeadScriptPosition {
+  id              String           @id @default(cuid())
+  leadId          String
+  scriptId        String
+  currentStepId   String
+  currentBranchId String?
+  status          LeadScriptStatus @default(active)
+  updatedAt       DateTime         @updatedAt
+
+  lead   Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  script Script        @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  step   ScriptStep    @relation(fields: [currentStepId], references: [id], onDelete: Cascade)
+  branch ScriptBranch? @relation(fields: [currentBranchId], references: [id], onDelete: SetNull)
+
+  @@unique([leadId, scriptId])
+  @@index([leadId])
+  @@index([scriptId])
 }

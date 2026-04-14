@@ -90,7 +90,7 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       }
     }
 
-    // Sprint 3: Add link slot URLs from ScriptSlots
+    // Sprint 3: Add link slot URLs from ScriptSlots (legacy)
     const linkSlots = await prisma.scriptSlot.findMany({
       where: {
         accountId,
@@ -103,6 +103,21 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
     for (const slot of linkSlots) {
       if (slot.url && /^https?:\/\//i.test(slot.url)) {
         allowed.add(slot.url.trim());
+      }
+    }
+
+    // Sprint 3 Revised: Add link URLs from Script template actions
+    const scriptLinkActions = await prisma.scriptAction.findMany({
+      where: {
+        step: { script: { accountId, isActive: true } },
+        actionType: { in: ['send_link', 'send_video'] },
+        linkUrl: { not: null }
+      },
+      select: { linkUrl: true }
+    });
+    for (const action of scriptLinkActions) {
+      if (action.linkUrl && /^https?:\/\//i.test(action.linkUrl)) {
+        allowed.add(action.linkUrl.trim());
       }
     }
   } catch (err) {

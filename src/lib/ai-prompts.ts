@@ -3,6 +3,7 @@ import {
   serializeBreakdownForPrompt,
   buildDualLayerBlock
 } from '@/lib/persona-breakdown-serializer';
+import { serializeScriptForPrompt } from '@/lib/script-serializer';
 
 // ---------------------------------------------------------------------------
 // Lead Context (passed from webhook processor / API routes)
@@ -1011,7 +1012,10 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
   // 1. PersonaBreakdown (new script-driven system) — if active breakdown exists
   // 2. Script-first (legacy) — if rawScript exists
   // 3. Field-by-field (legacy) — fallback
-  const breakdownText = await serializeBreakdownForPrompt(accountId);
+  // Try new Script template system first, fall back to old PersonaBreakdown
+  const scriptText = await serializeScriptForPrompt(accountId);
+  const breakdownText =
+    scriptText || (await serializeBreakdownForPrompt(accountId));
   const hasRawScript =
     !!(p as any).rawScript &&
     ((p as any).rawScript as string).trim().length > 100;
