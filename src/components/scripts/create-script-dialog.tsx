@@ -137,7 +137,7 @@ export default function CreateScriptDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className='max-w-lg'>
+      <DialogContent className='max-h-[85vh] max-w-lg overflow-y-auto'>
         {step === 'choose' && (
           <>
             <DialogHeader>
@@ -305,7 +305,7 @@ export default function CreateScriptDialog({
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
                   placeholder={`# STEP 1: Intro\n## BRANCH: Default\n[MSG]: Hey! Thanks for reaching out...\n[WAIT]:\n\n# STEP 2: Qualification\n...`}
-                  className='min-h-[200px] font-mono text-sm'
+                  className='h-[180px] max-h-[35vh] resize-y font-mono text-sm'
                 />
                 <p className='text-muted-foreground mt-1 text-xs'>
                   {pasteText.length} characters
