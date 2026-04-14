@@ -6,7 +6,15 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { GripVertical, Trash2, Clock, MessageSquare } from 'lucide-react';
+import {
+  GripVertical,
+  Trash2,
+  Clock,
+  MessageSquare,
+  AlertCircle,
+  Check
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
 import ActionTypeSelector from './action-type-selector';
 import VoiceNotePickerInline from './voice-note-picker-inline';
 import FormReferenceSelector from './form-reference-selector';
@@ -57,8 +65,21 @@ export default function ActionCard({
     async (field: string, value: any) => {
       setSaving(true);
       try {
+        // When user edits any content field, also mark as confirmed
+        const extra: Record<string, any> = {};
+        if (
+          field !== 'userConfirmed' &&
+          field !== 'parserStatus' &&
+          action.parserConfidence &&
+          !action.userConfirmed
+        ) {
+          extra.userConfirmed = true;
+          extra.parserStatus = null;
+        }
+
         const result = await updateAction(scriptId, action.id, {
-          [field]: value
+          [field]: value,
+          ...extra
         });
         onUpdate({ ...action, ...result });
       } catch (err) {
@@ -249,7 +270,11 @@ export default function ActionCard({
     <div
       ref={setNodeRef}
       style={style}
-      className='border-border bg-card rounded border p-3'
+      className={cn('border-border bg-card rounded border p-3', {
+        'border-amber-400/60 bg-amber-500/5':
+          action.parserStatus === 'needs_review' ||
+          action.parserStatus === 'needs_user_input'
+      })}
     >
       <div className='flex items-start gap-2'>
         <button
@@ -267,6 +292,27 @@ export default function ActionCard({
                 value={action.actionType}
                 onChange={handleTypeChange}
               />
+              {action.parserConfidence && (
+                <span
+                  className={cn('h-2 w-2 shrink-0 rounded-full', {
+                    'bg-green-500': action.parserConfidence === 'high',
+                    'bg-yellow-500': action.parserConfidence === 'medium',
+                    'bg-red-500': action.parserConfidence === 'low'
+                  })}
+                  title={`Parser confidence: ${action.parserConfidence}`}
+                />
+              )}
+              {action.parserConfidence && !action.userConfirmed && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-6 px-2 text-xs text-green-600'
+                  onClick={() => handleFieldSave('userConfirmed', true)}
+                >
+                  <Check className='mr-1 h-3 w-3' />
+                  Confirm
+                </Button>
+              )}
               {saving && (
                 <span className='text-muted-foreground text-xs'>Saving...</span>
               )}
@@ -280,6 +326,20 @@ export default function ActionCard({
               <Trash2 className='h-3.5 w-3.5 text-red-500' />
             </Button>
           </div>
+
+          {action.parserStatus === 'needs_review' && (
+            <div className='flex items-center gap-1 text-xs text-amber-600'>
+              <AlertCircle className='h-3 w-3' />
+              Needs review — parser was unsure about this action
+            </div>
+          )}
+          {action.parserStatus === 'needs_user_input' && (
+            <div className='flex items-center gap-1 text-xs text-amber-600'>
+              <AlertCircle className='h-3 w-3' />
+              Needs your input — bind a voice note, paste a URL, or select a
+              form
+            </div>
+          )}
 
           {renderFields()}
         </div>

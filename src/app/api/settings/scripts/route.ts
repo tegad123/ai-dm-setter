@@ -75,6 +75,7 @@ export async function GET(req: NextRequest) {
       description: s.description,
       isActive: s.isActive,
       isDefault: s.isDefault,
+      createdVia: s.createdVia,
       stepCount: s._count.steps,
       createdAt: s.createdAt.toISOString(),
       updatedAt: s.updatedAt.toISOString()

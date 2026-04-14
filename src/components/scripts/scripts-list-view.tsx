@@ -6,12 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -23,28 +17,21 @@ import {
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import {
-  Plus,
-  ChevronDown,
-  FileText,
-  Copy,
-  Trash2,
-  Loader2
-} from 'lucide-react';
+import { Plus, FileText, Copy, Trash2, Loader2, Upload } from 'lucide-react';
 import {
   fetchScripts,
-  createScript,
   deleteScript,
   activateScript,
   duplicateScript
 } from '@/lib/api';
 import type { ScriptListItem } from '@/lib/script-types';
+import CreateScriptDialog from './create-script-dialog';
 
 export default function ScriptsListView() {
   const router = useRouter();
   const [scripts, setScripts] = useState<ScriptListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -62,27 +49,6 @@ export default function ScriptsListView() {
     load();
   }, [load]);
 
-  const handleCreate = async (fromDefault: boolean) => {
-    setCreating(true);
-    try {
-      const script = await createScript({
-        fromDefault,
-        name: fromDefault ? undefined : 'New Script'
-      });
-      toast.success(
-        fromDefault
-          ? 'Created script from default template'
-          : 'Created blank script'
-      );
-      router.push(`/dashboard/settings/persona/${script.id}`);
-    } catch (err) {
-      console.error('Failed to create script:', err);
-      toast.error('Failed to create script');
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const handleToggleActive = async (
     scriptId: string,
     currentlyActive: boolean
@@ -92,8 +58,6 @@ export default function ScriptsListView() {
         await activateScript(scriptId);
         toast.success('Script activated');
       }
-      // If currently active, we deactivate by reloading (no separate deactivate endpoint needed —
-      // activating another script handles it, or we just don't allow deactivating the only script)
       await load();
     } catch (err) {
       console.error('Failed to toggle script:', err);
@@ -142,29 +106,10 @@ export default function ScriptsListView() {
           </p>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button disabled={creating}>
-              {creating ? (
-                <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-              ) : (
-                <Plus className='mr-2 h-4 w-4' />
-              )}
-              Create Script
-              <ChevronDown className='ml-2 h-4 w-4' />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end'>
-            <DropdownMenuItem onClick={() => handleCreate(true)}>
-              <FileText className='mr-2 h-4 w-4' />
-              From Default Template
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => handleCreate(false)}>
-              <Plus className='mr-2 h-4 w-4' />
-              Blank Script
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <Plus className='mr-2 h-4 w-4' />
+          Create Script
+        </Button>
       </div>
 
       {/* Empty state */}
@@ -173,11 +118,11 @@ export default function ScriptsListView() {
           <FileText className='text-muted-foreground mx-auto mb-4 h-12 w-12' />
           <h3 className='mb-2 text-lg font-semibold'>No scripts yet</h3>
           <p className='text-muted-foreground mb-4 text-sm'>
-            Create a script from the default template to get started.
+            Create a script to get started — upload your own or use a template.
           </p>
-          <Button onClick={() => handleCreate(true)} disabled={creating}>
-            {creating && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            Create from Default Template
+          <Button onClick={() => setCreateDialogOpen(true)}>
+            <Plus className='mr-2 h-4 w-4' />
+            Create Script
           </Button>
         </div>
       )}
@@ -206,6 +151,15 @@ export default function ScriptsListView() {
                   {script.isDefault && (
                     <Badge variant='secondary' className='shrink-0'>
                       Default Template
+                    </Badge>
+                  )}
+                  {script.createdVia === 'upload_parsed' && (
+                    <Badge
+                      variant='outline'
+                      className='shrink-0 border-blue-200 text-blue-600 dark:border-blue-800 dark:text-blue-400'
+                    >
+                      <Upload className='mr-1 h-3 w-3' />
+                      Parsed
                     </Badge>
                   )}
                 </div>
@@ -275,6 +229,12 @@ export default function ScriptsListView() {
           </div>
         ))}
       </div>
+
+      <CreateScriptDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onCreated={(id) => router.push(`/dashboard/settings/persona/${id}`)}
+      />
     </div>
   );
 }

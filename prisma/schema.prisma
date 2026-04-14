@@ -1063,15 +1063,37 @@ enum LeadScriptStatus {
   stalled
 }
 
+enum ScriptCreatedVia {
+  template
+  blank
+  upload_parsed
+}
+
+enum ParserConfidence {
+  high
+  medium
+  low
+}
+
+enum ParserActionStatus {
+  filled
+  needs_review
+  needs_user_input
+}
+
 model Script {
   id          String   @id @default(cuid())
   accountId   String
   name        String
   description String?  @db.Text
   isActive    Boolean  @default(false)
-  isDefault   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isDefault          Boolean          @default(false)
+  createdVia         ScriptCreatedVia @default(blank)
+  originalUploadText String?          @db.Text
+  lastParsedAt       DateTime?
+  parseWarnings      Json?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
   steps         ScriptStep[]
@@ -1088,9 +1110,11 @@ model ScriptStep {
   stepNumber  Int
   title       String
   description String?  @db.Text
-  objective   String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  objective        String?           @db.Text
+  parserConfidence ParserConfidence?
+  userConfirmed    Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   script        Script               @relation(fields: [scriptId], references: [id], onDelete: Cascade)
   branches      ScriptBranch[]
@@ -1105,9 +1129,11 @@ model ScriptBranch {
   stepId               String
   branchLabel          String
   conditionDescription String?  @db.Text
-  sortOrder            Int      @default(0)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  sortOrder            Int               @default(0)
+  parserConfidence     ParserConfidence?
+  userConfirmed        Boolean           @default(false)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   step          ScriptStep           @relation(fields: [stepId], references: [id], onDelete: Cascade)
   actions       ScriptAction[]
@@ -1127,9 +1153,12 @@ model ScriptAction {
   linkLabel    String?
   formId       String?
   waitDuration Int?
-  sortOrder    Int              @default(0)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  sortOrder        Int                @default(0)
+  parserConfidence ParserConfidence?
+  parserStatus     ParserActionStatus?
+  userConfirmed    Boolean            @default(false)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   step      ScriptStep            @relation(fields: [stepId], references: [id], onDelete: Cascade)
   branch    ScriptBranch?         @relation(fields: [branchId], references: [id], onDelete: Cascade)

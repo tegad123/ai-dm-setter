@@ -766,3 +766,30 @@ export async function deleteFormField(
     body: JSON.stringify({ fieldId })
   });
 }
+
+// -- Script parsing --
+
+export async function parseScript(data: {
+  text?: string;
+  fileBase64?: string;
+  fileName?: string;
+}): Promise<{ script: any; parseWarnings: string[] }> {
+  return apiFetch('/api/settings/scripts/parse', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}
+
+export async function reuploadScript(
+  scriptId: string,
+  data: {
+    text?: string;
+    fileBase64?: string;
+    fileName?: string;
+  }
+): Promise<{ script: any; parseWarnings: string[] }> {
+  return apiFetch(`/api/settings/scripts/${scriptId}/reupload`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+}

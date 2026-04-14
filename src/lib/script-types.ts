@@ -28,6 +28,12 @@ export const SCRIPT_ACTION_TYPE_LABELS: Record<ScriptActionType, string> = {
   wait_duration: 'Wait Duration'
 };
 
+export type ScriptCreatedVia = 'template' | 'blank' | 'upload_parsed';
+
+export type ParserConfidence = 'high' | 'medium' | 'low';
+
+export type ParserActionStatus = 'filled' | 'needs_review' | 'needs_user_input';
+
 export type LeadScriptStatus = 'active' | 'completed' | 'stalled';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +68,9 @@ export interface ScriptAction {
   formId: string | null;
   waitDuration: number | null;
   sortOrder: number;
+  parserConfidence?: ParserConfidence | null;
+  parserStatus?: ParserActionStatus | null;
+  userConfirmed?: boolean;
   // Populated relations
   voiceNote?: {
     id: string;
@@ -78,6 +87,8 @@ export interface ScriptBranch {
   branchLabel: string;
   conditionDescription: string | null;
   sortOrder: number;
+  parserConfidence?: ParserConfidence | null;
+  userConfirmed?: boolean;
   actions: ScriptAction[];
 }
 
@@ -88,6 +99,8 @@ export interface ScriptStep {
   title: string;
   description: string | null;
   objective: string | null;
+  parserConfidence?: ParserConfidence | null;
+  userConfirmed?: boolean;
   branches: ScriptBranch[];
   actions: ScriptAction[]; // direct actions (branchId = null)
 }
@@ -99,6 +112,10 @@ export interface Script {
   description: string | null;
   isActive: boolean;
   isDefault: boolean;
+  createdVia: ScriptCreatedVia;
+  originalUploadText: string | null;
+  lastParsedAt: string | null;
+  parseWarnings: string[] | null;
   steps: ScriptStep[];
   forms: ScriptForm[];
   createdAt: string;
@@ -111,6 +128,7 @@ export interface ScriptListItem {
   description: string | null;
   isActive: boolean;
   isDefault: boolean;
+  createdVia: ScriptCreatedVia;
   stepCount: number;
   createdAt: string;
   updatedAt: string;

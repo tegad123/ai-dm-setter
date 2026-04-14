@@ -10,6 +10,8 @@ import { Separator } from '@/components/ui/separator';
 import { ArrowLeft, Loader2, Check } from 'lucide-react';
 import StepSidebar from './step-sidebar';
 import StepDetail from './step-detail';
+import ParseSummaryBanner from './parse-summary-banner';
+import ReuploadScriptDialog from './reupload-script-dialog';
 import { fetchScript, updateScript, activateScript } from '@/lib/api';
 import type { Script, ScriptStep, ScriptForm } from '@/lib/script-types';
 import { toast } from 'sonner';
@@ -23,6 +25,7 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
   const [script, setScript] = useState<Script | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
+  const [reuploadOpen, setReuploadOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -149,6 +152,14 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
         </div>
       </div>
 
+      {/* Parse summary banner (only for parsed scripts) */}
+      {script.createdVia === 'upload_parsed' && (
+        <ParseSummaryBanner
+          script={script}
+          onReupload={() => setReuploadOpen(true)}
+        />
+      )}
+
       {/* Main content: sidebar + detail */}
       <div className='flex flex-1 overflow-hidden'>
         {/* Left sidebar */}
@@ -182,6 +193,16 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
           )}
         </div>
       </div>
+
+      {/* Re-upload dialog */}
+      {script.createdVia === 'upload_parsed' && (
+        <ReuploadScriptDialog
+          scriptId={scriptId}
+          open={reuploadOpen}
+          onOpenChange={setReuploadOpen}
+          onComplete={() => load()}
+        />
+      )}
     </div>
   );
 }

@@ -176,7 +176,13 @@ export async function PUT(
         ...(data.waitDuration !== undefined && {
           waitDuration: data.waitDuration
         }),
-        ...(data.sortOrder !== undefined && { sortOrder: data.sortOrder })
+        ...(data.sortOrder !== undefined && { sortOrder: data.sortOrder }),
+        ...(data.userConfirmed !== undefined && {
+          userConfirmed: data.userConfirmed
+        }),
+        ...(data.parserStatus !== undefined && {
+          parserStatus: data.parserStatus
+        })
       },
       include: {
         voiceNote: {
