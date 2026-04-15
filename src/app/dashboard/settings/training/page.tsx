@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Trash2
 } from 'lucide-react';
+import TrainingReadinessCard from '@/components/training/training-readiness-card';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -533,6 +534,9 @@ export default function TrainingDataPage() {
           sell. Export your Instagram DMs as a PDF and upload them here.
         </p>
       </div>
+
+      {/* Training readiness */}
+      <TrainingReadinessCard />
 
       {/* Stats bar */}
       {completedUploads > 0 && (

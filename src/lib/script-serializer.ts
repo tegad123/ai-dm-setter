@@ -128,6 +128,7 @@ export async function serializeScriptForPrompt(
     label: string;
     description: string;
   }[] = [];
+  let hasRuntimeMatchActions = false;
 
   for (const step of script.steps) {
     const allActions = [
@@ -135,23 +136,49 @@ export async function serializeScriptForPrompt(
       ...step.branches.flatMap((b) => b.actions)
     ];
     for (const action of allActions) {
-      if (action.actionType === 'send_voice_note' && action.voiceNote) {
-        voiceNotes.push({
-          id: action.voiceNote.id,
-          label:
-            action.voiceNote.userLabel ||
-            `Voice Note (Step ${step.stepNumber})`,
-          description: action.content || 'Pre-recorded voice note'
-        });
+      if (action.actionType === 'send_voice_note') {
+        if (action.bindingMode === 'specific' && action.voiceNote) {
+          voiceNotes.push({
+            id: action.voiceNote.id,
+            label:
+              action.voiceNote.userLabel ||
+              `Voice Note (Step ${step.stepNumber})`,
+            description: action.content || 'Pre-recorded voice note'
+          });
+        } else if (
+          action.bindingMode === 'runtime_match' ||
+          !action.voiceNote
+        ) {
+          hasRuntimeMatchActions = true;
+        } else if (action.voiceNote) {
+          // Legacy: no explicit bindingMode but has a voiceNote
+          voiceNotes.push({
+            id: action.voiceNote.id,
+            label:
+              action.voiceNote.userLabel ||
+              `Voice Note (Step ${step.stepNumber})`,
+            description: action.content || 'Pre-recorded voice note'
+          });
+        }
       }
     }
   }
 
-  if (voiceNotes.length > 0) {
-    const vnLines = voiceNotes.map(
-      (vn) =>
-        `- ${vn.label} (voice_note_id: ${vn.id}): ${vn.description} [AUDIO READY]`
-    );
+  if (voiceNotes.length > 0 || hasRuntimeMatchActions) {
+    const vnLines: string[] = [];
+    if (voiceNotes.length > 0) {
+      vnLines.push(
+        ...voiceNotes.map(
+          (vn) =>
+            `- ${vn.label} (voice_note_id: ${vn.id}): ${vn.description} [AUDIO READY]`
+        )
+      );
+    }
+    if (hasRuntimeMatchActions) {
+      vnLines.push(
+        `- [RUNTIME MATCH] Some voice note slots will be automatically matched from the library based on conversation context.`
+      );
+    }
     parts.push(
       `## Available Voice Notes (Library)\nThese voice notes are pre-recorded and ready to send. When the conversation reaches the trigger point, output voice_note_action with the voice_note_id.\n${vnLines.join('\n')}`
     );
@@ -247,6 +274,7 @@ function serializeAction(
     linkUrl?: string | null;
     linkLabel?: string | null;
     waitDuration?: number | null;
+    bindingMode?: string | null;
     voiceNote?: { id: string; userLabel: string | null } | null;
     form?: {
       name: string;
@@ -263,10 +291,16 @@ function serializeAction(
       return `${indent}[${tag}] ${action.content || '(empty)'}`;
 
     case 'send_voice_note':
-      if (action.voiceNote) {
+      // Specific binding: use the bound voice note ID
+      if (action.bindingMode === 'specific' && action.voiceNote) {
         return `${indent}[${tag}] Send pre-recorded: ${action.voiceNote.userLabel || 'voice note'} (voice_note_id: ${action.voiceNote.id})`;
       }
-      return `${indent}[${tag}] ${action.content || 'Send a voice note'}`;
+      // Runtime match (default): let the context matcher find the best VN
+      if (action.bindingMode === 'runtime_match' || !action.voiceNote) {
+        return `${indent}[${tag}] ${action.content || 'Send a voice note'} (voice_note_action: runtime_match)`;
+      }
+      // Legacy fallback: specific VN without explicit bindingMode
+      return `${indent}[${tag}] Send pre-recorded: ${action.voiceNote.userLabel || 'voice note'} (voice_note_id: ${action.voiceNote.id})`;
 
     case 'send_link':
     case 'send_video':

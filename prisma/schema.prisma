@@ -196,6 +196,7 @@ model Account {
   voiceNoteTimingSettings VoiceNoteTimingSettings?
   scriptSlots        ScriptSlot[]
   scripts            Script[]
+  trainingAnalyses   TrainingDataAnalysis[]
 
   @@index([slug])
 }
@@ -383,6 +384,8 @@ model VoiceNoteLibraryItem {
   priority                Int                      @default(0)
   active                  Boolean                  @default(false)
   embeddingVector         Json?
+  autoSuggestedTriggers   Json?                    // LLM-generated trigger suggestions stored pre-approval
+  suggestionStatus        TriggerSuggestionStatus? // null = no suggestions yet
   status                  VoiceNoteLibraryStatus   @default(PROCESSING)
   errorMessage            String?
   createdAt               DateTime                 @default(now())
@@ -1081,6 +1084,18 @@ enum ParserActionStatus {
   needs_user_input
 }
 
+enum VoiceNoteBindingMode {
+  specific
+  runtime_match
+}
+
+enum TriggerSuggestionStatus {
+  pending
+  approved
+  edited
+  rejected
+}
+
 model Script {
   id          String   @id @default(cuid())
   accountId   String
@@ -1149,6 +1164,7 @@ model ScriptAction {
   actionType   ScriptActionType
   content      String?          @db.Text
   voiceNoteId  String?
+  bindingMode  VoiceNoteBindingMode   @default(runtime_match)
   linkUrl      String?
   linkLabel    String?
   formId       String?
@@ -1215,4 +1231,23 @@ model LeadScriptPosition {
   @@unique([leadId, scriptId])
   @@index([leadId])
   @@index([scriptId])
+}
+
+// ─── Training Data Adequacy Analyzer (Sprint 4) ─────────────────────
+
+model TrainingDataAnalysis {
+  id                 String   @id @default(cuid())
+  accountId          String
+  runAt              DateTime @default(now())
+  overallScore       Int                      // 0-100 weighted readiness
+  categoryScores     Json                     // { quantity, voice_style, lead_type, stage, outcome, objection }
+  totalConversations Int
+  totalMessages      Int
+  recommendations    Json                     // [{ category, severity, description, recommendation, evidence }]
+  estimatedCostCents Int?
+  status             String   @default("complete") // running | complete | failed
+  errorMessage       String?  @db.Text
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, runAt(sort: Desc)])
 }

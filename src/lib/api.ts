@@ -403,6 +403,8 @@ export interface VoiceNoteLibraryItem {
   boundToScriptStep: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scriptBindings: any[] | null;
+  autoSuggestedTriggers: any[] | null;
+  suggestionStatus: 'pending' | 'approved' | 'edited' | 'rejected' | null;
   userLabel: string | null;
   userNotes: string | null;
   priority: number;
@@ -482,6 +484,35 @@ export async function retryVoiceNote(
 }
 
 // ---------------------------------------------------------------------------
+// Voice Note Trigger Suggestions (Sprint 4)
+// ---------------------------------------------------------------------------
+
+export interface VoiceNoteSuggestionResponse {
+  id: string;
+  autoSuggestedTriggers: any[] | null;
+  suggestionStatus: 'pending' | 'approved' | 'edited' | 'rejected' | null;
+  triggers: any[] | null;
+  triggerDescription: string | null;
+}
+
+export async function getVoiceNoteSuggestions(
+  id: string
+): Promise<VoiceNoteSuggestionResponse> {
+  return apiFetch(`/api/voice-notes/${id}/suggestions`);
+}
+
+export async function respondToSuggestion(
+  id: string,
+  action: 'approve' | 'edit' | 'reject',
+  triggers?: unknown[]
+): Promise<VoiceNoteSuggestionResponse> {
+  return apiFetch(`/api/voice-notes/${id}/suggestions`, {
+    method: 'PUT',
+    body: JSON.stringify({ action, ...(triggers ? { triggers } : {}) })
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Voice Note Timing Settings
 // ---------------------------------------------------------------------------
 
@@ -500,6 +531,58 @@ export async function updateVoiceNoteTimingSettings(
   return apiFetch('/api/voice-notes/timing-settings', {
     method: 'PUT',
     body: JSON.stringify(data)
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Training Data Analysis (Sprint 4)
+// ---------------------------------------------------------------------------
+
+export interface TrainingAnalysisResult {
+  id: string;
+  accountId: string;
+  runAt: string;
+  overallScore: number;
+  categoryScores: {
+    quantity: number;
+    voice_style: number;
+    lead_type_coverage: number;
+    stage_coverage: number;
+    outcome_coverage: number;
+    objection_coverage: number;
+  };
+  totalConversations: number;
+  totalMessages: number;
+  recommendations: Array<{
+    category: string;
+    severity: 'high' | 'medium' | 'low';
+    description: string;
+    recommendation: string;
+    evidence?: string;
+  }>;
+  summary?: string;
+  status: string;
+}
+
+export interface CostEstimate {
+  estimatedCostDollars: string;
+  estimatedTokens: number;
+  totalConversations: number;
+  totalMessages: number;
+}
+
+export async function getTrainingAnalysis(): Promise<{
+  analysis: TrainingAnalysisResult | null;
+}> {
+  return apiFetch('/api/settings/training/analysis');
+}
+
+export async function runTrainingAnalysis(
+  confirm: boolean
+): Promise<{ estimate: CostEstimate } | { analysis: TrainingAnalysisResult }> {
+  return apiFetch('/api/settings/training/analysis', {
+    method: 'POST',
+    body: JSON.stringify({ confirm })
   });
 }
 

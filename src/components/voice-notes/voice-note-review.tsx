@@ -66,6 +66,7 @@ import {
 import type { VoiceNoteTrigger } from '@/lib/voice-note-triggers';
 import TriggerBuilder from './trigger-builder';
 import ChipSelector from './chip-selector';
+import SuggestionPanel from './suggestion-panel';
 
 const USE_CASE_SUGGESTIONS = [
   'social_proof',
@@ -181,6 +182,7 @@ export default function VoiceNoteReview({ id }: { id: string }) {
   const [userNotes, setUserNotes] = useState('');
   const [priority, setPriority] = useState(0);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [suggestionApproved, setSuggestionApproved] = useState(false);
 
   const loadItem = useCallback(async () => {
     try {
@@ -578,6 +580,54 @@ export default function VoiceNoteReview({ id }: { id: string }) {
                   </Select>
                 </div>
               </div>
+
+              {/* AI-Suggested Triggers (Sprint 4) */}
+              {item?.suggestionStatus === 'pending' &&
+                item?.autoSuggestedTriggers &&
+                !suggestionApproved && (
+                  <div className='sm:col-span-2'>
+                    <SuggestionPanel
+                      voiceNoteId={item.id}
+                      triggers={parseTriggerJson(item.autoSuggestedTriggers)}
+                      status={item.suggestionStatus}
+                      onApproved={(approved) => {
+                        setTriggers(approved);
+                        setSuggestionApproved(true);
+                      }}
+                      onRejected={() => {
+                        setItem((prev) =>
+                          prev
+                            ? { ...prev, suggestionStatus: 'rejected' }
+                            : prev
+                        );
+                      }}
+                      onEditRequested={() => {
+                        // Pre-fill TriggerBuilder with suggested triggers for editing
+                        setTriggers(
+                          parseTriggerJson(item.autoSuggestedTriggers)
+                        );
+                        setItem((prev) =>
+                          prev
+                            ? { ...prev, suggestionStatus: 'rejected' }
+                            : prev
+                        );
+                        document
+                          .getElementById('trigger-builder-section')
+                          ?.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                    />
+                  </div>
+                )}
+
+              {/* Approved badge */}
+              {suggestionApproved && (
+                <div className='sm:col-span-2'>
+                  <Badge className='border-green-300 bg-green-100 text-green-800'>
+                    <CheckCircle2 className='mr-1 h-3 w-3' />
+                    Triggers approved from AI suggestion
+                  </Badge>
+                </div>
+              )}
 
               {/* Structured triggers */}
               <div id='trigger-builder-section' className='sm:col-span-2'>

@@ -42,11 +42,33 @@ emotional_tone — pick ONE from:
   storytelling, educational, direct, reassuring
 
 structured_triggers — create 1-3 trigger objects. Pick the most appropriate type:
-  - stage_transition: when the voice note clearly responds to a pipeline event (e.g. no-show, booking)
+
+  - stage_transition: when the voice note clearly responds to a pipeline event (e.g. no-show, booking, ghosting)
+    DIRECTION MATTERS. stage_transition triggers fire AT THE MOMENT the lead's stage changes:
+    - "from_stage: QUALIFYING, to_stage: GHOSTED" means the voice note fires when a previously-engaged lead has just gone silent (re-engagement / follow-up use case)
+    - "from_stage: GHOSTED, to_stage: ENGAGED" means the voice note fires when a previously-ghosted lead has just come back (welcome-back use case)
+    - "from_stage: BOOKED, to_stage: NO_SHOWED" means the voice note fires when a lead missed their call
+    Read the transcript carefully to determine what JUST HAPPENED to the lead:
+    * If the speaker is trying to wake up / re-engage a silent lead → to_stage is GHOSTED (the lead just went silent)
+    * If the speaker is welcoming someone back who returned → from_stage is GHOSTED (they were ghost, now they're back)
+    * If the speaker is following up on a missed call → to_stage is NO_SHOWED
+
+    EXAMPLES:
+    Transcript: "Hey just checking in, haven't heard from you in a bit, are you still interested?"
+    → Re-engagement attempt → { "type": "stage_transition", "from_stage": "QUALIFYING", "to_stage": "GHOSTED" }
+
+    Transcript: "Hey welcome back! Glad you reached out again, ready to pick up where we left off?"
+    → Welcome-back → { "type": "stage_transition", "from_stage": "GHOSTED", "to_stage": "ENGAGED" }
+
   - content_intent: when it responds to a specific objection or intent
+
   - conversational_move: when it's situational/contextual (social proof, motivation, rapport)
-  For conversational_move, required_pipeline_stages should be the stages where this voice note
-  is relevant. LeadStage values: NEW_LEAD, ENGAGED, QUALIFYING, QUALIFIED, CALL_PROPOSED,
+    For conversational_move, required_pipeline_stages should be the stages where this voice note
+    is relevant — these are the stages the lead is CURRENTLY IN when this voice note should fire.
+    Think about the lead's current state, not where they came from or where they're going.
+    suggested_moments should describe the conversational moment in plain English.
+
+  LeadStage values: NEW_LEAD, ENGAGED, QUALIFYING, QUALIFIED, CALL_PROPOSED,
   BOOKED, SHOWED, NO_SHOWED, RESCHEDULED, CLOSED_WON, CLOSED_LOST, UNQUALIFIED, GHOSTED, NURTURE
   Default cooldown: { "type": "messages", "value": 5 }
 

@@ -1070,6 +1070,50 @@ export async function scheduleAIReply(
     return;
   }
 
+  // ── Step 4a-pre: Script-bound runtime_match VN resolution ──────
+  // If the AI responded with a runtime_match voice note action (from a
+  // script [VN] slot set to runtime_match mode), resolve it via the
+  // embedding + LLM context matcher. Non-fatal: falls back to text.
+  if (
+    result.voiceNoteAction?.slot_id === 'runtime_match' ||
+    (result.format === 'voice_note' && !result.voiceNoteAction?.slot_id)
+  ) {
+    try {
+      const { findBestVoiceNoteMatch } = await import(
+        '@/lib/voice-note-context-matcher'
+      );
+      const matchResult = await findBestVoiceNoteMatch({
+        accountId,
+        conversationContext: messages
+          .slice(-5)
+          .map((m) => `${m.sender}: ${m.content}`)
+          .join('\n'),
+        leadStage: lead.stage,
+        lastLeadMessage: messages[messages.length - 1]?.content || '',
+        actionContent: result.reply
+      });
+      if (matchResult && matchResult.confidence > 0.7) {
+        result.shouldVoiceNote = true;
+        result.voiceNoteAction = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (result as any)._libraryVoiceNote = {
+          id: matchResult.voiceNoteId,
+          audioFileUrl: matchResult.audioFileUrl,
+          triggerType: 'runtime_match'
+        };
+        log(
+          'sched.step4apre.runtimeMatch',
+          `voiceNote=${matchResult.voiceNoteId} confidence=${matchResult.confidence.toFixed(2)}`
+        );
+      }
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Runtime match failed (non-fatal):',
+        err
+      );
+    }
+  }
+
   // ── Step 4a: Voice Note Library Trigger Evaluation ──────────────
   // Check if any library voice note should be sent based on structured
   // triggers (stage transition, content intent, conversational move).

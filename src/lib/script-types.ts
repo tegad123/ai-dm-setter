@@ -63,6 +63,7 @@ export interface ScriptAction {
   actionType: ScriptActionType;
   content: string | null;
   voiceNoteId: string | null;
+  bindingMode?: 'specific' | 'runtime_match';
   linkUrl: string | null;
   linkLabel: string | null;
   formId: string | null;

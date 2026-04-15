@@ -219,10 +219,12 @@ export async function POST(
           emotionalTone,
           triggerConditionsNatural,
           userLabel,
+          // Save LLM-generated triggers as suggestions for user approval (Sprint 4)
+          // triggers field stays null until user approves via the suggestion panel
           ...(triggers
             ? {
-                triggers: triggers as unknown as any[], // Prisma Json type
-                triggerDescription
+                autoSuggestedTriggers: triggers as unknown as any[],
+                suggestionStatus: 'pending'
               }
             : {})
         }

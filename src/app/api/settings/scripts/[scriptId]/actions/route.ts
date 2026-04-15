@@ -182,6 +182,9 @@ export async function PUT(
         }),
         ...(data.parserStatus !== undefined && {
           parserStatus: data.parserStatus
+        }),
+        ...(data.bindingMode !== undefined && {
+          bindingMode: data.bindingMode
         })
       },
       include: {

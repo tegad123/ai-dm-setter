@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ActionTypeSelector from './action-type-selector';
-import VoiceNotePickerInline from './voice-note-picker-inline';
+import BindingModeToggle from './binding-mode-toggle';
 import FormReferenceSelector from './form-reference-selector';
 import { updateAction, deleteAction } from '@/lib/api';
 import { SCRIPT_ACTION_TYPE_LABELS } from '@/lib/script-types';
@@ -134,9 +134,13 @@ export default function ActionCard({
                 {action.content}
               </p>
             )}
-            <VoiceNotePickerInline
-              value={action.voiceNoteId}
-              onChange={(id) => handleFieldSave('voiceNoteId', id)}
+            <BindingModeToggle
+              bindingMode={action.bindingMode || 'runtime_match'}
+              voiceNoteId={action.voiceNoteId}
+              onBindingModeChange={(mode) =>
+                handleFieldSave('bindingMode', mode)
+              }
+              onVoiceNoteChange={(id) => handleFieldSave('voiceNoteId', id)}
             />
           </div>
         );
