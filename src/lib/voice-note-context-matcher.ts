@@ -199,7 +199,7 @@ async function judgeCandidates(
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey });
     const msg = await client.messages.create({
-      model: 'claude-haiku-3-20240307',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 256,
       messages: [{ role: 'user', content: prompt }]
     });
