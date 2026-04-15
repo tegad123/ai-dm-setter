@@ -336,7 +336,7 @@ async function handleTextPaste(
     return NextResponse.json(
       {
         error:
-          'Could not detect any conversations in the pasted text. Make sure it includes timestamps and sender names.'
+          'Could not detect any conversations in the pasted text. Supported formats: Instagram PDF export (with timestamps), or labeled format ([YOU]/[LEAD] with ## CONVERSATION headers).'
       },
       { status: 422 }
     );

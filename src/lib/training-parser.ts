@@ -122,6 +122,34 @@ export function estimateTokens(text: string): TokenEstimate {
 export function detectConversationBoundaries(rawText: string): string[] {
   const lines = rawText.split('\n');
 
+  // ── Pattern 0: ## CONVERSATION headers ────────────────────
+  // Matches: "## CONVERSATION 1: Name" or "## CONVERSATION 2: Name (details)"
+  const convoHeaderTest = (line: string): boolean =>
+    /^#{1,3}\s*CONVERSATION\s+\d+/i.test(line.trim());
+
+  const hasConvoHeaders = lines.filter((l) => convoHeaderTest(l)).length >= 2;
+
+  if (hasConvoHeaders) {
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+
+    for (const line of lines) {
+      if (convoHeaderTest(line) && currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n'));
+        currentChunk = [line];
+      } else {
+        currentChunk.push(line);
+      }
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join('\n'));
+    }
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 1) return filtered;
+  }
+
   // ── Pattern 1: @username headers ──────────────────────────
   // Matches: @username, @user.name, @user_name (even with trailing content
   // or leading whitespace from PDF extraction).
@@ -316,6 +344,22 @@ function parseSingleConversation(text: string): ParsedConversation | null {
       leadIdentifier = dnMatch[1].trim();
       break;
     }
+    // Also check for "## CONVERSATION N: Name" headers
+    const convoMatch = lines[i]
+      ?.trim()
+      .match(/^#{1,3}\s*CONVERSATION\s+\d+[:\s]*(.+)?$/i);
+    if (convoMatch && convoMatch[1]) {
+      leadIdentifier = convoMatch[1].trim().replace(/\s*\(.*\)$/, '');
+      break;
+    }
+  }
+
+  // ── Check for [YOU]/[LEAD] labeled format (no timestamps) ──
+  const labeledLineRe = /^\[(YOU|LEAD|CLOSER|SETTER)\]:\s*(.+)/i;
+  const labeledLines = lines.filter((l) => labeledLineRe.test(l.trim()));
+
+  if (labeledLines.length >= 2) {
+    return parseLabeledConversation(lines, leadIdentifier);
   }
 
   // Find all timestamp line indices
@@ -414,6 +458,90 @@ function parseSingleConversation(text: string): ParsedConversation | null {
     contentHash: computeContentHash(messages),
     startedAt: timestamps.length > 0 ? timestamps[0] : null,
     endedAt: timestamps.length > 0 ? timestamps[timestamps.length - 1] : null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Labeled conversation parser ([YOU]/[LEAD] format)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses conversations in [YOU]/[LEAD] labeled format (no timestamps).
+ * Each line is: [YOU]: message text  or  [LEAD]: message text
+ * Also handles [CLOSER], [SETTER] as closer labels.
+ */
+function parseLabeledConversation(
+  lines: string[],
+  leadIdentifier: string
+): ParsedConversation | null {
+  const labeledLineRe = /^\[(YOU|LEAD|CLOSER|SETTER)\]:\s*(.*)/i;
+  const messages: ParsedMessage[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const match = trimmed.match(labeledLineRe);
+    if (!match) continue;
+
+    const label = match[1].toUpperCase();
+    const msgText = match[2].trim();
+
+    // Skip meta-annotations like [LEFT ON READ], [OPENING MESSAGE], [LEAD CONTACT INFO]
+    if (
+      /^\[.*\]$/.test(msgText) ||
+      /LEFT ON READ|OPENING MESSAGE|LEAD CONTACT INFO|SETTER LEFT/i.test(
+        msgText
+      )
+    ) {
+      continue;
+    }
+
+    if (!msgText) continue;
+
+    const isCloser =
+      label === 'YOU' || label === 'CLOSER' || label === 'SETTER';
+
+    let messageType: ParsedMessage['messageType'] = 'TEXT';
+    if (/voice\s*(message|note)|click for audio|audio call/i.test(msgText)) {
+      messageType = 'VOICE_NOTE';
+    } else if (/liked a message|reacted.*to your message/i.test(msgText)) {
+      messageType = 'REACTION';
+    } else if (
+      /missed (video|voice) call|call started|shared a (post|reel|story)/i.test(
+        msgText
+      )
+    ) {
+      messageType = 'SYSTEM';
+    } else if (/^https?:\/\/\S+$/i.test(msgText)) {
+      messageType = 'URL_DROP';
+    }
+
+    messages.push({
+      sender: isCloser ? 'CLOSER' : 'LEAD',
+      text: msgText,
+      timestamp: null,
+      messageType,
+      orderIndex: messages.length
+    });
+  }
+
+  if (messages.length < 2) return null;
+
+  const closerMsgs = messages.filter((m) => m.sender === 'CLOSER');
+  const leadMsgs = messages.filter((m) => m.sender === 'LEAD');
+  const voiceNotes = messages.filter((m) => m.messageType === 'VOICE_NOTE');
+
+  return {
+    leadIdentifier,
+    messages,
+    messageCount: messages.length,
+    closerMessageCount: closerMsgs.length,
+    leadMessageCount: leadMsgs.length,
+    voiceNoteCount: voiceNotes.length,
+    contentHash: computeContentHash(messages),
+    startedAt: null,
+    endedAt: null
   };
 }
 
