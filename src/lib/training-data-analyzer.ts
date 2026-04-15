@@ -116,20 +116,53 @@ async function callAnalyzerLLM(
     model: ANALYZER_MODEL,
     max_tokens: 4096,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userContent }]
+    messages: [
+      {
+        role: 'user',
+        content:
+          userContent +
+          '\n\nRespond with valid JSON only. No markdown fences, no explanation.'
+      }
+    ]
   });
 
   return msg.content[0].type === 'text' ? msg.content[0].text : '';
 }
 
 function parseJSON(text: string): Record<string, unknown> {
+  // 1. Direct parse
   try {
     return JSON.parse(text);
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('Failed to parse analyzer LLM response as JSON');
+    // continue to extraction
   }
+
+  // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {
+      // continue
+    }
+  }
+
+  // 3. Extract outermost JSON object
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      return JSON.parse(objMatch[0]);
+    } catch {
+      // continue
+    }
+  }
+
+  // 4. Log and throw
+  console.error(
+    '[training-analyzer] Failed to parse LLM response as JSON. First 500 chars:',
+    text.slice(0, 500)
+  );
+  throw new Error('Failed to parse analyzer LLM response as JSON');
 }
 
 // ---------------------------------------------------------------------------
