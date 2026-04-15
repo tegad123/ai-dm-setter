@@ -74,20 +74,26 @@ export default function VoiceNotePickerInline({
 
   return (
     <div className='space-y-2'>
-      <Select value={value || ''} onValueChange={(v) => onChange(v || null)}>
+      <Select
+        value={value || '__none__'}
+        onValueChange={(v) => onChange(v === '__none__' ? null : v)}
+      >
         <SelectTrigger className='w-full'>
           <SelectValue placeholder='Select a voice note...' />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value=''>None (user fills later)</SelectItem>
-          {options.map((vn) => (
-            <SelectItem key={vn.id} value={vn.id}>
-              <span className='flex items-center gap-2'>
-                <Mic className='h-3 w-3' />
-                {vn.userLabel || 'Untitled'} ({Math.round(vn.durationSeconds)}s)
-              </span>
-            </SelectItem>
-          ))}
+          <SelectItem value='__none__'>None (user fills later)</SelectItem>
+          {options
+            .filter((vn) => vn.id)
+            .map((vn) => (
+              <SelectItem key={vn.id} value={vn.id}>
+                <span className='flex items-center gap-2'>
+                  <Mic className='h-3 w-3' />
+                  {vn.userLabel || 'Untitled'} ({Math.round(vn.durationSeconds)}
+                  s)
+                </span>
+              </SelectItem>
+            ))}
         </SelectContent>
       </Select>
       {selected && (

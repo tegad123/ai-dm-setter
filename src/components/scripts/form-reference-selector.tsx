@@ -21,16 +21,22 @@ export default function FormReferenceSelector({
   onChange
 }: FormReferenceSelectorProps) {
   return (
-    <Select value={value || ''} onValueChange={(v) => onChange(v || null)}>
+    <Select
+      value={value || '__none__'}
+      onValueChange={(v) => onChange(v === '__none__' ? null : v)}
+    >
       <SelectTrigger className='w-full'>
         <SelectValue placeholder='Select a form...' />
       </SelectTrigger>
       <SelectContent>
-        {forms.map((form) => (
-          <SelectItem key={form.id} value={form.id}>
-            {form.name} ({form.fields.length} fields)
-          </SelectItem>
-        ))}
+        <SelectItem value='__none__'>None</SelectItem>
+        {forms
+          .filter((form) => form.id)
+          .map((form) => (
+            <SelectItem key={form.id} value={form.id}>
+              {form.name} ({form.fields.length} fields)
+            </SelectItem>
+          ))}
       </SelectContent>
     </Select>
   );
