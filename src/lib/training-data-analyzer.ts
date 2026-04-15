@@ -68,27 +68,30 @@ export interface CostEstimate {
 // Provider Resolution (mirrors script-parser.ts)
 // ---------------------------------------------------------------------------
 
+const ANALYZER_MODEL = 'claude-3-haiku-20240307';
+
 async function resolveProvider(accountId: string): Promise<{
   provider: 'anthropic';
   apiKey: string;
   model: string;
 }> {
-  // Prefer Anthropic for analyzer (Haiku is cost-efficient)
-  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
-  if (anthropicCreds?.apiKey) {
-    return {
-      provider: 'anthropic',
-      apiKey: anthropicCreds.apiKey as string,
-      model: 'claude-haiku-4-5-20251001'
-    };
-  }
-
+  // Prefer env key for analyzer — it's a platform cost, not user's key
   const envKey = process.env.ANTHROPIC_API_KEY;
   if (envKey) {
     return {
       provider: 'anthropic',
       apiKey: envKey,
-      model: 'claude-haiku-4-5-20251001'
+      model: ANALYZER_MODEL
+    };
+  }
+
+  // Fallback to per-account Anthropic credentials
+  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
+  if (anthropicCreds?.apiKey) {
+    return {
+      provider: 'anthropic',
+      apiKey: anthropicCreds.apiKey as string,
+      model: ANALYZER_MODEL
     };
   }
 
@@ -110,7 +113,7 @@ async function callAnalyzerLLM(
   const client = new Anthropic({ apiKey });
 
   const msg = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: ANALYZER_MODEL,
     max_tokens: 4096,
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }]
