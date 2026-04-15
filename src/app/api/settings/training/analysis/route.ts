@@ -44,7 +44,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Run full analysis
+    console.log(
+      '[training/analysis] Starting analysis for account:',
+      auth.accountId
+    );
+    const startTime = Date.now();
     const result = await runTrainingAnalysis(auth.accountId);
+    console.log(
+      `[training/analysis] Analysis completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s, score: ${result.overallScore}`
+    );
 
     // Save to database
     const analysis = await prisma.trainingDataAnalysis.create({

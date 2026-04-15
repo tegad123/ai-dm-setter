@@ -111,6 +111,36 @@ export default function TrainingReadinessCard() {
     );
   }
 
+  // Running analysis — show progress
+  if (running) {
+    return (
+      <Card>
+        <CardHeader className='pb-2'>
+          <CardTitle className='flex items-center gap-2 text-base'>
+            <BarChart3 className='h-4 w-4' />
+            Training Data Readiness
+          </CardTitle>
+        </CardHeader>
+        <CardContent className='space-y-3'>
+          <div className='flex items-center gap-3 py-4'>
+            <Loader2 className='h-5 w-5 animate-spin text-blue-500' />
+            <div>
+              <p className='text-sm font-medium'>
+                Analyzing your training data...
+              </p>
+              <p className='text-muted-foreground text-xs'>
+                This typically takes 30-90 seconds. Checking quantity, voice
+                style, lead types, stage coverage, outcomes, and objection
+                handling.
+              </p>
+            </div>
+          </div>
+          <Progress value={undefined} className='h-2 animate-pulse' />
+        </CardContent>
+      </Card>
+    );
+  }
+
   // Never run — show CTA
   if (!analysis) {
     return (
