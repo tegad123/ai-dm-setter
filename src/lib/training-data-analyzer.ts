@@ -112,21 +112,38 @@ async function callAnalyzerLLM(
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
 
-  const msg = await client.messages.create({
-    model: ANALYZER_MODEL,
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content:
-          userContent +
-          '\n\nRespond with valid JSON only. No markdown fences, no explanation.'
-      }
-    ]
-  });
+  const maxRetries = 3;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const msg = await client.messages.create({
+        model: ANALYZER_MODEL,
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content:
+              userContent +
+              '\n\nRespond with valid JSON only. No markdown fences, no explanation.'
+          }
+        ]
+      });
 
-  return msg.content[0].type === 'text' ? msg.content[0].text : '';
+      return msg.content[0].type === 'text' ? msg.content[0].text : '';
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 429 && attempt < maxRetries - 1) {
+        const waitMs = (attempt + 1) * 15_000; // 15s, 30s
+        console.log(
+          `[training-analyzer] Rate limited, waiting ${waitMs / 1000}s before retry ${attempt + 2}/${maxRetries}`
+        );
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('callAnalyzerLLM: exhausted retries');
 }
 
 function parseJSON(text: string): Record<string, unknown> {
@@ -770,12 +787,22 @@ export async function runTrainingAnalysis(
   // Cat 2: Voice/Style (1 LLM call)
   const voiceStyleResult = await analyzeVoiceStyle(conversations, apiKey);
 
-  // Cat 3, 4, 6: Full scan with chunking
-  const [leadTypeResult, stageResult, objectionResult] = await Promise.all([
-    analyzeLeadTypeCoverage(conversations, totalMessages, apiKey),
-    analyzeStageCoverage(conversations, totalMessages, apiKey),
-    analyzeObjectionCoverage(conversations, totalMessages, apiKey)
-  ]);
+  // Cat 3, 4, 6: Full scan with chunking (sequential to avoid rate limits)
+  const leadTypeResult = await analyzeLeadTypeCoverage(
+    conversations,
+    totalMessages,
+    apiKey
+  );
+  const stageResult = await analyzeStageCoverage(
+    conversations,
+    totalMessages,
+    apiKey
+  );
+  const objectionResult = await analyzeObjectionCoverage(
+    conversations,
+    totalMessages,
+    apiKey
+  );
 
   // Collect all category results
   const categoryScores = {
