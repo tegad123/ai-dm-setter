@@ -79,7 +79,7 @@ async function resolveProvider(accountId: string): Promise<{
     return {
       provider: 'anthropic',
       apiKey: anthropicCreds.apiKey as string,
-      model: 'claude-3-haiku-20240307'
+      model: 'claude-haiku-4-20250414'
     };
   }
 
@@ -88,7 +88,7 @@ async function resolveProvider(accountId: string): Promise<{
     return {
       provider: 'anthropic',
       apiKey: envKey,
-      model: 'claude-3-haiku-20240307'
+      model: 'claude-haiku-4-20250414'
     };
   }
 
@@ -110,7 +110,7 @@ async function callAnalyzerLLM(
   const client = new Anthropic({ apiKey });
 
   const msg = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: 'claude-haiku-4-20250414',
     max_tokens: 4096,
     system: systemPrompt,
     messages: [{ role: 'user', content: userContent }]
