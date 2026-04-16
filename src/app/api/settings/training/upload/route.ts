@@ -387,6 +387,7 @@ async function handleTextPaste(
         accountId: auth.accountId,
         personaId: persona.id,
         leadIdentifier: conv.leadIdentifier,
+        outcomeLabel: (conv.outcomeLabel || 'UNKNOWN') as any,
         contentHash: conv.contentHash,
         messageCount: conv.messageCount,
         closerMessageCount: conv.closerMessageCount,

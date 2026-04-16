@@ -14,6 +14,7 @@ export interface ParsedMessage {
 
 export interface ParsedConversation {
   leadIdentifier: string;
+  outcomeLabel: string; // TrainingOutcome enum: CLOSED_WIN, GHOSTED, OBJECTION_LOST, HARD_NO, BOOKED_NO_SHOW, UNKNOWN
   messages: ParsedMessage[];
   messageCount: number;
   closerMessageCount: number;
@@ -22,6 +23,67 @@ export interface ParsedConversation {
   contentHash: string;
   startedAt: Date | null;
   endedAt: Date | null;
+}
+
+// ---------------------------------------------------------------------------
+// Outcome extraction: maps raw text from Outcome: lines and [Category]
+// headers to the TrainingOutcome enum.
+// ---------------------------------------------------------------------------
+
+const OUTCOME_MAP: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /ghost/i, label: 'GHOSTED' },
+  { pattern: /hard\s*no/i, label: 'HARD_NO' },
+  { pattern: /explicit\s*reject/i, label: 'HARD_NO' },
+  { pattern: /objection\s*lost/i, label: 'OBJECTION_LOST' },
+  { pattern: /declined\s*after\s*objection/i, label: 'OBJECTION_LOST' },
+  { pattern: /no[\s-]*show/i, label: 'BOOKED_NO_SHOW' },
+  { pattern: /missed\s*call/i, label: 'BOOKED_NO_SHOW' },
+  { pattern: /closed?\s*w[oi]n/i, label: 'CLOSED_WIN' },
+  { pattern: /\bwon\b/i, label: 'CLOSED_WIN' },
+  { pattern: /\bbooked\b/i, label: 'CLOSED_WIN' },
+  { pattern: /\bsale\b/i, label: 'CLOSED_WIN' }
+];
+
+/**
+ * Map free-text outcome descriptions to TrainingOutcome enum values.
+ * Input examples:
+ *   "Ghosted Conversations"
+ *   "Hard No (Explicit Rejection)"
+ *   "Objection Lost (Declined After Objections)"
+ *   "Booked No-Show (Missed Call)"
+ */
+function mapOutcomeText(text: string): string {
+  for (const { pattern, label } of OUTCOME_MAP) {
+    if (pattern.test(text)) return label;
+  }
+  return 'UNKNOWN';
+}
+
+/**
+ * Extract outcome label from the first few lines of a conversation chunk.
+ * Checks two formats:
+ *   1. "Outcome: Ghosted Conversations | N messages"
+ *   2. "[Hard No (Explicit Rejection)] Name"
+ */
+function extractOutcomeFromHeader(lines: string[]): string {
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    const trimmed = lines[i]?.trim() || '';
+
+    // Format 1: Outcome: Category | N messages
+    const outcomeMatch = trimmed.match(
+      /^Outcome:\s*(.+?)\s*\|\s*\d+\s+messages?/i
+    );
+    if (outcomeMatch) {
+      return mapOutcomeText(outcomeMatch[1]);
+    }
+
+    // Format 2: [Category (Description)] Name
+    const categoryMatch = trimmed.match(/^\[(.+?)\]\s+\S/);
+    if (categoryMatch && !/^\[(YOU|LEAD|CLOSER|SETTER)\]/i.test(trimmed)) {
+      return mapOutcomeText(categoryMatch[1]);
+    }
+  }
+  return 'UNKNOWN';
 }
 
 export interface PreflightResult {
@@ -602,6 +664,7 @@ function parseTimestampFormatB(
 
   return {
     leadIdentifier,
+    outcomeLabel: 'UNKNOWN', // Format B — outcome set by caller from header
     messages,
     messageCount: messages.length,
     closerMessageCount: closerMsgs.length,
@@ -620,8 +683,10 @@ function parseTimestampFormatB(
 function parseSingleConversation(text: string): ParsedConversation | null {
   const lines = text.split('\n');
 
-  // Extract lead identifier from header
+  // Extract lead identifier and outcome label from header
   let leadIdentifier = 'Unknown';
+  const outcomeLabel = extractOutcomeFromHeader(lines);
+
   for (let i = 0; i < Math.min(5, lines.length); i++) {
     const atMatch = lines[i]?.trim().match(/^@([\w._]+)/);
     if (atMatch) {
@@ -669,7 +734,9 @@ function parseSingleConversation(text: string): ParsedConversation | null {
   const labeledLines = lines.filter((l) => labeledLineRe.test(l.trim()));
 
   if (labeledLines.length >= 2) {
-    return parseLabeledConversation(lines, leadIdentifier);
+    const labeled = parseLabeledConversation(lines, leadIdentifier);
+    if (labeled) labeled.outcomeLabel = outcomeLabel;
+    return labeled;
   }
 
   // Find all timestamp line indices
@@ -695,7 +762,10 @@ function parseSingleConversation(text: string): ParsedConversation | null {
   if (!senderBeforeTs) {
     // Likely Format B — try it first
     const result = parseTimestampFormatB(lines, leadIdentifier);
-    if (result && result.messages.length >= 2) return result;
+    if (result && result.messages.length >= 2) {
+      result.outcomeLabel = outcomeLabel;
+      return result;
+    }
   }
 
   // ── Format A fallback (sender → timestamp → text) ────────────
@@ -750,6 +820,7 @@ function parseSingleConversation(text: string): ParsedConversation | null {
 
   return {
     leadIdentifier,
+    outcomeLabel,
     messages,
     messageCount: messages.length,
     closerMessageCount: closerMsgs.length,
@@ -861,6 +932,7 @@ function parseLabeledConversation(
 
   return {
     leadIdentifier,
+    outcomeLabel: 'UNKNOWN', // Labeled format — outcome set by caller from header
     messages,
     messageCount: messages.length,
     closerMessageCount: closerMsgs.length,
@@ -1057,6 +1129,7 @@ export function hydrateConversations(
 
     return {
       leadIdentifier: raw.leadIdentifier || 'Unknown',
+      outcomeLabel: 'UNKNOWN', // LLM-hydrated conversations — outcome set separately
       messages,
       messageCount: messages.length,
       closerMessageCount: closerMessages.length,

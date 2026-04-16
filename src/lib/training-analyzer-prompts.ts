@@ -2,10 +2,96 @@
 // training-analyzer-prompts.ts (Sprint 4)
 // ---------------------------------------------------------------------------
 // Production prompt set for the Training Data Adequacy Analyzer.
-// 1 master orchestrator + 6 category-specific prompts + 1 synthesis prompt.
+// 1 master orchestrator + 6 category-specific prompts + 1 synthesis prompt
+// + 1 metadata classification prompt.
 //
-// THESE PROMPTS ARE THE CONTRACT. They are embedded VERBATIM from the
-// user-provided prompt set. Do NOT summarize, shorten, or rewrite.
+// EVERY LLM-facing prompt ends with a strict JSON schema contract.
+// Haiku will drift if the schema is not locked.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Allowed enum values (shared across prompts and validation)
+// ---------------------------------------------------------------------------
+
+export const LEAD_TYPE_ENUM = [
+  'beginner',
+  'intermediate',
+  'experienced_no_results',
+  'experienced_with_results',
+  'skeptical',
+  'hot',
+  'cold',
+  'researcher',
+  'price_sensitive',
+  'time_sensitive',
+  'other'
+] as const;
+
+export const STAGE_ENUM = [
+  'intro',
+  'qualification',
+  'education',
+  'social_proof',
+  'objection_handling',
+  'call_proposal',
+  'booking',
+  'post_booking_confirmation',
+  'call_reminders',
+  'follow_up'
+] as const;
+
+export const OBJECTION_ENUM = [
+  'price_objection',
+  'time_concern',
+  'skepticism_or_scam_concern',
+  'past_failure',
+  'complexity_concern',
+  'need_to_think',
+  'not_interested',
+  'ready_to_buy',
+  'budget_question',
+  'experience_question',
+  'timeline_question'
+] as const;
+
+// ---------------------------------------------------------------------------
+// JSON schema footer (appended to every LLM-classified category prompt)
+// ---------------------------------------------------------------------------
+
+function strictSchemaFooter(distributionEnumValues: readonly string[]): string {
+  const enumList = distributionEnumValues.map((v) => `"${v}"`).join(', ');
+  const exampleDist = distributionEnumValues
+    .slice(0, 3)
+    .map((v) => `    "${v}": 0`)
+    .join(',\n');
+
+  return `
+
+You MUST respond with ONLY valid JSON in this EXACT schema. No other text. No markdown. No commentary. Just JSON.
+
+Required schema:
+{
+  "score": <integer 0-100>,
+  "distribution": {
+${exampleDist},
+    ...
+  },
+  "missing_categories": [<enum values with zero count>],
+  "analysis": "<1-2 sentence summary>",
+  "recommendations": [
+    "<specific actionable recommendation>",
+    ...
+  ]
+}
+
+Allowed enum values for distribution keys (use EXACT strings):
+[${enumList}]
+
+Every allowed enum MUST appear as a key in distribution, even if count is 0. Do not skip categories. Do not rename them. Do not add new categories not in the allowed list.`;
+}
+
+// ---------------------------------------------------------------------------
+// Master Orchestrator
 // ---------------------------------------------------------------------------
 
 export const MASTER_ORCHESTRATOR_PROMPT = `You are the Training Data Adequacy Analyzer for an AI sales DM tool. Your job is to read a user's uploaded sales conversation transcripts (closed conversations from their actual past lead interactions) and determine whether they have enough — and the right kind of — training data to produce a high-confidence AI that sounds like them and handles real lead conversations well.
@@ -46,6 +132,10 @@ OUTPUT FORMAT: JSON only matching this schema:
   "metrics": { ... raw counts and distributions ... }
 }`;
 
+// ---------------------------------------------------------------------------
+// Category 1: Quantity (pure DB — no LLM, prompt kept for reference)
+// ---------------------------------------------------------------------------
+
 export const QUANTITY_ANALYSIS_PROMPT = `You are evaluating whether the user has enough raw training data volume.
 
 Inputs you receive:
@@ -70,19 +160,18 @@ Also check closer message count:
 
 Calculate the score using the more restrictive of the two checks (conversation count or closer message count).
 
-Return JSON:
+You MUST respond with ONLY valid JSON in this EXACT schema:
 {
-  "score": number,
-  "metrics": {
-    "total_conversations": number,
-    "total_closer_messages": number,
-    "total_lead_messages": number,
-    "avg_conversation_length": number
-  },
-  "gaps": [
-    { "severity": "high"|"medium"|"low", "description": "...", "recommendation": "..." }
-  ]
+  "score": <integer 0-100>,
+  "distribution": {},
+  "missing_categories": [],
+  "analysis": "<1-2 sentence summary>",
+  "recommendations": ["<specific actionable recommendation>"]
 }`;
+
+// ---------------------------------------------------------------------------
+// Category 2: Voice/Style (1 LLM call on 20-message sample)
+// ---------------------------------------------------------------------------
 
 export const VOICE_STYLE_ANALYSIS_PROMPT = `You are evaluating whether the user's training data has enough material to teach the AI their voice, tone, cadence, and style.
 
@@ -99,23 +188,31 @@ Analyze the closer messages for:
 4. Stylistic markers: presence of emoji, slang, abbreviations, characteristic phrases, signature greetings
 
 Scoring rules:
-- closer_message_count < 200 → score 0-30, severity: high, message: "Insufficient sample size to learn your voice. The AI will fall back to generic responses. Need at least 500 closer messages."
+- closer_message_count < 200 → score 0-30, severity: high
 - 200-499 closer messages → score 30-60, severity: medium
 - 500-999 closer messages with reasonable diversity → score 60-85, severity: low
 - 1000+ closer messages with strong diversity → score 85-100
 
 Penalties:
-- If vocabulary diversity is low (less than 15 unique meaningful words per 100 messages) → reduce score by 15. Message: "Your training data uses limited vocabulary. The AI's responses may feel repetitive."
-- If message lengths show no variation (all messages within 20% of average length) → reduce score by 10. Message: "Your training messages are uniformly sized. Real conversations have a mix of quick replies and longer thoughts. Verify your training data isn't filtered or truncated."
-- If voice inconsistency is detected (e.g., conversations from multiple different closers mixed together) → reduce score by 25. Message: "Multiple distinct voices detected in your training data. The AI will not have a clear voice to emulate. Either filter to one closer's messages, or accept that the AI will sound like an average of your team."
+- If vocabulary diversity is low → reduce score by 15
+- If message lengths show no variation → reduce score by 10
+- If voice inconsistency is detected → reduce score by 25
 
-Provide concrete examples in your gaps:
-- Quote a representative message from the data when describing the user's voice
-- Specifically name what's missing if anything (e.g., "I see no examples of you handling a price objection — your voice in those moments will be guessed at")
+You MUST respond with ONLY valid JSON in this EXACT schema:
+{
+  "score": <integer 0-100>,
+  "distribution": {},
+  "missing_categories": [],
+  "analysis": "<1-2 sentence summary>",
+  "recommendations": ["<specific actionable recommendation>"]
+}`;
 
-Return JSON in same format as Category 1.`;
+// ---------------------------------------------------------------------------
+// Category 3: Lead Type Coverage (full scan, chunked + LLM)
+// ---------------------------------------------------------------------------
 
-export const LEAD_TYPE_ANALYSIS_PROMPT = `You are evaluating whether the user's training data covers a diverse range of lead types.
+export const LEAD_TYPE_ANALYSIS_PROMPT =
+  `You are evaluating whether the user's training data covers a diverse range of lead types.
 
 Inputs you receive:
 - All conversation transcripts (full conversations, not just closer messages)
@@ -140,26 +237,21 @@ For each conversation:
 3. Assign ONE primary lead_type
 4. Note any secondary characteristics
 
-Then analyze distribution:
-- Total count per lead_type
-- Percentage distribution
-- Which types are absent or underrepresented
-
 Scoring rules:
 - Strong coverage = at least 3 conversations across at least 5 different lead types → score 80-100
 - Moderate coverage = 3+ conversations across 3-4 types, OR 1-2 conversations spread across many types → score 50-80
-- Weak coverage = heavy skew toward 1-2 types (more than 70% of conversations are one type) → score 20-50, severity: high
-- Critical = only 1 lead type represented → score 0-20, severity: high
+- Weak coverage = heavy skew toward 1-2 types (more than 70% of conversations are one type) → score 20-50
+- Critical = only 1 lead type represented → score 0-20
 
-Recommendations should specifically name the missing or underrepresented types:
-- "You have 22 conversations with beginners but 0 with experienced traders who have prior results. The AI will sound condescending or off-base when an experienced lead reaches out. Upload at least 5 conversations with experienced_with_results leads."
-- "You have no skeptical lead conversations. When a lead questions your legitimacy, the AI will struggle to handle it. Either upload conversations with skeptical leads, or record voice notes specifically for handling skepticism."
+Recommendations should specifically name the missing or underrepresented types.` +
+  strictSchemaFooter(LEAD_TYPE_ENUM);
 
-Output should include the full distribution in metrics and at least one specific recommendation per significant gap.
+// ---------------------------------------------------------------------------
+// Category 4: Stage Coverage (full scan, chunked + LLM)
+// ---------------------------------------------------------------------------
 
-Return JSON in same format as Category 1, plus include lead_type_distribution in metrics.`;
-
-export const STAGE_COVERAGE_ANALYSIS_PROMPT = `You are evaluating whether the user's training data covers all stages of the sales conversation lifecycle.
+export const STAGE_COVERAGE_ANALYSIS_PROMPT =
+  `You are evaluating whether the user's training data covers all stages of the sales conversation lifecycle.
 
 Inputs you receive:
 - All conversation transcripts
@@ -177,90 +269,42 @@ Pipeline stage taxonomy (classify each MESSAGE into ONE stage):
 - "call_reminders" — pre-call check-ins, day-of reminders
 - "follow_up" — re-engagement after silence
 
-For each message:
-1. Determine which stage the conversation is in at that point
-2. Tag the message accordingly
+For each message, determine which stage the conversation is in and tag accordingly.
 
-Then analyze stage distribution across all training data:
-- Total messages per stage
-- Conversations that include each stage
-- Stages with thin coverage (less than 30 messages OR appearing in less than 20% of conversations)
+Distribution should contain the COUNT of messages per stage (not conversations).
 
 Scoring rules:
 - Strong = all 10 stages represented with 30+ messages each → score 90-100
 - Good = 7-9 stages represented with adequate coverage → score 70-90
 - Moderate = 5-6 stages represented, some thin → score 50-70
-- Weak = 3-4 stages represented, several missing → score 25-50, severity: high
-- Critical = only 1-2 stages represented → score 0-25, severity: high
+- Weak = 3-4 stages represented, several missing → score 25-50
+- Critical = only 1-2 stages represented → score 0-25
 
-Critical absences to flag with high severity:
-- objection_handling missing → "Your AI has no examples of how you handle objections. When leads raise concerns, the AI will improvise. This is high-risk for your conversion rate."
-- call_proposal missing → "Your AI has no examples of how you propose calls. The most important moment of the funnel will be guessed at."
-- booking missing → "Your AI cannot learn your booking style. Coordination will feel awkward."
-- post_booking_confirmation missing → "Your AI doesn't know what to do after a lead books. Confirmation, homework, and pre-call moments will be weak."
+Critical absences to flag: objection_handling, call_proposal, booking, post_booking_confirmation.` +
+  strictSchemaFooter(STAGE_ENUM);
 
-Recommendations should name specific stages and ask for conversations that include those stages:
-- "Upload 5-10 conversations that include the post-booking phase (after the lead books a call). Your current data has only 8 messages of post-booking conversation across all uploads."
-
-Return JSON in same format as Category 1, plus stage_distribution in metrics.`;
+// ---------------------------------------------------------------------------
+// Category 5: Outcome Coverage (pure DB — no LLM, prompt kept for reference)
+// ---------------------------------------------------------------------------
 
 export const OUTCOME_COVERAGE_ANALYSIS_PROMPT = `You are evaluating whether the user's training data includes a healthy mix of outcomes (wins, losses, ghosts) — not just successful closes.
 
-Inputs you receive:
-- All conversation transcripts
-- For each conversation, you classify the outcome
+This category is computed from stored outcome labels, not from LLM classification.
 
-Outcome taxonomy (classify each conversation as ONE outcome):
-- "closed_won" — lead booked the call AND showed up AND converted (or last message indicates positive intent to buy)
-- "closed_lost" — lead explicitly declined or said no after sales process
-- "ghosted_pre_booking" — lead stopped responding before booking a call
-- "ghosted_post_booking" — lead booked but stopped responding before the call
-- "no_show" — lead booked but didn't attend the call
-- "rescheduled_no_close" — lead rescheduled but never re-engaged or closed
-- "ongoing_in_pipeline" — conversation appears unfinished (still in active dialogue)
-- "unclear" — outcome cannot be determined from the transcript
+Return JSON in same format as other categories, with outcome_distribution in the distribution field.`;
 
-For each conversation:
-1. Read to the end
-2. Look for signals of outcome (last message tone, explicit statements, conversation length, time gaps)
-3. Assign ONE outcome
+// ---------------------------------------------------------------------------
+// Category 6: Objection Coverage (full scan, chunked + LLM)
+// ---------------------------------------------------------------------------
 
-Then analyze distribution:
-- Percentage breakdown of outcomes
-- Win rate (closed_won / total)
-- Loss visibility (closed_lost + ghosted_pre_booking + ghosted_post_booking + no_show as % of total)
-
-Scoring rules:
-- Healthy mix = 30-70% wins, with at least 15% losses/ghosts/no-shows represented → score 80-100
-- Win-heavy but with some losses = 70-90% wins, 10-20% other outcomes → score 60-80
-- Win-only with no failure data = 95-100% wins, no losses → score 20-40, severity: HIGH
-- Loss-only or ghost-only = unusual but flag as biased → score 30-50
-
-CRITICAL FAILURE MODE TO FLAG:
-If 100% of conversations are closed_won, this is the most important issue in the entire analysis. The user will think they have great training data because all their conversations look successful. They don't. They have survivorship bias. Their AI will repeat the patterns that "worked" without knowing what didn't work.
-
-Specific recommendation for win-only datasets:
-"All [N] of your conversations are closed wins. This is the single biggest problem in your training data. The AI will learn the patterns of successful closes but will not learn:
-- What makes a lead ghost (so it can avoid those triggers)
-- What objections you couldn't overcome (so it can sidestep them)
-- What lead types tend not to convert (so it can recognize them early)
-
-Upload at least:
-- 5-10 ghosted conversations (leads who stopped responding)
-- 3-5 hard-no conversations (leads who explicitly declined)
-- 2-3 no-show conversations (leads who booked but didn't show)
-
-These 'failure' conversations are MORE valuable for AI training than another 10 wins. The AI needs contrast to learn boundaries."
-
-Return JSON in same format as Category 1, plus outcome_distribution in metrics. This category should weight loss/ghost data heavily — a 100% win dataset should never score above 40 regardless of volume.`;
-
-export const OBJECTION_COVERAGE_ANALYSIS_PROMPT = `You are evaluating whether the user's training data covers the full range of objections leads typically raise.
+export const OBJECTION_COVERAGE_ANALYSIS_PROMPT =
+  `You are evaluating whether the user's training data covers the full range of objections leads typically raise.
 
 Inputs you receive:
 - All conversation transcripts
 - The 11 predefined content_intent objection types from the system
 
-Objection taxonomy (the 11 intents from Sprint 2):
+Objection taxonomy (the 11 intents):
 - "price_objection" — lead expresses concern about cost or affordability
 - "time_concern" — lead worries about time commitment
 - "skepticism_or_scam_concern" — lead questions legitimacy or trust
@@ -274,60 +318,83 @@ Objection taxonomy (the 11 intents from Sprint 2):
 - "timeline_question" — lead asks how long until results
 
 For each message in the training data:
-1. Scan for objection patterns
+1. Scan lead messages for objection patterns
 2. Classify which intent (if any) the message represents
-3. Tag the closer's response that follows that objection
+3. Count occurrences per type
 
-Then analyze:
-- Count of each objection type in lead messages
-- Count of closer responses to each objection type (how the user has handled each one)
-- Which objection types have less than 3 examples (weak coverage)
-- Which objection types have ZERO examples (critical gap)
+Distribution should contain the COUNT of lead messages per objection type.
 
 Scoring rules:
 - Strong = at least 3 examples of 8+ objection types → score 85-100
 - Good = at least 3 examples of 5-7 objection types → score 65-85
 - Moderate = 3+ examples of 3-4 types → score 40-65
-- Weak = most objection types missing → score 15-40, severity: high
+- Weak = most objection types missing → score 15-40
 - Critical = no objection examples in training data → score 0-15
 
-Recommendations should be specific PER objection type:
-- "Your training data covers price objections (15 examples) and time concerns (8 examples) well. But you have 0 examples of skepticism objections, 1 example of past-failure objections, and 0 examples of complexity concerns."
-- "For each missing objection type, you have two options:
-  Option A: Upload conversations that include those objections (preferred — teaches the AI your handling style)
-  Option B: Record voice notes specifically for those objections in the Voice Notes Library (faster — gives the AI a specific response to fire)"
+Recommendations should be specific PER objection type.` +
+  strictSchemaFooter(OBJECTION_ENUM);
 
-Output the full objection_distribution in metrics so the user can see the breakdown clearly.
-
-Return JSON in same format as Category 1, plus objection_distribution in metrics.`;
+// ---------------------------------------------------------------------------
+// Synthesis
+// ---------------------------------------------------------------------------
 
 export const SYNTHESIS_PROMPT = `After running all 6 category analyses, you receive their results and must:
 
-1. Calculate the overall readiness score using these weights:
-   - Quantity: 15%
-   - Voice/Style: 20%
-   - Lead Type Coverage: 15%
-   - Stage Coverage: 15%
-   - Outcome Coverage: 20%
-   - Objection Coverage: 15%
-
-2. Generate a 1-2 sentence overall summary that captures the user's biggest issue:
+1. Generate a 1-2 sentence overall summary that captures the user's biggest issue:
    - If overall score < 50: "Your training data is insufficient for a high-confidence AI. [Top issue] is the most critical gap to address first."
    - If overall score 50-79: "Your training data is adequate but has specific gaps. [Top issue] would have the biggest impact on AI quality."
    - If overall score 80+: "Your training data is comprehensive. Minor improvements: [Top minor gap]."
 
-3. Prioritize the gaps array by:
-   - Severity (high first)
-   - Then by impact on overall score
-   - Take the top 5-7 gaps maximum (don't overwhelm the user with everything)
+2. Prioritize the gaps by severity (high first), then by impact on overall score. Take top 5-7 gaps maximum.
 
-4. For each top gap, ensure the recommendation is:
-   - Specific (names exact missing data type and quantity needed)
-   - Actionable (the user can immediately go ask their team for it)
-   - Quantified (gives a number, not a vague "more")
+3. For each top gap, ensure the recommendation is specific, actionable, and quantified.
 
-5. Output the final JSON matching the TrainingDataAnalysis schema.
+CRITICAL: Recommendations must be ranked by impact, not by category.
 
-CRITICAL: Recommendations must be ranked by impact, not by category. If outcome_coverage and lead_type_coverage both score low, but the user can fix outcome_coverage by uploading 10 conversations and lead_type_coverage requires uploading 30, recommend the outcome fix first because it's higher leverage.
+You MUST respond with ONLY valid JSON:
+{
+  "summary": "<1-2 sentence verdict>",
+  "top_gaps": [
+    { "category": "<category_name>", "severity": "high"|"medium"|"low", "description": "<what's missing>", "recommendation": "<exactly what to do>" }
+  ]
+}`;
 
-Final output is the complete TrainingDataAnalysis JSON.`;
+// ---------------------------------------------------------------------------
+// Metadata Classification Prompt (used for write-back to training data)
+// ---------------------------------------------------------------------------
+
+export const CONVERSATION_METADATA_PROMPT = `You are classifying sales DM conversations for a training data system. For EACH conversation, analyze the full transcript and return structured metadata.
+
+For each conversation, return:
+
+1. **lead_type** — classify the lead as ONE of:
+   beginner, intermediate, experienced_no_results, experienced_with_results, skeptical, hot, cold, researcher, price_sensitive, time_sensitive, other
+
+2. **dominant_stage** — the FURTHEST pipeline stage the conversation reached (not the first stage). ONE of:
+   intro, qualification, education, social_proof, objection_handling, call_proposal, booking, post_booking_confirmation, call_reminders, follow_up
+
+3. **objections** — an array of objection instances found in LEAD messages. For each objection:
+   - message_index: the 0-based index counting ONLY lead messages (skip closer messages when counting)
+   - type: ONE of: price_objection, time_concern, skepticism_or_scam_concern, past_failure, complexity_concern, need_to_think, not_interested, ready_to_buy, budget_question, experience_question, timeline_question
+
+   If no objections are found, return an empty array.
+
+IMPORTANT:
+- Classify EVERY conversation provided, even if it's short
+- message_index counts lead messages only (0 = first lead message, 1 = second lead message, etc.)
+- A conversation can have multiple objections
+- "ready_to_buy" is a positive signal, not an objection — include it if the lead signals buying intent
+
+You MUST respond with ONLY valid JSON:
+{
+  "conversations": [
+    {
+      "id": "<exact conversation ID from input>",
+      "lead_type": "...",
+      "dominant_stage": "...",
+      "objections": [
+        { "message_index": 0, "type": "price_objection" }
+      ]
+    }
+  ]
+}`;

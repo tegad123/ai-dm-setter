@@ -17,7 +17,11 @@ import {
   STAGE_COVERAGE_ANALYSIS_PROMPT,
   OUTCOME_COVERAGE_ANALYSIS_PROMPT,
   OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-  SYNTHESIS_PROMPT
+  SYNTHESIS_PROMPT,
+  CONVERSATION_METADATA_PROMPT,
+  LEAD_TYPE_ENUM,
+  STAGE_ENUM,
+  OBJECTION_ENUM
 } from '@/lib/training-analyzer-prompts';
 
 // ---------------------------------------------------------------------------
@@ -131,7 +135,18 @@ async function callAnalyzerLLM(
         ]
       });
 
-      return msg.content[0].type === 'text' ? msg.content[0].text : '';
+      const response =
+        msg.content[0].type === 'text' ? msg.content[0].text : '';
+      console.log(
+        `[training-analyzer] LLM response length=${response.length}, stop_reason=${msg.stop_reason}, first 500 chars: ${response.slice(0, 500)}`
+      );
+      // Flag potential truncation — if stop_reason is 'max_tokens', the JSON is cut off
+      if (msg.stop_reason === 'max_tokens') {
+        console.warn(
+          `[training-analyzer] ⚠ RESPONSE TRUNCATED (hit max_tokens). Last 200 chars: ...${response.slice(-200)}`
+        );
+      }
+      return response;
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
       if (status === 429 && attempt < maxRetries - 1) {
@@ -149,25 +164,37 @@ async function callAnalyzerLLM(
 }
 
 function parseJSON(text: string): Record<string, unknown> {
-  // 1. Direct parse
+  const trimmed = text.trim();
+
+  // 1. Direct parse (works if response is clean JSON)
   try {
-    return JSON.parse(text);
+    return JSON.parse(trimmed);
   } catch {
     // continue to extraction
   }
 
-  // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  // 2. Strip markdown code fences — Haiku wraps in ```json ... ``` on ~100% of calls.
+  //    Handle all variants: ```json, ```, trailing whitespace, missing close fence.
+  //    Use greedy match from first { to last } inside fences for robustness.
+  const fenced = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
   if (fenced) {
     try {
       return JSON.parse(fenced[1].trim());
     } catch {
-      // continue
+      // Fence content wasn't valid JSON — try extracting {} from inside it
+      const innerObj = fenced[1].match(/\{[\s\S]*\}/);
+      if (innerObj) {
+        try {
+          return JSON.parse(innerObj[0]);
+        } catch {
+          // continue
+        }
+      }
     }
   }
 
-  // 3. Extract outermost JSON object
-  const objMatch = text.match(/\{[\s\S]*\}/);
+  // 3. Extract outermost JSON object (handles preamble/postamble text around JSON)
+  const objMatch = trimmed.match(/\{[\s\S]*\}/);
   if (objMatch) {
     try {
       return JSON.parse(objMatch[0]);
@@ -176,12 +203,266 @@ function parseJSON(text: string): Record<string, unknown> {
     }
   }
 
-  // 4. Log and throw
+  // 4. Last resort: strip everything before first { and after last }
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    } catch {
+      // continue
+    }
+  }
+
+  // 4. Log full response and throw
   console.error(
-    '[training-analyzer] Failed to parse LLM response as JSON. First 500 chars:',
-    text.slice(0, 500)
+    `[training-analyzer] parseJSON: ALL extraction methods failed.\n` +
+      `  Response length: ${text.length}\n` +
+      `  Starts with: ${JSON.stringify(text.slice(0, 100))}\n` +
+      `  Ends with: ${JSON.stringify(text.slice(-100))}\n` +
+      `  FULL RAW RESPONSE:\n---START---\n${text}\n---END---`
   );
   throw new Error('Failed to parse analyzer LLM response as JSON');
+}
+
+// ---------------------------------------------------------------------------
+// Schema Validation (Layer 3) + Validated LLM Call (Layer 2 + 3)
+// ---------------------------------------------------------------------------
+// Strict schema validation for LLM-classified categories (3, 4, 6).
+// Replaces extractDistribution — with strict prompt contracts, distribution
+// is always at response.distribution with all enum keys present.
+// ---------------------------------------------------------------------------
+
+interface ValidatedCategoryResponse {
+  status: 'success' | 'analysis_failed';
+  score: number;
+  distribution: Record<string, number>;
+  missingCategories: string[];
+  analysis: string;
+  recommendations: string[];
+  rawErrors?: string[];
+}
+
+/**
+ * Validate that a parsed LLM response matches the strict category schema.
+ * Checks: score (int 0-100), distribution (all enum keys), missing_categories,
+ * analysis, recommendations.
+ */
+function validateCategoryResponse(
+  parsed: Record<string, unknown>,
+  expectedEnumValues: readonly string[]
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  // score: integer 0-100
+  if (typeof parsed.score !== 'number') {
+    errors.push(`"score" must be a number, got ${typeof parsed.score}`);
+  } else if (parsed.score < 0 || parsed.score > 100) {
+    errors.push(`"score" must be 0-100, got ${parsed.score}`);
+  }
+
+  // distribution: object with ALL enum keys present
+  if (
+    !parsed.distribution ||
+    typeof parsed.distribution !== 'object' ||
+    parsed.distribution === null
+  ) {
+    errors.push(
+      `"distribution" must be an object, got ${parsed.distribution === null ? 'null' : typeof parsed.distribution}`
+    );
+  } else {
+    const dist = parsed.distribution as Record<string, unknown>;
+    for (const key of expectedEnumValues) {
+      if (!(key in dist)) {
+        errors.push(`"distribution" missing required key "${key}"`);
+      } else if (typeof dist[key] !== 'number') {
+        errors.push(
+          `"distribution.${key}" must be a number, got ${typeof dist[key]}`
+        );
+      }
+    }
+  }
+
+  // missing_categories: array
+  if (!Array.isArray(parsed.missing_categories)) {
+    errors.push(
+      `"missing_categories" must be an array, got ${typeof parsed.missing_categories}`
+    );
+  }
+
+  // analysis: string
+  if (typeof parsed.analysis !== 'string') {
+    errors.push(`"analysis" must be a string, got ${typeof parsed.analysis}`);
+  }
+
+  // recommendations: array
+  if (!Array.isArray(parsed.recommendations)) {
+    errors.push(
+      `"recommendations" must be an array, got ${typeof parsed.recommendations}`
+    );
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Convert a ValidatedCategoryResponse into CategoryResult gaps.
+ */
+function validatedToGaps(
+  result: ValidatedCategoryResponse
+): CategoryResult['gaps'] {
+  if (result.status === 'analysis_failed') {
+    return [
+      {
+        severity: 'high',
+        description: result.analysis,
+        recommendation:
+          result.recommendations[0] ||
+          'Re-run analysis. If this persists, contact support.'
+      }
+    ];
+  }
+
+  const gaps: CategoryResult['gaps'] = [];
+
+  if (result.missingCategories.length > 0) {
+    gaps.push({
+      severity: result.missingCategories.length > 5 ? 'high' : 'medium',
+      description: `Missing or zero coverage: ${result.missingCategories.join(', ')}`,
+      recommendation:
+        result.recommendations[0] ||
+        `Add training data covering: ${result.missingCategories.join(', ')}`
+    });
+  }
+
+  // Additional recommendations as separate gap entries
+  const startIdx = result.missingCategories.length > 0 ? 1 : 0;
+  for (let i = startIdx; i < result.recommendations.length; i++) {
+    gaps.push({
+      severity: 'low',
+      description: result.analysis,
+      recommendation: result.recommendations[i]
+    });
+  }
+
+  return gaps;
+}
+
+/**
+ * Call the analyzer LLM with JSON parse retry (Layer 2) and schema
+ * validation with retry (Layer 3). Returns a validated response or
+ * analysis_failed status — never throws, never returns score 0 silently.
+ *
+ * Retry budget: 1 retry (2 total attempts). On parse/validation failure,
+ * the retry includes the specific error feedback so Haiku can self-correct.
+ */
+async function callAnalyzerLLMValidated(
+  apiKey: string,
+  systemPrompt: string,
+  userContent: string,
+  expectedEnumValues: readonly string[],
+  categoryName: string
+): Promise<ValidatedCategoryResponse> {
+  const MAX_RETRIES = 1; // 1 retry = 2 total attempts
+  let lastErrors: string[] = [];
+  let augmentedContent = userContent;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // 1. Call LLM
+    let rawResponse: string;
+    try {
+      rawResponse = await callAnalyzerLLM(
+        apiKey,
+        systemPrompt,
+        augmentedContent
+      );
+    } catch (err) {
+      console.error(
+        `[training-analyzer] ${categoryName}: LLM call failed on attempt ${attempt + 1}:`,
+        err
+      );
+      lastErrors = [
+        `LLM call failed: ${err instanceof Error ? err.message : String(err)}`
+      ];
+      continue;
+    }
+
+    // 2. Parse JSON (Layer 2)
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = parseJSON(rawResponse);
+    } catch {
+      console.error(
+        `[training-analyzer] ${categoryName}: JSON parse FAILED on attempt ${attempt + 1}/${MAX_RETRIES + 1}.\n` +
+          `  Response length: ${rawResponse.length}\n` +
+          `  FULL RAW RESPONSE:\n---START---\n${rawResponse}\n---END---`
+      );
+      lastErrors = [
+        `JSON parse failure. Response length=${rawResponse.length}. First 500 chars: "${rawResponse.slice(0, 500)}"`
+      ];
+      if (attempt < MAX_RETRIES) {
+        augmentedContent =
+          userContent +
+          `\n\n[CORRECTION: Your previous response was not valid JSON. Respond with ONLY a valid JSON object matching the required schema. No markdown, no commentary, no code fences. Start with { and end with }.]`;
+      }
+      continue;
+    }
+
+    // 3. Validate schema (Layer 3)
+    const validation = validateCategoryResponse(parsed, expectedEnumValues);
+    if (validation.valid) {
+      if (attempt > 0) {
+        console.log(
+          `[training-analyzer] ${categoryName}: Validation passed on retry ${attempt}`
+        );
+      }
+      return {
+        status: 'success',
+        score: Math.round(parsed.score as number),
+        distribution: parsed.distribution as Record<string, number>,
+        missingCategories: parsed.missing_categories as string[],
+        analysis: parsed.analysis as string,
+        recommendations: parsed.recommendations as string[]
+      };
+    }
+
+    // Validation failed
+    console.error(
+      `[training-analyzer] ${categoryName}: Schema validation FAILED on attempt ${attempt + 1}/${MAX_RETRIES + 1}.\n` +
+        `  Errors: ${JSON.stringify(validation.errors)}\n` +
+        `  Parsed keys: ${JSON.stringify(Object.keys(parsed))}\n` +
+        `  score type=${typeof parsed.score} value=${JSON.stringify(parsed.score)}\n` +
+        `  distribution type=${typeof parsed.distribution} keys=${parsed.distribution && typeof parsed.distribution === 'object' ? JSON.stringify(Object.keys(parsed.distribution as object)) : 'N/A'}\n` +
+        `  FULL RAW RESPONSE:\n---START---\n${rawResponse}\n---END---`
+    );
+    lastErrors = validation.errors;
+
+    if (attempt < MAX_RETRIES) {
+      augmentedContent =
+        userContent +
+        `\n\n[CORRECTION: Your previous response had these validation errors:\n${validation.errors.join('\n')}\n\nFix ALL of these issues. Every allowed enum value MUST appear as a key in "distribution", even if count is 0. The "score" MUST be an integer 0-100. "missing_categories" MUST be an array. "analysis" MUST be a string. "recommendations" MUST be an array. Respond with ONLY valid JSON.]`;
+    }
+  }
+
+  // All attempts exhausted — return analysis_failed, NOT score 0
+  console.error(
+    `[training-analyzer] ${categoryName}: Analysis failed after ${MAX_RETRIES + 1} attempts. Last errors:`,
+    lastErrors
+  );
+
+  const zeroDist = Object.fromEntries(expectedEnumValues.map((k) => [k, 0]));
+
+  return {
+    status: 'analysis_failed',
+    score: 0,
+    distribution: zeroDist,
+    missingCategories: [...expectedEnumValues],
+    analysis: `Analysis failed for ${categoryName}: LLM response did not match required schema after ${MAX_RETRIES + 1} attempts.`,
+    recommendations: [
+      `Re-run analysis for ${categoryName}. If this persists, contact support.`
+    ],
+    rawErrors: lastErrors
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -390,11 +671,39 @@ async function analyzeVoiceStyle(
     VOICE_STYLE_ANALYSIS_PROMPT,
     userContent
   );
-  const parsed = parseJSON(response) as unknown as CategoryResult;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJSON(response);
+  } catch {
+    console.error(
+      `[training-analyzer] voice_style: JSON parse FAILED.\n` +
+        `  Response length: ${response.length}\n` +
+        `  FULL RAW RESPONSE:\n---START---\n${response}\n---END---`
+    );
+    return {
+      score: 0,
+      metrics: {
+        closer_message_count: allCloserMessages.length,
+        parse_error: true
+      },
+      gaps: [
+        {
+          severity: 'high' as const,
+          description:
+            'Voice style analysis failed: LLM returned unparseable response.',
+          recommendation: 'Re-run analysis. If this persists, contact support.'
+        }
+      ]
+    };
+  }
+
   return {
-    score: parsed.score ?? 0,
-    metrics: parsed.metrics ?? {},
-    gaps: parsed.gaps ?? []
+    score: typeof parsed.score === 'number' ? parsed.score : 0,
+    metrics: (parsed.metrics as Record<string, unknown>) ?? {},
+    gaps: Array.isArray(parsed.gaps)
+      ? (parsed.gaps as CategoryResult['gaps'])
+      : []
   };
 }
 
@@ -423,54 +732,53 @@ async function analyzeLeadTypeCoverage(
 
   const chunks = chunkConversations(conversations, totalMessages);
 
-  // Single chunk — one LLM call, return directly
+  // Single chunk — one validated LLM call
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const result = await callAnalyzerLLMValidated(
       apiKey,
       LEAD_TYPE_ANALYSIS_PROMPT,
-      `Analyze these ${conversations.length} conversations and classify each lead type.\n\n${transcripts}`
+      `Analyze these ${conversations.length} conversations and classify each lead type.\n\n${transcripts}`,
+      LEAD_TYPE_ENUM,
+      'lead_type_coverage'
     );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
     return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? {},
-      gaps: parsed.gaps ?? []
+      score: result.score,
+      metrics: { lead_type_distribution: result.distribution },
+      gaps: validatedToGaps(result)
     };
   }
 
-  // Multi-chunk: aggregate distributions then synthesize
+  // Multi-chunk: validated call per chunk, aggregate distributions, then rescore
   const aggregatedDistribution: Record<string, number> = {};
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       LEAD_TYPE_ANALYSIS_PROMPT,
-      `Analyze these ${chunk.length} conversations and classify each lead type. Return JSON with lead_type_distribution counts.\n\n${transcripts}`
+      `Analyze these ${chunk.length} conversations and classify each lead type.\n\n${transcripts}`,
+      LEAD_TYPE_ENUM,
+      'lead_type_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.lead_type_distribution as Record<string, number>) || {};
-    for (const [type, count] of Object.entries(dist)) {
-      aggregatedDistribution[type] =
-        (aggregatedDistribution[type] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [type, count] of Object.entries(chunkResult.distribution)) {
+        aggregatedDistribution[type] =
+          (aggregatedDistribution[type] || 0) + (count || 0);
+      }
     }
   }
 
-  const synthResponse = await callAnalyzerLLM(
+  const synthResult = await callAnalyzerLLMValidated(
     apiKey,
     LEAD_TYPE_ANALYSIS_PROMPT,
-    `Here is the aggregated lead type distribution across all ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide gaps/recommendations. Total conversations: ${conversations.length}.`
+    `Here is the aggregated lead type distribution across all ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations. Total conversations: ${conversations.length}.`,
+    LEAD_TYPE_ENUM,
+    'lead_type_coverage'
   );
-  const synthParsed = parseJSON(synthResponse) as unknown as CategoryResult;
   return {
-    score: synthParsed.score ?? 0,
-    metrics: {
-      ...(synthParsed.metrics ?? {}),
-      lead_type_distribution: aggregatedDistribution
-    },
-    gaps: synthParsed.gaps ?? []
+    score: synthResult.score,
+    metrics: { lead_type_distribution: aggregatedDistribution },
+    gaps: validatedToGaps(synthResult)
   };
 }
 
@@ -499,54 +807,59 @@ async function analyzeStageCoverage(
 
   const chunks = chunkConversations(conversations, totalMessages);
 
-  // Single chunk — one LLM call, return directly
+  // Single chunk — one validated LLM call
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const result = await callAnalyzerLLMValidated(
       apiKey,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
-      `Analyze these ${conversations.length} conversations.\n\n${transcripts}`
+      `Analyze these ${conversations.length} conversations.\n\n${transcripts}`,
+      STAGE_ENUM,
+      'stage_coverage'
     );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
     return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? {},
-      gaps: parsed.gaps ?? []
+      score: result.score,
+      metrics: {
+        stage_distribution: result.distribution,
+        total_messages: totalMessages
+      },
+      gaps: validatedToGaps(result)
     };
   }
 
-  // Multi-chunk: aggregate then synthesize
+  // Multi-chunk: validated call per chunk, aggregate, then rescore
   const aggregatedDistribution: Record<string, number> = {};
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
-      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage. Return JSON with stage_distribution counts.\n\n${transcripts}`
+      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage.\n\n${transcripts}`,
+      STAGE_ENUM,
+      'stage_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.stage_distribution as Record<string, number>) || {};
-    for (const [stage, count] of Object.entries(dist)) {
-      aggregatedDistribution[stage] =
-        (aggregatedDistribution[stage] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [stage, count] of Object.entries(chunkResult.distribution)) {
+        aggregatedDistribution[stage] =
+          (aggregatedDistribution[stage] || 0) + (count || 0);
+      }
     }
   }
 
-  const synthResponse = await callAnalyzerLLM(
+  const synthResult = await callAnalyzerLLMValidated(
     apiKey,
     STAGE_COVERAGE_ANALYSIS_PROMPT,
-    `Aggregated stage distribution across ${conversations.length} conversations (${totalMessages} total messages):\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide gaps/recommendations.`
+    `Aggregated stage distribution across ${conversations.length} conversations (${totalMessages} total messages):\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations.`,
+    STAGE_ENUM,
+    'stage_coverage'
   );
-  const synthParsed = parseJSON(synthResponse) as unknown as CategoryResult;
   return {
-    score: synthParsed.score ?? 0,
+    score: synthResult.score,
     metrics: {
-      ...(synthParsed.metrics ?? {}),
-      stage_distribution: aggregatedDistribution
+      stage_distribution: aggregatedDistribution,
+      total_messages: totalMessages
     },
-    gaps: synthParsed.gaps ?? []
+    gaps: validatedToGaps(synthResult)
   };
 }
 
@@ -675,54 +988,53 @@ async function analyzeObjectionCoverage(
 
   const chunks = chunkConversations(conversations, totalMessages);
 
-  // Single chunk — one LLM call, return directly
+  // Single chunk — one validated LLM call
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const result = await callAnalyzerLLMValidated(
       apiKey,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-      `Scan these ${conversations.length} conversations for objections.\n\n${transcripts}`
+      `Scan these ${conversations.length} conversations for objections.\n\n${transcripts}`,
+      OBJECTION_ENUM,
+      'objection_coverage'
     );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
     return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? {},
-      gaps: parsed.gaps ?? []
+      score: result.score,
+      metrics: { objection_distribution: result.distribution },
+      gaps: validatedToGaps(result)
     };
   }
 
-  // Multi-chunk: aggregate then synthesize
+  // Multi-chunk: validated call per chunk, aggregate, then rescore
   const aggregatedDistribution: Record<string, number> = {};
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type. Return JSON with objection_distribution counts.\n\n${transcripts}`
+      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type.\n\n${transcripts}`,
+      OBJECTION_ENUM,
+      'objection_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.objection_distribution as Record<string, number>) || {};
-    for (const [type, count] of Object.entries(dist)) {
-      aggregatedDistribution[type] =
-        (aggregatedDistribution[type] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [type, count] of Object.entries(chunkResult.distribution)) {
+        aggregatedDistribution[type] =
+          (aggregatedDistribution[type] || 0) + (count || 0);
+      }
     }
   }
 
-  const synthResponse = await callAnalyzerLLM(
+  const synthResult = await callAnalyzerLLMValidated(
     apiKey,
     OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-    `Aggregated objection distribution across ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide gaps/recommendations.`
+    `Aggregated objection distribution across ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations.`,
+    OBJECTION_ENUM,
+    'objection_coverage'
   );
-  const synthParsed = parseJSON(synthResponse) as unknown as CategoryResult;
   return {
-    score: synthParsed.score ?? 0,
-    metrics: {
-      ...(synthParsed.metrics ?? {}),
-      objection_distribution: aggregatedDistribution
-    },
-    gaps: synthParsed.gaps ?? []
+    score: synthResult.score,
+    metrics: { objection_distribution: aggregatedDistribution },
+    gaps: validatedToGaps(synthResult)
   };
 }
 
@@ -747,24 +1059,28 @@ function mergeDistributions(
 /**
  * Re-score an existing distribution without re-scanning conversations.
  * Used when no new data was added — just recalculates the score.
+ * Uses validated LLM call to ensure schema compliance.
  */
 async function rescoreDistribution(
   apiKey: string,
   prompt: string,
   distributionKey: string,
   distribution: Record<string, number>,
-  totalConversations: number
+  totalConversations: number,
+  expectedEnumValues: readonly string[],
+  categoryName: string
 ): Promise<CategoryResult> {
-  const response = await callAnalyzerLLM(
+  const result = await callAnalyzerLLMValidated(
     apiKey,
     prompt,
-    `Here is the ${distributionKey} across ${totalConversations} conversations:\n${JSON.stringify(distribution, null, 2)}\n\nScore this distribution and provide gaps/recommendations. Total conversations: ${totalConversations}.`
+    `Here is the ${distributionKey} across ${totalConversations} conversations:\n${JSON.stringify(distribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations. Total conversations: ${totalConversations}.`,
+    expectedEnumValues,
+    categoryName
   );
-  const parsed = parseJSON(response) as unknown as CategoryResult;
   return {
-    score: parsed.score ?? 0,
-    metrics: { ...(parsed.metrics ?? {}), [distributionKey]: distribution },
-    gaps: parsed.gaps ?? []
+    score: result.score,
+    metrics: { [distributionKey]: distribution }, // Keep original distribution
+    gaps: validatedToGaps(result)
   };
 }
 
@@ -783,17 +1099,17 @@ async function analyzeLeadTypeCoverageIncremental(
 
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       LEAD_TYPE_ANALYSIS_PROMPT,
-      `Analyze these ${chunk.length} conversations and classify each lead type. Return JSON with lead_type_distribution counts.\n\n${transcripts}`
+      `Analyze these ${chunk.length} conversations and classify each lead type.\n\n${transcripts}`,
+      LEAD_TYPE_ENUM,
+      'lead_type_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.lead_type_distribution as Record<string, number>) || {};
-    for (const [type, count] of Object.entries(dist)) {
-      newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [type, count] of Object.entries(chunkResult.distribution)) {
+        newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+      }
     }
   }
 
@@ -804,7 +1120,9 @@ async function analyzeLeadTypeCoverageIncremental(
     LEAD_TYPE_ANALYSIS_PROMPT,
     'lead_type_distribution',
     merged,
-    totalConversations
+    totalConversations,
+    LEAD_TYPE_ENUM,
+    'lead_type_coverage'
   );
 }
 
@@ -824,17 +1142,17 @@ async function analyzeStageCoverageIncremental(
 
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
-      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage. Return JSON with stage_distribution counts.\n\n${transcripts}`
+      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage.\n\n${transcripts}`,
+      STAGE_ENUM,
+      'stage_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.stage_distribution as Record<string, number>) || {};
-    for (const [stage, count] of Object.entries(dist)) {
-      newDistribution[stage] = (newDistribution[stage] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [stage, count] of Object.entries(chunkResult.distribution)) {
+        newDistribution[stage] = (newDistribution[stage] || 0) + (count || 0);
+      }
     }
   }
 
@@ -845,7 +1163,9 @@ async function analyzeStageCoverageIncremental(
     STAGE_COVERAGE_ANALYSIS_PROMPT,
     'stage_distribution',
     merged,
-    totalConversations
+    totalConversations,
+    STAGE_ENUM,
+    'stage_coverage'
   );
   // Preserve total messages in metrics
   result.metrics.total_messages = totalMessages;
@@ -867,17 +1187,17 @@ async function analyzeObjectionCoverageIncremental(
 
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
-    const response = await callAnalyzerLLM(
+    const chunkResult = await callAnalyzerLLMValidated(
       apiKey,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type. Return JSON with objection_distribution counts.\n\n${transcripts}`
+      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type.\n\n${transcripts}`,
+      OBJECTION_ENUM,
+      'objection_coverage'
     );
-    const parsed = parseJSON(response) as Record<string, unknown>;
-    const dist =
-      ((parsed.metrics as Record<string, unknown>)
-        ?.objection_distribution as Record<string, number>) || {};
-    for (const [type, count] of Object.entries(dist)) {
-      newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+    if (chunkResult.status === 'success') {
+      for (const [type, count] of Object.entries(chunkResult.distribution)) {
+        newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+      }
     }
   }
 
@@ -888,7 +1208,9 @@ async function analyzeObjectionCoverageIncremental(
     OBJECTION_COVERAGE_ANALYSIS_PROMPT,
     'objection_distribution',
     merged,
-    totalConversations
+    totalConversations,
+    OBJECTION_ENUM,
+    'objection_coverage'
   );
 }
 
@@ -977,7 +1299,8 @@ export async function estimateAnalysisCost(
 // ---------------------------------------------------------------------------
 
 export async function runTrainingAnalysis(
-  accountId: string
+  accountId: string,
+  options?: { forceFullRun?: boolean }
 ): Promise<AnalysisResult> {
   const { apiKey } = await resolveProvider(accountId);
   const conversations = await fetchTrainingData(accountId);
@@ -985,14 +1308,23 @@ export async function runTrainingAnalysis(
   const currentIds = conversations.map((c) => c.id);
 
   // ── Check for previous analysis (incremental support) ───────────
-  const previousAnalysis = await prisma.trainingDataAnalysis.findFirst({
-    where: { accountId, status: 'complete' },
-    orderBy: { runAt: 'desc' },
-    select: {
-      analyzedConversationIds: true,
-      categoryMetrics: true
-    }
-  });
+  let previousAnalysis = null;
+  if (!options?.forceFullRun) {
+    previousAnalysis = await prisma.trainingDataAnalysis.findFirst({
+      where: { accountId, status: 'complete' },
+      orderBy: { runAt: 'desc' },
+      select: {
+        analyzedConversationIds: true,
+        categoryMetrics: true
+      }
+    });
+  }
+
+  if (options?.forceFullRun) {
+    console.log(
+      `[training-analyzer] Force full run requested — ignoring previous analysis`
+    );
+  }
 
   const previousIds = new Set<string>(
     (previousAnalysis?.analyzedConversationIds as string[] | null) || []
@@ -1052,7 +1384,9 @@ export async function runTrainingAnalysis(
         string,
         number
       >) || {},
-      conversations.length
+      conversations.length,
+      LEAD_TYPE_ENUM,
+      'lead_type_coverage'
     );
     stageResult = await rescoreDistribution(
       apiKey,
@@ -1062,7 +1396,9 @@ export async function runTrainingAnalysis(
         string,
         number
       >) || {},
-      conversations.length
+      conversations.length,
+      STAGE_ENUM,
+      'stage_coverage'
     );
     objectionResult = await rescoreDistribution(
       apiKey,
@@ -1072,7 +1408,9 @@ export async function runTrainingAnalysis(
         string,
         number
       >) || {},
-      conversations.length
+      conversations.length,
+      OBJECTION_ENUM,
+      'objection_coverage'
     );
   } else if (isIncremental && hasNewData) {
     // Incremental: LLM-analyze only new conversations, merge with previous
@@ -1178,7 +1516,18 @@ export async function runTrainingAnalysis(
     SYNTHESIS_PROMPT,
     synthesisInput
   );
-  const synthesis = parseJSON(synthesisResponse) as Record<string, unknown>;
+
+  let synthesis: Record<string, unknown>;
+  try {
+    synthesis = parseJSON(synthesisResponse);
+  } catch {
+    console.error(
+      `[training-analyzer] synthesis: JSON parse FAILED.\n` +
+        `  Response length: ${synthesisResponse.length}\n` +
+        `  FULL RAW RESPONSE:\n---START---\n${synthesisResponse}\n---END---`
+    );
+    synthesis = {};
+  }
 
   // Calculate weighted overall score
   const weights = {
@@ -1221,6 +1570,25 @@ export async function runTrainingAnalysis(
     })
     .slice(0, 7);
 
+  // ── Write-back metadata to training data (non-fatal) ────────────
+  try {
+    const conversationsToClassify =
+      options?.forceFullRun || !isIncremental
+        ? conversations
+        : hasNewData
+          ? newConversations
+          : [];
+
+    if (conversationsToClassify.length > 0) {
+      await writeBackConversationMetadata(conversationsToClassify, apiKey);
+    }
+  } catch (err) {
+    console.error(
+      '[training-analyzer] Metadata write-back failed (non-fatal):',
+      err
+    );
+  }
+
   return {
     overallScore,
     categoryScores,
@@ -1231,4 +1599,143 @@ export async function runTrainingAnalysis(
     analyzedConversationIds: currentIds,
     categoryMetrics
   };
+}
+
+// ---------------------------------------------------------------------------
+// Metadata Write-Back: Classify conversations and persist to DB
+// ---------------------------------------------------------------------------
+
+interface ConversationMetadata {
+  leadType: string;
+  dominantStage: string;
+  objections: Array<{ messageIndex: number; type: string }>;
+}
+
+async function classifyConversationMetadata(
+  conversations: ConversationData[],
+  apiKey: string
+): Promise<Map<string, ConversationMetadata>> {
+  const result = new Map<string, ConversationMetadata>();
+  const chunks = chunkConversations(
+    conversations,
+    conversations.flatMap((c) => c.messages).length
+  );
+
+  for (const chunk of chunks) {
+    const transcripts = chunk
+      .map((conv) => {
+        const msgs = conv.messages
+          .map((m) => `${m.sender}: ${m.content}`)
+          .join('\n');
+        return `--- Conversation ${conv.id} ---\n${msgs}\n--- End ---`;
+      })
+      .join('\n\n');
+
+    const response = await callAnalyzerLLM(
+      apiKey,
+      CONVERSATION_METADATA_PROMPT,
+      `Classify these ${chunk.length} conversations:\n\n${transcripts}`
+    );
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = parseJSON(response);
+    } catch {
+      console.error(
+        `[training-analyzer] metadata_classification: JSON parse FAILED.\n` +
+          `  Chunk size: ${chunk.length} conversations\n` +
+          `  Response length: ${response.length}\n` +
+          `  FULL RAW RESPONSE:\n---START---\n${response}\n---END---`
+      );
+      continue; // Skip this chunk, try next
+    }
+    const convList =
+      (parsed.conversations as Array<Record<string, unknown>>) || [];
+
+    for (const item of convList) {
+      const id = item.id as string;
+      if (!id) continue;
+
+      result.set(id, {
+        leadType: (item.lead_type as string) || 'other',
+        dominantStage: (item.dominant_stage as string) || 'intro',
+        objections: Array.isArray(item.objections)
+          ? (
+              item.objections as Array<{ message_index: number; type: string }>
+            ).map((o) => ({
+              messageIndex:
+                typeof o.message_index === 'number' ? o.message_index : 0,
+              type: o.type || 'other'
+            }))
+          : []
+      });
+    }
+
+    // Small delay between chunks to avoid rate limits
+    if (chunks.length > 1) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  return result;
+}
+
+async function writeBackConversationMetadata(
+  conversations: ConversationData[],
+  apiKey: string
+): Promise<void> {
+  console.log(
+    `[training-analyzer] Classifying ${conversations.length} conversations for metadata write-back...`
+  );
+
+  const metadata = await classifyConversationMetadata(conversations, apiKey);
+
+  let updated = 0;
+  for (const [convId, meta] of Array.from(metadata.entries())) {
+    // Update conversation-level metadata
+    await prisma.trainingConversation.update({
+      where: { id: convId },
+      data: {
+        leadType: meta.leadType,
+        dominantStage: meta.dominantStage,
+        primaryObjectionType: meta.objections[0]?.type || null,
+        analyzedAt: new Date()
+      }
+    });
+
+    // Find the conversation's lead messages for objection tagging
+    const conv = conversations.find((c) => c.id === convId);
+    if (conv) {
+      // Set stage on all messages based on dominant stage
+      await prisma.trainingMessage.updateMany({
+        where: { conversationId: convId },
+        data: { stage: meta.dominantStage }
+      });
+
+      // Set objectionType on specific lead messages
+      const leadMessages = conv.messages
+        .filter((m) => m.sender === 'LEAD')
+        .sort((a, b) => a.orderIndex - b.orderIndex);
+
+      for (const obj of meta.objections) {
+        const leadMsg = leadMessages[obj.messageIndex];
+        if (leadMsg) {
+          await prisma.trainingMessage.updateMany({
+            where: {
+              conversationId: convId,
+              orderIndex: leadMsg.orderIndex,
+              sender: 'LEAD'
+            },
+            data: { objectionType: obj.type }
+          });
+        }
+      }
+    }
+
+    updated++;
+  }
+
+  console.log(
+    `[training-analyzer] Wrote metadata for ${updated} conversations`
+  );
 }

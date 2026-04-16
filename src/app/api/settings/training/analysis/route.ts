@@ -35,7 +35,10 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
     const body = await req.json();
-    const { confirm } = body as { confirm: boolean };
+    const { confirm, forceFullRun } = body as {
+      confirm: boolean;
+      forceFullRun?: boolean;
+    };
 
     if (!confirm) {
       // Cost estimate only
@@ -45,11 +48,12 @@ export async function POST(req: NextRequest) {
 
     // Run full analysis
     console.log(
-      '[training/analysis] Starting analysis for account:',
-      auth.accountId
+      `[training/analysis] Starting analysis for account: ${auth.accountId}${forceFullRun ? ' (force full run)' : ''}`
     );
     const startTime = Date.now();
-    const result = await runTrainingAnalysis(auth.accountId);
+    const result = await runTrainingAnalysis(auth.accountId, {
+      forceFullRun: forceFullRun ?? false
+    });
     console.log(
       `[training/analysis] Analysis completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s, score: ${result.overallScore}`
     );

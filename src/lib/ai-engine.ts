@@ -66,13 +66,39 @@ export async function generateReply(
     .find((m) => m.sender === 'LEAD');
 
   // 0b. Retrieve few-shot examples from training data (non-fatal)
+  //     Uses metadata-filtered 3-tier retrieval when context is available.
   let fewShotBlock: string | null = null;
   if (lastLeadMsg) {
     try {
-      fewShotBlock = await retrieveFewShotExamples(
+      // Classify intent for metadata-aware retrieval (non-fatal)
+      let detectedIntent: string | undefined;
+      try {
+        const { classifyContentIntent } = await import(
+          '@/lib/content-intent-classifier'
+        );
+        const intentResult = await classifyContentIntent(
+          accountId,
+          lastLeadMsg.content,
+          conversationHistory
+            .slice(-5)
+            .map((m) => `${m.sender}: ${m.content}`)
+            .join('\n')
+        );
+        if (intentResult?.intent) {
+          detectedIntent = intentResult.intent;
+        }
+      } catch {
+        // Intent classification is optional — continue without it
+      }
+
+      fewShotBlock = await retrieveFewShotExamples({
         accountId,
-        lastLeadMsg.content
-      );
+        currentLeadMessage: lastLeadMsg.content,
+        leadStage: leadContext.status,
+        leadExperience: leadContext.experience,
+        detectedIntent,
+        conversationHistory: conversationHistory.slice(-5).map((m) => m.content)
+      });
     } catch (err) {
       console.error('[ai-engine] Few-shot retrieval failed (non-fatal):', err);
     }

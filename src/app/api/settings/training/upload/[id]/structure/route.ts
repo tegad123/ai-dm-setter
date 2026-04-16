@@ -226,6 +226,7 @@ export async function POST(
               accountId: auth.accountId,
               personaId: upload.personaId,
               leadIdentifier: conv.leadIdentifier,
+              outcomeLabel: (conv.outcomeLabel || 'UNKNOWN') as any,
               contentHash: conv.contentHash,
               messageCount: conv.messageCount,
               closerMessageCount: conv.closerMessageCount,

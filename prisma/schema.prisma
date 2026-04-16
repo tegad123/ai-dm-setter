@@ -517,9 +517,15 @@ model TrainingConversation {
   closerMessageCount Int             @default(0)
   leadMessageCount   Int             @default(0)
   voiceNoteCount     Int             @default(0)
-  startedAt          DateTime?
-  endedAt            DateTime?
-  createdAt          DateTime        @default(now())
+  startedAt            DateTime?
+  endedAt              DateTime?
+  createdAt            DateTime        @default(now())
+
+  // Analyzer-populated metadata (written back after LLM classification)
+  leadType             String?         // beginner, intermediate, experienced_no_results, etc.
+  primaryObjectionType String?         // price_objection, skepticism_or_scam_concern, etc.
+  dominantStage        String?         // intro, qualification, objection_handling, etc.
+  analyzedAt           DateTime?       // When metadata was last classified
 
   upload   TrainingUpload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
   account  Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -529,6 +535,8 @@ model TrainingConversation {
   @@unique([accountId, contentHash])
   @@index([uploadId])
   @@index([accountId, personaId])
+  @@index([accountId, leadType])
+  @@index([accountId, dominantStage])
 }
 
 model TrainingMessage {
@@ -538,7 +546,8 @@ model TrainingMessage {
   text            String?  @db.Text
   timestamp       DateTime?
   messageType     String   @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
-  stage           String?  // OPENER, QUALIFYING, etc. (populated later)
+  stage           String?  // intro, qualification, etc. (populated by analyzer)
+  objectionType   String?  // price_objection, skepticism_or_scam_concern, etc. (populated by analyzer)
   orderIndex      Int
   embeddingVector Json?    // OpenAI text-embedding-3-small vector (lead messages only)
 
