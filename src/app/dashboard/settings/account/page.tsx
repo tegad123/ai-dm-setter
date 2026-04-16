@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Loader2, GraduationCap, ChevronRight } from 'lucide-react';
+import { Loader2, GraduationCap, ChevronRight, Clock } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
 
@@ -25,6 +25,8 @@ interface AccountData {
   brandName: string | null;
   plan: string;
   onboardingComplete: boolean;
+  responseDelayMin: number;
+  responseDelayMax: number;
 }
 
 interface TrainingPhaseData {
@@ -43,6 +45,9 @@ export default function AccountSettingsPage() {
   const [brandName, setBrandName] = useState('');
   const [training, setTraining] = useState<TrainingPhaseData | null>(null);
   const [trainingAction, setTrainingAction] = useState(false);
+  const [delayMinSec, setDelayMinSec] = useState<number>(300);
+  const [delayMaxSec, setDelayMaxSec] = useState<number>(600);
+  const [savingTiming, setSavingTiming] = useState(false);
 
   useEffect(() => {
     apiFetch<{ account: AccountData }>('/settings/account')
@@ -50,6 +55,8 @@ export default function AccountSettingsPage() {
         setAccount(account);
         setName(account.name || '');
         setBrandName(account.brandName || '');
+        setDelayMinSec(account.responseDelayMin ?? 300);
+        setDelayMaxSec(account.responseDelayMax ?? 600);
       })
       .catch(() => toast.error('Failed to load account settings'))
       .finally(() => setLoading(false));
@@ -106,6 +113,39 @@ export default function AccountSettingsPage() {
     }
   };
 
+  const handleSaveTiming = async () => {
+    if (delayMaxSec < delayMinSec) {
+      toast.error('Maximum delay must be at least the minimum delay');
+      return;
+    }
+    setSavingTiming(true);
+    try {
+      const updated = await apiFetch<{ account: AccountData }>(
+        '/settings/account',
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            responseDelayMin: delayMinSec,
+            responseDelayMax: delayMaxSec
+          })
+        }
+      );
+      setAccount(updated.account);
+      toast.success('Response timing saved');
+    } catch {
+      toast.error('Failed to save response timing');
+    } finally {
+      setSavingTiming(false);
+    }
+  };
+
+  const formatSeconds = (s: number) => {
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return r === 0 ? `${m}m` : `${m}m ${r}s`;
+  };
+
   if (loading) {
     return (
       <div className='flex flex-1 items-center justify-center p-6'>
@@ -160,6 +200,71 @@ export default function AccountSettingsPage() {
               {saving && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
               Save Changes
             </Button>
+          </CardContent>
+        </Card>
+
+        {/* Response Timing — global, applies to every script */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center gap-2'>
+              <Clock className='text-muted-foreground h-5 w-5' />
+              <div>
+                <CardTitle>Response Timing</CardTitle>
+                <CardDescription>
+                  How long the AI waits before replying. A random value between
+                  min and max is picked for each message.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <div className='space-y-2'>
+                <Label htmlFor='delay-min'>
+                  Minimum delay (seconds) ·{' '}
+                  <span className='text-muted-foreground font-normal'>
+                    {formatSeconds(delayMinSec)}
+                  </span>
+                </Label>
+                <Input
+                  id='delay-min'
+                  type='number'
+                  min={0}
+                  value={delayMinSec}
+                  onChange={(e) =>
+                    setDelayMinSec(Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
+              </div>
+              <div className='space-y-2'>
+                <Label htmlFor='delay-max'>
+                  Maximum delay (seconds) ·{' '}
+                  <span className='text-muted-foreground font-normal'>
+                    {formatSeconds(delayMaxSec)}
+                  </span>
+                </Label>
+                <Input
+                  id='delay-max'
+                  type='number'
+                  min={0}
+                  value={delayMaxSec}
+                  onChange={(e) =>
+                    setDelayMaxSec(Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
+              </div>
+            </div>
+            <div className='flex items-center gap-3'>
+              <Button onClick={handleSaveTiming} disabled={savingTiming}>
+                {savingTiming && (
+                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                )}
+                Save Timing
+              </Button>
+              <p className='text-muted-foreground text-xs'>
+                Set both to 0 to reply immediately (testing only).
+              </p>
+            </div>
           </CardContent>
         </Card>
 
