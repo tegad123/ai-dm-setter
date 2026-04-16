@@ -6,7 +6,7 @@ import {
   estimateAnalysisCost
 } from '@/lib/training-data-analyzer';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ---------------------------------------------------------------------------
 // GET /api/settings/training/analysis — latest analysis result

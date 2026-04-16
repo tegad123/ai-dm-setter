@@ -68,7 +68,7 @@ export interface CostEstimate {
 // Provider Resolution (mirrors script-parser.ts)
 // ---------------------------------------------------------------------------
 
-const ANALYZER_MODEL = 'claude-3-haiku-20240307';
+const ANALYZER_MODEL = 'claude-haiku-4-5-20251001';
 
 async function resolveProvider(accountId: string): Promise<{
   provider: 'anthropic';
@@ -420,46 +420,42 @@ async function analyzeLeadTypeCoverage(
   }
 
   const chunks = chunkConversations(conversations, totalMessages);
-  const aggregatedDistribution: Record<string, number> = {};
 
-  for (const chunk of chunks) {
-    const transcripts = chunk.map(formatConversation).join('\n\n');
-    const userContent = `Analyze these ${chunk.length} conversations and classify each lead type. Return JSON with lead_type_distribution counts.\n\n${transcripts}`;
-
+  // Single chunk — one LLM call, return directly
+  if (chunks.length === 1) {
+    const transcripts = conversations.map(formatConversation).join('\n\n');
     const response = await callAnalyzerLLM(
       apiKey,
       LEAD_TYPE_ANALYSIS_PROMPT,
-      userContent
+      `Analyze these ${conversations.length} conversations and classify each lead type.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as unknown as CategoryResult;
+    return {
+      score: parsed.score ?? 0,
+      metrics: parsed.metrics ?? {},
+      gaps: parsed.gaps ?? []
+    };
+  }
+
+  // Multi-chunk: aggregate distributions then synthesize
+  const aggregatedDistribution: Record<string, number> = {};
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      LEAD_TYPE_ANALYSIS_PROMPT,
+      `Analyze these ${chunk.length} conversations and classify each lead type. Return JSON with lead_type_distribution counts.\n\n${transcripts}`
     );
     const parsed = parseJSON(response) as Record<string, unknown>;
     const dist =
       ((parsed.metrics as Record<string, unknown>)
         ?.lead_type_distribution as Record<string, number>) || {};
-
     for (const [type, count] of Object.entries(dist)) {
       aggregatedDistribution[type] =
         (aggregatedDistribution[type] || 0) + (count || 0);
     }
   }
 
-  // If only one chunk, use the LLM's score directly
-  if (chunks.length === 1) {
-    const response = await callAnalyzerLLM(
-      apiKey,
-      LEAD_TYPE_ANALYSIS_PROMPT,
-      `Analyze these ${conversations.length} conversations and classify each lead type.\n\n${conversations.map(formatConversation).join('\n\n')}`
-    );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
-    return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? {
-        lead_type_distribution: aggregatedDistribution
-      },
-      gaps: parsed.gaps ?? []
-    };
-  }
-
-  // Multi-chunk: run synthesis on aggregated distribution
   const synthResponse = await callAnalyzerLLM(
     apiKey,
     LEAD_TYPE_ANALYSIS_PROMPT,
@@ -500,40 +496,40 @@ async function analyzeStageCoverage(
   }
 
   const chunks = chunkConversations(conversations, totalMessages);
-  const aggregatedDistribution: Record<string, number> = {};
 
-  for (const chunk of chunks) {
-    const transcripts = chunk.map(formatConversation).join('\n\n');
-    const userContent = `Analyze these ${chunk.length} conversations and classify each message by pipeline stage. Return JSON with stage_distribution counts.\n\n${transcripts}`;
-
+  // Single chunk — one LLM call, return directly
+  if (chunks.length === 1) {
+    const transcripts = conversations.map(formatConversation).join('\n\n');
     const response = await callAnalyzerLLM(
       apiKey,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
-      userContent
+      `Analyze these ${conversations.length} conversations.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as unknown as CategoryResult;
+    return {
+      score: parsed.score ?? 0,
+      metrics: parsed.metrics ?? {},
+      gaps: parsed.gaps ?? []
+    };
+  }
+
+  // Multi-chunk: aggregate then synthesize
+  const aggregatedDistribution: Record<string, number> = {};
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      STAGE_COVERAGE_ANALYSIS_PROMPT,
+      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage. Return JSON with stage_distribution counts.\n\n${transcripts}`
     );
     const parsed = parseJSON(response) as Record<string, unknown>;
     const dist =
       ((parsed.metrics as Record<string, unknown>)
         ?.stage_distribution as Record<string, number>) || {};
-
     for (const [stage, count] of Object.entries(dist)) {
       aggregatedDistribution[stage] =
         (aggregatedDistribution[stage] || 0) + (count || 0);
     }
-  }
-
-  if (chunks.length === 1) {
-    const response = await callAnalyzerLLM(
-      apiKey,
-      STAGE_COVERAGE_ANALYSIS_PROMPT,
-      `Analyze these ${conversations.length} conversations.\n\n${conversations.map(formatConversation).join('\n\n')}`
-    );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
-    return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? { stage_distribution: aggregatedDistribution },
-      gaps: parsed.gaps ?? []
-    };
   }
 
   const synthResponse = await callAnalyzerLLM(
@@ -676,42 +672,40 @@ async function analyzeObjectionCoverage(
   }
 
   const chunks = chunkConversations(conversations, totalMessages);
-  const aggregatedDistribution: Record<string, number> = {};
 
-  for (const chunk of chunks) {
-    const transcripts = chunk.map(formatConversation).join('\n\n');
-    const userContent = `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type. Return JSON with objection_distribution counts.\n\n${transcripts}`;
-
+  // Single chunk — one LLM call, return directly
+  if (chunks.length === 1) {
+    const transcripts = conversations.map(formatConversation).join('\n\n');
     const response = await callAnalyzerLLM(
       apiKey,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-      userContent
+      `Scan these ${conversations.length} conversations for objections.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as unknown as CategoryResult;
+    return {
+      score: parsed.score ?? 0,
+      metrics: parsed.metrics ?? {},
+      gaps: parsed.gaps ?? []
+    };
+  }
+
+  // Multi-chunk: aggregate then synthesize
+  const aggregatedDistribution: Record<string, number> = {};
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      OBJECTION_COVERAGE_ANALYSIS_PROMPT,
+      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type. Return JSON with objection_distribution counts.\n\n${transcripts}`
     );
     const parsed = parseJSON(response) as Record<string, unknown>;
     const dist =
       ((parsed.metrics as Record<string, unknown>)
         ?.objection_distribution as Record<string, number>) || {};
-
     for (const [type, count] of Object.entries(dist)) {
       aggregatedDistribution[type] =
         (aggregatedDistribution[type] || 0) + (count || 0);
     }
-  }
-
-  if (chunks.length === 1) {
-    const response = await callAnalyzerLLM(
-      apiKey,
-      OBJECTION_COVERAGE_ANALYSIS_PROMPT,
-      `Scan these ${conversations.length} conversations for objections.\n\n${conversations.map(formatConversation).join('\n\n')}`
-    );
-    const parsed = parseJSON(response) as unknown as CategoryResult;
-    return {
-      score: parsed.score ?? 0,
-      metrics: parsed.metrics ?? {
-        objection_distribution: aggregatedDistribution
-      },
-      gaps: parsed.gaps ?? []
-    };
   }
 
   const synthResponse = await callAnalyzerLLM(
