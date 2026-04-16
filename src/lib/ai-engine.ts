@@ -2,6 +2,8 @@ import prisma from '@/lib/prisma';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
 import type { LeadContext } from '@/lib/ai-prompts';
 import { getCredentials } from '@/lib/credential-store';
+import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
+import { scoreVoiceQuality } from '@/lib/voice-quality-gate';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,8 +60,30 @@ export async function generateReply(
   leadContext: LeadContext,
   scoringContext?: string
 ): Promise<GenerateReplyResult> {
-  // 1. Build the dynamic system prompt
-  let systemPrompt = await buildDynamicSystemPrompt(accountId, leadContext);
+  // 0. Extract the last lead message for few-shot retrieval
+  const lastLeadMsg = [...conversationHistory]
+    .reverse()
+    .find((m) => m.sender === 'LEAD');
+
+  // 0b. Retrieve few-shot examples from training data (non-fatal)
+  let fewShotBlock: string | null = null;
+  if (lastLeadMsg) {
+    try {
+      fewShotBlock = await retrieveFewShotExamples(
+        accountId,
+        lastLeadMsg.content
+      );
+    } catch (err) {
+      console.error('[ai-engine] Few-shot retrieval failed (non-fatal):', err);
+    }
+  }
+
+  // 1. Build the dynamic system prompt with few-shot examples
+  let systemPrompt = await buildDynamicSystemPrompt(
+    accountId,
+    leadContext,
+    fewShotBlock || undefined
+  );
 
   // 1b. Append scoring intelligence if available
   if (scoringContext) {
@@ -78,17 +102,69 @@ export async function generateReply(
   // 3. Format conversation history for the LLM
   const messages = formatConversationForLLM(conversationHistory);
 
-  // 4. Call the LLM
-  const rawResponse = await callLLM(
-    provider,
-    apiKey,
-    model,
-    systemPrompt,
-    messages
-  );
+  // 4. Call the LLM with quality gate (retry up to 2x on voice fails)
+  const MAX_RETRIES = 2;
+  let parsed: ParsedAIResponse | null = null;
 
-  // 5. Parse the structured JSON response
-  const parsed = parseAIResponse(rawResponse);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const rawResponse = await callLLM(
+      provider,
+      apiKey,
+      model,
+      systemPrompt,
+      messages
+    );
+
+    parsed = parseAIResponse(rawResponse);
+
+    // 5. Voice quality gate
+    const quality = scoreVoiceQuality(parsed.message);
+
+    if (quality.passed) {
+      if (attempt > 0) {
+        console.log(
+          `[ai-engine] Voice quality passed on retry ${attempt} (score: ${quality.score.toFixed(2)})`
+        );
+      }
+      break;
+    }
+
+    // Log the failure
+    console.warn(
+      `[ai-engine] Voice quality FAIL attempt ${attempt + 1}/${MAX_RETRIES + 1}:`,
+      {
+        score: quality.score.toFixed(2),
+        hardFails: quality.hardFails,
+        message: parsed.message.slice(0, 100)
+      }
+    );
+
+    // Log to quality_failures for analysis (non-fatal)
+    try {
+      await prisma.voiceQualityFailure.create({
+        data: {
+          accountId,
+          message: parsed.message,
+          score: quality.score,
+          hardFails: quality.hardFails as unknown as object,
+          attempt: attempt + 1,
+          leadMessage: lastLeadMsg?.content?.slice(0, 500) || null
+        }
+      });
+    } catch {
+      // Table might not exist yet — that's fine
+    }
+
+    if (attempt === MAX_RETRIES) {
+      console.warn(
+        `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
+      );
+    }
+  }
+
+  if (!parsed) {
+    throw new Error('Failed to generate AI response');
+  }
 
   // 6. Get response delay from persona config — must read the ACTIVE persona,
   // not the oldest row, otherwise stale defaults override the dashboard value.

@@ -532,14 +532,15 @@ model TrainingConversation {
 }
 
 model TrainingMessage {
-  id             String   @id @default(cuid())
-  conversationId String
-  sender         String   // "CLOSER" | "LEAD"
-  text           String?  @db.Text
-  timestamp      DateTime?
-  messageType    String   @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
-  stage          String?  // OPENER, QUALIFYING, etc. (populated later)
-  orderIndex     Int
+  id              String   @id @default(cuid())
+  conversationId  String
+  sender          String   // "CLOSER" | "LEAD"
+  text            String?  @db.Text
+  timestamp       DateTime?
+  messageType     String   @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
+  stage           String?  // OPENER, QUALIFYING, etc. (populated later)
+  orderIndex      Int
+  embeddingVector Json?    // OpenAI text-embedding-3-small vector (lead messages only)
 
   conversation TrainingConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -1252,4 +1253,19 @@ model TrainingDataAnalysis {
   account                 Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@index([accountId, runAt(sort: Desc)])
+}
+
+// ─── Voice Quality Gate Failures (logging) ────────────────────────
+
+model VoiceQualityFailure {
+  id          String   @id @default(cuid())
+  accountId   String
+  message     String   @db.Text     // The AI message that failed
+  score       Float                 // 0.0–1.0 quality score
+  hardFails   Json                  // string[] of hard fail reasons
+  attempt     Int                   // Which attempt (1, 2, 3)
+  leadMessage String?  @db.Text     // The lead message that triggered this
+  createdAt   DateTime @default(now())
+
+  @@index([accountId, createdAt(sort: Desc)])
 }
