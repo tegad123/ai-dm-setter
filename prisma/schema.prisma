@@ -189,6 +189,10 @@ model Account {
   trainingTargetOverrideCount Int          @default(20) // Overrides needed to suggest "training complete"
   trainingOverrideCount      Int           @default(0)  // Incremented on each human override during onboarding
 
+  // ── Global AI Response Timing (applies to all scripts) ────
+  responseDelayMin           Int           @default(300) // Min response delay in seconds (default 5 min)
+  responseDelayMax           Int           @default(600) // Max response delay in seconds (default 10 min)
+
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

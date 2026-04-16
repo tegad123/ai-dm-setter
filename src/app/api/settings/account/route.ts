@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
         trainingPhaseStartedAt: true,
         trainingPhaseCompletedAt: true,
         trainingTargetOverrideCount: true,
-        trainingOverrideCount: true
+        trainingOverrideCount: true,
+        responseDelayMin: true,
+        responseDelayMax: true
       }
     });
 
@@ -65,7 +67,9 @@ export async function PUT(req: NextRequest) {
       logoUrl,
       primaryColor,
       onboardingComplete,
-      ghostThresholdDays
+      ghostThresholdDays,
+      responseDelayMin,
+      responseDelayMax
     } = body;
 
     const data: Record<string, unknown> = {};
@@ -77,6 +81,22 @@ export async function PUT(req: NextRequest) {
       data.onboardingComplete = onboardingComplete;
     if (ghostThresholdDays !== undefined)
       data.ghostThresholdDays = ghostThresholdDays;
+    if (typeof responseDelayMin === 'number' && responseDelayMin >= 0)
+      data.responseDelayMin = Math.floor(responseDelayMin);
+    if (typeof responseDelayMax === 'number' && responseDelayMax >= 0)
+      data.responseDelayMax = Math.floor(responseDelayMax);
+
+    // Normalize: ensure max >= min if either was updated
+    if (
+      data.responseDelayMin !== undefined ||
+      data.responseDelayMax !== undefined
+    ) {
+      const min = (data.responseDelayMin as number | undefined) ?? undefined;
+      const max = (data.responseDelayMax as number | undefined) ?? undefined;
+      if (typeof min === 'number' && typeof max === 'number' && max < min) {
+        data.responseDelayMax = min;
+      }
+    }
 
     const account = await prisma.account.update({
       where: { id: auth.accountId },
@@ -95,7 +115,9 @@ export async function PUT(req: NextRequest) {
         trainingPhaseStartedAt: true,
         trainingPhaseCompletedAt: true,
         trainingTargetOverrideCount: true,
-        trainingOverrideCount: true
+        trainingOverrideCount: true,
+        responseDelayMin: true,
+        responseDelayMax: true
       }
     });
 

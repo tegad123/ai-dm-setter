@@ -200,30 +200,26 @@ export async function generateReply(
     throw new Error('Failed to generate AI response');
   }
 
-  // 6. Get response delay from persona config — must read the ACTIVE persona,
-  // not the oldest row, otherwise stale defaults override the dashboard value.
+  // 6. Get response delay from the account (global setting, set on Scripts page).
+  // voiceNotesEnabled still lives on the persona for now.
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { responseDelayMin: true, responseDelayMax: true }
+  });
   const persona =
     (await prisma.aIPersona.findFirst({
       where: { accountId, isActive: true },
       orderBy: { updatedAt: 'desc' },
-      select: {
-        responseDelayMin: true,
-        responseDelayMax: true,
-        voiceNotesEnabled: true
-      }
+      select: { voiceNotesEnabled: true }
     })) ??
     (await prisma.aIPersona.findFirst({
       where: { accountId },
       orderBy: { updatedAt: 'desc' },
-      select: {
-        responseDelayMin: true,
-        responseDelayMax: true,
-        voiceNotesEnabled: true
-      }
+      select: { voiceNotesEnabled: true }
     }));
 
-  const delayMin = persona?.responseDelayMin ?? 300;
-  const delayMax = persona?.responseDelayMax ?? 600;
+  const delayMin = account?.responseDelayMin ?? 300;
+  const delayMax = account?.responseDelayMax ?? 600;
   const { humanResponseDelay } = await import('@/lib/delay-utils');
   const suggestedDelay = humanResponseDelay(delayMin, delayMax);
 

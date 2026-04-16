@@ -825,34 +825,25 @@ export async function scheduleAIReply(
     shouldAutoSend
   ) {
     try {
-      // Read the ACTIVE persona — same convention used by ai-prompts.ts and
-      // the allow-list lookup at line 46. Without the isActive filter we'd
-      // pick the oldest persona by row order, which on this account was a
-      // stale row with the schema defaults of 300/600s, ignoring whatever
-      // the user actually saved in the dashboard. Fall back to "any persona"
-      // only if nothing is active, to keep working on accounts that haven't
-      // gone through activation yet.
+      // Response delays are a GLOBAL account setting (managed on the Scripts page).
+      // voiceNotesEnabled still lives on the active persona for now.
+      const accountRow = await prisma.account.findUnique({
+        where: { id: accountId },
+        select: { responseDelayMin: true, responseDelayMax: true }
+      });
       const persona =
         (await prisma.aIPersona.findFirst({
           where: { accountId, isActive: true },
           orderBy: { updatedAt: 'desc' },
-          select: {
-            responseDelayMin: true,
-            responseDelayMax: true,
-            voiceNotesEnabled: true
-          }
+          select: { voiceNotesEnabled: true }
         })) ??
         (await prisma.aIPersona.findFirst({
           where: { accountId },
           orderBy: { updatedAt: 'desc' },
-          select: {
-            responseDelayMin: true,
-            responseDelayMax: true,
-            voiceNotesEnabled: true
-          }
+          select: { voiceNotesEnabled: true }
         }));
-      const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
-      const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
+      const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
+      const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
 
       // If voice notes are enabled, generate the reply FIRST so we can
       // apply the correct delay system per message type. Fall through to
@@ -2683,19 +2674,12 @@ async function deliverStoredReply(
 export async function computeReplyDelaySeconds(
   accountId: string
 ): Promise<number> {
-  const persona =
-    (await prisma.aIPersona.findFirst({
-      where: { accountId, isActive: true },
-      orderBy: { updatedAt: 'desc' },
-      select: { responseDelayMin: true, responseDelayMax: true }
-    })) ??
-    (await prisma.aIPersona.findFirst({
-      where: { accountId },
-      orderBy: { updatedAt: 'desc' },
-      select: { responseDelayMin: true, responseDelayMax: true }
-    }));
-  const minDelay = Math.max(0, persona?.responseDelayMin ?? 0);
-  const maxDelay = Math.max(minDelay, persona?.responseDelayMax ?? 0);
+  const accountRow = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { responseDelayMin: true, responseDelayMax: true }
+  });
+  const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
+  const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
   if (maxDelay <= 0) return 0;
   return Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 }
