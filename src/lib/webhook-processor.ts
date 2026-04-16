@@ -1589,6 +1589,31 @@ async function sendAIReply(
     return;
   }
 
+  // ── Double-fire guard: skip if AI already replied recently ──────
+  // Catches duplicate ships caused by concurrent webhooks + the
+  // processScheduledReply stale-regen path (which uses skipDelayQueue
+  // and bypasses the Step 0a debounce in scheduleAIReply). A legitimate
+  // next AI reply will always be at least responseDelayMin (30s+) after
+  // the previous one, so a 25-second window is safe and catches the
+  // rapid-double-fires we saw on 2026-04-16 (AI msgs 23 seconds apart
+  // despite a 30–173s delay config).
+  const recentAiMessage = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      sender: 'AI',
+      timestamp: { gte: new Date(Date.now() - 25_000) }
+    },
+    orderBy: { timestamp: 'desc' },
+    select: { id: true, timestamp: true }
+  });
+  if (recentAiMessage) {
+    const ageMs = Date.now() - recentAiMessage.timestamp.getTime();
+    console.log(
+      `[webhook-processor] Double-fire guard: AI already replied ${Math.round(ageMs / 1000)}s ago to ${conversationId} — discarding this duplicate reply`
+    );
+    return;
+  }
+
   const now = new Date();
 
   // ── Check for human message conflict (human sent while AI was generating) ──
