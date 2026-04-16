@@ -292,6 +292,17 @@ async function handleTextPaste(
     );
   }
 
+  // Guard: reject text that's too large (~500K chars)
+  const MAX_PASTE_CHARS = 500_000;
+  if (rawText.length > MAX_PASTE_CHARS) {
+    return NextResponse.json(
+      {
+        error: `Text is too long (${(rawText.length / 1000).toFixed(0)}K characters). Please paste up to 20 conversations at a time.`
+      },
+      { status: 413 }
+    );
+  }
+
   // Dedup via text hash
   const crypto = await import('crypto');
   const fileHash = crypto.createHash('sha256').update(rawText).digest('hex');

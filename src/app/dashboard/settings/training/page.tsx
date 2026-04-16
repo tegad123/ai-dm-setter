@@ -239,6 +239,15 @@ export default function TrainingDataPage() {
   async function handleTextPaste() {
     if (!pasteText.trim()) return;
 
+    // Guard: reject text that's too large (>500K chars ≈ 125K tokens)
+    const MAX_PASTE_CHARS = 500_000;
+    if (pasteText.length > MAX_PASTE_CHARS) {
+      toast.error(
+        `Text is too long (${(pasteText.length / 1000).toFixed(0)}K characters). Please paste up to 20 conversations at a time.`
+      );
+      return;
+    }
+
     setUploadStep('uploading');
     setUploadResult(null);
     setStructuredConversations([]);
@@ -628,14 +637,21 @@ export default function TrainingDataPage() {
                     onChange={(e) => setPasteText(e.target.value)}
                   />
                   <div className='flex items-center justify-between'>
-                    <p className='text-muted-foreground text-xs'>
-                      {pasteText.length > 0
-                        ? `${pasteText.length.toLocaleString()} characters`
-                        : 'Supports Instagram DM exports with timestamps and sender names'}
+                    <p
+                      className={`text-xs ${pasteText.length > 500_000 ? 'font-medium text-red-500' : 'text-muted-foreground'}`}
+                    >
+                      {pasteText.length > 500_000
+                        ? `${(pasteText.length / 1000).toFixed(0)}K characters — too long! Paste up to 20 conversations at a time.`
+                        : pasteText.length > 0
+                          ? `${pasteText.length.toLocaleString()} characters`
+                          : 'Supports Instagram DM exports with timestamps and sender names'}
                     </p>
                     <Button
                       onClick={handleTextPaste}
-                      disabled={pasteText.trim().length < 50}
+                      disabled={
+                        pasteText.trim().length < 50 ||
+                        pasteText.length > 500_000
+                      }
                     >
                       Process & Save
                     </Button>

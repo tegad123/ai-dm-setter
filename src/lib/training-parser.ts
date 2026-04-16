@@ -122,14 +122,46 @@ export function estimateTokens(text: string): TokenEstimate {
 export function detectConversationBoundaries(rawText: string): string[] {
   const lines = rawText.split('\n');
 
-  // ── Pattern 0: ## CONVERSATION headers ────────────────────
-  // Matches: "## CONVERSATION 1: Name" or "## CONVERSATION 2: Name (details)"
+  // ── Header test functions ──────────────────────────────────
+  // Pattern 0: ## CONVERSATION headers
   const convoHeaderTest = (line: string): boolean =>
     /^#{1,3}\s*CONVERSATION\s+\d+/i.test(line.trim());
 
-  const hasConvoHeaders = lines.filter((l) => convoHeaderTest(l)).length >= 2;
+  // Pattern 1: @username headers
+  const atHeaderTest = (line: string): boolean =>
+    /^@[\w._]+(\s*$|\s+[—\-|:(])/.test(line.trim());
 
-  if (hasConvoHeaders) {
+  const convoHeaderCount = lines.filter((l) => convoHeaderTest(l)).length;
+  const atHeaderCount = lines.filter((l) => atHeaderTest(l)).length;
+
+  // ── Mixed format: both @username AND ## CONVERSATION headers present ──
+  // Split on BOTH header types so neither format gets lumped together
+  if (convoHeaderCount >= 2 && atHeaderCount >= 2) {
+    const isAnyHeader = (line: string): boolean =>
+      convoHeaderTest(line) || atHeaderTest(line);
+
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+
+    for (const line of lines) {
+      if (isAnyHeader(line) && currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n'));
+        currentChunk = [line];
+      } else {
+        currentChunk.push(line);
+      }
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join('\n'));
+    }
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
+  }
+
+  // ── Pattern 0: ## CONVERSATION headers only ──────────────
+  if (convoHeaderCount >= 2) {
     const chunks: string[] = [];
     let currentChunk: string[] = [];
 
@@ -150,15 +182,8 @@ export function detectConversationBoundaries(rawText: string): string[] {
     if (filtered.length >= 1) return filtered;
   }
 
-  // ── Pattern 1: @username headers ──────────────────────────
-  // Matches: @username, @user.name, @user_name (even with trailing content
-  // or leading whitespace from PDF extraction).
-  const atHeaderTest = (line: string): boolean =>
-    /^@[\w._]+(\s*$|\s+[—\-|:(])/.test(line.trim());
-
-  const hasAtHeaders = lines.filter((l) => atHeaderTest(l)).length >= 2;
-
-  if (hasAtHeaders) {
+  // ── Pattern 1: @username headers only ─────────────────────
+  if (atHeaderCount >= 2) {
     const chunks: string[] = [];
     let currentChunk: string[] = [];
 
