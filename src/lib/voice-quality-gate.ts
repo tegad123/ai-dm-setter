@@ -241,6 +241,31 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
+  // the AI sends the booking link from the script and the lead picks their
+  // own time. The AI must NOT propose specific day+time combinations.
+  // Hallucinated slots like "Monday at 2 PM" are a critical failure (R14)
+  // because we have no way to guarantee the time is available and the
+  // system isn't going to book it automatically.
+  // Matches patterns like "Monday at 2 PM", "Tuesday 10am", "Friday at 4
+  // PM CST", "tomorrow at 3pm", and the lead-in phrase "here are a couple
+  // of slots".
+  const TIME_SLOT_PATTERNS: RegExp[] = [
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)\b/i,
+    /\b(tomorrow|today)\s+(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)\b/i,
+    /\bhere are (a|some|2|3|two|three) (couple of )?slots?\b/i,
+    /\bchoose from\b.*\b\d{1,2}\s*(am|pm)\b/i,
+    /\b(which|what) (one|time|slot) works (best|better)\b/i
+  ];
+  for (const pat of TIME_SLOT_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `fabricated_time_slot: matched "${pat.source}" — booking is script-driven, don't propose specific times`
+      );
+      break;
+    }
+  }
+
   // 10. Title-case opener — Daniel's voice starts messages in lowercase.
   // "That's smart thinking bro" breaks the voice; "that's smart thinking bro"
   // keeps it. Only fires on the first alphabetic character — inside the
