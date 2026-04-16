@@ -178,8 +178,17 @@ model Account {
   primaryColor       String?     @default("#2563EB") // Brand color
   onboardingComplete Boolean     @default(false)
   plan               AccountPlan @default(FREE)
-  awayMode           Boolean     @default(false)     // Global AI takeover toggle
-  awayModeEnabledAt  DateTime?                       // When away mode was last enabled
+  // Away Mode — per-platform toggles. When a platform's away mode is ON,
+  // the AI auto-sends replies for ALL conversations on that platform
+  // regardless of the per-conversation aiActive flag. Legacy single
+  // `awayMode` field is retained for the migration window but no longer
+  // read at runtime. Prefer the per-platform fields below.
+  awayMode           Boolean     @default(false)     // DEPRECATED — superseded by awayMode{Instagram,Facebook}
+  awayModeEnabledAt  DateTime?                       // DEPRECATED
+  awayModeInstagram           Boolean   @default(false)
+  awayModeInstagramEnabledAt  DateTime?
+  awayModeFacebook            Boolean   @default(false)
+  awayModeFacebookEnabledAt   DateTime?
   ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
 
   // ── Closed-Loop Training ──────────────────────────────────

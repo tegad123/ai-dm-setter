@@ -344,16 +344,21 @@ export async function processIncomingMessage(
     // Check if this looks like a mid-conversation message (not a fresh opener)
     const isOngoing = looksLikeOngoingConversation(messageText);
 
-    // Determine AI default based on away mode:
-    // - Away mode ON → AI handles new leads (aiActive: true)
-    // - Away mode OFF → Human handles new leads (aiActive: false), manually toggle AI on
+    // Determine AI default based on PER-PLATFORM away mode:
+    // - Away mode ON for this lead's platform → AI handles new leads
+    // - Away mode OFF for this lead's platform → Human handles new leads
     // - Ongoing conversations always start with AI off
     const account = await prisma.account.findUnique({
       where: { id: accountId },
-      select: { awayMode: true }
+      select: { awayModeInstagram: true, awayModeFacebook: true }
     });
-    const awayMode = account?.awayMode ?? false;
-    const shouldEnableAI = isOngoing ? false : awayMode;
+    const awayModeForPlatform =
+      platform === 'INSTAGRAM'
+        ? (account?.awayModeInstagram ?? false)
+        : platform === 'FACEBOOK'
+          ? (account?.awayModeFacebook ?? false)
+          : false;
+    const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
 
     // Create new lead + conversation
     lead = await prisma.lead.create({
@@ -385,7 +390,7 @@ export async function processIncomingMessage(
       );
     } else {
       console.log(
-        `[webhook-processor] Created new lead: ${lead.id} (${senderHandle}) — AI=${shouldEnableAI ? 'ON' : 'OFF'} (awayMode=${awayMode})`
+        `[webhook-processor] Created new lead: ${lead.id} (${senderHandle}) — AI=${shouldEnableAI ? 'ON' : 'OFF'} (platform=${platform} awayMode=${awayModeForPlatform})`
       );
     }
   }
@@ -708,20 +713,26 @@ export async function scheduleAIReply(
 
   const { lead } = conversation;
 
-  // Check account-level away mode
+  // Check account-level PER-PLATFORM away mode. The lead's platform decides
+  // whether the Instagram or Facebook switch applies to this conversation.
   log('sched.step1.findAccount');
   const account = await prisma.account.findUnique({
     where: { id: accountId },
-    select: { awayMode: true }
+    select: { awayModeInstagram: true, awayModeFacebook: true }
   });
+  const awayModeForPlatform =
+    lead.platform === 'INSTAGRAM'
+      ? (account?.awayModeInstagram ?? false)
+      : lead.platform === 'FACEBOOK'
+        ? (account?.awayModeFacebook ?? false)
+        : false;
 
-  // If AI is not active AND away mode is off, generate suggestion only
+  // If AI is not active AND this platform's away mode is off, generate suggestion only
   const aiActive = conversation.aiActive;
-  const awayMode = account?.awayMode ?? false;
-  const shouldAutoSend = aiActive || awayMode;
+  const shouldAutoSend = aiActive || awayModeForPlatform;
   log(
     'sched.step1.aiActive',
-    `aiActive=${aiActive} awayMode=${awayMode} shouldAutoSend=${shouldAutoSend}`
+    `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} shouldAutoSend=${shouldAutoSend}`
   );
 
   if (!shouldAutoSend) {
