@@ -176,6 +176,37 @@ export function scoreVoiceQuality(reply: string): QualityResult {
     hardFails.push(`message_too_long: ${reply.length} chars`);
   }
 
+  // 9. Cliffhanger preamble — a short message that promises follow-up
+  // content without delivering it. Happens when the LLM generates a
+  // voice-note intro ("My G! I'll explain") but the voice note never
+  // gets attached (empty library, matcher miss, ElevenLabs fails). The
+  // result is a standalone fragment that reads like the AI ghosted the
+  // lead mid-thought.
+  const CLIFFHANGER_PATTERNS = [
+    /\bi['']ll explain\b/i,
+    /\blemme explain\b/i,
+    /\blet me show you\b/i,
+    /\blemme show you\b/i,
+    /\blet me tell you\b/i,
+    /\blemme tell you\b/i,
+    /\bi['']ll send you (something|a|the)\b/i,
+    /\bhold up[.,]?\s*i['']ll\b/i,
+    /\bgimme a sec\b/i,
+    /\blemme break (it|this) down\b/i
+  ];
+  for (const pattern of CLIFFHANGER_PATTERNS) {
+    if (pattern.test(reply)) {
+      // Only a hard fail if the message is SHORT (<80 chars) — a
+      // cliffhanger phrase inside a longer substantive reply is fine.
+      if (reply.trim().length < 80) {
+        hardFails.push(
+          `cliffhanger_preamble: matched "${pattern.source}" in ${reply.trim().length}-char message`
+        );
+        break;
+      }
+    }
+  }
+
   // ── Soft scoring ────────────────────────────────────────────────
 
   // Under 200 chars

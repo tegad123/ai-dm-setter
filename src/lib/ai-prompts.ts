@@ -1137,6 +1137,64 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
 
   // ── TEST MODE: skip-to-booking backdoor ───────────────────────────
   // When the lead sends "september 2002" in any DM, the webhook-processor
+  // ── Voice note availability check ────────────────────────────────
+  // If the library is empty AND no script slot has bound audio, the AI
+  // must not generate voice-note preambles like "My G! I'll explain" —
+  // those rely on an audio follow-up that will never come. Strip voice
+  // note options from the prompt and inject an explicit anti-preamble
+  // rule. This is the root-cause fix for the "LLM sent a preamble and
+  // the voice note matchers all returned nothing" failure mode.
+  try {
+    const [vnLibraryCount, vnBoundSlotCount] = await Promise.all([
+      prisma.voiceNoteLibraryItem.count({ where: { accountId } }),
+      prisma.scriptSlot.count({
+        where: {
+          accountId,
+          slotType: 'voice_note',
+          boundVoiceNoteId: { not: null }
+        }
+      })
+    ]);
+    const voiceNotesAvailable = vnLibraryCount > 0 || vnBoundSlotCount > 0;
+    if (!voiceNotesAvailable) {
+      // Force format to text-only
+      prompt = prompt.replace(
+        /"format":\s*"text"\s*\|\s*"voice_note"/,
+        '"format": "text"'
+      );
+      // Remove the voice_note_action JSON schema line
+      prompt = prompt.replace(
+        /,\s*\n\s*"voice_note_action":\s*null\s*\|\s*\{\s*"slot_id":\s*"<voice_note_slot_id>"\s*\}/,
+        ''
+      );
+      // Remove the voice_note_action instruction paragraph
+      prompt = prompt.replace(/\*\*voice_note_action\*\*:[^\n]*\n+/, '');
+      // Inject an explicit anti-preamble rule at the top of the prompt
+      const antiPreambleRule = `[VOICE NOTES DISABLED — IMPORTANT]
+Voice notes are currently unavailable for this account (no audio files configured). You MUST respond with complete, substantive text replies only.
+
+NEVER use cliffhanger preambles like:
+- "My G! I'll explain"
+- "Lemme explain"
+- "Lemme tell you..."
+- "Let me show you..."
+- "Hold up, I'll send you something"
+- Any short phrase that promises more content to follow
+
+Every message you send must stand alone with real substance. If you would normally send a voice note explaining something, write that explanation as text instead. Match the voice and length of the few-shot examples, but never send a preamble with no follow-through.
+
+----- ORIGINAL PROMPT BELOW -----
+
+`;
+      prompt = antiPreambleRule + prompt;
+    }
+  } catch (err) {
+    console.error(
+      '[ai-prompts] Voice note availability check failed (non-fatal):',
+      err
+    );
+  }
+
   // sets leadContext.testModeSkipToBooking = true. This prepends a hard
   // override at the very top of the prompt that tells the AI to ignore all
   // earlier stages and jump directly to BOOKING (Stage 7). Used for dev
