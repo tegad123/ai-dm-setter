@@ -616,6 +616,7 @@ export async function scheduleAIReply(
   accountId: string,
   options?: { skipDelayQueue?: boolean }
 ): Promise<void> {
+  const _pipelineStart = Date.now();
   // Diagnostic checkpoint logging — every step prints a tag with the convo id
   // so we can see exactly where the function silently exits in production logs.
   const log = (tag: string, extra?: string) =>
@@ -1045,6 +1046,7 @@ export async function scheduleAIReply(
 
   // ── Step 4: Generate AI reply ──────────────────────────────────
   log('sched.step4.generateStart');
+  const _aiGenStart = Date.now();
   const formattedMessages = messages.map((m) => ({
     id: m.id,
     sender: m.sender,
@@ -1061,7 +1063,11 @@ export async function scheduleAIReply(
       leadContext,
       scoringContext
     );
-    log('sched.step4.generateDone', `stage=${result.stage}`);
+    const _aiGenMs = Date.now() - _aiGenStart;
+    log(
+      'sched.step4.generateDone',
+      `stage=${result.stage} aiGen=${(_aiGenMs / 1000).toFixed(1)}s`
+    );
   } catch (err) {
     console.error(
       `[webhook-processor] AI generation failed for ${conversationId}:`,
@@ -1306,7 +1312,8 @@ export async function scheduleAIReply(
   // Either way, the reply ships now.
   console.log(
     `[webhook-processor] Sending AI reply for ${conversationId}` +
-      (options?.skipDelayQueue ? ' (delivered after scheduled delay)' : '')
+      (options?.skipDelayQueue ? ' (delivered after scheduled delay)' : '') +
+      ` | pipeline so far: ${((Date.now() - _pipelineStart) / 1000).toFixed(1)}s`
   );
   await sendAIReply(conversationId, accountId, lead, result);
 }
