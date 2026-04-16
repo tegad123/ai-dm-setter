@@ -16,10 +16,111 @@ import {
   IconMicrophone,
   IconRobot,
   IconUserCheck,
-  IconBolt
+  IconBolt,
+  IconPencil
 } from '@tabler/icons-react';
+import { apiFetch } from '@/lib/api';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
+
+// ── Inline override note input ──────────────────────────────────────
+function OverrideNoteInput({
+  conversationId,
+  messageId,
+  initialNote
+}: {
+  conversationId: string;
+  messageId: string;
+  initialNote: string | null | undefined;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState(initialNote || '');
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState(initialNote || '');
+
+  const handleSave = async () => {
+    if (!note.trim() && !savedNote) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiFetch(`/conversations/${conversationId}/override-note`, {
+        method: 'POST',
+        body: JSON.stringify({ messageId, note: note.trim() })
+      });
+      setSavedNote(note.trim());
+      setEditing(false);
+    } catch {
+      toast.error('Failed to save note');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing && savedNote) {
+    return (
+      <button
+        className='mt-1 flex items-center gap-1 text-[10px] text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300'
+        onClick={() => setEditing(true)}
+      >
+        <IconPencil className='h-3 w-3' />
+        &ldquo;{savedNote}&rdquo;
+      </button>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <button
+        className='text-muted-foreground hover:text-foreground mt-1 flex items-center gap-1 text-[10px]'
+        onClick={() => setEditing(true)}
+      >
+        <IconPencil className='h-3 w-3' />
+        Why did you change it?
+      </button>
+    );
+  }
+
+  return (
+    <div className='mt-1.5 flex items-center gap-1.5'>
+      <input
+        type='text'
+        value={note}
+        onChange={(e) => setNote(e.target.value.slice(0, 140))}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleSave();
+          if (e.key === 'Escape') setEditing(false);
+        }}
+        placeholder='e.g. Too formal, Wrong tone...'
+        maxLength={140}
+        autoFocus
+        className='h-6 flex-1 rounded border bg-transparent px-2 text-[11px] outline-none focus:border-amber-400'
+      />
+      <Button
+        size='sm'
+        variant='ghost'
+        className='h-6 px-2 text-[10px]'
+        onClick={handleSave}
+        disabled={saving}
+      >
+        {saving ? '...' : 'Save'}
+      </Button>
+      <Button
+        size='sm'
+        variant='ghost'
+        className='h-6 px-1 text-[10px]'
+        onClick={() => {
+          setNote(savedNote);
+          setEditing(false);
+        }}
+      >
+        ✕
+      </Button>
+    </div>
+  );
+}
 
 interface ConversationThreadProps {
   conversation: Conversation;
@@ -248,6 +349,14 @@ export function ConversationThread({
                             )}
                           </div>
                         </div>
+                        {/* Override note input — shown for human override messages */}
+                        {isHuman && msg.isHumanOverride && (
+                          <OverrideNoteInput
+                            conversationId={conversation.id}
+                            messageId={msg.id}
+                            initialNote={msg.humanOverrideNote}
+                          />
+                        )}
                       </div>
                     </div>
                   );

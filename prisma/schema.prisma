@@ -140,6 +140,12 @@ enum DataSource {
   SEED
 }
 
+enum TrainingPhase {
+  ONBOARDING
+  ACTIVE
+  PAUSED
+}
+
 // ─── Training Upload Pipeline Enums ──────────────────────
 
 enum UploadStatus {
@@ -175,6 +181,14 @@ model Account {
   awayMode           Boolean     @default(false)     // Global AI takeover toggle
   awayModeEnabledAt  DateTime?                       // When away mode was last enabled
   ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
+
+  // ── Closed-Loop Training ──────────────────────────────────
+  trainingPhase              TrainingPhase @default(ONBOARDING)
+  trainingPhaseStartedAt     DateTime      @default(now())
+  trainingPhaseCompletedAt   DateTime?
+  trainingTargetOverrideCount Int          @default(20) // Overrides needed to suggest "training complete"
+  trainingOverrideCount      Int           @default(0)  // Incremented on each human override during onboarding
+
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
@@ -197,6 +211,7 @@ model Account {
   scriptSlots        ScriptSlot[]
   scripts            Script[]
   trainingAnalyses   TrainingDataAnalysis[]
+  aiSuggestions      AISuggestion[]
 
   @@index([slug])
 }
@@ -692,8 +707,9 @@ model Conversation {
   bookingUrl     String?   // Fallback link if provider doesn't support server-side booking
 
   // Relations
-  lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  messages Message[]
+  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages       Message[]
+  aiSuggestions  AISuggestion[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
@@ -725,9 +741,19 @@ model Message {
   followUpAttemptNumber      Int?      // For ghosted lead follow-ups (1, 2, 3)
   systemPromptVersion        String?   // Semver of prompt used to generate this message
 
+  // ── Closed-Loop Training Fields ────────────────────────────
+  isHumanOverride            Boolean   @default(false) // True when human sent this instead of AI
+  rejectedAISuggestionId     String?                   // FK to AISuggestion the human rejected
+  editedFromSuggestion       Boolean   @default(false) // True if human text was similar to suggestion (>0.7)
+  suggestionId               String?                   // FK to AISuggestion that generated this AI message
+  humanOverrideNote          String?   @db.Text        // Optional 1-line reason from human
+  loggedDuringTrainingPhase  Boolean   @default(false) // Snapshot: was account in ONBOARDING when saved?
+
   // Relations
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser   User?        @relation("HumanSender", fields: [sentByUserId], references: [id])
+  conversation        Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser          User?         @relation("HumanSender", fields: [sentByUserId], references: [id])
+  suggestion          AISuggestion? @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
+  rejectedSuggestion  AISuggestion? @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
 
   @@unique([conversationId, platformMessageId])
   @@index([conversationId, timestamp])
@@ -1277,4 +1303,48 @@ model VoiceQualityFailure {
   createdAt   DateTime @default(now())
 
   @@index([accountId, createdAt(sort: Desc)])
+}
+
+// ─── Closed-Loop Training: AI Suggestion Logging ─────────────────────
+
+model AISuggestion {
+  id                          String   @id @default(cuid())
+  conversationId              String
+  accountId                   String
+  generatedAt                 DateTime @default(now())
+
+  // Generated response
+  responseText                String   @db.Text
+  retrievalTier               Int?                      // Which few-shot tier produced examples (1, 2, 3)
+  qualityGateAttempts         Int      @default(1)      // How many LLM calls before quality passed
+  qualityGateScore            Float?                    // Final voice quality gate score (0.0–1.0)
+  qualityGatePassedFirstAttempt Boolean @default(false) // True if first attempt passed
+
+  // Context snapshot at generation time
+  intentClassification        String?                   // Content intent detected (e.g. "price_objection")
+  intentConfidence            Float?                    // Intent classifier confidence (0.0–1.0)
+  leadStageSnapshot           String?                   // Lead stage at generation (e.g. "QUALIFYING")
+  leadTypeSnapshot            String?                   // Mapped lead type (e.g. "beginner")
+
+  // Outcome tracking
+  wasSelected                 Boolean  @default(false)  // True if AI auto-sent this response
+  wasRejected                 Boolean  @default(false)  // True if human overrode with a different message
+  wasEdited                   Boolean  @default(false)  // True if human text was similar (>0.7 similarity)
+  finalSentText               String?  @db.Text         // What was actually sent (AI or human text)
+  similarityToFinalSent       Float?                    // Cosine sim between responseText and finalSentText
+
+  // Training phase context
+  generatedDuringTrainingPhase Boolean @default(false)  // Snapshot: was account in ONBOARDING?
+
+  // Relations
+  conversation                Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  account                     Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  selectedByMessages          Message[]    @relation("SelectedSuggestion")
+  rejectedByMessages          Message[]    @relation("RejectedSuggestion")
+
+  @@index([conversationId, generatedAt(sort: Desc)])
+  @@index([accountId, generatedAt(sort: Desc)])
+  @@index([accountId, generatedDuringTrainingPhase, generatedAt(sort: Desc)])
+  @@index([wasSelected, generatedAt(sort: Desc)])
+  @@index([wasRejected, generatedAt(sort: Desc)])
 }

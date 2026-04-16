@@ -102,12 +102,75 @@ export async function POST(
 
     const now = new Date();
 
+    // ── Closed-loop training: detect human override of AI suggestion ──
+    let overrideFields: Record<string, unknown> = {};
+    if (sender === 'HUMAN') {
+      try {
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const recentSuggestion = await prisma.aISuggestion.findFirst({
+          where: {
+            conversationId: id,
+            wasSelected: false,
+            wasRejected: false,
+            generatedAt: { gte: twoHoursAgo }
+          },
+          orderBy: { generatedAt: 'desc' }
+        });
+
+        if (recentSuggestion) {
+          const accountRow = await prisma.account.findUnique({
+            where: { id: auth.accountId },
+            select: { trainingPhase: true }
+          });
+          const isOnboarding = accountRow?.trainingPhase === 'ONBOARDING';
+
+          // Jaccard similarity
+          const sArr = recentSuggestion.responseText.toLowerCase().split(/\s+/);
+          const hArr = (content as string).toLowerCase().split(/\s+/);
+          const sWords = new Set(sArr);
+          const hWords = new Set(hArr);
+          const inter = sArr.filter((w) => hWords.has(w)).length;
+          const allWords = new Set(sArr.concat(hArr));
+          const sim = allWords.size > 0 ? inter / allWords.size : 0;
+
+          overrideFields = {
+            isHumanOverride: true,
+            rejectedAISuggestionId: recentSuggestion.id,
+            editedFromSuggestion: sim > 0.7,
+            loggedDuringTrainingPhase: isOnboarding
+          };
+
+          // Update the suggestion
+          await prisma.aISuggestion.update({
+            where: { id: recentSuggestion.id },
+            data: {
+              wasRejected: true,
+              wasEdited: sim > 0.7,
+              finalSentText: content,
+              similarityToFinalSent: sim
+            }
+          });
+
+          // Increment override count if onboarding
+          if (isOnboarding) {
+            await prisma.account.update({
+              where: { id: auth.accountId },
+              data: { trainingOverrideCount: { increment: 1 } }
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[messages] Override detection failed (non-fatal):', err);
+      }
+    }
+
     const message = await prisma.message.create({
       data: {
         conversationId: id,
         content,
         sender,
         timestamp: now,
+        ...overrideFields,
         // Self-optimizing layer tracking fields (only set for AI messages)
         ...(sender === 'AI'
           ? {

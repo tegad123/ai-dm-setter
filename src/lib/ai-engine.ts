@@ -41,6 +41,8 @@ export interface GenerateReplyResult {
   qualityScore: number;
   suggestedDelay: number;
   systemPromptVersion: string;
+  // Closed-loop training
+  suggestionId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +70,10 @@ export async function generateReply(
   // 0b. Retrieve few-shot examples from training data (non-fatal)
   //     Uses metadata-filtered 3-tier retrieval when context is available.
   let fewShotBlock: string | null = null;
+  let detectedIntent: string | undefined;
   if (lastLeadMsg) {
     try {
       // Classify intent for metadata-aware retrieval (non-fatal)
-      let detectedIntent: string | undefined;
       try {
         const { classifyContentIntent } = await import(
           '@/lib/content-intent-classifier'
@@ -131,8 +133,12 @@ export async function generateReply(
   // 4. Call the LLM with quality gate (retry up to 2x on voice fails)
   const MAX_RETRIES = 2;
   let parsed: ParsedAIResponse | null = null;
+  let qualityGateAttempts = 0;
+  let finalQualityScore: number | null = null;
+  let qualityGatePassedFirstAttempt = false;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    qualityGateAttempts = attempt + 1;
     const rawResponse = await callLLM(
       provider,
       apiKey,
@@ -145,8 +151,10 @@ export async function generateReply(
 
     // 5. Voice quality gate
     const quality = scoreVoiceQuality(parsed.message);
+    finalQualityScore = quality.score;
 
     if (quality.passed) {
+      if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
         console.log(
           `[ai-engine] Voice quality passed on retry ${attempt} (score: ${quality.score.toFixed(2)})`
@@ -225,6 +233,52 @@ export async function generateReply(
   // 7. Get prompt version for tracking
   const systemPromptVersion = await getPromptVersion(accountId);
 
+  // 8. Create AISuggestion record for closed-loop training (non-fatal)
+  let suggestionId: string | null = null;
+  try {
+    // Check account's current training phase for snapshot
+    const accountRow = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { trainingPhase: true }
+    });
+    const isOnboarding = accountRow?.trainingPhase === 'ONBOARDING';
+
+    // Resolve the conversationId from the last lead message in history
+    // (passed via leadContext, but we need the actual convo ID — the caller
+    // must provide it; we extract from the conversation history context)
+    const lastMsg = [...conversationHistory].reverse().find((m) => m.id);
+    let convoId: string | null = null;
+    if (lastMsg?.id) {
+      const msgRow = await prisma.message.findUnique({
+        where: { id: lastMsg.id },
+        select: { conversationId: true }
+      });
+      convoId = msgRow?.conversationId || null;
+    }
+
+    if (convoId) {
+      const suggestion = await prisma.aISuggestion.create({
+        data: {
+          conversationId: convoId,
+          accountId,
+          responseText: parsed.message,
+          retrievalTier: null, // TODO: pipe from retriever in future
+          qualityGateAttempts,
+          qualityGateScore: finalQualityScore,
+          qualityGatePassedFirstAttempt,
+          intentClassification: detectedIntent || null,
+          intentConfidence: null, // TODO: pipe from classifier in future
+          leadStageSnapshot: leadContext.status || null,
+          leadTypeSnapshot: leadContext.experience || null,
+          generatedDuringTrainingPhase: isOnboarding
+        }
+      });
+      suggestionId = suggestion.id;
+    }
+  } catch (err) {
+    console.error('[ai-engine] AISuggestion write failed (non-fatal):', err);
+  }
+
   return {
     reply: parsed.message,
     format: parsed.format as 'text' | 'voice_note',
@@ -247,7 +301,8 @@ export async function generateReply(
     voiceNoteAction: parsed.voiceNoteAction,
     qualityScore: Math.round(parsed.stageConfidence * 100),
     suggestedDelay,
-    systemPromptVersion
+    systemPromptVersion,
+    suggestionId
   };
 }
 

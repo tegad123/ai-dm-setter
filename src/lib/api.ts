@@ -86,6 +86,8 @@ export interface Message {
   sentimentScore?: number | null;
   followUpAttemptNumber?: number | null;
   systemPromptVersion?: string | null;
+  isHumanOverride?: boolean;
+  humanOverrideNote?: string | null;
 }
 
 export interface OverviewStats {

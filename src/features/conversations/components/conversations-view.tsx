@@ -80,7 +80,9 @@ export function ConversationsView() {
     id: m.id,
     sender: m.sender as 'ai' | 'lead' | 'human',
     content: m.content,
-    timestamp: m.sentAt || m.timestamp || ''
+    timestamp: m.sentAt || m.timestamp || '',
+    isHumanOverride: m.isHumanOverride,
+    humanOverrideNote: m.humanOverrideNote
   }));
 
   // Map conversations list

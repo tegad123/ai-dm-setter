@@ -2,6 +2,7 @@ import KBar from '@/components/kbar';
 import AppSidebar from '@/components/layout/app-sidebar';
 import Header from '@/components/layout/header';
 import { ApiKeyBanner } from '@/components/api-key-banner';
+import { TrainingBanner } from '@/components/training-banner';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
@@ -29,6 +30,7 @@ export default async function DashboardLayout({
         <SidebarInset>
           <Header />
           <ApiKeyBanner />
+          <TrainingBanner />
           {children}
         </SidebarInset>
       </SidebarProvider>

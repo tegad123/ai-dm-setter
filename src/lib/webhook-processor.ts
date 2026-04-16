@@ -1356,6 +1356,7 @@ async function sendAIReply(
     suggestedTags: string[];
     suggestedDelay: number;
     systemPromptVersion: string;
+    suggestionId?: string | null;
   }
 ): Promise<void> {
   // Re-check that AI is still active (human might have taken over during delay)
@@ -1410,9 +1411,28 @@ async function sendAIReply(
       objectionType: result.objectionDetected || null,
       stallType: result.stallType || null,
       followUpAttemptNumber: result.followUpNumber ?? null,
-      systemPromptVersion: result.systemPromptVersion
+      systemPromptVersion: result.systemPromptVersion,
+      suggestionId: result.suggestionId || null
     }
   });
+
+  // ── Link AISuggestion as selected ──────────────────────────────
+  if (result.suggestionId) {
+    try {
+      await prisma.aISuggestion.update({
+        where: { id: result.suggestionId },
+        data: {
+          wasSelected: true,
+          finalSentText: result.reply
+        }
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] AISuggestion selection update failed (non-fatal):',
+        err
+      );
+    }
+  }
 
   // Update conversation
   await prisma.conversation.update({
@@ -2074,6 +2094,82 @@ export async function processAdminMessage(
     return;
   }
 
+  // ── Closed-loop training: detect human override of AI suggestion ──
+  let isHumanOverride = false;
+  let rejectedAISuggestionId: string | null = null;
+  let editedFromSuggestion = false;
+  let loggedDuringTrainingPhase = false;
+
+  try {
+    // Find the most recent AISuggestion in the last 2 hours that hasn't been
+    // selected or rejected yet — this is the suggestion the human is overriding.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const recentSuggestion = await prisma.aISuggestion.findFirst({
+      where: {
+        conversationId,
+        wasSelected: false,
+        wasRejected: false,
+        generatedAt: { gte: twoHoursAgo }
+      },
+      orderBy: { generatedAt: 'desc' }
+    });
+
+    if (recentSuggestion) {
+      isHumanOverride = true;
+      rejectedAISuggestionId = recentSuggestion.id;
+
+      // Check training phase for snapshot
+      const accountRow = await prisma.account.findUnique({
+        where: { id: accountId },
+        select: { trainingPhase: true, trainingOverrideCount: true }
+      });
+      loggedDuringTrainingPhase = accountRow?.trainingPhase === 'ONBOARDING';
+
+      // Compute rough text similarity (word overlap / Jaccard) for editedFromSuggestion
+      const suggestionArr = recentSuggestion.responseText
+        .toLowerCase()
+        .split(/\s+/);
+      const humanArr = messageText.toLowerCase().split(/\s+/);
+      const humanWordSet = new Set(humanArr);
+      const intersection = suggestionArr.filter((w) =>
+        humanWordSet.has(w)
+      ).length;
+      const allWords = new Set(suggestionArr.concat(humanArr));
+      const similarity = allWords.size > 0 ? intersection / allWords.size : 0;
+      editedFromSuggestion = similarity > 0.7;
+
+      // Update the AISuggestion
+      await prisma.aISuggestion.update({
+        where: { id: recentSuggestion.id },
+        data: {
+          wasRejected: true,
+          wasEdited: editedFromSuggestion,
+          finalSentText: messageText,
+          similarityToFinalSent: similarity
+        }
+      });
+
+      // Increment override count if in onboarding
+      if (loggedDuringTrainingPhase) {
+        await prisma.account.update({
+          where: { id: accountId },
+          data: { trainingOverrideCount: { increment: 1 } }
+        });
+      }
+
+      console.log(
+        `[webhook-processor] Human override detected for ${conversationId}: ` +
+          `suggestion=${recentSuggestion.id}, similarity=${similarity.toFixed(2)}, ` +
+          `edited=${editedFromSuggestion}, onboarding=${loggedDuringTrainingPhase}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Override detection failed (non-fatal):',
+      err
+    );
+  }
+
   // Save as HUMAN message (genuinely sent by a human admin)
   const message = await prisma.message.create({
     data: {
@@ -2081,7 +2177,11 @@ export async function processAdminMessage(
       sender: 'HUMAN',
       content: messageText,
       timestamp: new Date(),
-      platformMessageId: platformMessageId || null
+      platformMessageId: platformMessageId || null,
+      isHumanOverride,
+      rejectedAISuggestionId,
+      editedFromSuggestion,
+      loggedDuringTrainingPhase
     }
   });
 

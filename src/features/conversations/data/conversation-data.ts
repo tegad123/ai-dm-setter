@@ -5,6 +5,8 @@ export interface Message {
   timestamp: string;
   isVoiceNote?: boolean;
   voiceNoteUrl?: string;
+  isHumanOverride?: boolean;
+  humanOverrideNote?: string | null;
 }
 
 export interface ConversationTag {

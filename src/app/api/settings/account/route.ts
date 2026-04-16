@@ -17,7 +17,12 @@ export async function GET(req: NextRequest) {
         primaryColor: true,
         plan: true,
         onboardingComplete: true,
-        ghostThresholdDays: true
+        ghostThresholdDays: true,
+        trainingPhase: true,
+        trainingPhaseStartedAt: true,
+        trainingPhaseCompletedAt: true,
+        trainingTargetOverrideCount: true,
+        trainingOverrideCount: true
       }
     });
 
@@ -85,7 +90,12 @@ export async function PUT(req: NextRequest) {
         primaryColor: true,
         plan: true,
         onboardingComplete: true,
-        ghostThresholdDays: true
+        ghostThresholdDays: true,
+        trainingPhase: true,
+        trainingPhaseStartedAt: true,
+        trainingPhaseCompletedAt: true,
+        trainingTargetOverrideCount: true,
+        trainingOverrideCount: true
       }
     });
 
