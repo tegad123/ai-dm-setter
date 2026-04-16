@@ -355,7 +355,7 @@ async function handleTextPaste(
     }
   });
 
-  // Save conversations to DB
+  // Save conversations to DB (dedup against existing conversations in the account)
   const saved: Array<any> = [];
   const hashes = parsed.map((c) => c.contentHash);
   const existingConvos = await prisma.trainingConversation.findMany({
@@ -364,6 +364,10 @@ async function handleTextPaste(
   });
   const existingSet = new Set(existingConvos.map((c) => c.contentHash));
   const newConvos = parsed.filter((c) => !existingSet.has(c.contentHash));
+
+  console.log(
+    `[training-upload] Dedup: ${parsed.length} parsed, ${existingSet.size} already exist, ${newConvos.length} new to save`
+  );
 
   for (const conv of newConvos) {
     const created = await prisma.trainingConversation.create({

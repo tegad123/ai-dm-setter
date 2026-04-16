@@ -316,12 +316,29 @@ export function parseConversationsFromText(
 ): ParsedConversation[] {
   const chunks = detectConversationBoundaries(rawText);
   const conversations: ParsedConversation[] = [];
+  const dropped: string[] = [];
 
   for (const chunk of chunks) {
     const conv = parseSingleConversation(chunk);
     if (conv && conv.messages.length >= 2) {
       conversations.push(conv);
+    } else {
+      // Log what was dropped for debugging
+      const firstLine =
+        chunk
+          .split('\n')
+          .find((l) => l.trim())
+          ?.trim() || '(empty)';
+      const msgCount = conv?.messages.length ?? 0;
+      dropped.push(`"${firstLine.slice(0, 60)}" (${msgCount} msgs)`);
     }
+  }
+
+  console.log(
+    `[training-parser] Boundary detection found ${chunks.length} chunks → ${conversations.length} valid conversations, ${dropped.length} dropped`
+  );
+  if (dropped.length > 0) {
+    console.log(`[training-parser] Dropped chunks: ${dropped.join(' | ')}`);
   }
 
   return conversations;
@@ -487,20 +504,47 @@ function parseLabeledConversation(
     const label = match[1].toUpperCase();
     const msgText = match[2].trim();
 
-    // Skip meta-annotations like [LEFT ON READ], [OPENING MESSAGE], [LEAD CONTACT INFO]
+    if (!msgText) continue;
+
+    const isCloser =
+      label === 'YOU' || label === 'CLOSER' || label === 'SETTER';
+
+    // Handle bracketed content — could be annotation or message-type indicator
+    if (/^\[.*\]$/.test(msgText)) {
+      // Voice note indicators → classify as VOICE_NOTE
+      if (/VOICE\s*(MESSAGE|NOTE)/i.test(msgText)) {
+        messages.push({
+          sender: isCloser ? 'CLOSER' : 'LEAD',
+          text: msgText,
+          timestamp: null,
+          messageType: 'VOICE_NOTE',
+          orderIndex: messages.length
+        });
+        continue;
+      }
+      // Shared content → classify as SYSTEM
+      if (/SHARED\s+A\s+(POST|REEL|STORY)/i.test(msgText)) {
+        messages.push({
+          sender: isCloser ? 'CLOSER' : 'LEAD',
+          text: msgText,
+          timestamp: null,
+          messageType: 'SYSTEM',
+          orderIndex: messages.length
+        });
+        continue;
+      }
+      // Everything else in brackets (LEFT ON READ, OPENING MESSAGE, etc.) → skip
+      continue;
+    }
+
+    // Skip bare known annotations (without brackets) — must be exact match
     if (
-      /^\[.*\]$/.test(msgText) ||
-      /LEFT ON READ|OPENING MESSAGE|LEAD CONTACT INFO|SETTER LEFT/i.test(
+      /^(LEFT ON READ|OPENING MESSAGE|LEAD CONTACT INFO|SETTER LEFT ON READ|SETTER LEFT)$/i.test(
         msgText
       )
     ) {
       continue;
     }
-
-    if (!msgText) continue;
-
-    const isCloser =
-      label === 'YOU' || label === 'CLOSER' || label === 'SETTER';
 
     let messageType: ParsedMessage['messageType'] = 'TEXT';
     if (/voice\s*(message|note)|click for audio|audio call/i.test(msgText)) {

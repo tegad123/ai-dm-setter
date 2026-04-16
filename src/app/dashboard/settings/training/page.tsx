@@ -262,9 +262,18 @@ export default function TrainingDataPage() {
         await fetchUploads();
         setPasteText('');
 
-        toast.success(
-          `Parsed ${result.conversations.length} conversations${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicates skipped)` : ''}`
-        );
+        const newCount = result.conversations.length;
+        const dupCount = result.duplicatesSkipped || 0;
+        const totalParsed = newCount + dupCount;
+        if (dupCount > 0) {
+          toast.success(
+            `Found ${totalParsed} conversations — ${newCount} new added, ${dupCount} already in your training data`
+          );
+        } else {
+          toast.success(
+            `Added ${newCount} conversations to your training data`
+          );
+        }
       } else if (result.upload) {
         // Fallback: normal PDF flow
         setUploadResult(result);
