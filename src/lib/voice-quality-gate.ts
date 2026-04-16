@@ -230,16 +230,49 @@ export function scoreVoiceQuality(
   // gets attached (empty library, matcher miss, ElevenLabs fails). The
   // result is a standalone fragment that reads like the AI ghosted the
   // lead mid-thought.
-  for (const pattern of PROMISE_PATTERNS) {
-    if (pattern.test(reply)) {
-      // Only a hard fail if the message is SHORT (<80 chars) — a
-      // cliffhanger phrase inside a longer substantive reply is fine.
+  for (const cliffhangerPattern of PROMISE_PATTERNS) {
+    if (cliffhangerPattern.test(reply)) {
       if (reply.trim().length < 80) {
         hardFails.push(
-          `cliffhanger_preamble: matched "${pattern.source}" in ${reply.trim().length}-char message`
+          `cliffhanger_preamble: matched "${cliffhangerPattern.source}" in ${reply.trim().length}-char message`
         );
         break;
       }
+    }
+  }
+
+  // 10. Title-case opener — Daniel's voice starts messages in lowercase.
+  // "That's smart thinking bro" breaks the voice; "that's smart thinking bro"
+  // keeps it. Only fires on the first alphabetic character — inside the
+  // message proper nouns (names, FTMO) stay capitalized. Exceptions:
+  //   - "I" as a standalone pronoun ("I feel you")
+  //   - ALL-CAPS first word of <=3 chars ("OMG", "WYD", "IMO")
+  const firstCharMatch = reply.trim().match(/[A-Za-z]/);
+  if (
+    firstCharMatch &&
+    firstCharMatch.index !== undefined &&
+    reply.trim().length >= 3
+  ) {
+    const ch = firstCharMatch[0];
+    const firstWord = reply
+      .trim()
+      .slice(firstCharMatch.index)
+      .split(/\s+/)[0]
+      .replace(/[^A-Za-z]/g, '');
+    const isAllCapsShort =
+      firstWord.length > 0 &&
+      firstWord.length <= 3 &&
+      firstWord === firstWord.toUpperCase();
+    const isStandaloneI = firstWord === 'I';
+    if (
+      ch === ch.toUpperCase() &&
+      ch !== ch.toLowerCase() &&
+      !isAllCapsShort &&
+      !isStandaloneI
+    ) {
+      hardFails.push(
+        `title_case_opener: starts with "${firstWord}" — voice requires lowercase openers`
+      );
     }
   }
 

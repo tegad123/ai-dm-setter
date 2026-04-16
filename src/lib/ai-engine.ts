@@ -159,6 +159,23 @@ This rule overrides stage progression — even if the funnel says you should be 
     );
   }
 
+  // ── FINAL OUTPUT FORMAT REMINDER ──────────────────────────────
+  // Stacked directive blocks (pre_qualified_context, promise-keeping,
+  // voice-notes-disabled) sometimes confuse the LLM into replying with
+  // plain text instead of the required JSON. This trailer lands as the
+  // LAST thing the model reads before generating, which carries more
+  // recency weight than instructions buried hundreds of lines up.
+  systemPrompt += `\n\n## OUTPUT FORMAT — NON-NEGOTIABLE (READ LAST)
+Your entire response MUST be a single valid JSON object matching the RESPONSE FORMAT schema at the top of this system prompt. No prose. No markdown. No code fences.
+
+At minimum, your JSON must include these fields with valid values:
+- "format": "text" (or "voice_note" if enabled)
+- "message": the actual reply you want sent to the lead, written in Daniel's voice (lowercase opener, casual)
+- "stage": one of OPENING | SITUATION_DISCOVERY | GOAL_EMOTIONAL_WHY | URGENCY | SOFT_PITCH_COMMITMENT | FINANCIAL_SCREENING | BOOKING — whichever stage you are ACTUALLY in right now based on the conversation
+- "stage_confidence": a number 0.0–1.0
+
+If you catch yourself writing plain text, stop and rewrite as JSON. The entire pipeline breaks when stage is missing — downstream systems rely on it to track funnel progression.`;
+
   // 2. Resolve AI provider credentials (per-account BYOK → env fallback)
   const { provider, apiKey, model } = await resolveAIProvider(accountId);
 
@@ -425,7 +442,11 @@ async function callLLM(
     const response = await client.chat.completions.create({
       model,
       temperature: 0.85,
-      max_tokens: 500,
+      max_tokens: 1500,
+      // Force OpenAI to emit a valid JSON object. The system prompt already
+      // demands JSON, but stacked directive blocks sometimes steered the
+      // model into plain text — this guarantees the response parses.
+      response_format: { type: 'json_object' },
       messages: [{ role: 'system', content: systemPrompt }, ...messages]
     });
 
@@ -457,7 +478,7 @@ async function callLLM(
       model,
       system: systemPrompt,
       temperature: 0.85,
-      max_tokens: 500,
+      max_tokens: 1500,
       messages: anthropicMessages
     });
 
@@ -588,6 +609,10 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       voiceNoteAction: obj.voice_note_action || null
     };
   } catch {
+    console.warn(
+      '[ai-engine] JSON parse failed — LLM returned plain text instead of JSON. Falling back to defaults. First 200 chars:',
+      raw.slice(0, 200)
+    );
     // If JSON parsing fails, treat the whole response as a plain text message
     return defaults;
   }
