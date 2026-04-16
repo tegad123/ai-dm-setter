@@ -629,6 +629,55 @@ export async function scheduleAIReply(
     options?.skipDelayQueue ? '(cron picked up)' : '(realtime)'
   );
 
+  // ── Step 0a: Debounce — skip if we JUST sent an AI reply ──────
+  // Catches the race where two inbound lead messages arrive close
+  // together and each triggers its own scheduleAIReply, resulting in
+  // near-duplicate AI messages back-to-back. If an AI message was sent
+  // in the last 15 seconds, another reply on the heels of it is almost
+  // certainly a duplicate or would talk over the lead. Never applies
+  // when the cron is re-running us with skipDelayQueue — that's the
+  // legitimate "deliver the scheduled one now" path.
+  if (!options?.skipDelayQueue) {
+    const DEBOUNCE_WINDOW_MS = 15_000;
+    const recentAiMsg = await prisma.message.findFirst({
+      where: {
+        conversationId,
+        sender: 'AI',
+        timestamp: { gte: new Date(Date.now() - DEBOUNCE_WINDOW_MS) }
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, timestamp: true }
+    });
+    if (recentAiMsg) {
+      const ageMs = Date.now() - recentAiMsg.timestamp.getTime();
+      log(
+        'sched.step0a.debounced',
+        `AI replied ${Math.round(ageMs / 1000)}s ago — skipping duplicate generation`
+      );
+      return;
+    }
+  }
+
+  // ── Step 0b: Cancel any existing PENDING scheduled replies ────
+  // When the lead sends multiple messages in quick succession, each
+  // webhook lands here. The previous in-flight ScheduledReply is now
+  // stale (based on older context) — cancel it so only the newest
+  // reply ships. Skip this when the cron is processing a specific row
+  // (that row is in PROCESSING state, not PENDING, so it wouldn't be
+  // touched by this updateMany anyway; we skip for clarity).
+  if (!options?.skipDelayQueue) {
+    const cancelled = await prisma.scheduledReply.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    if (cancelled.count > 0) {
+      log(
+        'sched.step0b.cancelledStale',
+        `cancelled ${cancelled.count} stale PENDING scheduled reply(ies)`
+      );
+    }
+  }
+
   // ── Step 1: Check AI active + away mode ────────────────────────
   log('sched.step1.findConversation');
   const conversation = await prisma.conversation.findUnique({
