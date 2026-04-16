@@ -122,6 +122,41 @@ export function estimateTokens(text: string): TokenEstimate {
 export function detectConversationBoundaries(rawText: string): string[] {
   const lines = rawText.split('\n');
 
+  // ── Pattern -1: Categorized export with Folder: lines ─────
+  // Matches headers like:
+  //   [Hard No (Explicit Rejection)] Hdee Mclaren
+  //   Folder: hdeemclaren_xxx | 65 messages (30 you / 35 lead)
+  const folderLineTest = (line: string): boolean =>
+    /^Folder:\s*\S+.*\|\s*\d+\s+messages?/i.test(line.trim());
+
+  const folderLineCount = lines.filter((l) => folderLineTest(l)).length;
+
+  if (folderLineCount >= 2) {
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      // A conversation starts at the line BEFORE a Folder: line
+      // (that line is the [Category] Name header)
+      const nextIsFolderLine =
+        i + 1 < lines.length && folderLineTest(lines[i + 1]);
+
+      if (nextIsFolderLine && currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n'));
+        currentChunk = [lines[i]];
+      } else {
+        currentChunk.push(lines[i]);
+      }
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join('\n'));
+    }
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
+  }
+
   // ── Header test functions ──────────────────────────────────
   // Pattern 0: ## CONVERSATION headers
   const convoHeaderTest = (line: string): boolean =>
@@ -369,6 +404,183 @@ export function parseConversationsFromText(
   return conversations;
 }
 
+// ---------------------------------------------------------------------------
+// Sender line detection for timestamp-based formats
+// ---------------------------------------------------------------------------
+
+/**
+ * Detects if a line is a sender/name line (e.g. "DaeTradez (You):" or "Thomas:").
+ * Returns { isCloser: true/false } or null if not a sender line.
+ */
+function detectSenderLine(line: string): { isCloser: boolean } | null {
+  const trimmed = line.trim();
+
+  // Must end with ':'
+  if (!trimmed.endsWith(':')) return null;
+
+  // Must be reasonably short
+  if (trimmed.length > 60) return null;
+
+  // Must NOT be a timestamp
+  if (TIMESTAMP_RE.test(trimmed)) return null;
+
+  // Has (You) marker → definitely closer
+  if (/\(You\)\s*:?\s*$/i.test(trimmed)) return { isCloser: true };
+
+  // Extract name before the colon
+  const beforeColon = trimmed.slice(0, -1).trim();
+  if (beforeColon.length < 1 || beforeColon.length > 55) return null;
+
+  // Skip URLs
+  if (/https?:\/\//i.test(beforeColon)) return null;
+
+  // Skip lines that look like sentences (start with common English words)
+  if (
+    /^(I |I'm|You |He |She |We |They |It |The |A |An |My |Your |How |What |Why |When |Where |Which |Do |Did |Will |Would |Can |Could |Should |Is |Are |Was |Were |Has |Have |Had |Not |No |Yes |Yeah |Yep |Nah |Sure |Ok |Bet |Nice |Damn |Just |But |And |So |If |Let |Look )/i.test(
+      beforeColon
+    )
+  )
+    return null;
+
+  // Skip lines ending with sentence-final punctuation before the colon
+  if (/[.!?]$/.test(beforeColon)) return null;
+
+  return { isCloser: false };
+}
+
+// ---------------------------------------------------------------------------
+// Classify message type
+// ---------------------------------------------------------------------------
+
+function classifyMessageType(msgText: string): ParsedMessage['messageType'] {
+  if (/voice\s*(message|note)|click for audio|audio call/i.test(msgText))
+    return 'VOICE_NOTE';
+  if (/liked a message|reacted.*to your message/i.test(msgText))
+    return 'REACTION';
+  if (
+    /missed (video|voice) call|call started|shared a (post|reel|story)/i.test(
+      msgText
+    )
+  )
+    return 'SYSTEM';
+  if (/^https?:\/\/\S+$/i.test(msgText.trim())) return 'URL_DROP';
+  return 'TEXT';
+}
+
+// ---------------------------------------------------------------------------
+// Parse timestamp string
+// ---------------------------------------------------------------------------
+
+function parseTimestamp(tsLine: string): Date | null {
+  try {
+    const tsClean = tsLine.trim().replace(/,/g, '');
+    const d = new Date(tsClean);
+    if (!isNaN(d.getTime())) return d;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Format B timestamp parser: sender → text → timestamp
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses conversations where the format is:
+ *   SenderName (You):
+ *   Message text (one or more lines)
+ *   Jan 19, 2026 10:10 am
+ *
+ * The sender persists until a new sender line appears.
+ * This is the format used by Instagram DM exports.
+ */
+function parseTimestampFormatB(
+  lines: string[],
+  leadIdentifier: string
+): ParsedConversation | null {
+  const messages: ParsedMessage[] = [];
+  let currentSender: 'CLOSER' | 'LEAD' | null = null;
+  let currentTextLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+
+    // Skip header lines
+    if (
+      /^\[.+?\]\s+\S/.test(trimmed) &&
+      !/^\[(YOU|LEAD|CLOSER|SETTER)\]/i.test(trimmed)
+    )
+      continue;
+    if (/^Folder:/i.test(trimmed)) continue;
+
+    // Check if it's a sender line
+    const sender = detectSenderLine(trimmed);
+    if (sender) {
+      // New sender — discard any accumulated text without a timestamp
+      currentSender = sender.isCloser ? 'CLOSER' : 'LEAD';
+      currentTextLines = [];
+      continue;
+    }
+
+    // Check if it's a timestamp line
+    if (TIMESTAMP_RE.test(trimmed)) {
+      if (currentSender && currentTextLines.length > 0) {
+        const msgText = currentTextLines.join('\n').trim();
+        if (msgText) {
+          messages.push({
+            sender: currentSender,
+            text: msgText,
+            timestamp: parseTimestamp(trimmed),
+            messageType: classifyMessageType(msgText),
+            orderIndex: messages.length
+          });
+        }
+      }
+      currentTextLines = [];
+      continue;
+    }
+
+    // Regular text line — accumulate
+    currentTextLines.push(trimmed);
+  }
+
+  if (messages.length < 2) return null;
+
+  // If messages are in reverse chronological order, reverse them
+  const validTs = messages
+    .filter((m) => m.timestamp)
+    .map((m) => m.timestamp!.getTime());
+  if (validTs.length >= 2 && validTs[0] > validTs[validTs.length - 1]) {
+    messages.reverse();
+    messages.forEach((m, i) => (m.orderIndex = i));
+  }
+
+  const closerMsgs = messages.filter((m) => m.sender === 'CLOSER');
+  const leadMsgs = messages.filter((m) => m.sender === 'LEAD');
+  const voiceNotes = messages.filter((m) => m.messageType === 'VOICE_NOTE');
+  const timestamps = messages
+    .filter((m) => m.timestamp)
+    .map((m) => m.timestamp!);
+
+  return {
+    leadIdentifier,
+    messages,
+    messageCount: messages.length,
+    closerMessageCount: closerMsgs.length,
+    leadMessageCount: leadMsgs.length,
+    voiceNoteCount: voiceNotes.length,
+    contentHash: computeContentHash(messages),
+    startedAt: timestamps.length > 0 ? timestamps[0] : null,
+    endedAt: timestamps.length > 0 ? timestamps[timestamps.length - 1] : null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Single conversation parser
+// ---------------------------------------------------------------------------
+
 function parseSingleConversation(text: string): ParsedConversation | null {
   const lines = text.split('\n');
 
@@ -380,18 +592,27 @@ function parseSingleConversation(text: string): ParsedConversation | null {
       leadIdentifier = '@' + atMatch[1];
       break;
     }
-    // Also check for "Display name: Foo | N messages" headers
+    // "Display name: Foo | N messages" headers
     const dnMatch = lines[i]?.trim().match(/^Display name:\s*(.+?)\s*\|/i);
     if (dnMatch) {
       leadIdentifier = dnMatch[1].trim();
       break;
     }
-    // Also check for "## CONVERSATION N: Name" headers
+    // "## CONVERSATION N: Name" headers
     const convoMatch = lines[i]
       ?.trim()
       .match(/^#{1,3}\s*CONVERSATION\s+\d+[:\s]*(.+)?$/i);
     if (convoMatch && convoMatch[1]) {
       leadIdentifier = convoMatch[1].trim().replace(/\s*\(.*\)$/, '');
+      break;
+    }
+    // [Category] Name headers (e.g. "[Hard No (Explicit Rejection)] Hdee Mclaren")
+    const categoryMatch = lines[i]?.trim().match(/^\[.+?\]\s+(.+)$/);
+    if (
+      categoryMatch &&
+      !/^\[(YOU|LEAD|CLOSER|SETTER)\]/i.test(lines[i]?.trim() || '')
+    ) {
+      leadIdentifier = categoryMatch[1].trim();
       break;
     }
   }
@@ -414,6 +635,23 @@ function parseSingleConversation(text: string): ParsedConversation | null {
 
   if (tsIndices.length < 2) return null;
 
+  // ── Detect format ────────────────────────────────────────────
+  // Format A: sender line is immediately before timestamp
+  // Format B: sender → text → timestamp (Instagram DM export style)
+  //
+  // Check if the line before the first timestamp is a sender line.
+  // If NOT, it's Format B (the text is between sender and timestamp).
+  const firstTsIdx = tsIndices[0];
+  const lineBeforeTs = firstTsIdx > 0 ? lines[firstTsIdx - 1].trim() : '';
+  const senderBeforeTs = detectSenderLine(lineBeforeTs);
+
+  if (!senderBeforeTs) {
+    // Likely Format B — try it first
+    const result = parseTimestampFormatB(lines, leadIdentifier);
+    if (result && result.messages.length >= 2) return result;
+  }
+
+  // ── Format A fallback (sender → timestamp → text) ────────────
   const messages: ParsedMessage[] = [];
 
   for (let t = 0; t < tsIndices.length; t++) {
@@ -436,45 +674,18 @@ function parseSingleConversation(text: string): ParsedConversation | null {
     }
     const msgText = textLines.join('\n').trim();
 
-    // Classify message type
-    let messageType: ParsedMessage['messageType'] = 'TEXT';
-    if (/voice\s*(message|note)|click for audio|audio call/i.test(msgText)) {
-      messageType = 'VOICE_NOTE';
-    } else if (/liked a message|reacted.*to your message/i.test(msgText)) {
-      messageType = 'REACTION';
-    } else if (
-      /missed (video|voice) call|call started|shared a (post|reel|story)/i.test(
-        msgText
-      )
-    ) {
-      messageType = 'SYSTEM';
-    } else if (/^https?:\/\/\S+$/i.test(msgText.trim())) {
-      messageType = 'URL_DROP';
-    }
-
-    // Parse timestamp
-    let timestamp: Date | null = null;
-    try {
-      // Remove extra commas for Date parsing: "Jan 14, 2026, 10:09 am" → "Jan 14 2026 10:09 am"
-      const tsClean = lines[tsIdx].trim().replace(/,/g, '');
-      const d = new Date(tsClean);
-      if (!isNaN(d.getTime())) timestamp = d;
-    } catch {
-      /* ignore */
-    }
-
     messages.push({
       sender: isCloser ? 'CLOSER' : 'LEAD',
       text: msgText || null,
-      timestamp,
-      messageType,
+      timestamp: parseTimestamp(lines[tsIdx]),
+      messageType: classifyMessageType(msgText),
       orderIndex: messages.length
     });
   }
 
   if (messages.length < 2) return null;
 
-  // If messages are in reverse chronological order (newest first), reverse them
+  // If messages are in reverse chronological order, reverse them
   const validTs = messages
     .filter((m) => m.timestamp)
     .map((m) => m.timestamp!.getTime());
