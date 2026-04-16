@@ -1236,18 +1236,20 @@ model LeadScriptPosition {
 // ─── Training Data Adequacy Analyzer (Sprint 4) ─────────────────────
 
 model TrainingDataAnalysis {
-  id                 String   @id @default(cuid())
-  accountId          String
-  runAt              DateTime @default(now())
-  overallScore       Int                      // 0-100 weighted readiness
-  categoryScores     Json                     // { quantity, voice_style, lead_type, stage, outcome, objection }
-  totalConversations Int
-  totalMessages      Int
-  recommendations    Json                     // [{ category, severity, description, recommendation, evidence }]
-  estimatedCostCents Int?
-  status             String   @default("complete") // running | complete | failed
-  errorMessage       String?  @db.Text
-  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id                      String   @id @default(cuid())
+  accountId               String
+  runAt                   DateTime @default(now())
+  overallScore            Int                      // 0-100 weighted readiness
+  categoryScores          Json                     // { quantity, voice_style, lead_type, stage, outcome, objection }
+  totalConversations      Int
+  totalMessages           Int
+  recommendations         Json                     // [{ category, severity, description, recommendation, evidence }]
+  estimatedCostCents      Int?
+  status                  String   @default("complete") // running | complete | failed
+  errorMessage            String?  @db.Text
+  analyzedConversationIds Json?                    // string[] — IDs of conversations included in this analysis
+  categoryMetrics         Json?                    // Per-category distributions for incremental merge
+  account                 Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@index([accountId, runAt(sort: Desc)])
 }

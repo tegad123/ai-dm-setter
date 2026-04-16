@@ -55,6 +55,8 @@ export interface AnalysisResult {
     evidence?: string;
   }>;
   summary: string;
+  analyzedConversationIds: string[];
+  categoryMetrics: Record<string, Record<string, unknown>>;
 }
 
 export interface CostEstimate {
@@ -725,40 +727,248 @@ async function analyzeObjectionCoverage(
 }
 
 // ---------------------------------------------------------------------------
+// Incremental helpers: merge new LLM results with previous distributions
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge two distribution maps by summing counts.
+ */
+function mergeDistributions(
+  prev: Record<string, number>,
+  curr: Record<string, number>
+): Record<string, number> {
+  const merged = { ...prev };
+  for (const [key, count] of Object.entries(curr)) {
+    merged[key] = (merged[key] || 0) + (count || 0);
+  }
+  return merged;
+}
+
+/**
+ * Re-score an existing distribution without re-scanning conversations.
+ * Used when no new data was added — just recalculates the score.
+ */
+async function rescoreDistribution(
+  apiKey: string,
+  prompt: string,
+  distributionKey: string,
+  distribution: Record<string, number>,
+  totalConversations: number
+): Promise<CategoryResult> {
+  const response = await callAnalyzerLLM(
+    apiKey,
+    prompt,
+    `Here is the ${distributionKey} across ${totalConversations} conversations:\n${JSON.stringify(distribution, null, 2)}\n\nScore this distribution and provide gaps/recommendations. Total conversations: ${totalConversations}.`
+  );
+  const parsed = parseJSON(response) as unknown as CategoryResult;
+  return {
+    score: parsed.score ?? 0,
+    metrics: { ...(parsed.metrics ?? {}), [distributionKey]: distribution },
+    gaps: parsed.gaps ?? []
+  };
+}
+
+/**
+ * Incremental lead type analysis: scan only new conversations, merge with previous.
+ */
+async function analyzeLeadTypeCoverageIncremental(
+  newConversations: ConversationData[],
+  newMessages: number,
+  previousDistribution: Record<string, number>,
+  totalConversations: number,
+  apiKey: string
+): Promise<CategoryResult> {
+  const chunks = chunkConversations(newConversations, newMessages);
+  const newDistribution: Record<string, number> = {};
+
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      LEAD_TYPE_ANALYSIS_PROMPT,
+      `Analyze these ${chunk.length} conversations and classify each lead type. Return JSON with lead_type_distribution counts.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as Record<string, unknown>;
+    const dist =
+      ((parsed.metrics as Record<string, unknown>)
+        ?.lead_type_distribution as Record<string, number>) || {};
+    for (const [type, count] of Object.entries(dist)) {
+      newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+    }
+  }
+
+  const merged = mergeDistributions(previousDistribution, newDistribution);
+
+  return rescoreDistribution(
+    apiKey,
+    LEAD_TYPE_ANALYSIS_PROMPT,
+    'lead_type_distribution',
+    merged,
+    totalConversations
+  );
+}
+
+/**
+ * Incremental stage coverage analysis.
+ */
+async function analyzeStageCoverageIncremental(
+  newConversations: ConversationData[],
+  newMessages: number,
+  previousDistribution: Record<string, number>,
+  totalConversations: number,
+  totalMessages: number,
+  apiKey: string
+): Promise<CategoryResult> {
+  const chunks = chunkConversations(newConversations, newMessages);
+  const newDistribution: Record<string, number> = {};
+
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      STAGE_COVERAGE_ANALYSIS_PROMPT,
+      `Analyze these ${chunk.length} conversations and classify each message by pipeline stage. Return JSON with stage_distribution counts.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as Record<string, unknown>;
+    const dist =
+      ((parsed.metrics as Record<string, unknown>)
+        ?.stage_distribution as Record<string, number>) || {};
+    for (const [stage, count] of Object.entries(dist)) {
+      newDistribution[stage] = (newDistribution[stage] || 0) + (count || 0);
+    }
+  }
+
+  const merged = mergeDistributions(previousDistribution, newDistribution);
+
+  const result = await rescoreDistribution(
+    apiKey,
+    STAGE_COVERAGE_ANALYSIS_PROMPT,
+    'stage_distribution',
+    merged,
+    totalConversations
+  );
+  // Preserve total messages in metrics
+  result.metrics.total_messages = totalMessages;
+  return result;
+}
+
+/**
+ * Incremental objection coverage analysis.
+ */
+async function analyzeObjectionCoverageIncremental(
+  newConversations: ConversationData[],
+  newMessages: number,
+  previousDistribution: Record<string, number>,
+  totalConversations: number,
+  apiKey: string
+): Promise<CategoryResult> {
+  const chunks = chunkConversations(newConversations, newMessages);
+  const newDistribution: Record<string, number> = {};
+
+  for (const chunk of chunks) {
+    const transcripts = chunk.map(formatConversation).join('\n\n');
+    const response = await callAnalyzerLLM(
+      apiKey,
+      OBJECTION_COVERAGE_ANALYSIS_PROMPT,
+      `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type. Return JSON with objection_distribution counts.\n\n${transcripts}`
+    );
+    const parsed = parseJSON(response) as Record<string, unknown>;
+    const dist =
+      ((parsed.metrics as Record<string, unknown>)
+        ?.objection_distribution as Record<string, number>) || {};
+    for (const [type, count] of Object.entries(dist)) {
+      newDistribution[type] = (newDistribution[type] || 0) + (count || 0);
+    }
+  }
+
+  const merged = mergeDistributions(previousDistribution, newDistribution);
+
+  return rescoreDistribution(
+    apiKey,
+    OBJECTION_COVERAGE_ANALYSIS_PROMPT,
+    'objection_distribution',
+    merged,
+    totalConversations
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Cost Estimation
 // ---------------------------------------------------------------------------
 
 export async function estimateAnalysisCost(
   accountId: string
-): Promise<CostEstimate> {
+): Promise<
+  CostEstimate & { newConversations: number; isIncremental: boolean }
+> {
   const conversations = await fetchTrainingData(accountId);
   const totalMessages = conversations.flatMap((c) => c.messages).length;
   const totalConversations = conversations.length;
 
+  // Check for previous analysis to determine incremental scope
+  const previousAnalysis = await prisma.trainingDataAnalysis.findFirst({
+    where: { accountId, status: 'complete' },
+    orderBy: { runAt: 'desc' },
+    select: { analyzedConversationIds: true }
+  });
+
+  const previousIds = new Set<string>(
+    (previousAnalysis?.analyzedConversationIds as string[] | null) || []
+  );
+  const currentIds = conversations.map((c) => c.id);
+  const deletedIds = Array.from(previousIds).filter(
+    (id) => !currentIds.includes(id)
+  );
+  const isIncremental = previousIds.size > 0 && deletedIds.length === 0;
+
+  // Determine which conversations the LLM needs to process
+  let llmConversations: ConversationData[];
+  if (isIncremental) {
+    llmConversations = conversations.filter((c) => !previousIds.has(c.id));
+  } else {
+    llmConversations = conversations;
+  }
+
+  const llmMessages = llmConversations.flatMap((c) => c.messages).length;
+
   // Estimate token count: ~4 tokens per word, ~10 words per message
   const avgTokensPerMessage = 40;
-  const totalInputTokens = totalMessages * avgTokensPerMessage;
+  const llmInputTokens = llmMessages * avgTokensPerMessage;
+
+  if (llmConversations.length === 0 && isIncremental) {
+    // No new data — only re-run DB categories + voice style + synthesis
+    return {
+      estimatedCostDollars: '$0.01',
+      estimatedTokens: 2000,
+      totalConversations,
+      totalMessages,
+      newConversations: 0,
+      isIncremental: true
+    };
+  }
 
   // Count LLM calls:
-  // Cat 2: 1 call (20 messages sample)
-  // Cat 3, 4, 6: chunked full scan
-  const chunks = chunkConversations(conversations, totalMessages);
+  // Cat 2: 1 call (20 messages sample from ALL data)
+  // Cat 3, 4, 6: chunked scan on NEW conversations only (if incremental)
+  const chunks = chunkConversations(llmConversations, llmMessages);
   const numChunks = chunks.length;
   const fullScanCalls = numChunks * 3; // 3 categories
-  // Cat 7: 1 synthesis call
-  const totalCalls = 1 + fullScanCalls + 1; // voice/style + full-scan + synthesis
+  // + 3 synthesis calls (one per category to re-score merged distributions)
+  const synthesisCalls = isIncremental ? 3 : 0;
+  const totalCalls = 1 + fullScanCalls + synthesisCalls + 1; // voice/style + scans + merges + final synthesis
 
   // Haiku pricing: ~$0.25 / 1M input tokens, ~$1.25 / 1M output tokens
-  // Estimate ~500 output tokens per call
-  const inputCost = (totalInputTokens * fullScanCalls * 0.25) / 1_000_000;
+  const inputCost = (llmInputTokens * fullScanCalls * 0.25) / 1_000_000;
   const outputCost = (totalCalls * 500 * 1.25) / 1_000_000;
   const totalCost = inputCost + outputCost;
 
   return {
     estimatedCostDollars: `$${Math.max(0.01, totalCost).toFixed(2)}`,
-    estimatedTokens: totalInputTokens * fullScanCalls + totalCalls * 500,
+    estimatedTokens: llmInputTokens * fullScanCalls + totalCalls * 500,
     totalConversations,
-    totalMessages
+    totalMessages,
+    newConversations: llmConversations.length,
+    isIncremental
   };
 }
 
@@ -772,33 +982,153 @@ export async function runTrainingAnalysis(
   const { apiKey } = await resolveProvider(accountId);
   const conversations = await fetchTrainingData(accountId);
   const totalMessages = conversations.flatMap((c) => c.messages).length;
+  const currentIds = conversations.map((c) => c.id);
 
-  // Run all 6 categories
-  // Cat 1 & 5: Pure DB (synchronous)
+  // ── Check for previous analysis (incremental support) ───────────
+  const previousAnalysis = await prisma.trainingDataAnalysis.findFirst({
+    where: { accountId, status: 'complete' },
+    orderBy: { runAt: 'desc' },
+    select: {
+      analyzedConversationIds: true,
+      categoryMetrics: true
+    }
+  });
+
+  const previousIds = new Set<string>(
+    (previousAnalysis?.analyzedConversationIds as string[] | null) || []
+  );
+  const previousMetrics =
+    (previousAnalysis?.categoryMetrics as Record<
+      string,
+      Record<string, unknown>
+    >) || null;
+
+  // Determine new vs deleted conversations
+  const newConversations = conversations.filter((c) => !previousIds.has(c.id));
+  const deletedIds = Array.from(previousIds).filter(
+    (id) => !currentIds.includes(id)
+  );
+
+  // If conversations were deleted, distributions are stale → full re-run
+  const canDoIncremental =
+    previousIds.size > 0 && deletedIds.length === 0 && previousMetrics !== null;
+
+  const isIncremental = canDoIncremental && newConversations.length >= 0;
+  const hasNewData = newConversations.length > 0;
+
+  if (isIncremental && !hasNewData) {
+    console.log(
+      `[training-analyzer] No new conversations since last analysis — re-running DB categories only`
+    );
+  } else if (isIncremental) {
+    console.log(
+      `[training-analyzer] Incremental: ${newConversations.length} new conversations (${previousIds.size} already analyzed)`
+    );
+  } else if (deletedIds.length > 0) {
+    console.log(
+      `[training-analyzer] ${deletedIds.length} conversations deleted since last run — full re-analysis`
+    );
+  }
+
+  // ── Cat 1 & 5: Always re-run on ALL data (pure DB, free) ─────
   const quantityResult = analyzeQuantity(conversations);
   const outcomeResult = analyzeOutcomeCoverage(conversations);
 
-  // Cat 2: Voice/Style (1 LLM call)
+  // ── Cat 2: Voice/Style — always re-run (1 LLM call, samples from all data) ──
   const voiceStyleResult = await analyzeVoiceStyle(conversations, apiKey);
 
-  // Cat 3, 4, 6: Full scan with chunking (sequential to avoid rate limits)
-  const leadTypeResult = await analyzeLeadTypeCoverage(
-    conversations,
-    totalMessages,
-    apiKey
-  );
-  const stageResult = await analyzeStageCoverage(
-    conversations,
-    totalMessages,
-    apiKey
-  );
-  const objectionResult = await analyzeObjectionCoverage(
-    conversations,
-    totalMessages,
-    apiKey
-  );
+  // ── Cat 3, 4, 6: Full-scan LLM categories — incremental if possible ──
+  let leadTypeResult: CategoryResult;
+  let stageResult: CategoryResult;
+  let objectionResult: CategoryResult;
 
-  // Collect all category results
+  if (isIncremental && !hasNewData) {
+    // No new data — reuse previous LLM metrics, just re-score distributions
+    leadTypeResult = await rescoreDistribution(
+      apiKey,
+      LEAD_TYPE_ANALYSIS_PROMPT,
+      'lead_type_distribution',
+      (previousMetrics.lead_type_coverage?.lead_type_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length
+    );
+    stageResult = await rescoreDistribution(
+      apiKey,
+      STAGE_COVERAGE_ANALYSIS_PROMPT,
+      'stage_distribution',
+      (previousMetrics.stage_coverage?.stage_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length
+    );
+    objectionResult = await rescoreDistribution(
+      apiKey,
+      OBJECTION_COVERAGE_ANALYSIS_PROMPT,
+      'objection_distribution',
+      (previousMetrics.objection_coverage?.objection_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length
+    );
+  } else if (isIncremental && hasNewData) {
+    // Incremental: LLM-analyze only new conversations, merge with previous
+    const newMessages = newConversations.flatMap((c) => c.messages).length;
+
+    leadTypeResult = await analyzeLeadTypeCoverageIncremental(
+      newConversations,
+      newMessages,
+      (previousMetrics.lead_type_coverage?.lead_type_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length,
+      apiKey
+    );
+    stageResult = await analyzeStageCoverageIncremental(
+      newConversations,
+      newMessages,
+      (previousMetrics.stage_coverage?.stage_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length,
+      totalMessages,
+      apiKey
+    );
+    objectionResult = await analyzeObjectionCoverageIncremental(
+      newConversations,
+      newMessages,
+      (previousMetrics.objection_coverage?.objection_distribution as Record<
+        string,
+        number
+      >) || {},
+      conversations.length,
+      apiKey
+    );
+  } else {
+    // Full analysis (no previous, or deletions detected)
+    leadTypeResult = await analyzeLeadTypeCoverage(
+      conversations,
+      totalMessages,
+      apiKey
+    );
+    stageResult = await analyzeStageCoverage(
+      conversations,
+      totalMessages,
+      apiKey
+    );
+    objectionResult = await analyzeObjectionCoverage(
+      conversations,
+      totalMessages,
+      apiKey
+    );
+  }
+
+  // ── Collect all category results ─────────────────────────────
   const categoryScores = {
     quantity: quantityResult.score,
     voice_style: voiceStyleResult.score,
@@ -808,7 +1138,17 @@ export async function runTrainingAnalysis(
     objection_coverage: objectionResult.score
   };
 
-  // Run synthesis via LLM
+  // Save per-category metrics for future incremental merges
+  const categoryMetrics: Record<string, Record<string, unknown>> = {
+    quantity: quantityResult.metrics,
+    voice_style: voiceStyleResult.metrics,
+    lead_type_coverage: leadTypeResult.metrics,
+    stage_coverage: stageResult.metrics,
+    outcome_coverage: outcomeResult.metrics,
+    objection_coverage: objectionResult.metrics
+  };
+
+  // ── Synthesis ────────────────────────────────────────────────
   const allGaps = [
     ...quantityResult.gaps.map((g) => ({ ...g, category: 'quantity' })),
     ...voiceStyleResult.gaps.map((g) => ({ ...g, category: 'voice_style' })),
@@ -830,14 +1170,7 @@ export async function runTrainingAnalysis(
   const synthesisInput = JSON.stringify({
     category_scores: categoryScores,
     all_gaps: allGaps,
-    metrics: {
-      quantity: quantityResult.metrics,
-      voice_style: voiceStyleResult.metrics,
-      lead_type_coverage: leadTypeResult.metrics,
-      stage_coverage: stageResult.metrics,
-      outcome_coverage: outcomeResult.metrics,
-      objection_coverage: objectionResult.metrics
-    }
+    metrics: categoryMetrics
   });
 
   const synthesisResponse = await callAnalyzerLLM(
@@ -894,6 +1227,8 @@ export async function runTrainingAnalysis(
     totalConversations: conversations.length,
     totalMessages,
     recommendations: rankedGaps,
-    summary
+    summary,
+    analyzedConversationIds: currentIds,
+    categoryMetrics
   };
 }

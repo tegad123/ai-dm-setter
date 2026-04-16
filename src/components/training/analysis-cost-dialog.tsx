@@ -55,10 +55,32 @@ export default function AnalysisCostDialog({
               ) : estimate ? (
                 <>
                   <p>
-                    This will analyze{' '}
-                    <strong>{estimate.totalConversations}</strong> conversations
-                    ({estimate.totalMessages.toLocaleString()} messages) across
-                    6 quality categories.
+                    {estimate.isIncremental &&
+                    estimate.newConversations !== undefined ? (
+                      estimate.newConversations === 0 ? (
+                        <>
+                          All <strong>{estimate.totalConversations}</strong>{' '}
+                          conversations have already been analyzed. This will
+                          re-score with updated metrics only (minimal cost).
+                        </>
+                      ) : (
+                        <>
+                          Analyzing <strong>{estimate.newConversations}</strong>{' '}
+                          new conversations (
+                          {estimate.totalConversations -
+                            estimate.newConversations}{' '}
+                          already analyzed). Only new data will be sent to the
+                          AI.
+                        </>
+                      )
+                    ) : (
+                      <>
+                        This will analyze{' '}
+                        <strong>{estimate.totalConversations}</strong>{' '}
+                        conversations ({estimate.totalMessages.toLocaleString()}{' '}
+                        messages) across 6 quality categories.
+                      </>
+                    )}
                   </p>
                   <div className='bg-muted rounded-md p-3'>
                     <p className='text-sm font-medium'>
@@ -73,8 +95,9 @@ export default function AnalysisCostDialog({
                     </p>
                   </div>
                   <p className='text-muted-foreground text-xs'>
-                    Analysis typically takes 30-90 seconds depending on data
-                    volume.
+                    {estimate.isIncremental && estimate.newConversations === 0
+                      ? 'This will be quick since no new data needs scanning.'
+                      : 'Analysis typically takes 30-90 seconds depending on data volume.'}
                   </p>
                 </>
               ) : (

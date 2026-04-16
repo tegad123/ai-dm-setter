@@ -569,6 +569,8 @@ export interface CostEstimate {
   estimatedTokens: number;
   totalConversations: number;
   totalMessages: number;
+  newConversations?: number;
+  isIncremental?: boolean;
 }
 
 export async function getTrainingAnalysis(): Promise<{

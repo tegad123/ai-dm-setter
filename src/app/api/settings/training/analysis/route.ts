@@ -63,6 +63,9 @@ export async function POST(req: NextRequest) {
         totalConversations: result.totalConversations,
         totalMessages: result.totalMessages,
         recommendations: result.recommendations as unknown as any,
+        analyzedConversationIds:
+          result.analyzedConversationIds as unknown as any,
+        categoryMetrics: result.categoryMetrics as unknown as any,
         status: 'complete'
       }
     });
