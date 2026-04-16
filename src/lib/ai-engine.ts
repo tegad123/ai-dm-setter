@@ -3,7 +3,7 @@ import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
 import type { LeadContext } from '@/lib/ai-prompts';
 import { getCredentials } from '@/lib/credential-store';
 import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
-import { scoreVoiceQuality } from '@/lib/voice-quality-gate';
+import { scoreVoiceQuality, isUnkeptPromise } from '@/lib/voice-quality-gate';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -118,6 +118,47 @@ export async function generateReply(
     systemPrompt += '\n\n' + scoringContext;
   }
 
+  // 1c. Promise-tracking: if the last AI turn was an unkept promise
+  // (e.g., "My G! I'll explain" with nothing that followed), the LLM
+  // must deliver on that promise this turn before advancing the funnel.
+  // This fires regardless of voice note availability — it's about
+  // conversational continuity, not voice notes specifically.
+  const lastAiMsg = [...conversationHistory]
+    .reverse()
+    .find((m) => m.sender === 'AI');
+  const unkeptPattern = lastAiMsg ? isUnkeptPromise(lastAiMsg.content) : null;
+  if (unkeptPattern) {
+    const promiseText = lastAiMsg!.content.trim();
+    // Find the last lead message BEFORE that promise — it's what the
+    // explanation is supposed to address.
+    const promiseIdx = conversationHistory.findIndex((m) => m === lastAiMsg);
+    const priorLeadMsg =
+      promiseIdx > 0
+        ? [...conversationHistory.slice(0, promiseIdx)]
+            .reverse()
+            .find((m) => m.sender === 'LEAD')
+        : null;
+    const priorLeadText = priorLeadMsg?.content?.trim() || '';
+    systemPrompt += `\n\n## PROMISE-KEEPING (CRITICAL — READ CAREFULLY)
+Your previous message to the lead was: "${promiseText}"
+${priorLeadText ? `It was in response to the lead saying: "${priorLeadText.slice(0, 300)}"` : ''}
+
+That message promised follow-up content but did not deliver it. The lead is now waiting and expecting you to explain or show what you said you would. Your next message MUST:
+
+1. Deliver substantive content that fulfills the promise. Actually explain. Actually show. Actually tell them what you said you would.
+2. Do NOT open with another qualifying question before delivering. The lead already said they're ready to hear you — don't make them wait again.
+3. Do NOT repeat the same preamble ("I'll explain", "lemme explain", "let me show you"). Just deliver the content directly.
+4. You CAN follow the explanation with a short forward-moving question to continue the conversation, but only AFTER the substance is there.
+5. Keep your established voice: casual texting style, short sentences, no corporate tone.
+
+**LENGTH CONSTRAINT:** Total message MUST be under 450 characters. That's about 2-4 short text-message sentences, not a paragraph. Don't lecture. Pick ONE key point and hit it, then ask the next question. If you can't fit the full explanation in 450 chars, give the high-level gist — they'll ask for more if they want it.
+
+This rule overrides stage progression — even if the funnel says you should be asking a Discovery question next, deliver the promised explanation FIRST, then ask the next question in the SAME message.`;
+    console.log(
+      `[ai-engine] Promise-tracking triggered: last AI turn "${promiseText}" — injecting delivery directive`
+    );
+  }
+
   // 2. Resolve AI provider credentials (per-account BYOK → env fallback)
   const { provider, apiKey, model } = await resolveAIProvider(accountId);
 
@@ -149,8 +190,11 @@ export async function generateReply(
 
     parsed = parseAIResponse(rawResponse);
 
-    // 5. Voice quality gate
-    const quality = scoreVoiceQuality(parsed.message);
+    // 5. Voice quality gate — relax length cap when this turn is
+    // delivering a promise (it needs room to actually explain).
+    const quality = scoreVoiceQuality(parsed.message, {
+      relaxLengthLimit: !!unkeptPattern
+    });
     finalQualityScore = quality.score;
 
     if (quality.passed) {

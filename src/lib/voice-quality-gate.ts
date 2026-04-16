@@ -88,6 +88,38 @@ const BANNED_WORDS = [
 // "however" only banned at sentence start (not mid-sentence like "however you want")
 const BANNED_SENTENCE_STARTERS = ['however,', 'however '];
 
+// Patterns that promise follow-up content ("I'll explain", "lemme show you").
+// Exported because ai-engine uses them for promise-tracking across turns.
+export const PROMISE_PATTERNS: RegExp[] = [
+  /\bi['']ll explain\b/i,
+  /\blemme explain\b/i,
+  /\blet me explain\b/i,
+  /\blet me show you\b/i,
+  /\blemme show you\b/i,
+  /\blet me tell you\b/i,
+  /\blemme tell you\b/i,
+  /\bi['']ll send you (something|a|the)\b/i,
+  /\bhold up[.,]?\s*i['']ll\b/i,
+  /\bgimme a sec\b/i,
+  /\blemme break (it|this) down\b/i
+];
+
+/**
+ * Check whether a message looks like an UNKEPT promise — a short cliffhanger
+ * that promises content without delivering it. Used by ai-engine to detect
+ * when the PREVIOUS AI turn made a promise that the next turn must fulfill.
+ *
+ * Returns the matched pattern if the message is a short unkept promise,
+ * otherwise null. Uses the same 80-char threshold as the hard-fail gate.
+ */
+export function isUnkeptPromise(message: string): RegExp | null {
+  if (!message || message.trim().length >= 80) return null;
+  for (const pattern of PROMISE_PATTERNS) {
+    if (pattern.test(message)) return pattern;
+  }
+  return null;
+}
+
 const BANNED_EMOJIS = [
   '🙏',
   '👍',
@@ -111,7 +143,19 @@ const BANNED_EMOJIS = [
 // Main scoring function
 // ---------------------------------------------------------------------------
 
-export function scoreVoiceQuality(reply: string): QualityResult {
+export interface VoiceQualityOptions {
+  /**
+   * When true, relax the 300-char length cap. Used when the turn is
+   * delivering on a prior promise ("I'll explain") — explanations need
+   * room to actually explain, so we allow up to 500 chars.
+   */
+  relaxLengthLimit?: boolean;
+}
+
+export function scoreVoiceQuality(
+  reply: string,
+  options?: VoiceQualityOptions
+): QualityResult {
   const hardFails: string[] = [];
   const softSignals: Record<string, number> = {};
 
@@ -171,9 +215,13 @@ export function scoreVoiceQuality(reply: string): QualityResult {
     hardFails.push('lol_instead_of_haha');
   }
 
-  // 8. Message too long (over 300 chars)
-  if (reply.length > 300) {
-    hardFails.push(`message_too_long: ${reply.length} chars`);
+  // 8. Message too long — 300 chars normally, 500 when relaxed (e.g., when
+  // the turn is delivering on a prior promise and needs room to explain).
+  const lengthCap = options?.relaxLengthLimit ? 500 : 300;
+  if (reply.length > lengthCap) {
+    hardFails.push(
+      `message_too_long: ${reply.length} chars (cap ${lengthCap})`
+    );
   }
 
   // 9. Cliffhanger preamble — a short message that promises follow-up
@@ -182,19 +230,7 @@ export function scoreVoiceQuality(reply: string): QualityResult {
   // gets attached (empty library, matcher miss, ElevenLabs fails). The
   // result is a standalone fragment that reads like the AI ghosted the
   // lead mid-thought.
-  const CLIFFHANGER_PATTERNS = [
-    /\bi['']ll explain\b/i,
-    /\blemme explain\b/i,
-    /\blet me show you\b/i,
-    /\blemme show you\b/i,
-    /\blet me tell you\b/i,
-    /\blemme tell you\b/i,
-    /\bi['']ll send you (something|a|the)\b/i,
-    /\bhold up[.,]?\s*i['']ll\b/i,
-    /\bgimme a sec\b/i,
-    /\blemme break (it|this) down\b/i
-  ];
-  for (const pattern of CLIFFHANGER_PATTERNS) {
+  for (const pattern of PROMISE_PATTERNS) {
     if (pattern.test(reply)) {
       // Only a hard fail if the message is SHORT (<80 chars) — a
       // cliffhanger phrase inside a longer substantive reply is fine.
