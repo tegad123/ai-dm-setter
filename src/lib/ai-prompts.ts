@@ -22,6 +22,25 @@ export interface BookingState {
   hasCalendarIntegration?: boolean;
 }
 
+export interface PreQualifiedContext {
+  /** Final stage name after skip-cap, e.g. "SOFT_PITCH_COMMITMENT" */
+  suggestedStartStageName: string;
+  /** 1-7, final stage number after skip-cap */
+  suggestedStartStage: number;
+  /** How many stages were skipped (0-6) */
+  stagesSkipped: number;
+  /** Human-readable reason the classifier chose this stage */
+  stageSkipReason: string;
+  // Extracted facts — all optional, only filled if classifier detected them
+  experienceLevel?: string | null;
+  painPointSummary?: string | null;
+  goalSummary?: string | null;
+  urgencySummary?: string | null;
+  financialSummary?: string | null;
+  intentType?: string | null;
+  isInbound: boolean;
+}
+
 export interface LeadContext {
   leadName: string;
   handle: string;
@@ -46,6 +65,10 @@ export interface LeadContext {
   // in any inbound DM. Used during development to test the booking flow
   // without burning credits going through 7 stages of qualification.
   testModeSkipToBooking?: boolean;
+  // Stage-skip intelligence: populated on the FIRST AI generation cycle
+  // when the lead arrived pre-qualified. Tells the AI which stage to start
+  // at and summarizes what the lead already told us so we don't re-ask.
+  preQualified?: PreQualifiedContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,6 +1216,49 @@ Every message you send must stand alone with real substance. If you would normal
       '[ai-prompts] Voice note availability check failed (non-fatal):',
       err
     );
+  }
+
+  // ── Pre-qualified lead context ────────────────────────────────────
+  // When the inbound qualification classifier (runs on the first AI
+  // generation only) detects that the lead provided information in their
+  // opening messages that later stages would have asked for, it populates
+  // leadContext.preQualified with the target start stage and a summary of
+  // what they already told us. Inject a directive block so the AI:
+  //   1. Starts at the suggested stage instead of Opening
+  //   2. Acknowledges what the lead already said
+  //   3. Does not re-ask questions the lead already answered
+  if (leadContext.preQualified) {
+    const pq = leadContext.preQualified;
+    const facts: string[] = [];
+    if (pq.experienceLevel) facts.push(`- Experience: ${pq.experienceLevel}`);
+    if (pq.painPointSummary) facts.push(`- Pain point: ${pq.painPointSummary}`);
+    if (pq.goalSummary) facts.push(`- Goal: ${pq.goalSummary}`);
+    if (pq.urgencySummary) facts.push(`- Urgency: ${pq.urgencySummary}`);
+    if (pq.financialSummary)
+      facts.push(`- Financial context: ${pq.financialSummary}`);
+    if (pq.intentType) facts.push(`- Intent: ${pq.intentType}`);
+    const factsBlock =
+      facts.length > 0 ? facts.join('\n') : '(no specific facts extracted)';
+
+    const preQualifiedBlock = `<pre_qualified_context>
+This lead arrived pre-qualified. Their opening messages already covered the early stages of the funnel. DO NOT ask them to repeat any of this information.
+
+${factsBlock}
+
+Classifier reasoning: ${pq.stageSkipReason}
+
+You are starting at Stage ${pq.suggestedStartStage} (${pq.suggestedStartStageName}) because the lead already covered Stages 1-${pq.suggestedStartStage - 1 || 0} in their opening messages. In your FIRST reply to them:
+
+1. Acknowledge what they told you — reference specifics from their messages (don't just say "I hear you").
+2. Advance to the next logical question or action for Stage ${pq.suggestedStartStageName}. Do NOT re-ask Discovery questions they already answered (their job, their experience level, their situation).
+3. Keep your established voice — casual, short, no corporate tone.
+4. Still follow the voice quality rules and the stage protocol for Stage ${pq.suggestedStartStageName} going forward.
+
+This is a ONE-TIME adjustment for your first reply. Subsequent turns use normal stage progression.
+</pre_qualified_context>
+
+`;
+    prompt = preQualifiedBlock + prompt;
   }
 
   // sets leadContext.testModeSkipToBooking = true. This prepends a hard

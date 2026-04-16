@@ -216,6 +216,7 @@ model Account {
   scripts            Script[]
   trainingAnalyses   TrainingDataAnalysis[]
   aiSuggestions      AISuggestion[]
+  inboundQualifications InboundQualification[]
 
   @@index([slug])
 }
@@ -660,6 +661,7 @@ model Lead {
   abTestAssignments    ABTestAssignment[]
   stageTransitions     LeadStageTransition[]
   scriptPositions      LeadScriptPosition[]
+  inboundQualification InboundQualification?
 
   @@index([accountId, stage])
   @@index([accountId, platform])
@@ -714,6 +716,7 @@ model Conversation {
   lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages       Message[]
   aiSuggestions  AISuggestion[]
+  inboundQualification InboundQualification?
 
   @@index([lastMessageAt])
   @@index([priorityScore])
@@ -1351,4 +1354,53 @@ model AISuggestion {
   @@index([accountId, generatedDuringTrainingPhase, generatedAt(sort: Desc)])
   @@index([wasSelected, generatedAt(sort: Desc)])
   @@index([wasRejected, generatedAt(sort: Desc)])
+}
+
+// ─── Inbound Qualification: stage-skip intelligence ─────────────────
+// One row per conversation, written on the first AI generation cycle.
+// Records the classifier's read of the lead's opening messages: which
+// stage to start at, what was extracted (experience / pain / goal /
+// financial / intent), and whether the skip-cap had to clamp the
+// suggestion. Used by the prompt to inject pre-qualified context so the
+// AI doesn't re-ask questions the lead already answered.
+
+model InboundQualification {
+  id                     String   @id @default(cuid())
+  conversationId         String   @unique
+  accountId              String
+  leadId                 String   @unique
+  classifiedAt           DateTime @default(now())
+
+  // Classifier outputs
+  suggestedStartStage    Int                 // 1-7, raw classifier suggestion
+  finalStartStage        Int                 // after skip-cap applied
+  stagesSkipped          Int                 // finalStartStage - 1
+  stageSkipReason        String   @db.Text
+  classifierConfidence   Float    @default(0)
+  capped                 Boolean  @default(false)
+
+  // Extracted data
+  hasExperience          Boolean  @default(false)
+  experienceLevel        String?             // beginner | intermediate | experienced
+  hasPainPoint           Boolean  @default(false)
+  painPointSummary       String?  @db.Text
+  hasGoal                Boolean  @default(false)
+  goalSummary            String?  @db.Text
+  hasUrgency             Boolean  @default(false)
+  urgencySummary         String?  @db.Text
+  hasFinancialInfo       Boolean  @default(false)
+  financialSummary       String?  @db.Text
+  hasExplicitIntent      Boolean  @default(false)
+  intentType             String?             // learn_strategy | join_mentorship | ...
+  isInbound              Boolean  @default(false)
+
+  // Raw model response for debugging
+  rawResponse            Json?
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, classifiedAt(sort: Desc)])
+  @@index([accountId, finalStartStage])
 }
