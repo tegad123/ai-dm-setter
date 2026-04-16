@@ -157,6 +157,41 @@ export function detectConversationBoundaries(rawText: string): string[] {
     if (filtered.length >= 2) return filtered;
   }
 
+  // ── Pattern -0.5: Outcome: line boundaries ───────────────
+  // Matches headers like:
+  //   JACK GA■TSBY SKVORTSOV
+  //   Outcome: Ghosted Conversations | 102 messages (47 you / 55 lead)
+  const outcomeLineTest = (line: string): boolean =>
+    /^Outcome:\s*.+\|\s*\d+\s+messages?/i.test(line.trim());
+
+  const outcomeLineCount = lines.filter((l) => outcomeLineTest(l)).length;
+
+  if (outcomeLineCount >= 1) {
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      // A conversation starts at the line BEFORE an Outcome: line
+      // (that line is the lead name)
+      const nextIsOutcomeLine =
+        i + 1 < lines.length && outcomeLineTest(lines[i + 1]);
+
+      if (nextIsOutcomeLine && currentChunk.length > 0) {
+        chunks.push(currentChunk.join('\n'));
+        currentChunk = [lines[i]];
+      } else {
+        currentChunk.push(lines[i]);
+      }
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join('\n'));
+    }
+    const filtered = chunks.filter(
+      (c) => c.split('\n').filter((l) => l.trim()).length >= 3
+    );
+    if (filtered.length >= 2) return filtered;
+  }
+
   // ── Header test functions ──────────────────────────────────
   // Pattern 0: ## CONVERSATION headers
   const convoHeaderTest = (line: string): boolean =>
@@ -514,6 +549,7 @@ function parseTimestampFormatB(
     )
       continue;
     if (/^Folder:/i.test(trimmed)) continue;
+    if (/^Outcome:\s*.+\|\s*\d+\s+messages?/i.test(trimmed)) continue;
 
     // Check if it's a sender line
     const sender = detectSenderLine(trimmed);
@@ -613,6 +649,17 @@ function parseSingleConversation(text: string): ParsedConversation | null {
       !/^\[(YOU|LEAD|CLOSER|SETTER)\]/i.test(lines[i]?.trim() || '')
     ) {
       leadIdentifier = categoryMatch[1].trim();
+      break;
+    }
+    // "Name\nOutcome: Category | N messages" — name is the line BEFORE Outcome:
+    if (
+      /^Outcome:\s*.+\|\s*\d+\s+messages?/i.test(lines[i]?.trim() || '') &&
+      i > 0
+    ) {
+      const nameLine = lines[i - 1]?.trim();
+      if (nameLine && nameLine.length < 60 && !TIMESTAMP_RE.test(nameLine)) {
+        leadIdentifier = nameLine;
+      }
       break;
     }
   }
