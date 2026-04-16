@@ -22,10 +22,7 @@ import {
 } from '@/lib/scoring-integration';
 import { getMessages as getInstagramMessages } from '@/lib/instagram';
 import { getMessages as getFacebookMessages } from '@/lib/facebook';
-import {
-  getUnifiedAvailability,
-  bookUnifiedAppointment
-} from '@/lib/calendar-adapter';
+import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 
 // ---------------------------------------------------------------------------
@@ -1664,267 +1661,26 @@ async function sendAIReply(
     });
   }
 
-  // ── Trigger real booking when the AI confirms a slot selection ──
-  // This fires when sub_stage is BOOKING_CONFIRM AND we have the minimum
-  // data needed to book via LeadConnector (slot + email).
+  // ── Booking is now script-driven, not API-triggered ─────────────
+  // Previously this block called bookUnifiedAppointment() (LeadConnector
+  // / Calendly / Cal.com) whenever the AI reached BOOKING_CONFIRM with
+  // a slot + email. Removed at the user's request: the AI would try to
+  // auto-book, the provider would fail (wrong creds, no LeadConnector
+  // configured, etc.), and the lead saw a phantom "you're locked in"
+  // message with no actual calendar entry.
   //
-  // FAILURE PHILOSOPHY: every failure path below MUST do two things:
-  //   1. Flip conversation.aiActive = false (so AI stops generating)
-  //   2. Create a SYSTEM notification (so a human is alerted in the dashboard)
-  // Otherwise we end up with a phantom "BOOKED" stage with no calendar entry,
-  // which is the bug we hit on 2026-04-08 with conversation cmngzdbbu0002if04jjxlm35i.
-  if (
-    result.subStage === 'BOOKING_CONFIRM' &&
-    result.selectedSlotIso &&
-    result.leadEmail
-  ) {
-    // Validate the selected slot matches one we actually proposed (prevents
-    // the AI from hallucinating times despite R14).
-    const convoForBooking = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      select: {
-        proposedSlots: true,
-        leadTimezone: true,
-        bookingId: true,
-        outcome: true
-      }
-    });
-
-    // If this conversation is already in BOOKED outcome, the AI is just
-    // acknowledging the existing booking in chat (not re-booking). Skip the
-    // validator and the booking call entirely so we don't trip the R14 guard
-    // against the already-confirmed slot when proposedSlots has been cleared
-    // or rotated. This was the cause of the 2026-04-08 stuck-conversation bug
-    // on cmngzdbbu0002if04jjxlm35i where every follow-up message tripped the
-    // guard and flipped aiActive=false. We accept BOOKED outcome (not just
-    // bookingId) because some providers return without an appointmentId but
-    // the conversation is still legitimately booked.
-    if (convoForBooking?.outcome === 'BOOKED' || convoForBooking?.bookingId) {
-      console.log(
-        `[webhook-processor] BOOKING_CONFIRM substage but conversation ${conversationId} already BOOKED (outcome=${convoForBooking?.outcome}, bookingId=${convoForBooking?.bookingId ?? 'null'}) — skipping re-book validator.`
-      );
-    } else {
-      const proposed =
-        (convoForBooking?.proposedSlots as BookingSlot[] | null) || [];
-      const matchedSlot = proposed.find(
-        (s) => s.start === result.selectedSlotIso
-      );
-
-      console.log(
-        `[BOOKING_FLOW] BookingConfirm.slotMatch`,
-        JSON.stringify({
-          conversationId,
-          selectedSlotIso: result.selectedSlotIso,
-          leadEmail: result.leadEmail,
-          proposedSlotCount: proposed.length,
-          proposedSlots: proposed.map((s) => s.start),
-          matched: !!matchedSlot,
-          matchedSlot: matchedSlot || null,
-          ts: new Date().toISOString()
-        })
-      );
-
-      if (!matchedSlot) {
-        // R14 hallucination guard tripped — AI picked a slot we never proposed.
-        // Pause AI and surface to the team instead of silently dropping the book.
-        console.warn(
-          `[webhook-processor] AI confirmed a slot (${result.selectedSlotIso}) not in proposed list for ${conversationId} — pausing AI and notifying team.`
-        );
-        try {
-          await prisma.conversation.update({
-            where: { id: conversationId },
-            data: { aiActive: false }
-          });
-          await prisma.notification.create({
-            data: {
-              accountId: lead.accountId,
-              type: 'SYSTEM',
-              title: 'AI hallucinated booking slot — needs human',
-              body: `${lead.name} (@${lead.handle}): AI tried to book a time (${result.selectedSlotIso}) that was not in the proposed slot list. AI is now paused. Please review the conversation and book manually. Proposed slots: ${proposed.map((s) => s.start).join(', ') || '(none)'}.`,
-              leadId: lead.id
-            }
-          });
-        } catch (notifErr) {
-          console.error(
-            '[webhook-processor] Failed to flag hallucinated-slot failure:',
-            notifErr
-          );
-        }
-      } else {
-        try {
-          const bookingParams = {
-            leadName: lead.name,
-            leadHandle: lead.handle,
-            leadEmail: result.leadEmail,
-            platform: lead.platform,
-            slotStart: matchedSlot.start,
-            slotEnd: matchedSlot.end,
-            timezone: convoForBooking?.leadTimezone || undefined,
-            notes: `Auto-booked via DMsetter AI. Platform: ${lead.platform}, handle: @${lead.handle}.`
-          };
-
-          console.log(
-            `[BOOKING_FLOW] BookingCall.start`,
-            JSON.stringify({
-              conversationId,
-              leadId: lead.id,
-              bookingParams: {
-                ...bookingParams,
-                leadEmail: bookingParams.leadEmail ? '[PRESENT]' : '[MISSING]'
-              },
-              ts: new Date().toISOString()
-            })
-          );
-
-          const bookingResult = await bookUnifiedAppointment(
-            accountId,
-            bookingParams
-          );
-
-          console.log(
-            `[BOOKING_FLOW] BookingCall.result`,
-            JSON.stringify({
-              conversationId,
-              success: bookingResult.success,
-              provider: bookingResult.provider,
-              appointmentId: bookingResult.appointmentId,
-              contactId: bookingResult.contactId,
-              meetingUrl: bookingResult.meetingUrl,
-              error: bookingResult.error || null,
-              ts: new Date().toISOString()
-            })
-          );
-
-          if (bookingResult.success) {
-            await prisma.conversation.update({
-              where: { id: conversationId },
-              data: {
-                selectedSlot: matchedSlot as any,
-                bookingId: bookingResult.appointmentId || null,
-                bookingUrl: bookingResult.meetingUrl || null,
-                outcome: 'BOOKED'
-              }
-            });
-            await prisma.lead.update({
-              where: { id: lead.id },
-              data: { stage: 'BOOKED' as any, bookedAt: new Date() }
-            });
-            await prisma.notification.create({
-              data: {
-                accountId: lead.accountId,
-                type: 'CALL_BOOKED',
-                title: 'New Call Booked (AI)',
-                body: `${lead.name} (@${lead.handle}) booked a call for ${new Date(
-                  matchedSlot.start
-                ).toLocaleString('en-US', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short'
-                })} via ${bookingResult.provider}.`,
-                leadId: lead.id,
-                userId: null
-              }
-            });
-            console.log(
-              `[webhook-processor] Call booked for ${conversationId} via ${bookingResult.provider} (apt: ${bookingResult.appointmentId})`
-            );
-            console.log(
-              `[BOOKING_FLOW] StageTransition.success`,
-              JSON.stringify({
-                conversationId,
-                leadId: lead.id,
-                newStage: 'BOOKED',
-                appointmentId: bookingResult.appointmentId,
-                notificationCreated: true,
-                ts: new Date().toISOString()
-              })
-            );
-          } else {
-            // Provider returned a structured failure — pause AI + notify team.
-            console.error(
-              `[webhook-processor] Booking failed for ${conversationId}:`,
-              bookingResult.error
-            );
-            try {
-              await prisma.conversation.update({
-                where: { id: conversationId },
-                data: { aiActive: false }
-              });
-              await prisma.notification.create({
-                data: {
-                  accountId: lead.accountId,
-                  type: 'SYSTEM',
-                  title: 'Booking failed — needs human',
-                  body: `${lead.name} (@${lead.handle}): AI tried to book but ${bookingResult.provider} returned: ${(bookingResult.error || 'Unknown error').slice(0, 200)}. AI is now paused.`,
-                  leadId: lead.id
-                }
-              });
-            } catch (notifErr) {
-              console.error(
-                '[webhook-processor] Failed to flag provider booking failure:',
-                notifErr
-              );
-            }
-          }
-        } catch (bookErr: any) {
-          // Unhandled exception in the booking call — pause AI + notify team.
-          console.error(
-            '[webhook-processor] Unhandled booking error:',
-            bookErr
-          );
-          try {
-            await prisma.conversation.update({
-              where: { id: conversationId },
-              data: { aiActive: false }
-            });
-            await prisma.notification.create({
-              data: {
-                accountId: lead.accountId,
-                type: 'SYSTEM',
-                title: 'Booking crashed — needs human',
-                body: `${lead.name} (@${lead.handle}): unhandled error while booking. AI is now paused. Error: ${(bookErr?.message || String(bookErr)).slice(0, 200)}`,
-                leadId: lead.id
-              }
-            });
-          } catch (notifErr) {
-            console.error(
-              '[webhook-processor] Failed to flag unhandled booking error:',
-              notifErr
-            );
-          }
-        }
-      }
-    } // close: !alreadyBooked branch
-  } else if (result.subStage === 'BOOKING_CONFIRM') {
-    // The AI advanced to BOOKING_CONFIRM but is missing critical data
-    // (slot or email). This shouldn't happen with a correct prompt, but if
-    // it does we surface it loudly so we don't end up with a phantom
-    // BOOKED stage and no real booking.
-    const missing: string[] = [];
-    if (!result.selectedSlotIso) missing.push('slot');
-    if (!result.leadEmail) missing.push('email');
-    console.warn(
-      `[webhook-processor] BOOKING_CONFIRM sub-stage but missing ${missing.join(', ')} for ${conversationId} — pausing AI and notifying team.`
+  // New flow: the AI reaches Stage 7, follows the script, and drops the
+  // booking link from the script's `send_link` action. The lead clicks
+  // and books themselves. lead.stage transitions to BOOKED only via a
+  // real calendar webhook or a human manually updating the lead — never
+  // automatically from the LLM's sub_stage.
+  //
+  // We still capture leadTimezone / leadEmail on the conversation row
+  // above (bookingUpdates) so humans have context for follow-up.
+  if (result.subStage === 'BOOKING_CONFIRM') {
+    console.log(
+      `[webhook-processor] BOOKING_CONFIRM reached for ${conversationId} — script-driven flow, no server-side booking triggered`
     );
-    try {
-      await prisma.conversation.update({
-        where: { id: conversationId },
-        data: { aiActive: false }
-      });
-      await prisma.notification.create({
-        data: {
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'Booking incomplete — needs human',
-          body: `${lead.name} (@${lead.handle}): AI advanced to booking confirmation but is missing ${missing.join(' + ')}. AI is now paused. Please review and book manually.`,
-          leadId: lead.id
-        }
-      });
-    } catch (notifErr) {
-      console.error(
-        '[webhook-processor] Failed to flag missing-data booking failure:',
-        notifErr
-      );
-    }
   }
 
   // ── Handle soft exit ──────────────────────────────────────────

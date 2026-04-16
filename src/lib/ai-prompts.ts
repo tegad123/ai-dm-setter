@@ -187,47 +187,32 @@ Progress through these stages IN ORDER. Never skip a stage. Never jump ahead bec
 - If no capital AND no credit AND no card → soft exit immediately with tenant's exit content.
 
 ### Stage 7: BOOKING
-- Use the tenant's booking scripts for each step:
-  1. Transition to booking
-  2. Ask timezone (REQUIRED before proposing any time)
-  3. Propose 2-3 specific times from AVAILABLE SLOTS below (never invent a time)
-  4. Double down / handle hesitation
-  5. Collect necessary info (email is required — always ask before confirming)
-  6. Confirm the slot — DO NOT send a URL, the booking is created automatically
-- NEVER propose, suggest, or confirm a time that is not in the AVAILABLE SLOTS list below (R14).
-- NEVER fabricate, invent, or hallucinate ANY URL — booking link, calendar link, or otherwise (R16). The only URLs that exist are the ones explicitly listed in the **Booking link** field below or in the Asset Links section.
-- NEVER send a booking link before confirming timezone AND email (R5).
-- Maximum 2 booking attempts. Never offer a third call.
+Booking is script-driven. The lead books themselves by clicking the booking link you send — you do NOT schedule appointments on your behalf of the system. Your only job is to follow the script's booking steps, collect the info the script asks for, and then drop the booking link.
+
+Typical script flow (your script may vary — always defer to it):
+  1. Transition to booking warmly
+  2. Ask for the lead's timezone (so the human team knows who they are regionally)
+  3. Ask for their email (for the human team's follow-up records)
+  4. Send the booking link — **copy it VERBATIM from the "Available Links & URLs" section of your script context**. Do NOT modify, shorten, or rewrite the URL.
+  5. Wrap up warmly after the link is sent. Let the lead know they'll get a calendar confirmation once they pick a time.
+
+CRITICAL RULES:
+- NEVER fabricate, invent, or hallucinate ANY URL (R16). The only valid booking link is the one listed in your script's "Available Links & URLs" section. If your script does NOT have a booking link configured, tell the lead the human team will follow up shortly — do NOT invent one.
+- NEVER send the booking link before collecting timezone AND email (R5), unless the script explicitly orders otherwise.
+- Maximum 2 booking attempts per conversation. Never offer a third call.
+- Do NOT write "cal.com/...", "calendly.com/...", or any URL that isn't in your script's Available Links section.
+- You do NOT "confirm a time" or "lock them in" — the lead picks their own slot via the link. Phrase your wrap-up accordingly (e.g., "pick whatever time works best for you" instead of "you're locked in").
+
+Sub-stages to use in your JSON response:
+- "BOOKING_TZ_ASK" — asking for timezone
+- "BOOKING_EMAIL_ASK" — asking for email
+- "BOOKING_LINK_DROP" — sending the booking link
+- "BOOKING_CONFIRM" — post-link wrap-up message after the lead has the link
+
 {{callHandoffReminder}}
 
 **Booking state already collected from the lead (DO NOT re-ask any of these):**
 {{bookingStateContext}}
-
-**AVAILABLE SLOTS (real calendar data — ONLY propose times from this list):**
-{{availableSlotsContext}}
-
-**Booking link (only used when AVAILABLE SLOTS is empty AND a real link is configured):**
-{{bookingLinkContext}}
-
-**Slot selection logic — follow this state machine STRICTLY:**
-
-CASE A: AVAILABLE SLOTS contains real times (server already fetched them)
-- If lead has NOT provided timezone → ask for it. sub_stage = "BOOKING_TZ_ASK". Do NOT propose times yet.
-- If timezone IS known → propose 2-3 specific times from the list, in the lead's local timezone. sub_stage = "BOOKING_SLOT_PROPOSE". DO NOT send any URL.
-- If the lead picks a time → confirm it back to them AND ask for their email. sub_stage = "BOOKING_EMAIL_ASK". Set selected_slot_iso to the EXACT ISO string from the AVAILABLE SLOTS list (not a paraphrase, not a guess — copy the ISO verbatim).
-- If lead provides email → write a short confirmation message (something like "you're locked in for [time]"). sub_stage = "BOOKING_CONFIRM". Set selected_slot_iso AND lead_email. The server will create the appointment automatically — DO NOT include a URL in this message.
-
-CASE B: AVAILABLE SLOTS is empty BUT a real Booking link is configured (no slots available, but tenant has a fallback link)
-- If lead has NOT provided timezone → ask for it. sub_stage = "BOOKING_TZ_ASK".
-- If timezone IS known → drop the EXACT booking link from the field above (copy verbatim). sub_stage = "BOOKING_LINK_DROP". Do NOT modify the URL.
-
-CASE C: AVAILABLE SLOTS is empty AND NO Booking link is configured (no calendar wired up at all)
-- You MUST NOT invent a URL. Inventing a URL is a critical failure (R16).
-- Collect timezone + lead's preferred day/time + email.
-- Tell the lead honestly that the human team will follow up with the call link shortly. Use a phrase like: "we'll send you the link to lock it in shortly".
-- Stop the booking flow there. Set sub_stage = "BOOKING_EMAIL_ASK" once email is collected. DO NOT set sub_stage to BOOKING_CONFIRM in this case (no real booking can happen).
-
-NEVER write "cal.com/...", "calendly.com/...", "[anything].com/30min", or any URL pattern that is not explicitly listed in the Booking link field above. If you do, the entire booking system breaks.
 
 ## OBJECTION HANDLING PROTOCOL
 On EVERY incoming lead message, scan against the tenant's objection trigger keyword lists. This scan happens regardless of which stage the conversation is in.
@@ -996,92 +981,15 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
       : '- (nothing collected yet — ask for timezone first in Stage 7)'
   );
 
-  // ── Booking link & available slots ────────────────────────────────
-  // CRITICAL: the prompt must NEVER suggest the AI should fabricate a URL.
-  // We only inject a booking link if a real one is configured. If slots
-  // are present we suppress the link entirely so the AI doesn't get
-  // confused about which one to use. If neither is present we explicitly
-  // instruct the AI to NOT invent a URL.
-  const bookingLink =
-    config.bookingLink || config.calendarLink || config.assetLinks?.bookingLink;
-  const slots = booking.availableSlots || [];
-
-  // 1. Available slots block — real calendar data takes priority.
-  // CRITICAL ORDERING — the no-timezone branch MUST come before any other
-  // calendar branch. Without leadTimezone we cannot label slots in the
-  // lead's local time, and the AI will misread UTC-labeled times as
-  // lead-local. The webhook-processor enforces this by skipping slot
-  // fetching when leadTimezone is null, so `slots` will be empty here
-  // even if calendar integration exists.
-  if (booking.hasCalendarIntegration && !booking.leadTimezone) {
-    prompt = prompt.replace(
-      /\{\{availableSlotsContext\}\}/g,
-      '- (Lead timezone is NOT YET KNOWN. STEP 1 of booking: ask the lead what timezone they are in BEFORE proposing any times. Do NOT invent any specific time. Do NOT send a URL. Once they answer with a timezone, real calendar slots will be fetched and shown to you on the next turn.)'
-    );
-  } else if (slots.length) {
-    const tz = booking.leadTimezone;
-    // Always include timeZoneName so labels are unambiguous
-    // (e.g. "Mon, Apr 8, 12:30 PM CDT" instead of "Mon, Apr 8, 12:30 PM").
-    // Without this suffix, the AI hallucinates the wrong tz when reading
-    // the slot list back to the lead — that bug previously caused the AI
-    // to quote "5pm CT" for a UTC-labeled slot that was actually noon CDT.
-    const fmtOpts: Intl.DateTimeFormatOptions = {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-      timeZoneName: 'short',
-      ...(tz ? { timeZone: tz } : {})
-    };
-    const lines = slots.slice(0, 12).map((s) => {
-      const d = new Date(s.start);
-      let label: string;
-      try {
-        label = d.toLocaleString('en-US', fmtOpts);
-      } catch {
-        // Invalid tz — fall back to UTC-formatted ISO
-        label = d.toUTCString();
-      }
-      return `- ${label}  (ISO: ${s.start})`;
-    });
-    prompt = prompt.replace(
-      /\{\{availableSlotsContext\}\}/g,
-      lines.join('\n') +
-        '\n\nUSE THESE SLOTS — propose 2-3 of them in your reply, quoting the EXACT label including the timezone suffix (e.g. "CDT", "EDT"). NEVER invent a time that is not in this list (R14). NEVER strip the timezone suffix when reading a slot back to the lead. NEVER drop a booking link when slots are present — the booking will be created automatically once the lead picks a time and provides their email.'
-    );
-  } else if (booking.hasCalendarIntegration) {
-    prompt = prompt.replace(
-      /\{\{availableSlotsContext\}\}/g,
-      '- (no available slots in the next 7 days — ask the lead for their preferred day/time so we can requery the calendar. Do NOT invent a time. Do NOT send a URL.)'
-    );
-  } else if (bookingLink) {
-    prompt = prompt.replace(
-      /\{\{availableSlotsContext\}\}/g,
-      '- (no calendar integration — once timezone is confirmed, drop the EXACT booking link from the field below. Do NOT modify or shorten it.)'
-    );
-  } else {
-    prompt = prompt.replace(
-      /\{\{availableSlotsContext\}\}/g,
-      '- (NO calendar integration AND NO booking link configured. You MUST NOT invent a calendar URL like "cal.com/...", "calendly.com/...", or anything similar — that is a critical failure (R16). Instead: collect the lead\'s timezone + preferred day/time + email, then tell them honestly that the human team will follow up with the call link shortly. Then stop the booking flow.)'
-    );
-  }
-
-  // 2. Booking link block — only inject when slots are NOT present and a
-  //    real link is configured. Otherwise leave it empty (the slots block
-  //    above already gave the AI clear instructions).
-  if (!slots.length && bookingLink) {
-    prompt = prompt.replace(
-      /\{\{bookingLinkContext\}\}/g,
-      `- Booking link (use exactly as written, do not modify): ${bookingLink}`
-    );
-  } else {
-    prompt = prompt.replace(
-      /\{\{bookingLinkContext\}\}/g,
-      '- (NO booking link configured. R16: do NOT invent a URL under any circumstances.)'
-    );
-  }
+  // Booking link + available slots template variables have been removed
+  // from the Stage 7 prompt. Booking is now script-driven: the AI drops
+  // the booking link from the script's Available Links section (which is
+  // injected by serializeScriptForPrompt). Auto-booking via
+  // LeadConnector / Calendly / Cal.com has been removed.
+  // Clean up any stray template tokens in case the prompt still references
+  // them somewhere (defensive — no-op if they don't exist).
+  prompt = prompt.replace(/\{\{availableSlotsContext\}\}/g, '');
+  prompt = prompt.replace(/\{\{bookingLinkContext\}\}/g, '');
 
   // ── Experience branching keywords ─────────────────────────────────
   // IMPORTANT: fallbacks MUST be niche-agnostic. Any tenant (trading,
