@@ -631,30 +631,34 @@ export async function scheduleAIReply(
     options?.skipDelayQueue ? '(cron picked up)' : '(realtime)'
   );
 
-  // ── Step 0a: Debounce — skip if we JUST sent an AI reply ──────
-  // Catches the race where two inbound lead messages arrive close
-  // together and each triggers its own scheduleAIReply, resulting in
-  // near-duplicate AI messages back-to-back. If an AI message was sent
-  // in the last 15 seconds, another reply on the heels of it is almost
-  // certainly a duplicate or would talk over the lead. Never applies
-  // when the cron is re-running us with skipDelayQueue — that's the
-  // legitimate "deliver the scheduled one now" path.
+  // ── Step 0a: "Nothing to reply to" guard ──────────────────────
+  // Catches the race where MULTIPLE WEBHOOKS for the SAME lead message
+  // arrive close together (Meta retries, duplicate deliveries) — each
+  // would otherwise trigger its own generation.
+  //
+  // Semantic check: if the latest message in the conversation is NOT
+  // from the LEAD (it's either an AI reply we just sent, or a human
+  // takeover), there's nothing new to respond to — bail.
+  //
+  // Previous version used a 15-second time window ("AI replied recently,
+  // bail") which was too aggressive: it blocked legitimate new lead
+  // messages that arrived within 15s of an AI reply. Fast-typing leads
+  // trip that constantly. The ordering-based check below catches the
+  // duplicate-webhook race while allowing real lead follow-ups through.
+  //
+  // Never applies when the cron is re-running us with skipDelayQueue —
+  // that's the legitimate "deliver the scheduled one now" path.
   if (!options?.skipDelayQueue) {
-    const DEBOUNCE_WINDOW_MS = 15_000;
-    const recentAiMsg = await prisma.message.findFirst({
-      where: {
-        conversationId,
-        sender: 'AI',
-        timestamp: { gte: new Date(Date.now() - DEBOUNCE_WINDOW_MS) }
-      },
+    const latestMsg = await prisma.message.findFirst({
+      where: { conversationId },
       orderBy: { timestamp: 'desc' },
-      select: { id: true, timestamp: true }
+      select: { sender: true, timestamp: true }
     });
-    if (recentAiMsg) {
-      const ageMs = Date.now() - recentAiMsg.timestamp.getTime();
+    if (latestMsg && latestMsg.sender !== 'LEAD') {
+      const ageMs = Date.now() - latestMsg.timestamp.getTime();
       log(
-        'sched.step0a.debounced',
-        `AI replied ${Math.round(ageMs / 1000)}s ago — skipping duplicate generation`
+        'sched.step0a.noLeadToReplyTo',
+        `latest msg is ${latestMsg.sender} (${Math.round(ageMs / 1000)}s ago) — nothing new to reply to, skipping`
       );
       return;
     }
@@ -1569,27 +1573,24 @@ async function sendAIReply(
     return;
   }
 
-  // ── Double-fire guard: skip if AI already replied recently ──────
-  // Catches duplicate ships caused by concurrent webhooks + the
-  // processScheduledReply stale-regen path (which uses skipDelayQueue
-  // and bypasses the Step 0a debounce in scheduleAIReply). A legitimate
-  // next AI reply will always be at least responseDelayMin (30s+) after
-  // the previous one, so a 25-second window is safe and catches the
-  // rapid-double-fires we saw on 2026-04-16 (AI msgs 23 seconds apart
-  // despite a 30–173s delay config).
-  const recentAiMessage = await prisma.message.findFirst({
-    where: {
-      conversationId,
-      sender: 'AI',
-      timestamp: { gte: new Date(Date.now() - 25_000) }
-    },
+  // ── Double-fire guard: skip if the conversation is already our turn ──
+  // Catches duplicate ships caused by concurrent generations reaching
+  // sendAIReply for the same batch. Semantic check: if the latest
+  // message in the conversation is NOT from the LEAD, the AI has
+  // already answered (or a human took over) and shouldn't send again.
+  //
+  // Previously used a 25s time window which blocked legitimate replies
+  // when the AI's debounce fired shortly after a prior reply — same
+  // class of bug as Step 0a.
+  const latestMsgInConvo = await prisma.message.findFirst({
+    where: { conversationId },
     orderBy: { timestamp: 'desc' },
-    select: { id: true, timestamp: true }
+    select: { sender: true, timestamp: true }
   });
-  if (recentAiMessage) {
-    const ageMs = Date.now() - recentAiMessage.timestamp.getTime();
+  if (latestMsgInConvo && latestMsgInConvo.sender !== 'LEAD') {
+    const ageMs = Date.now() - latestMsgInConvo.timestamp.getTime();
     console.log(
-      `[webhook-processor] Double-fire guard: AI already replied ${Math.round(ageMs / 1000)}s ago to ${conversationId} — discarding this duplicate reply`
+      `[webhook-processor] Double-fire guard: latest msg is ${latestMsgInConvo.sender} (${Math.round(ageMs / 1000)}s ago) for ${conversationId} — discarding duplicate reply`
     );
     return;
   }
