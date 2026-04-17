@@ -652,7 +652,7 @@ export async function scheduleAIReply(
     const latestMsg = await prisma.message.findFirst({
       where: { conversationId },
       orderBy: { timestamp: 'desc' },
-      select: { sender: true, timestamp: true }
+      select: { sender: true, timestamp: true, content: true }
     });
     if (latestMsg && latestMsg.sender !== 'LEAD') {
       const ageMs = Date.now() - latestMsg.timestamp.getTime();
@@ -661,6 +661,39 @@ export async function scheduleAIReply(
         `latest msg is ${latestMsg.sender} (${Math.round(ageMs / 1000)}s ago) — nothing new to reply to, skipping`
       );
       return;
+    }
+
+    // ── Step 0a-ii: Close detection ────────────────────────────
+    // If the lead's message is a closing acknowledgment (emoji-only,
+    // "bet", "alright", etc.) AND the previous AI message was a
+    // sign-off ("take care", "catch you later"), don't reply. The
+    // conversation has naturally ended. Any AI response here is
+    // noise that steps on the close. aiActive stays true so
+    // re-engagement (the lead coming back later with a real message)
+    // triggers normal generation.
+    if (latestMsg && latestMsg.sender === 'LEAD') {
+      const prevAI = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          sender: 'AI',
+          timestamp: { lt: latestMsg.timestamp }
+        },
+        orderBy: { timestamp: 'desc' },
+        select: { content: true, timestamp: true }
+      });
+      const { isClosingSignal } = await import('@/lib/closing-signal-detector');
+      const check = isClosingSignal(
+        latestMsg.content,
+        prevAI?.content ?? null,
+        prevAI?.timestamp ?? null
+      );
+      if (check.isClosing) {
+        log(
+          'sched.step0a.closeDetected',
+          `skipping AI reply — ${check.reason}`
+        );
+        return;
+      }
     }
   }
 

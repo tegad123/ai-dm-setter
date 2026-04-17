@@ -120,6 +120,10 @@ export function isUnkeptPromise(message: string): RegExp | null {
   return null;
 }
 
+// Emojis that are NOT in Daniel's approved set (💪🏿 😂 🔥 💯 ❤) and
+// have been observed slipping through in production. The gate hard-fails
+// any reply containing one of these, forcing a retry. Keep this in sync
+// with what the prompt tells the LLM is allowed.
 const BANNED_EMOJIS = [
   '🙏',
   '👍',
@@ -136,6 +140,8 @@ const BANNED_EMOJIS = [
   '🌟',
   '👏',
   '🤝',
+  '🤙', // "call me" hand — LLM kept using this despite not being in the set
+  '🙌', // raised hands — same
   '💪' // without skin tone — Daniel uses 💪🏿 specifically
 ];
 
