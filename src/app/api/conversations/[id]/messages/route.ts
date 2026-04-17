@@ -29,17 +29,30 @@ export async function GET(
     }
 
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '50', 10);
+    // Default bumped 50 → 200 so normal conversations load their full
+    // history. The UI can still paginate via `before` for conversations
+    // that run past 200 turns.
+    const limit = parseInt(searchParams.get('limit') || '200', 10);
     const before = searchParams.get('before');
 
+    // CRITICAL: fetch the most RECENT N messages (DESC + take), then
+    // reverse to ASC for rendering. The previous `orderBy: asc, take: N`
+    // returned the OLDEST N messages — once a conversation passed the
+    // limit, every new message was silently dropped from the chat view
+    // (while the sidebar preview, which correctly uses DESC take 1,
+    // still showed them). Idris's 73-message conversation with
+    // limit=50 reproduced this exactly.
     const messages = await prisma.message.findMany({
       where: {
         conversationId: id,
         ...(before ? { timestamp: { lt: new Date(before) } } : {})
       },
-      orderBy: { timestamp: 'asc' },
+      orderBy: { timestamp: 'desc' },
       take: limit
     });
+    // Reverse in-place to ASC so the client renders oldest→newest
+    // without any UI-side changes needed.
+    messages.reverse();
 
     return NextResponse.json({ messages });
   } catch (error) {
