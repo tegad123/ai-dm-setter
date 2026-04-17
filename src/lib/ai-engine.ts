@@ -378,7 +378,11 @@ async function resolveAIProvider(accountId: string): Promise<{
     return {
       provider: 'openai',
       apiKey: openaiCreds.apiKey as string,
-      model: (openaiCreds.model as string) || 'gpt-4o'
+      // Default to gpt-4o-mini — ~16x cheaper than gpt-4o and the voice
+      // quality gate + heavy prompt scaffolding absorb the capability
+      // delta well enough. Accounts that want gpt-4o can set it explicitly
+      // in their credential record.
+      model: (openaiCreds.model as string) || 'gpt-4o-mini'
     };
   }
 
@@ -401,7 +405,7 @@ async function resolveAIProvider(accountId: string): Promise<{
       : process.env.OPENAI_API_KEY;
   const model =
     process.env.AI_MODEL ||
-    (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
+    (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
 
   return { provider: provider as 'openai' | 'anthropic', apiKey, model };
 }
