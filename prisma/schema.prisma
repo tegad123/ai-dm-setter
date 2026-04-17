@@ -202,6 +202,13 @@ model Account {
   responseDelayMin           Int           @default(300) // Min response delay in seconds (default 5 min)
   responseDelayMax           Int           @default(600) // Max response delay in seconds (default 10 min)
 
+  // Debounce: wait this many seconds of silence from the lead before
+  // generating. Each new lead message resets the timer. maxDebounceWindow
+  // is a hard cap measured from the FIRST message in the current batch so
+  // the AI doesn't go silent indefinitely on a chatty lead.
+  debounceWindowSeconds      Int           @default(45)
+  maxDebounceWindowSeconds   Int           @default(120)
+
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

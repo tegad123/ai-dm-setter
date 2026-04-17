@@ -1029,91 +1029,112 @@ export async function scheduleAIReply(
     });
   }
 
-  // ── Step 3.5: Delayed-send queue check ──────────────────────────
-  // If the persona has a response delay configured, AND we're not in
-  // test mode, AND the cron hasn't already picked this up (skipDelayQueue
-  // flag), queue a ScheduledReply row and bail. The cron handler will
-  // re-run scheduleAIReply later with skipDelayQueue=true to actually
-  // generate and deliver the reply on the freshest conversation state.
+  // ── Step 3.5: DEBOUNCE — wait for the lead to finish typing ────
   //
-  // Bailing here (instead of generating now and delaying the send) means:
-  //   - We don't burn AI tokens on a reply we might throw away if the
-  //     lead sends another message during the delay window.
-  //   - The reply is generated against the most up-to-date conversation
-  //     state at delivery time, not at trigger time.
-  // Voice-note-aware delay path state: when voice notes are enabled,
-  // we generate first (to know the message type), then apply the
-  // appropriate delay system. These variables carry state from step 3.5
-  // into step 4d.
-  let vnAwarePath = false;
-  let vnTextMinDelay = 0;
-  let vnTextMaxDelay = 0;
-
+  // The lead often sends bursts of short messages. Instead of triggering
+  // generation per message (which produced 2-5 near-duplicate AI replies
+  // in production), we wait for a pause in their typing and respond to
+  // the full batch at once.
+  //
+  // Flow:
+  //   - Each inbound lead msg lands here → cancel any pending
+  //     ScheduledReply (Step 0b already did that) and create a new one
+  //     at now + debounce_window.
+  //   - The fire time respects the response-delay random jitter (for
+  //     texting-cadence realism) and is capped by maxDebounceWindow from
+  //     the first lead msg in the current batch (so a lead typing for
+  //     5 minutes straight still gets a reply by ~2 min in).
+  //   - Cron picks up the PENDING row when due and re-enters
+  //     scheduleAIReply with skipDelayQueue=true → generation runs on
+  //     the freshest conversation state (every message that arrived
+  //     during the debounce is now in history).
   if (
     !options?.skipDelayQueue &&
     !leadContext.testModeSkipToBooking &&
     shouldAutoSend
   ) {
     try {
-      // Response delays are a GLOBAL account setting (managed on the Scripts page).
-      // voiceNotesEnabled still lives on the active persona for now.
       const accountRow = await prisma.account.findUnique({
         where: { id: accountId },
-        select: { responseDelayMin: true, responseDelayMax: true }
+        select: {
+          responseDelayMin: true,
+          responseDelayMax: true,
+          debounceWindowSeconds: true,
+          maxDebounceWindowSeconds: true
+        }
       });
-      const persona =
-        (await prisma.aIPersona.findFirst({
-          where: { accountId, isActive: true },
-          orderBy: { updatedAt: 'desc' },
-          select: { voiceNotesEnabled: true }
-        })) ??
-        (await prisma.aIPersona.findFirst({
-          where: { accountId },
-          orderBy: { updatedAt: 'desc' },
-          select: { voiceNotesEnabled: true }
-        }));
       const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
       const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
+      const debounceSec = Math.max(0, accountRow?.debounceWindowSeconds ?? 45);
+      const maxDebounceSec = Math.max(
+        debounceSec,
+        accountRow?.maxDebounceWindowSeconds ?? 120
+      );
 
-      // If voice notes are enabled, generate the reply FIRST so we can
-      // apply the correct delay system per message type. Fall through to
-      // Step 4 generation — delay will be applied in Step 4d.
-      if (persona?.voiceNotesEnabled) {
-        vnAwarePath = true;
-        vnTextMinDelay = minDelay;
-        vnTextMaxDelay = maxDelay;
-        log(
-          'sched.step3.5.vnAwarePath',
-          'voice notes enabled — generating first to determine message type'
-        );
-      } else if (maxDelay > 0) {
-        // EXISTING TEXT-ONLY PATH: delay before generation (unchanged)
-        const { humanResponseDelay } = await import('@/lib/delay-utils');
-        const delaySeconds = humanResponseDelay(minDelay, maxDelay);
-        const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
-        await prisma.scheduledReply.create({
-          data: {
-            conversationId,
-            accountId,
-            scheduledFor,
-            status: 'PENDING'
-          }
-        });
-        console.log(
-          `[webhook-processor] AI reply queued for ${conversationId} ` +
-            `(delay: ${delaySeconds}s, range: ${minDelay}-${maxDelay}s, scheduledFor: ${scheduledFor.toISOString()})`
-        );
-        return;
-      }
+      // Find the earliest lead message in the current batch (since the
+      // last AI message). Used to enforce the max-cap so the AI can't
+      // be indefinitely postponed by a chatty lead.
+      const lastAiMsg = await prisma.message.findFirst({
+        where: { conversationId, sender: 'AI' },
+        orderBy: { timestamp: 'desc' },
+        select: { timestamp: true }
+      });
+      const earliestLeadInBatch = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          sender: 'LEAD',
+          ...(lastAiMsg ? { timestamp: { gt: lastAiMsg.timestamp } } : {})
+        },
+        orderBy: { timestamp: 'asc' },
+        select: { timestamp: true }
+      });
+
+      const { humanResponseDelay } = await import('@/lib/delay-utils');
+      const delayRandomSec = humanResponseDelay(minDelay, maxDelay);
+      const now = Date.now();
+      // Debounce floor: at least `debounceSec` from now OR the random
+      // response delay, whichever is later. This replaces the additive
+      // "debounce + delay" stacking — either one naturally provides the
+      // conversational pause.
+      const preferredFireAt =
+        now + Math.max(debounceSec, delayRandomSec) * 1000;
+      // Cap: never fire later than `maxDebounceSec` after the FIRST lead
+      // msg in the batch.
+      const maxFireAt = earliestLeadInBatch
+        ? earliestLeadInBatch.timestamp.getTime() + maxDebounceSec * 1000
+        : preferredFireAt;
+      // Final: min(preferred, cap), but always at least 1s from now so
+      // the cron can pick it up.
+      const fireAt = Math.max(now + 1000, Math.min(preferredFireAt, maxFireAt));
+      const scheduledFor = new Date(fireAt);
+
+      await prisma.scheduledReply.create({
+        data: {
+          conversationId,
+          accountId,
+          scheduledFor,
+          status: 'PENDING'
+        }
+      });
+      const secFromNow = Math.round((fireAt - now) / 1000);
+      const batchAgeSec = earliestLeadInBatch
+        ? Math.round((now - earliestLeadInBatch.timestamp.getTime()) / 1000)
+        : 0;
+      console.log(
+        `[webhook-processor] AI reply debounced for ${conversationId} ` +
+          `(fire in ${secFromNow}s, debounce=${debounceSec}s delay=${delayRandomSec}s ` +
+          `batchAge=${batchAgeSec}s cap=${maxDebounceSec}s scheduledFor=${scheduledFor.toISOString()})`
+      );
+      return;
     } catch (err) {
       console.error(
-        '[webhook-processor] Delay-queue check failed (proceeding immediately):',
+        '[webhook-processor] Debounce queue failed (proceeding immediately):',
         err
       );
     }
   } else if (leadContext.testModeSkipToBooking) {
     console.log(
-      `[webhook-processor] [TEST MODE] Bypassing response-delay queue for ${conversationId}`
+      `[webhook-processor] [TEST MODE] Bypassing debounce for ${conversationId}`
     );
   }
 
@@ -1449,65 +1470,13 @@ export async function scheduleAIReply(
     );
   }
 
-  // ── Step 4d: Voice-note-aware delay ──────────────────────────────
-  // If we're in the VN-aware path (generated first, delay not yet applied),
-  // now we know the message type. Apply the appropriate delay system.
-  if (vnAwarePath && shouldAutoSend) {
-    const {
-      calculateVoiceNoteDelay,
-      getVoiceNoteTimingSettings,
-      serializeResult
-    } = await import('@/lib/voice-note-timing');
-
-    const isVoiceNote = !!(
-      result.shouldVoiceNote || result.voiceNoteAction?.slot_id
-    );
-
-    if (isVoiceNote) {
-      // Voice note: pick random delay between min and max
-      const vnSettings = await getVoiceNoteTimingSettings(accountId);
-      const delaySeconds = calculateVoiceNoteDelay(vnSettings);
-      const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
-
-      await prisma.scheduledReply.create({
-        data: {
-          conversationId,
-          accountId,
-          scheduledFor,
-          status: 'PENDING',
-          messageType: 'voice_note',
-          generatedResult: serializeResult(result) as object
-        }
-      });
-      log(
-        'sched.step4d.vnDelay',
-        `voice note queued (delay: ${delaySeconds}s, scheduledFor: ${scheduledFor.toISOString()})`
-      );
-      return;
-    } else if (vnTextMaxDelay > 0) {
-      // Text from VN-enabled account: use existing persona text delay
-      const { humanResponseDelay } = await import('@/lib/delay-utils');
-      const delaySeconds = humanResponseDelay(vnTextMinDelay, vnTextMaxDelay);
-      const scheduledFor = new Date(Date.now() + delaySeconds * 1000);
-
-      await prisma.scheduledReply.create({
-        data: {
-          conversationId,
-          accountId,
-          scheduledFor,
-          status: 'PENDING',
-          messageType: 'text',
-          generatedResult: serializeResult(result) as object
-        }
-      });
-      log(
-        'sched.step4d.textDelay',
-        `text reply queued from VN-aware path (delay: ${delaySeconds}s, range: ${vnTextMinDelay}-${vnTextMaxDelay}s)`
-      );
-      return;
-    }
-    // No delay configured — fall through to immediate send
-  }
+  // ── Step 4d removed ──────────────────────────────────────────────
+  // Voice-note-aware split removed: debounce now governs the pause in
+  // Step 3.5, so we no longer need a post-generation delay branch. The
+  // voice-note path still works — ElevenLabs generates the audio in
+  // Step 5 and ships it; the "wait N minutes before sending a voice
+  // note" timing logic was removed as part of the debounce unification.
+  // If per-message-type timing ever comes back, do it here post-gen.
 
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
   if (!shouldAutoSend) {
@@ -1640,6 +1609,63 @@ async function sendAIReply(
       `[webhook-processor] Human message detected during AI generation, discarding AI reply for ${conversationId}`
     );
     return;
+  }
+
+  // ── Dedup safety net ──────────────────────────────────────────
+  // Last-line defense against near-duplicate sends that slip through the
+  // debounce + cancel-pending + 25s recency guard. Compare the new reply
+  // against the last 3 AI messages using word-level Jaccard. Threshold
+  // 0.85 catches copy-pastes and trivial rewordings but allows genuinely
+  // different responses that happen to share common words (like "bro"
+  // or "gotchu").
+  try {
+    const last3 = await prisma.message.findMany({
+      where: { conversationId, sender: 'AI' },
+      orderBy: { timestamp: 'desc' },
+      take: 3,
+      select: { content: true }
+    });
+    const tokenize = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 0);
+    const newArr = tokenize(result.reply);
+    const newTokens = new Set(newArr);
+    for (const prev of last3) {
+      const prevArr = tokenize(prev.content);
+      const prevTokens = new Set(prevArr);
+      if (newTokens.size === 0 || prevTokens.size === 0) continue;
+      let intersection = 0;
+      for (const w of newArr) if (prevTokens.has(w)) intersection++;
+      // Correct intersection: use set semantics (count unique words in common)
+      intersection = newArr.filter(
+        (w, i) => prevTokens.has(w) && newArr.indexOf(w) === i
+      ).length;
+      const union = new Set(newArr.concat(prevArr)).size;
+      const similarity = union > 0 ? intersection / union : 0;
+      if (similarity >= 0.85) {
+        console.warn(
+          `[webhook-processor] duplicate_suppressed ${conversationId} — sim=${similarity.toFixed(2)} vs prior AI msg. Not sending: "${result.reply.slice(0, 80)}"`
+        );
+        // Mark the suggestion as rejected-by-dedup so analytics can track it
+        if (result.suggestionId) {
+          await prisma.aISuggestion
+            .update({
+              where: { id: result.suggestionId },
+              data: { wasRejected: true, finalSentText: null }
+            })
+            .catch(() => {});
+        }
+        return;
+      }
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Dedup check failed (non-fatal, proceeding with send):',
+      err
+    );
   }
 
   // ── Save AI message to database ────────────────────────────────

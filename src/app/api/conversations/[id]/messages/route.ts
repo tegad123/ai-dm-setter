@@ -196,6 +196,20 @@ export async function POST(
     };
     if (sender === 'HUMAN') {
       updateData.aiActive = false;
+      // Cancel any pending debounced AI reply — the human just took over.
+      // Otherwise the queued AI reply would fire a minute later and talk
+      // over the human's message.
+      await prisma.scheduledReply
+        .updateMany({
+          where: { conversationId: id, status: 'PENDING' },
+          data: { status: 'CANCELLED' }
+        })
+        .catch((err) => {
+          console.error(
+            '[messages] Failed to cancel pending replies on human takeover (non-fatal):',
+            err
+          );
+        });
     }
 
     const updatedConvo = await prisma.conversation.update({
