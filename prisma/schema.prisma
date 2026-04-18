@@ -278,6 +278,20 @@ model AIPersona {
   activeCampaignsContext   String?  @db.Text
   contextUpdatedAt         DateTime?
   contextUpdatedByUserId   String?
+  // Capital-verification gate (R24). When set, the AI must verify the
+  // lead's capital claim in DM before routing to booking — leads lie on
+  // Typeform. If null, verification is skipped (backward compatible).
+  // capitalVerificationPrompt is an optional override if the operator
+  // wants custom wording; otherwise the default R24 phrasing is used.
+  minimumCapitalRequired   Int?
+  capitalVerificationPrompt String? @db.Text
+  // Scope & Limits (R26). Free-form list of topics the AI should
+  // politely decline — career advice, crypto, general investing, etc.
+  // Augments the universal R26 "stay in scope" rule with account-specific
+  // carveouts so a financial-literacy coach doesn't get false positives
+  // on the off-topic regex guard, and a trading coach gets an explicit
+  // "do NOT discuss general wealth-building" reinforcement.
+  outOfScopeTopics         String?  @db.Text
   responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
   responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
   voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled

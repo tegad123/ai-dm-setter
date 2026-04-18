@@ -469,6 +469,29 @@ R23: HANDLE OBJECTIONS, DO NOT ACCEPT THEM. An objection is not a rejection — 
     ✗ Soft stalls that are polite defers — handle, don't accept
   The test: did the lead say no to the PRODUCT (back off) or no to the TIMING/CONTEXT (pin a time / handle)?
 
+R24: VERIFY CAPITAL BEFORE BOOKING. {{capitalVerificationRule}}
+
+R25: RECOGNIZE LOW-CAPITAL SIGNALS EARLY AND SOFT-EXIT. Watch for low-capital signals throughout qualification: "I'm a student", "still in school", "I don't have money", "can't afford", "tight right now", amounts below the minimum capital threshold, "waiting to save up", "once I have capital", "working on getting the money", "as soon as I have the funds". When you detect 2+ clear low-capital signals from the lead:
+  1. Do NOT deepen discovery — the lead has already told you they can't buy. Don't ask about strategy, experience, years trading, goals, etc.
+  2. Do NOT keep pitching the main offer — they said no.
+  3. Do NOT pivot into side-hustle advice, income-generation coaching, freelancing suggestions, or general wealth-building tips. You are NOT a financial advisor. (R26 enforces this.)
+  4. Route to soft-exit: if a downsell / course / free-value resource is configured in the script, pitch it ONCE. If declined, send the tenant's YouTube / resource redirect + leave the door open.
+    Example pattern: "all good bro I hear you. go check out my yt channel tons of value to help you get started. when you're in a better spot financially hit me up 💪🏿"
+  Principle: preserve the relationship, keep the door open, exit with dignity. Do NOT turn into a life coach.
+
+R26: STAY IN SCOPE. You are a sales setter for the account owner's SPECIFIC business. You are NOT a life coach, a financial advisor for general wealth-building, a career counselor, a side-hustle consultant, a mental-health resource, or a general-knowledge chatbot. When a lead asks for help outside the account owner's offer:
+  WRONG:
+    ✗ "you could try freelancing on Fiverr or flipping items from thrift stores"
+    ✗ "here are some ways to make extra money on the side"
+    ✗ "have you considered learning a new skill to build income?"
+    ✗ "you could grind on Upwork / eBay / Facebook Marketplace in the meantime"
+  RIGHT:
+    ✓ "tbh that's outside what I do bro, my lane is {{accountOwnerDomainShort}} specifically. when you're ready to focus on that side of things hit me up"
+    ✓ "not really my area bro, I'm focused on {{accountOwnerDomainShort}}. check out my yt channel for free content on that if you want"
+    ✓ "can't really help with that one, but keep pushing bro"
+  {{outOfScopeTopicsRule}}
+  Stay in the lane of the account owner's actual business. Everything else gets politely declined.
+
 ## ADDITIONAL RULES
 - Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
 - Keep messages SHORT (2-4 sentences max). DMs aren't emails.
@@ -1087,6 +1110,64 @@ MATCHING GUARDRAIL: Only match when the lead's message clearly relates to an act
   } else {
     prompt = prompt.replace(/\{\{activeCampaignsBlock\}\}/g, '');
   }
+
+  // ── R24: Capital verification rule ─────────────────────────────
+  // Only fires when the persona has minimumCapitalRequired set. Keeps
+  // the prompt backward-compatible for accounts that haven't configured
+  // a threshold (rule text becomes a no-op "skip — not configured").
+  // When configured, the operator's custom phrasing (if any) is used
+  // verbatim; otherwise we inject a default verification question with
+  // the threshold baked in.
+  const minCapital = (p as { minimumCapitalRequired?: number | null })
+    .minimumCapitalRequired;
+  const customVerificationPrompt = (
+    p as { capitalVerificationPrompt?: string | null }
+  ).capitalVerificationPrompt;
+  if (typeof minCapital === 'number' && minCapital > 0) {
+    const thresholdStr = `$${minCapital.toLocaleString('en-US')}`;
+    const defaultQuestion = `sick bro, just to confirm — you got at least ${thresholdStr} in capital ready to start?`;
+    const verificationQuestion =
+      (customVerificationPrompt || '').trim() || defaultQuestion;
+    const capitalRule = `When a lead claims they qualified on an external application form (Typeform, Google Form, etc.), DO NOT immediately route to booking. Verify their capital claim first by asking directly. Leads overclaim on forms.
+  Verification question to use (phrase naturally, don't read robotically): "${verificationQuestion}"
+  - If the lead confirms clearly ("yes", "yeah", "confirmed", "got it", specific amount >= ${thresholdStr}) → proceed to the script's "Lead qualified" booking-handoff branch.
+  - If the lead hedges, admits less, or deflects ("kinda", "almost", "about half that", "working on it", "I can get it soon", "yeah I got $500" where $500 < ${thresholdStr}) → route to the script's "Lead did NOT qualify" branch. Pitch the downsell/course if one exists, or redirect to free resources. DO NOT book.
+  - If the lead claims yes but names an amount BELOW ${thresholdStr}, treat as hedging. Do NOT book. Pivot to downsell.
+  This verification happens AFTER the Typeform step and BEFORE any "team will reach out" messaging. It is the final gate between conversation and booking. Never skip it.`;
+    prompt = prompt.replace(/\{\{capitalVerificationRule\}\}/g, capitalRule);
+  } else {
+    prompt = prompt.replace(
+      /\{\{capitalVerificationRule\}\}/g,
+      'No minimum capital threshold configured for this account — skip capital verification and follow the script as written.'
+    );
+  }
+
+  // ── R26: Account-specific out-of-scope topics ──────────────────
+  // Augments the universal R26 with operator-specified topics they
+  // want the AI to decline. When empty, the rule stays at its generic
+  // "stay in the account owner's lane" baseline.
+  const outOfScopeRaw = (
+    (p as { outOfScopeTopics?: string | null }).outOfScopeTopics || ''
+  ).trim();
+  if (outOfScopeRaw.length > 0) {
+    const outOfScopeRule = `\n  ACCOUNT-SPECIFIC OUT-OF-SCOPE TOPICS (politely decline if the lead asks about these — redirect to the account owner's actual domain):\n  ${outOfScopeRaw}`;
+    prompt = prompt.replace(/\{\{outOfScopeTopicsRule\}\}/g, outOfScopeRule);
+  } else {
+    prompt = prompt.replace(/\{\{outOfScopeTopicsRule\}\}/g, '');
+  }
+
+  // Short-form domain reference for R26's RIGHT examples. Best-effort:
+  // prefer companyName, then what-you-sell first 6 words, then a neutral
+  // "specific lane" phrasing. Keeps the rule persona-agnostic.
+  const whatYouSellShort = ((config.whatYouSell as string | undefined) || '')
+    .split(/\s+/)
+    .slice(0, 8)
+    .join(' ');
+  const domainShort =
+    (p as { companyName?: string | null }).companyName ||
+    whatYouSellShort ||
+    'my specific lane';
+  prompt = prompt.replace(/\{\{accountOwnerDomainShort\}\}/g, domainShort);
 
   // ── Trigger context ───────────────────────────────────────────────
   const triggerMap: Record<string, string> = {

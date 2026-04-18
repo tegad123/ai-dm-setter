@@ -156,6 +156,16 @@ export interface VoiceQualityOptions {
    * room to actually explain, so we allow up to 500 chars.
    */
   relaxLengthLimit?: boolean;
+  /**
+   * Opt-out for the R26 off-topic-advice regex. Defaults to false, which
+   * means the gate blocks messages mentioning freelancing / Fiverr /
+   * side-hustles / etc. — the AI is a sales setter for a specific
+   * business, not a general wealth-building advisor. Set to true ONLY
+   * for accounts whose actual business legitimately covers these topics
+   * (a financial-literacy coach, a side-hustle teacher, etc.). Most
+   * accounts should leave this false.
+   */
+  allowGeneralAdvice?: boolean;
 }
 
 export function scoreVoiceQuality(
@@ -315,6 +325,39 @@ export function scoreVoiceQuality(
         `r19_fabricated_future_plan: matched "${pat.source}" — claims an upcoming release / feature / plan not supported by context`
       );
       break;
+    }
+  }
+
+  // 9e. R26 — off-topic life/career/side-hustle advice. The AI is a sales
+  // setter for the account owner's SPECIFIC business, not a general
+  // wealth-building advisor. Real production example: when a lead said
+  // they couldn't afford the mentorship, the AI started recommending
+  // Fiverr freelancing and flipping items from thrift stores. That's
+  // not what the account owner does; it wastes LLM budget and trains
+  // leads to expect free coaching from the account.
+  //
+  // The persona-level `allowGeneralAdvice` flag bypasses this guard
+  // (e.g. for a legit financial-literacy coach). Default = enforce.
+  if (!options?.allowGeneralAdvice) {
+    const OFF_TOPIC_ADVICE_PATTERNS: RegExp[] = [
+      /\bside[\s-]?hustle(s|)\b/i,
+      /\bflip(ping)?\s+(items|stuff|products|goods)\b/i,
+      /\bFiverr\b/i,
+      /\bUpwork\b/i,
+      /\bfreelanc(e|ing|er)\b/i,
+      /\bthrift\s+store(s|)\b/i,
+      /\bgarage\s+sale(s|)\b/i,
+      /\beBay\b/i,
+      /\bFacebook\s+Marketplace\b/i,
+      /\b(make|earn|build)\s+extra\s+(income|cash|money)\b/i
+    ];
+    for (const pat of OFF_TOPIC_ADVICE_PATTERNS) {
+      if (pat.test(reply)) {
+        hardFails.push(
+          `r26_offtopic_advice: matched "${pat.source}" — AI drifted into general wealth-building / side-hustle advice outside the account owner's lane`
+        );
+        break;
+      }
     }
   }
 

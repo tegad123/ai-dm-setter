@@ -41,6 +41,9 @@ interface PersonaResponse {
     companyName: string | null;
     closerName: string | null;
     activeCampaignsContext: string | null;
+    minimumCapitalRequired: number | null;
+    capitalVerificationPrompt: string | null;
+    outOfScopeTopics: string | null;
     contextUpdatedAt: string | null;
     contextUpdatedByUserId: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,6 +113,18 @@ export default function PersonaEditorPage() {
   const [handoffSavedSnapshot, setHandoffSavedSnapshot] = useState('');
   const [savingHandoff, setSavingHandoff] = useState(false);
 
+  // Capital verification (R24) + out-of-scope topics (R26). Separate
+  // section states so Capital saves don't require editing Scope and
+  // vice versa.
+  const [minCapital, setMinCapital] = useState<string>(''); // string so HTML number input clears cleanly
+  const [verificationPrompt, setVerificationPrompt] = useState('');
+  const [capitalSavedSnapshot, setCapitalSavedSnapshot] = useState('');
+  const [savingCapital, setSavingCapital] = useState(false);
+
+  const [outOfScope, setOutOfScope] = useState('');
+  const [outOfScopeSavedSnapshot, setOutOfScopeSavedSnapshot] = useState('');
+  const [savingScope, setSavingScope] = useState(false);
+
   // Rotating placeholder for campaigns textarea. Cycles every 4s; pauses
   // once the user has typed anything so we don't distract.
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
@@ -155,6 +170,21 @@ export default function PersonaEditorPage() {
         });
         setHandoffDescription('');
         setHandoffSavedSnapshot(snapshot);
+
+        // Capital verification state
+        const mc =
+          data.persona.minimumCapitalRequired != null
+            ? String(data.persona.minimumCapitalRequired)
+            : '';
+        setMinCapital(mc);
+        const vp = data.persona.capitalVerificationPrompt || '';
+        setVerificationPrompt(vp);
+        setCapitalSavedSnapshot(JSON.stringify({ minCapital: mc, vp }));
+
+        // Out-of-scope topics
+        const oos = data.persona.outOfScopeTopics || '';
+        setOutOfScope(oos);
+        setOutOfScopeSavedSnapshot(oos);
       }
     } catch (err) {
       console.error('Failed to load persona:', err);
@@ -210,6 +240,9 @@ export default function PersonaEditorPage() {
         (p as { freeValueLink?: string | null }).freeValueLink ?? null,
       closerName: p.closerName ?? null,
       activeCampaignsContext: p.activeCampaignsContext ?? null,
+      minimumCapitalRequired: p.minimumCapitalRequired ?? null,
+      capitalVerificationPrompt: p.capitalVerificationPrompt ?? null,
+      outOfScopeTopics: p.outOfScopeTopics ?? null,
       voiceNotesEnabled:
         (p as { voiceNotesEnabled?: boolean }).voiceNotesEnabled ?? true,
       setupComplete:
@@ -327,6 +360,50 @@ export default function PersonaEditorPage() {
     }
   };
 
+  const saveCapital = async () => {
+    setSavingCapital(true);
+    try {
+      const asNumber =
+        minCapital.trim().length > 0 ? parseInt(minCapital.trim(), 10) : null;
+      await persistAndRefresh(
+        {
+          minimumCapitalRequired:
+            typeof asNumber === 'number' &&
+            Number.isFinite(asNumber) &&
+            asNumber > 0
+              ? asNumber
+              : null,
+          capitalVerificationPrompt: verificationPrompt.trim() || null
+        },
+        'Capital verification saved'
+      );
+      setCapitalSavedSnapshot(
+        JSON.stringify({ minCapital, vp: verificationPrompt })
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save capital verification');
+    } finally {
+      setSavingCapital(false);
+    }
+  };
+
+  const saveScope = async () => {
+    setSavingScope(true);
+    try {
+      await persistAndRefresh(
+        { outOfScopeTopics: outOfScope.trim() || null },
+        'Scope limits saved'
+      );
+      setOutOfScopeSavedSnapshot(outOfScope);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save scope limits');
+    } finally {
+      setSavingScope(false);
+    }
+  };
+
   // ── Unsaved-changes warning on navigation ───────────────────────
   const currentHandoffSnapshot = JSON.stringify({
     closerName,
@@ -334,11 +411,17 @@ export default function PersonaEditorPage() {
     closerRole,
     description: handoffDescription
   });
+  const currentCapitalSnapshot = JSON.stringify({
+    minCapital,
+    vp: verificationPrompt
+  });
   const hasUnsavedChanges =
     campaigns !== campaignsSavedSnapshot ||
     adminBio !== adminBioSavedSnapshot ||
     whatYouSell !== whatYouSellSavedSnapshot ||
-    currentHandoffSnapshot !== handoffSavedSnapshot;
+    currentHandoffSnapshot !== handoffSavedSnapshot ||
+    currentCapitalSnapshot !== capitalSavedSnapshot ||
+    outOfScope !== outOfScopeSavedSnapshot;
   const hasUnsavedRef = useRef(hasUnsavedChanges);
   hasUnsavedRef.current = hasUnsavedChanges;
 
@@ -571,6 +654,111 @@ export default function PersonaEditorPage() {
               {savingHandoff && (
                 <Loader2 className='mr-2 h-3 w-3 animate-spin' />
               )}
+              Save
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── SECTION 5 — Capital Verification (R24) ───────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-lg'>Capital Verification</CardTitle>
+          <CardDescription>
+            Leads often overclaim on applications. When a minimum is set here,
+            the AI will verify the threshold in conversation before routing to
+            booking. Leave blank to skip verification.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-3'>
+          <div className='space-y-1.5'>
+            <Label htmlFor='minCapital'>Minimum capital to qualify (USD)</Label>
+            <Input
+              id='minCapital'
+              type='number'
+              min={0}
+              step={100}
+              value={minCapital}
+              onChange={(e) => setMinCapital(e.target.value)}
+              placeholder='e.g. 1000'
+            />
+            <p className='text-muted-foreground text-[11px]'>
+              Leave empty to disable capital verification entirely.
+            </p>
+          </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor='verificationPrompt'>
+              Custom verification phrasing (optional)
+            </Label>
+            <Textarea
+              id='verificationPrompt'
+              value={verificationPrompt}
+              onChange={(e) =>
+                setVerificationPrompt(e.target.value.slice(0, 500))
+              }
+              placeholder='Leave blank to use default: "sick bro, just to confirm — you got at least $X in capital ready to start?"'
+              className='min-h-[80px]'
+              maxLength={500}
+            />
+            <p className='text-muted-foreground text-[11px]'>
+              The AI will phrase this naturally. 500 chars max.
+            </p>
+          </div>
+          <div className='flex items-center justify-between'>
+            <span className='text-muted-foreground text-xs'>
+              {currentCapitalSnapshot !== capitalSavedSnapshot &&
+                '• Unsaved changes'}
+            </span>
+            <Button
+              onClick={saveCapital}
+              disabled={
+                savingCapital || currentCapitalSnapshot === capitalSavedSnapshot
+              }
+              size='sm'
+            >
+              {savingCapital && (
+                <Loader2 className='mr-2 h-3 w-3 animate-spin' />
+              )}
+              Save
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── SECTION 6 — Scope & Limits (R26) ─────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-lg'>Scope &amp; Limits</CardTitle>
+          <CardDescription>
+            Explicit list of topics your AI should politely decline. The AI is
+            already prevented from drifting into general side-hustle /
+            wealth-building advice by default. Add account-specific topics here
+            that you want it to redirect from.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-3'>
+          <Textarea
+            value={outOfScope}
+            onChange={(e) => setOutOfScope(e.target.value.slice(0, 500))}
+            placeholder='e.g. career advice, general investing, crypto strategy, personal finance coaching, legal advice, tax planning'
+            className='min-h-[100px]'
+            maxLength={500}
+          />
+          <div className='flex items-center justify-between text-xs'>
+            <span className='text-muted-foreground'>
+              {outOfScope !== outOfScopeSavedSnapshot && '• Unsaved changes'}
+            </span>
+            <span className='text-muted-foreground tabular-nums'>
+              {outOfScope.length} / 500
+            </span>
+          </div>
+          <div className='flex justify-end'>
+            <Button
+              onClick={saveScope}
+              disabled={savingScope || outOfScope === outOfScopeSavedSnapshot}
+              size='sm'
+            >
+              {savingScope && <Loader2 className='mr-2 h-3 w-3 animate-spin' />}
               Save
             </Button>
           </div>

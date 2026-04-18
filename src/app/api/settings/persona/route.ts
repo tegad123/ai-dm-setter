@@ -76,6 +76,9 @@ export async function PUT(req: NextRequest) {
       preCallSequence,
       closerName,
       activeCampaignsContext,
+      minimumCapitalRequired,
+      capitalVerificationPrompt,
+      outOfScopeTopics,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -142,6 +145,35 @@ export async function PUT(req: NextRequest) {
         typeof activeCampaignsContext === 'string' &&
         activeCampaignsContext.trim().length > 0
           ? activeCampaignsContext.trim()
+          : null;
+    }
+    // R24/R26 day-to-day fields. minimumCapitalRequired accepts numeric
+    // strings too since HTML number inputs sometimes send them that way;
+    // coerce and validate, null out on empty/invalid so turning off the
+    // threshold is as easy as clearing the field.
+    if (minimumCapitalRequired !== undefined) {
+      const n =
+        typeof minimumCapitalRequired === 'number'
+          ? minimumCapitalRequired
+          : typeof minimumCapitalRequired === 'string' &&
+              minimumCapitalRequired.trim().length > 0
+            ? parseInt(minimumCapitalRequired, 10)
+            : null;
+      data.minimumCapitalRequired =
+        typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+    }
+    if (capitalVerificationPrompt !== undefined) {
+      data.capitalVerificationPrompt =
+        typeof capitalVerificationPrompt === 'string' &&
+        capitalVerificationPrompt.trim().length > 0
+          ? capitalVerificationPrompt.trim()
+          : null;
+    }
+    if (outOfScopeTopics !== undefined) {
+      data.outOfScopeTopics =
+        typeof outOfScopeTopics === 'string' &&
+        outOfScopeTopics.trim().length > 0
+          ? outOfScopeTopics.trim()
           : null;
     }
     data.contextUpdatedAt = new Date();
