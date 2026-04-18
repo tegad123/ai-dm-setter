@@ -1230,17 +1230,23 @@ This is a ONE-TIME adjustment for your first reply. Subsequent turns use normal 
   // override at the very top of the prompt that tells the AI to ignore all
   // earlier stages and jump directly to BOOKING (Stage 7). Used for dev
   // testing without burning credits going through 7 stages of qualification.
+  //
+  // IMPORTANT: this prefix must NOT duplicate booking mechanics. Booking is
+  // now 100% script-driven (drop the URL from "Available Links & URLs",
+  // lead self-books on the calendar page). The previous version of this
+  // prefix still ordered the AI to "propose 2-3 specific slots from the
+  // available slots list" — a leftover from the removed LeadConnector /
+  // Calendly auto-booking flow. Since no availableSlotsContext is injected
+  // anymore (see lines ~1045 above), the AI had no list to pick from and
+  // hallucinated plausible-sounding slots ("Friday at 2 PM CT, Monday at
+  // 10 AM CT"), violating the R14/R16 rules in the Stage 7 section below.
+  // The fix: keep the prefix minimal — skip qualification, set stage to
+  // BOOKING, and DEFER to the Stage 7 rules below for the actual mechanics.
   if (leadContext.testModeSkipToBooking) {
     const testModePrefix = `[TEST MODE — DEVELOPMENT ONLY]
 This conversation is being tested by the developer. The lead has been pre-qualified through all earlier stages (OPENING through FINANCIAL_SCREENING). You MUST skip directly to STAGE 7 (BOOKING). Do NOT ask any qualification questions. Do NOT pitch the offer. Do NOT discuss capital, experience, or timing. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
 
-Your ONLY job for the rest of this conversation is to run the booking flow:
-1. If you do not yet know the lead's timezone, set sub_stage="BOOKING_TZ_ASK" and ASK for it first.
-2. Once you have the timezone, set sub_stage="BOOKING_SLOT_PROPOSE" and propose 2-3 specific slots from the available slots list (use the EXACT label including the timezone suffix).
-3. Once they pick a slot, set sub_stage="BOOKING_EMAIL_ASK" and ask for their email.
-4. Once you have email + selected slot, set sub_stage="BOOKING_CONFIRM" AND set selected_slot_iso to the ISO of the picked slot AND set lead_email to the captured email. This will trigger the real LeadConnector booking.
-
-In ALL responses during test mode, set stage="BOOKING".
+Run the BOOKING stage exactly as specified in the "Stage 7: BOOKING" section below. In particular, obey the ABSOLUTE RULE: do NOT propose specific times or date+time combinations. Drop the booking URL from the script's "Available Links & URLs" section and let the lead pick their own slot on the calendar page. If no booking/calendar URL exists in the script, follow the SCRIPT-DRIVEN HANDOFF FLOW (tell them a team member will reach out). In ALL responses during test mode, set stage="BOOKING".
 
 ----- ORIGINAL PROMPT BELOW -----
 
