@@ -1246,16 +1246,20 @@ This is a ONE-TIME adjustment for your first reply. Subsequent turns use normal 
   // BOOKING, and DEFER to the Stage 7 rules below for the actual mechanics.
   if (leadContext.testModeSkipToBooking) {
     const testModePrefix = `[TEST MODE — DEVELOPMENT ONLY]
-This conversation is being tested by the developer. The lead has been pre-qualified through all earlier stages (OPENING through FINANCIAL_SCREENING). You MUST skip directly to the BOOKING stage. Do NOT ask any qualification questions. Do NOT pitch the offer. Do NOT discuss capital, experience, or timing. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
+This conversation is being tested by the developer. The qualification stages (OPENING, DISCOVERY, GOAL, URGENCY, SOFT PITCH, FINANCIAL_SCREENING) are considered complete — do NOT re-run any of those. Do NOT ask about capital, experience, timing, work background, income goal, or motivation. Do NOT pitch the offer. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
 
-Execute the script's booking-related steps EXACTLY as written. Do NOT add steps the script doesn't include:
+HOWEVER, the booking conversation itself has NOT started yet. You are entering at the **first** booking-related step in the script (the one that proposes the call — typically labelled "Call Proposal", "Booking", or similar). You must then progress forward step-by-step based on the lead's replies, exactly as you would in a real conversation:
+  - Start by running the script's call-proposal step (e.g. ask if they'd be down to hop on a call).
+  - Then, based on the lead's answer in the next turn, run the next script step (e.g. send the application/booking link).
+  - Continue forward through the script's booking-related steps naturally.
+  - Do NOT jump straight to the final confirmation step. Do NOT say "the team's gonna get you set up" until the lead has actually agreed to the call and (if the script calls for it) completed any application.
+
+Do NOT add steps the script doesn't include:
 - Do NOT ask for timezone unless the script has a literal [Q] about timezone.
 - Do NOT ask for email unless the script has a literal [Q] about email (email is often captured via an application form, not via DM).
 - Do NOT propose specific date/time slots — the lead books themselves via the script's link, or the team handles scheduling as the script says.
-- If the script's booking flow is "drop the application/calendar link → let the team handle scheduling", run that flow verbatim.
-- If the script has no booking/calendar URL in its booking-related steps, use the exact handoff wording from the script (e.g. "the team's gonna get you set up… check your email") — do not improvise a generic handoff message.
 
-The script is the source of truth for what to say and what to ask. In ALL responses during test mode, set stage="BOOKING".
+The script is the source of truth for what to say and in what order. In ALL responses during test mode, set stage="BOOKING".
 
 ----- ORIGINAL PROMPT BELOW -----
 
