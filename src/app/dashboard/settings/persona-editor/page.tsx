@@ -69,11 +69,35 @@ const MAX_WHAT_YOU_SELL = 1500;
 const MAX_CALL_HANDOFF = 800;
 
 // ── Rotating placeholder examples for Active Campaigns ────────────
+// Strictly format-only — each rotates to teach the USER what shape
+// their own entries should take without suggesting specific content
+// they might save verbatim. No persona names, no dates, no URLs.
 const CAMPAIGN_PLACEHOLDERS = [
-  "IG Story CTA: Posted April 15 telling followers to DM 'MARKET' for my free breakdown. Link to send: https://example.com/free-breakdown",
-  "YouTube drop April 12: 'Why Traders Fail.' Core message is discipline > strategy. Leads referencing this come in warm.",
-  'Referral program active — students get $100 for qualified referrals. If someone mentions a referral, acknowledge it and route to the team.'
+  '[Channel]: [what you posted and when]. [What you told followers to do]. [Link to send, if any].',
+  'Describe each active campaign in plain language. Include: what channel, what the lead was told to do, what you promised them, and any link you want the AI to send.',
+  'Update this section whenever you launch or end a campaign. Clear expired entries so the AI stops welcoming leads to them.'
 ];
+
+// ── Docs hint link ────────────────────────────────────────────────
+// Small "Not sure what to put here? See examples in the docs." line
+// placed below each editor section. Links to /docs/persona-editor
+// with a section-specific hash anchor. The docs page is a stub for
+// now — when it ships these anchors will already be wired up.
+function DocsHint({ section }: { section: string }) {
+  return (
+    <p className='text-muted-foreground text-[11px]'>
+      Not sure what to put here?{' '}
+      <a
+        href={`/docs/persona-editor#${section}`}
+        target='_blank'
+        rel='noopener noreferrer'
+        className='hover:text-foreground underline'
+      >
+        See examples in the docs.
+      </a>
+    </p>
+  );
+}
 
 // ── Helpers ───────────────────────────────────────────────────────
 function formatRelativeTime(iso: string | null): string {
@@ -519,6 +543,7 @@ export default function PersonaEditorPage() {
             className='min-h-[180px]'
             maxLength={MAX_CAMPAIGNS}
           />
+          <DocsHint section='active-campaigns' />
           <div className='flex items-center justify-between text-xs'>
             <span className='text-amber-600 dark:text-amber-400'>
               Clear expired campaigns when they end. Your AI will keep welcoming
@@ -561,10 +586,11 @@ export default function PersonaEditorPage() {
             onChange={(e) =>
               setAdminBio(e.target.value.slice(0, MAX_ADMIN_BIO))
             }
-            placeholder='e.g. I run DAE Trading Accelerator, helping traders hit consistent profit through the Session Liquidity Model. Been at it for 6 years, multi-5-figure months personally, hundreds of students.'
+            placeholder='[Your business / domain]. [Your track record — years in it, outcomes delivered, who you serve]. [Anything else that establishes credibility for a cold lead.]'
             className='min-h-[140px]'
             maxLength={MAX_ADMIN_BIO}
           />
+          <DocsHint section='about-you' />
           <div className='flex items-center justify-between text-xs'>
             <span className='text-muted-foreground'>
               {adminBio !== adminBioSavedSnapshot && '• Unsaved changes'}
@@ -603,10 +629,11 @@ export default function PersonaEditorPage() {
             onChange={(e) =>
               setWhatYouSell(e.target.value.slice(0, MAX_WHAT_YOU_SELL))
             }
-            placeholder='e.g. 1-on-1 trading mentorship. 90 days, we work side-by-side on live trades. Outcome: consistent weekly profit using the Session Liquidity Model. For serious traders who have capital or credit and are ready to put reps in.'
+            placeholder='[Your main offer, in plain language]. [Duration / commitment required]. [The specific outcome you deliver]. [Who this is for — and who it is NOT for].'
             className='min-h-[140px]'
             maxLength={MAX_WHAT_YOU_SELL}
           />
+          <DocsHint section='what-you-sell' />
           <div className='flex items-center justify-between text-xs'>
             <span className='text-muted-foreground'>
               {whatYouSell !== whatYouSellSavedSnapshot && '• Unsaved changes'}
@@ -649,7 +676,7 @@ export default function PersonaEditorPage() {
                 id='closerName'
                 value={closerName}
                 onChange={(e) => setCloserName(e.target.value)}
-                placeholder='e.g. Anthony'
+                placeholder="[Closer's first name]"
               />
             </div>
             <div className='space-y-1.5'>
@@ -658,7 +685,7 @@ export default function PersonaEditorPage() {
                 id='closerRelation'
                 value={closerRelation}
                 onChange={(e) => setCloserRelation(e.target.value)}
-                placeholder='e.g. my right-hand man'
+                placeholder='[How you describe them to leads, e.g. partner / co-founder / head coach]'
               />
             </div>
           </div>
@@ -668,10 +695,11 @@ export default function PersonaEditorPage() {
               id='closerRole'
               value={closerRole}
               onChange={(e) => setCloserRole(e.target.value)}
-              placeholder='e.g. runs all our strategy calls and closes mentorship deals'
+              placeholder='[What they do on the call, in one line]'
               maxLength={MAX_CALL_HANDOFF}
             />
           </div>
+          <DocsHint section='call-handoff' />
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-xs'>
               {currentHandoffSnapshot !== handoffSavedSnapshot &&
@@ -713,7 +741,7 @@ export default function PersonaEditorPage() {
               step={100}
               value={minCapital}
               onChange={(e) => setMinCapital(e.target.value)}
-              placeholder='e.g. 1000'
+              placeholder='Minimum USD amount (whole number, no symbol)'
             />
             <p className='text-muted-foreground text-[11px]'>
               Leave empty to disable capital verification entirely.
@@ -729,7 +757,7 @@ export default function PersonaEditorPage() {
               onChange={(e) =>
                 setVerificationPrompt(e.target.value.slice(0, 500))
               }
-              placeholder='Leave blank to use default: "sick bro, just to confirm — you got at least $X in capital ready to start?"'
+              placeholder='Leave blank to use the default verification phrasing (the threshold above gets interpolated automatically). Override here if you want the AI to ask in a specific way.'
               className='min-h-[80px]'
               maxLength={500}
             />
@@ -737,6 +765,7 @@ export default function PersonaEditorPage() {
               The AI will phrase this naturally. 500 chars max.
             </p>
           </div>
+          <DocsHint section='capital-verification' />
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-xs'>
               {currentCapitalSnapshot !== capitalSavedSnapshot &&
@@ -773,10 +802,11 @@ export default function PersonaEditorPage() {
           <Textarea
             value={outOfScope}
             onChange={(e) => setOutOfScope(e.target.value.slice(0, 500))}
-            placeholder='e.g. career advice, general investing, crypto strategy, personal finance coaching, legal advice, tax planning'
+            placeholder='Comma-separated list of topics the AI should politely decline. These should be topics OUTSIDE your specific business domain that leads might still ask about.'
             className='min-h-[100px]'
             maxLength={500}
           />
+          <DocsHint section='scope-and-limits' />
           <div className='flex items-center justify-between text-xs'>
             <span className='text-muted-foreground'>
               {outOfScope !== outOfScopeSavedSnapshot && '• Unsaved changes'}
@@ -815,14 +845,20 @@ export default function PersonaEditorPage() {
           <Textarea
             value={verifiedFacts}
             onChange={(e) => setVerifiedFacts(e.target.value.slice(0, 3000))}
-            placeholder={`Closer languages: English, Spanish
-Refund policy: 14-day money-back if the lead hasn't started modules
-Offer includes: 12 weekly 1-on-1 sessions, private Slack, live trade reviews
-Supported timezones: Mon-Fri 9am-6pm CT
-Onboarding: email intake form + kickoff call within 48h of booking`}
+            placeholder={`Write one fact per line. Format:  [Category]: [Fact]
+
+Categories that commonly come up:
+  languages spoken
+  refund / guarantee policy
+  what's included in the offer
+  timezones / availability hours
+  credentials
+  onboarding process
+  pricing details`}
             className='min-h-[200px] font-mono text-sm'
             maxLength={3000}
           />
+          <DocsHint section='verified-facts' />
           <div className='flex items-center justify-between text-xs'>
             <span className='text-amber-600 dark:text-amber-400'>
               Only list facts you&apos;re 100% sure about — anything here
