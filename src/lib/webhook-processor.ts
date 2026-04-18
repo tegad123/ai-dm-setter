@@ -2178,21 +2178,34 @@ export async function processAdminMessage(
   }
 
   // ── AI echo detection ─────────────────────────────────────────────
-  // When AI sends a reply via the Instagram API, Instagram echoes it back
-  // as an admin message (is_echo=true). The AI-saved message won't have a
-  // platformMessageId, so the dedup above won't catch it. Instead, check
-  // if a recent AI message with the same content exists — if so, this is
-  // just the echo of the AI's own message. Link the platformMessageId to
-  // the existing AI message and skip the "human took over" logic.
-  const recentAIMessage = await prisma.message.findFirst({
+  // When AI sends a reply via the Instagram / Facebook Send API, Meta
+  // echoes it back as an admin message (is_echo=true). The AI-saved
+  // message won't have a platformMessageId, so the platformMessageId
+  // dedup above won't catch it. Instead, check if a recent AI message
+  // with equivalent content exists — if so, this is just the echo of
+  // the AI's own message. Link the platformMessageId to the existing
+  // AI message and skip the "human took over" logic.
+  //
+  // IMPORTANT: compare on TRIMMED content. Meta strips trailing
+  // whitespace from echoes, so a 1-char trailing-space difference
+  // between our saved AI text and Meta's echo was enough to bust the
+  // exact-match dedup and cause the echo to be saved as a second HUMAN
+  // message (see daetradez @l.galeza 2026-04-18 16:44). Both messages
+  // then rendered in the UI as separate bubbles ("AI Setter" + "Human
+  // Setter") for what was really one send + its echo.
+  const echoSearchWindow = new Date(Date.now() - 60000);
+  const trimmedIncoming = (messageText ?? '').trim();
+  const recentAIMessages = await prisma.message.findMany({
     where: {
       conversationId,
       sender: 'AI',
-      content: messageText,
-      timestamp: { gte: new Date(Date.now() - 60000) } // within last 60s
+      timestamp: { gte: echoSearchWindow }
     },
     orderBy: { timestamp: 'desc' }
   });
+  const recentAIMessage = recentAIMessages.find(
+    (m) => m.content.trim() === trimmedIncoming
+  );
 
   if (recentAIMessage) {
     // Link the platform message ID to the existing AI message for future dedup
