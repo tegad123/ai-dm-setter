@@ -71,10 +71,14 @@ IMPORTANT RULES:
 
 STANDARDIZED FORMAT (high confidence):
 If the script uses these explicit tags, parsing is straightforward:
-- "# STEP N:" headings for steps
+- "# STEP N:" headings for steps (ONLY headings matching this pattern become steps)
 - "## BRANCH:" headings for branches
 - "[MSG]:", "[Q]:", "[VN]:", "[LINK]:", "[VIDEO]:", "[FORM]:", "[JUDGE]:", "[WAIT]:", "[DELAY]:" action tags
 - {{placeholder}} inside any content = runtime AI substitution
+- A top-level "# Sales/DM Script" or similar title heading is METADATA only — ignore it, do NOT create a step for it.
+- A "# REFERENCE DATA" heading marks the forms section. Everything under it (including "## FORM: <name>" blocks) belongs in the top-level "forms" array, NOT in "steps". Do NOT create a step for REFERENCE DATA.
+- A "Condition:" line immediately under a "## BRANCH:" heading is the condition_description for that branch.
+- An "Objective:" line immediately under a "# STEP N:" heading is step metadata — ignore it, do NOT emit an action for it.
 
 FREEFORM FORMAT (medium confidence):
 If the script does NOT use explicit tags, you must infer the structure:
@@ -168,22 +172,27 @@ async function resolveProvider(accountId: string): Promise<{
   model: string;
 }> {
   // Try per-account OpenAI
+  // NOTE: parser-specific model — we force gpt-4o-mini for this task even if
+  // the account uses gpt-4o for conversations. Script parsing is pure
+  // structure extraction; gpt-4o-mini is ~3x faster, cheaper, and has the
+  // same 16K output ceiling (vs. gpt-4o's 16K) but costs 10x less.
   const openaiCreds = await getCredentials(accountId, 'OPENAI');
   if (openaiCreds?.apiKey) {
     return {
       provider: 'openai',
       apiKey: openaiCreds.apiKey as string,
-      model: (openaiCreds.model as string) || 'gpt-4o'
+      model: 'gpt-4o-mini'
     };
   }
 
   // Try per-account Anthropic
+  // Force Haiku 4.5 for parsing — faster than Sonnet for structured output.
   const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
   if (anthropicCreds?.apiKey) {
     return {
       provider: 'anthropic',
       apiKey: anthropicCreds.apiKey as string,
-      model: (anthropicCreds.model as string) || 'claude-sonnet-4-20250514'
+      model: 'claude-haiku-4-5'
     };
   }
 
@@ -195,8 +204,8 @@ async function resolveProvider(accountId: string): Promise<{
       ? process.env.ANTHROPIC_API_KEY
       : process.env.OPENAI_API_KEY;
   const model =
-    process.env.AI_MODEL ||
-    (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
+    process.env.SCRIPT_PARSER_MODEL ||
+    (provider === 'anthropic' ? 'claude-haiku-4-5' : 'gpt-4o-mini');
 
   if (!apiKey) {
     throw new Error(
@@ -226,7 +235,9 @@ async function callParserLLM(
     const response = await client.chat.completions.create({
       model,
       temperature: 0.1,
-      max_tokens: 8192,
+      // 16384 is the max for gpt-4o-mini and gpt-4o. A 14-step script with
+      // ~100 actions serializes to ~12–15k output tokens of JSON.
+      max_tokens: 16384,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: PARSER_SYSTEM_PROMPT },
@@ -234,7 +245,18 @@ async function callParserLLM(
       ]
     });
 
-    return response.choices[0]?.message?.content?.trim() || '';
+    const choice = response.choices[0];
+    const content = choice?.message?.content?.trim() || '';
+
+    // Detect truncation explicitly so we can throw a useful error instead of
+    // letting the downstream JSON parser fail with a generic message.
+    if (choice?.finish_reason === 'length') {
+      throw new Error(
+        `The AI response was truncated (hit the ${response.usage?.completion_tokens ?? 'output'} token ceiling). Your script is too large to parse in one pass. Try splitting it into two halves and parsing each separately, or remove branches you're not using.`
+      );
+    }
+
+    return content;
   } else {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey });
@@ -243,9 +265,18 @@ async function callParserLLM(
       model,
       system: PARSER_SYSTEM_PROMPT,
       temperature: 0.1,
-      max_tokens: 8192,
+      // Haiku 4.5 supports up to 8192 output tokens; Sonnet 4 supports 16384.
+      // Use the higher ceiling when the model name suggests Sonnet.
+      max_tokens: /sonnet|opus/i.test(model) ? 16384 : 8192,
       messages: [{ role: 'user', content: userMessage }]
     });
+
+    // Detect truncation on the Anthropic side too.
+    if (response.stop_reason === 'max_tokens') {
+      throw new Error(
+        "The AI response was truncated (hit the output token ceiling). Your script is too large to parse in one pass. Try splitting it into two halves and parsing each separately, or remove branches you're not using."
+      );
+    }
 
     const textBlock = response.content.find(
       (block: any) => block.type === 'text'
@@ -302,14 +333,22 @@ export async function parseScriptMarkdown(
   const { provider, apiKey, model } = await resolveProvider(accountId);
 
   // 3. Call the LLM
+  const t0 = Date.now();
   let rawResponse: string;
   try {
     rawResponse = await callParserLLM(provider, apiKey, model, text);
   } catch (err: any) {
+    // Propagate truncation errors verbatim (they carry actionable guidance).
+    if (err?.message?.includes('truncated')) {
+      throw err;
+    }
     throw new Error(
       `Failed to parse script with AI: ${err.message || 'Unknown error'}`
     );
   }
+  console.log(
+    `[script-parser] LLM call (${provider}/${model}) finished in ${Date.now() - t0}ms, ${rawResponse.length} chars`
+  );
 
   if (!rawResponse) {
     throw new Error('AI returned an empty response. Please try again.');
@@ -328,11 +367,17 @@ export async function parseScriptMarkdown(
     try {
       rawResponse = await callParserLLM(provider, apiKey, model, text);
       parsed = extractJSON(rawResponse);
-    } catch (retryErr) {
+    } catch (retryErr: any) {
       console.error('[script-parser] Second JSON extraction also failed', {
         responseLength: rawResponse.length,
-        preview: rawResponse.slice(0, 500)
+        preview: rawResponse.slice(0, 500),
+        retryErr: retryErr?.message
       });
+      // If the retry threw a truncation error, surface that message — it's
+      // more actionable than the generic "failed to return structured data".
+      if (retryErr?.message?.includes('truncated')) {
+        throw retryErr;
+      }
       throw new Error(
         'The AI failed to return structured data for your script. This can happen with very long or complex scripts. Try breaking it into fewer steps or pasting a shorter section first.'
       );

@@ -274,7 +274,9 @@ export async function POST(
       err?.message?.includes('Failed to parse') ||
       err?.message?.includes('failed to return') ||
       err?.message?.includes('could not identify') ||
-      err?.message?.includes('no steps')
+      err?.message?.includes('no steps') ||
+      err?.message?.includes('truncated') ||
+      err?.message?.includes('too large to parse')
     ) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
