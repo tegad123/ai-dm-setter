@@ -30,6 +30,8 @@ export interface GenerateReplyResult {
   affirmationDetected: boolean;
   followUpNumber: number | null;
   softExit: boolean;
+  /** R20: AI has detected it's stuck in a loop or can't resolve — hand off to a human. */
+  escalateToHuman: boolean;
   // Booking-stage extracted fields (Stage 7)
   leadTimezone: string | null;
   selectedSlotIso: string | null;
@@ -349,6 +351,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     affirmationDetected: parsed.affirmationDetected,
     followUpNumber: parsed.followUpNumber,
     softExit: parsed.softExit,
+    escalateToHuman: parsed.escalateToHuman,
     leadTimezone: parsed.leadTimezone,
     selectedSlotIso: parsed.selectedSlotIso,
     leadEmail: parsed.leadEmail,
@@ -532,6 +535,7 @@ interface ParsedAIResponse {
   affirmationDetected: boolean;
   followUpNumber: number | null;
   softExit: boolean;
+  escalateToHuman: boolean;
   leadTimezone: string | null;
   selectedSlotIso: string | null;
   leadEmail: string | null;
@@ -554,6 +558,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     affirmationDetected: false,
     followUpNumber: null,
     softExit: false,
+    escalateToHuman: false,
     leadTimezone: null,
     selectedSlotIso: null,
     leadEmail: null,
@@ -593,6 +598,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       followUpNumber:
         typeof obj.follow_up_number === 'number' ? obj.follow_up_number : null,
       softExit: obj.soft_exit === true,
+      escalateToHuman: obj.escalate_to_human === true,
       leadTimezone:
         typeof obj.lead_timezone === 'string' && obj.lead_timezone.trim()
           ? obj.lead_timezone.trim()

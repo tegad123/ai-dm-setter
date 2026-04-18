@@ -1573,6 +1573,7 @@ async function sendAIReply(
     affirmationDetected?: boolean;
     followUpNumber?: number | null;
     softExit?: boolean;
+    escalateToHuman?: boolean;
     // Booking fields (Stage 7)
     leadTimezone?: string | null;
     selectedSlotIso?: string | null;
@@ -1788,6 +1789,38 @@ async function sendAIReply(
     console.log(
       `[webhook-processor] Soft exit triggered for ${conversationId}`
     );
+  }
+
+  // ── R20: Escalation to human ──────────────────────────────────
+  // The AI set escalate_to_human=true because either (a) the lead
+  // reported the same issue twice, or (b) the AI made 3+ consecutive
+  // "I'll check on it" promises. Pause the AI and create a SYSTEM
+  // notification so a human teammate picks it up.
+  if (result.escalateToHuman) {
+    try {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'AI escalated conversation — needs human',
+          body: `${lead.name} (@${lead.handle}): AI hit an escalation condition (stuck loop or repeat issue). AI is now paused. Please review the conversation and take over.`,
+          leadId: lead.id
+        }
+      });
+      console.log(
+        `[webhook-processor] R20 escalation to human for ${conversationId} — AI paused, notification created`
+      );
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Failed to record R20 escalation (non-fatal):',
+        err
+      );
+    }
   }
 
   // ── Record stage timestamp ─────────────────────────────────────
