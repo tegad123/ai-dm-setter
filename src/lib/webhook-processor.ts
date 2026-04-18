@@ -752,6 +752,21 @@ export async function scheduleAIReply(
 
   // Check account-level PER-PLATFORM away mode. The lead's platform decides
   // whether the Instagram or Facebook switch applies to this conversation.
+  //
+  // Auto-send requires BOTH:
+  //   (1) The platform's away-mode is ON (operator has explicitly opted this
+  //       platform in to AI auto-send), AND
+  //   (2) The conversation's aiActive flag is true (no human has taken over
+  //       this specific lead).
+  //
+  // Earlier version used OR semantics ("either gate opens the floodgate"),
+  // which bit us because `Conversation.aiActive` defaults to true on
+  // creation. That meant any new Instagram lead coming in through the Meta
+  // webhook created a conversation with aiActive=true, and the AI
+  // auto-replied even though the operator had never flipped the Instagram
+  // switch on. See daetradez's @l.galeza for a real example. Requiring
+  // BOTH makes the per-platform switch an actual opt-in: no sends until
+  // the operator turns the platform on.
   log('sched.step1.findAccount');
   const account = await prisma.account.findUnique({
     where: { id: accountId },
@@ -764,9 +779,10 @@ export async function scheduleAIReply(
         ? (account?.awayModeFacebook ?? false)
         : false;
 
-  // If AI is not active AND this platform's away mode is off, generate suggestion only
+  // Auto-send only when the platform is enabled AND the per-conversation
+  // AI toggle is on. Either off → suggestion-only mode (no auto-send).
   const aiActive = conversation.aiActive;
-  const shouldAutoSend = aiActive || awayModeForPlatform;
+  const shouldAutoSend = aiActive && awayModeForPlatform;
   log(
     'sched.step1.aiActive',
     `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} shouldAutoSend=${shouldAutoSend}`

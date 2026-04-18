@@ -178,11 +178,17 @@ model Account {
   primaryColor       String?     @default("#2563EB") // Brand color
   onboardingComplete Boolean     @default(false)
   plan               AccountPlan @default(FREE)
-  // Away Mode — per-platform toggles. When a platform's away mode is ON,
-  // the AI auto-sends replies for ALL conversations on that platform
-  // regardless of the per-conversation aiActive flag. Legacy single
-  // `awayMode` field is retained for the migration window but no longer
-  // read at runtime. Prefer the per-platform fields below.
+  // Per-platform AI Auto-Send toggles. These are the MASTER switch that
+  // enables AI auto-reply for an entire platform. Required for any
+  // auto-send: the webhook-processor requires BOTH this flag AND the
+  // per-conversation `Conversation.aiActive` to be true before sending.
+  // With the flag OFF, new lead conversations are created with
+  // aiActive=false and no auto-sends occur on that platform — the AI
+  // still generates suggestions that surface in the dashboard but
+  // nothing ships to the platform. Flipping the flag ON is an explicit
+  // "I want AI to handle new Instagram/Facebook leads from now on"
+  // opt-in. Legacy single `awayMode` field is retained for the
+  // migration window but no longer read at runtime.
   awayMode           Boolean     @default(false)     // DEPRECATED — superseded by awayMode{Instagram,Facebook}
   awayModeEnabledAt  DateTime?                       // DEPRECATED
   awayModeInstagram           Boolean   @default(false)

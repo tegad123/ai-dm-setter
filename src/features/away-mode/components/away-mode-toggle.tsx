@@ -68,8 +68,10 @@ export function AwayModeToggle() {
       });
       setState(data);
       toast.success(
-        `${platform === 'instagram' ? 'Instagram' : 'Facebook'} Away Mode ${
-          checked ? 'ON — AI handling all leads' : 'OFF — team back in control'
+        `${platform === 'instagram' ? 'Instagram' : 'Facebook'} AI ${
+          checked
+            ? 'ON — auto-responding to new leads'
+            : 'OFF — all new leads go to human-only until you turn it back on'
         }`
       );
     } catch (err: unknown) {
@@ -123,10 +125,12 @@ export function AwayModeToggle() {
       <PopoverContent className='w-72' align='end'>
         <div className='space-y-3'>
           <div>
-            <h4 className='text-sm font-semibold'>Away Mode</h4>
+            <h4 className='text-sm font-semibold'>Platform AI</h4>
             <p className='text-muted-foreground text-xs'>
-              When ON, the AI auto-handles every conversation on that platform
-              regardless of the per-chat AI toggle.
+              Master switch for AI auto-send on each platform. When OFF, the AI
+              generates suggestions but does not send — nothing ships to the
+              platform even if individual chats have AI on. Turn ON when you
+              want AI to auto-respond to new leads.
             </p>
           </div>
 
