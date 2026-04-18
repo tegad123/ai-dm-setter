@@ -44,6 +44,7 @@ interface PersonaResponse {
     minimumCapitalRequired: number | null;
     capitalVerificationPrompt: string | null;
     outOfScopeTopics: string | null;
+    verifiedDetails: string | null;
     contextUpdatedAt: string | null;
     contextUpdatedByUserId: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,6 +126,15 @@ export default function PersonaEditorPage() {
   const [outOfScopeSavedSnapshot, setOutOfScopeSavedSnapshot] = useState('');
   const [savingScope, setSavingScope] = useState(false);
 
+  // Verified Facts (R27). Free-form operator-maintained text listing
+  // facts the AI is allowed to assert about third parties — closer
+  // languages, refund policy, offer inclusions, etc. When empty, the
+  // AI must escalate every third-party capability question.
+  const [verifiedFacts, setVerifiedFacts] = useState('');
+  const [verifiedFactsSavedSnapshot, setVerifiedFactsSavedSnapshot] =
+    useState('');
+  const [savingVerifiedFacts, setSavingVerifiedFacts] = useState(false);
+
   // Rotating placeholder for campaigns textarea. Cycles every 4s; pauses
   // once the user has typed anything so we don't distract.
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
@@ -185,6 +195,11 @@ export default function PersonaEditorPage() {
         const oos = data.persona.outOfScopeTopics || '';
         setOutOfScope(oos);
         setOutOfScopeSavedSnapshot(oos);
+
+        // Verified facts
+        const vf = data.persona.verifiedDetails || '';
+        setVerifiedFacts(vf);
+        setVerifiedFactsSavedSnapshot(vf);
       }
     } catch (err) {
       console.error('Failed to load persona:', err);
@@ -243,6 +258,7 @@ export default function PersonaEditorPage() {
       minimumCapitalRequired: p.minimumCapitalRequired ?? null,
       capitalVerificationPrompt: p.capitalVerificationPrompt ?? null,
       outOfScopeTopics: p.outOfScopeTopics ?? null,
+      verifiedDetails: p.verifiedDetails ?? null,
       voiceNotesEnabled:
         (p as { voiceNotesEnabled?: boolean }).voiceNotesEnabled ?? true,
       setupComplete:
@@ -404,6 +420,22 @@ export default function PersonaEditorPage() {
     }
   };
 
+  const saveVerifiedFacts = async () => {
+    setSavingVerifiedFacts(true);
+    try {
+      await persistAndRefresh(
+        { verifiedDetails: verifiedFacts.trim() || null },
+        'Verified facts saved'
+      );
+      setVerifiedFactsSavedSnapshot(verifiedFacts);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save verified facts');
+    } finally {
+      setSavingVerifiedFacts(false);
+    }
+  };
+
   // ── Unsaved-changes warning on navigation ───────────────────────
   const currentHandoffSnapshot = JSON.stringify({
     closerName,
@@ -421,7 +453,8 @@ export default function PersonaEditorPage() {
     whatYouSell !== whatYouSellSavedSnapshot ||
     currentHandoffSnapshot !== handoffSavedSnapshot ||
     currentCapitalSnapshot !== capitalSavedSnapshot ||
-    outOfScope !== outOfScopeSavedSnapshot;
+    outOfScope !== outOfScopeSavedSnapshot ||
+    verifiedFacts !== verifiedFactsSavedSnapshot;
   const hasUnsavedRef = useRef(hasUnsavedChanges);
   hasUnsavedRef.current = hasUnsavedChanges;
 
@@ -759,6 +792,62 @@ export default function PersonaEditorPage() {
               size='sm'
             >
               {savingScope && <Loader2 className='mr-2 h-3 w-3 animate-spin' />}
+              Save
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── SECTION 7 — Verified Facts (R27) ─────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-lg'>Verified Facts</CardTitle>
+          <CardDescription>
+            Everything the AI is allowed to confidently assert about your team,
+            offer, and policies — languages the closer speaks, refund policy,
+            exactly what the offer includes, supported timezones, anything else
+            that could come up. If it&apos;s not listed here, the AI will
+            escalate to &quot;lemme check with the team&quot; instead of
+            inventing an answer.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-3'>
+          <Textarea
+            value={verifiedFacts}
+            onChange={(e) => setVerifiedFacts(e.target.value.slice(0, 3000))}
+            placeholder={`Closer languages: English, Spanish
+Refund policy: 14-day money-back if the lead hasn't started modules
+Offer includes: 12 weekly 1-on-1 sessions, private Slack, live trade reviews
+Supported timezones: Mon-Fri 9am-6pm CT
+Onboarding: email intake form + kickoff call within 48h of booking`}
+            className='min-h-[200px] font-mono text-sm'
+            maxLength={3000}
+          />
+          <div className='flex items-center justify-between text-xs'>
+            <span className='text-amber-600 dark:text-amber-400'>
+              Only list facts you&apos;re 100% sure about — anything here
+              becomes something the AI will confidently state to leads.
+            </span>
+            <span className='text-muted-foreground tabular-nums'>
+              {verifiedFacts.length} / 3000
+            </span>
+          </div>
+          <div className='flex items-center justify-between'>
+            <span className='text-muted-foreground text-xs'>
+              {verifiedFacts !== verifiedFactsSavedSnapshot &&
+                '• Unsaved changes'}
+            </span>
+            <Button
+              onClick={saveVerifiedFacts}
+              disabled={
+                savingVerifiedFacts ||
+                verifiedFacts === verifiedFactsSavedSnapshot
+              }
+              size='sm'
+            >
+              {savingVerifiedFacts && (
+                <Loader2 className='mr-2 h-3 w-3 animate-spin' />
+              )}
               Save
             </Button>
           </div>

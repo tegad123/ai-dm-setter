@@ -423,6 +423,50 @@ export function scoreVoiceQuality(
 
   // ── Soft scoring ────────────────────────────────────────────────
 
+  // R27 — third-party capability claim detection (soft signal, NOT a
+  // hard fail). Unlike R19 fabrications which have tight surface
+  // patterns, R27 violations are open-ended factual assertions
+  // ("Anthony speaks German", "we have 24/7 support", "the course
+  // covers options"). Regex can't reliably catch every variant —
+  // primary enforcement is at the prompt level (R27). These patterns
+  // just flag the message for prioritised operator review so Daniel
+  // can verify whether the claim was accurate and, if not, log a
+  // correction + expand the persona's verifiedDetails block.
+  //
+  // We log to softSignals with 0 score impact so the quality gate
+  // still passes (the message might be a legitimate citation of a
+  // verifiedDetails entry), but the signal surfaces in downstream
+  // analytics. The End-of-Day Review (future) queries on these keys.
+  const R27_SOFT_PATTERNS: RegExp[] = [
+    // Closer / team capability assertion: "<proper noun> <capability verb>"
+    /\b(he|she|they|the team|the coach|the closer|our team|my team)\s+(speaks|offers|has|handles|works|gives|provides|covers|supports)\b/i,
+    // Universal availability / language claims
+    /\b(24\/7|any\s?time|anytime|any\s+time\s?zone|any\s+timezone|all\s+languages|every\s+language|in\s+any\s+language)\b/i,
+    // Product/offer content claim: "we/the course/the program includes X"
+    /\b(we|the\s+(?:course|program|mentorship|offer|package))\s+(includes?|covers?|offers?|guarantees?)\b/i,
+    // Refund / guarantee fabrication: "30-day guarantee", "money-back"
+    /\b\d+[\s-]?day\s+(money[\s-]?back|refund|guarantee|trial)\b/i,
+    /\bmoney[\s-]?back\s+guarantee\b/i,
+    // Credential invention: "<name> has a <noun> background"
+    /\bhas\s+(a|an)\s+\w+\s+(background|degree|certification|license)\b/i
+  ];
+  let r27SoftCount = 0;
+  for (const pat of R27_SOFT_PATTERNS) {
+    if (pat.test(reply)) r27SoftCount++;
+  }
+  // NOT added to softSignals — that record feeds into the rawScore sum,
+  // and a legit citation of a verifiedDetails entry shouldn't unfairly
+  // lower an otherwise-good message's score. R27's enforcement is at the
+  // prompt level; these patterns just surface borderline claims via
+  // Vercel logs for operator audit. End-of-Day Review (future) can grep
+  // for this log prefix or we can persist to a dedicated table if/when
+  // the review queue ships.
+  if (r27SoftCount > 0) {
+    console.warn(
+      `[voice-quality-gate] R27 soft signal fired ${r27SoftCount}x on reply (possible third-party fabrication): "${reply.slice(0, 120)}"`
+    );
+  }
+
   // Under 200 chars
   if (reply.length <= 200) {
     softSignals.short_message = 1.0;

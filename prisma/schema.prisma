@@ -292,6 +292,17 @@ model AIPersona {
   // on the off-topic regex guard, and a trading coach gets an explicit
   // "do NOT discuss general wealth-building" reinforcement.
   outOfScopeTopics         String?  @db.Text
+  // R27: verified third-party facts the AI is allowed to assert. When a
+  // lead asks about things the account owner hasn't personally disclosed
+  // to the AI (closer's spoken languages, refund policy, exact offer
+  // inclusions, timezone coverage, etc.), R27 forces the AI to escalate
+  // to "lemme check with the team" instead of inventing the answer.
+  // verifiedDetails is free-form operator-maintained text listing facts
+  // the AI CAN confidently claim. Everything outside this block is
+  // escalation territory — l.galeza's "Anthony speaks German" fabrication
+  // would have been blocked if verifiedDetails said nothing about
+  // Anthony's languages.
+  verifiedDetails          String?  @db.Text
   responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
   responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
   voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled

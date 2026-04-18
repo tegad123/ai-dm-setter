@@ -79,6 +79,7 @@ export async function PUT(req: NextRequest) {
       minimumCapitalRequired,
       capitalVerificationPrompt,
       outOfScopeTopics,
+      verifiedDetails,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -174,6 +175,12 @@ export async function PUT(req: NextRequest) {
         typeof outOfScopeTopics === 'string' &&
         outOfScopeTopics.trim().length > 0
           ? outOfScopeTopics.trim()
+          : null;
+    }
+    if (verifiedDetails !== undefined) {
+      data.verifiedDetails =
+        typeof verifiedDetails === 'string' && verifiedDetails.trim().length > 0
+          ? verifiedDetails.trim()
           : null;
     }
     data.contextUpdatedAt = new Date();

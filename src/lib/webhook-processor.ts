@@ -767,6 +767,19 @@ export async function scheduleAIReply(
   // switch on. See daetradez's @l.galeza for a real example. Requiring
   // BOTH makes the per-platform switch an actual opt-in: no sends until
   // the operator turns the platform on.
+  //
+  // REGRESSION NOTE — DELIVERY-TIME RE-CHECK: this entire scheduleAIReply
+  // function re-runs from scratch every time the cron picks up a PENDING
+  // ScheduledReply (via the skipDelayQueue=true branch). That means both
+  // toggles (awayModeInstagram/Facebook here, and conversation.aiActive
+  // inside sendAIReply below) are re-fetched at DELIVERY time, not snapshotted
+  // at scheduling time. So an operator who flips the platform switch off
+  // between a lead's message and the scheduled reply firing will NOT see
+  // a stale auto-send go out — the delivery path re-evaluates against
+  // the current DB state. sendAIReply does the final "is aiActive still
+  // true?" check one more time as a belt-and-suspenders guard (see line
+  // ~1605). Do NOT cache or pass these flags across the scheduling-to-
+  // delivery boundary — always resolve them from the current DB row.
   log('sched.step1.findAccount');
   const account = await prisma.account.findUnique({
     where: { id: accountId },
@@ -1603,7 +1616,18 @@ async function sendAIReply(
     suggestionId?: string | null;
   }
 ): Promise<void> {
-  // Re-check that AI is still active (human might have taken over during delay)
+  // Belt-and-suspenders: re-check that AI is still active at DELIVERY
+  // time. This covers two race conditions the scheduling-time check
+  // above can't catch on its own:
+  //   (1) Human took over the specific conversation mid-delay (flipped
+  //       per-chat aiActive to false via the dashboard toggle)
+  //   (2) Operator toggled the platform-level away-mode off between
+  //       scheduling and firing — this check handles per-conversation;
+  //       platform-level is covered by scheduleAIReply re-running from
+  //       scratch when cron picks up the PENDING row.
+  // Either condition means we should NOT ship the reply the LLM just
+  // generated. Instead, broadcast it as a suggestion so the dashboard
+  // can still render the AI's draft for the human to take or discard.
   const convo = await prisma.conversation.findUnique({
     where: { id: conversationId },
     select: { aiActive: true }
