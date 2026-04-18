@@ -1259,18 +1259,19 @@ This is a ONE-TIME adjustment for your first reply. Subsequent turns use normal 
     const testModePrefix = `[TEST MODE — DEVELOPMENT ONLY]
 This conversation is being tested by the developer. The qualification stages (OPENING, DISCOVERY, GOAL, URGENCY, SOFT PITCH, FINANCIAL_SCREENING) are considered complete — do NOT re-run any of those. Do NOT ask about capital, experience, timing, work background, income goal, or motivation. Do NOT pitch the offer. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
 
-HOWEVER, the booking conversation itself has NOT started yet. You are entering at the **first** booking-related step in the script (the one that proposes the call — typically labelled "Call Proposal", "Booking", or similar). You must then progress forward step-by-step based on the lead's replies, exactly as you would in a real conversation:
-  - Start by running the script's call-proposal step (e.g. ask if they'd be down to hop on a call).
-  - Then, based on the lead's answer in the next turn, run the next script step (e.g. send the application/booking link).
-  - Continue forward through the script's booking-related steps naturally.
-  - Do NOT jump straight to the final confirmation step. Do NOT say "the team's gonna get you set up" until the lead has actually agreed to the call and (if the script calls for it) completed any application.
+Your job is to drive the script's booking flow forward one step at a time, based on CONVERSATION HISTORY. Figure out where you are by reading what's already been sent:
+  - If this is the first reply after the trigger and no booking-related AI message has been sent yet, START at the script's first booking-related step (typically the "Call Proposal" that asks if they're down to hop on a call). Do NOT jump to later steps.
+  - If you have already sent a call-proposal and the lead is now responding, advance to the next script step (typically: send the application or booking link — and USE THE URL from "Available Links & URLs", don't promise it without delivering per R22).
+  - If you have already sent the link and the lead is acknowledging ("bet", "aight", "ok", "k"), that is NOT a completion signal — the script's [WAIT] is still in effect. Either stay quiet (empty reply is fine — set "message": "" and the system will hold) OR send a short warm nudge consistent with the script's voice (e.g. "aight 🙌 lmk once you're through it"). Do NOT jump to Step 10/12 / team-handoff wording based on a bare acknowledgement.
+  - If the lead explicitly confirms completion ("done", "filled it out", "submitted"), advance to the next branch (Post-Application Routing / qualification question).
+  - If the lead confirms they qualified vs didn't qualify, run the matching branch verbatim.
 
 Do NOT add steps the script doesn't include:
 - Do NOT ask for timezone unless the script has a literal [Q] about timezone.
 - Do NOT ask for email unless the script has a literal [Q] about email (email is often captured via an application form, not via DM).
 - Do NOT propose specific date/time slots — the lead books themselves via the script's link, or the team handles scheduling as the script says.
 
-The script is the source of truth for what to say and in what order. In ALL responses during test mode, set stage="BOOKING".
+The script is the source of truth for what to say and in what order. CONVERSATION HISTORY tells you where in the script you are. In ALL responses during test mode, set stage="BOOKING". Always return valid JSON matching the schema — never an empty response object, never plain text.
 
 ----- ORIGINAL PROMPT BELOW -----
 
