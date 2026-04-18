@@ -728,15 +728,30 @@ model Conversation {
   bookingId      String?   // LeadConnector appointment id after successful book
   bookingUrl     String?   // Fallback link if provider doesn't support server-side booking
 
+  // Call-scheduling state (set by human operator via Call Details UI,
+  // or by AI parsing from the lead's message with explicit confirmation).
+  // Drives reminder scheduling + sidebar badges. Distinct from the booking
+  // fields above: those track the automated Stage-7 flow; these track the
+  // actual confirmed call the lead is showing up for.
+  scheduledCallAt          DateTime?
+  scheduledCallTimezone    String?
+  scheduledCallSource      ScheduledCallSource?
+  scheduledCallConfirmed   Boolean   @default(false)
+  scheduledCallNote        String?
+  scheduledCallUpdatedAt   DateTime?
+  scheduledCallUpdatedBy   String?   // User.id — for audit trail
+
   // Relations
   lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
   messages       Message[]
   aiSuggestions  AISuggestion[]
   inboundQualification InboundQualification?
+  scheduledMessages ScheduledMessage[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
   @@index([outcome])
+  @@index([scheduledCallAt])
 }
 
 model Message {
@@ -1070,6 +1085,68 @@ model ScheduledReply {
 
   @@index([status, scheduledFor])
   @@index([conversationId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled outbound messages — call reminders + keepalives + re-engagement
+// ---------------------------------------------------------------------------
+// Distinct from ScheduledReply (which handles the debounced reply-to-lead
+// queue). ScheduledMessage fires SYSTEM-initiated outbound touches that are
+// tied to a calendar event or conversation state, not a direct lead reply.
+
+enum ScheduledMessageType {
+  DAY_BEFORE_REMINDER
+  MORNING_OF_REMINDER
+  WINDOW_KEEPALIVE
+  RE_ENGAGEMENT
+  CUSTOM
+}
+
+enum ScheduledMessageStatus {
+  PENDING
+  FIRING    // optimistic lock between cron pickup and send
+  FIRED
+  CANCELLED
+  FAILED
+}
+
+enum ScheduledMessageCreatedBy {
+  SYSTEM
+  HUMAN
+  AI
+}
+
+enum ScheduledCallSource {
+  HUMAN_ENTRY
+  AI_PARSED_FROM_LEAD
+  CALENDAR_INTEGRATION
+}
+
+model ScheduledMessage {
+  id                 String                    @id @default(cuid())
+  conversationId     String
+  accountId          String
+  scheduledFor       DateTime
+  messageType        ScheduledMessageType
+  messageBody        String?                   @db.Text
+  generateAtSendTime Boolean                   @default(true)
+  status             ScheduledMessageStatus    @default(PENDING)
+  firedAt            DateTime?
+  /// Denormalized so we can cancel reminders tied to a specific call
+  /// without extra joins when the call gets rescheduled.
+  relatedCallAt      DateTime?
+  createdBy          ScheduledMessageCreatedBy @default(SYSTEM)
+  createdByUserId    String?
+  attempts           Int                       @default(0)
+  lastError          String?                   @db.Text
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([conversationId, status])
+  @@index([conversationId, messageType, status])
 }
 
 // ---------------------------------------------------------------------------

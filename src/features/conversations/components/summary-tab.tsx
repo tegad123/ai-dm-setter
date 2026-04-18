@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { LeadStageBadge } from '@/features/shared/lead-stage-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
+import { CallDetailsPanel } from './call-details-panel';
 import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
 import {
   IconMessages,
@@ -54,6 +55,7 @@ interface MessageData {
 }
 
 interface SummaryTabProps {
+  conversationId: string;
   leadName: string;
   leadHandle: string;
   platform: string;
@@ -92,6 +94,7 @@ function formatOutcome(outcome: string): string {
 }
 
 export function SummaryTab({
+  conversationId,
   leadName,
   leadHandle,
   platform,
@@ -294,6 +297,9 @@ export function SummaryTab({
             </div>
           )}
         </div>
+
+        {/* Call Details (human entry + reminders) */}
+        <CallDetailsPanel conversationId={conversationId} />
 
         {/* Stage Progression */}
         <div className='rounded-lg border p-3'>

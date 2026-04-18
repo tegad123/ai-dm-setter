@@ -106,6 +106,7 @@ export function ConversationSidebar({
       <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
         {activeTab === 'summary' && (
           <SummaryTab
+            conversationId={conversationId}
             leadName={leadName}
             leadHandle={leadHandle}
             platform={platform}

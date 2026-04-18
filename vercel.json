@@ -5,6 +5,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/process-scheduled-messages",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/daily-analysis",
       "schedule": "0 6 * * *"
     }

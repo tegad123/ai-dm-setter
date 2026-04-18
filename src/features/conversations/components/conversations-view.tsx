@@ -40,7 +40,8 @@ function toLocalConvo(
     messages,
     tags: c.tags ?? [],
     priorityScore: c.priorityScore ?? 0,
-    qualityScore: c.qualityScore ?? 0
+    qualityScore: c.qualityScore ?? 0,
+    scheduledCallAt: c.scheduledCallAt ?? null
   };
 }
 

@@ -69,6 +69,7 @@ export interface Conversation {
   priorityScore: number;
   qualityScore: number;
   tags: Array<{ id: string; name: string; color: string }>;
+  scheduledCallAt?: string | null;
   createdAt: string;
 }
 

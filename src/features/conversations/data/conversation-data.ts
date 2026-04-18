@@ -29,6 +29,8 @@ export interface Conversation {
   tags?: ConversationTag[];
   priorityScore?: number;
   qualityScore?: number;
+  /** ISO string of a scheduled call, null if none. Used for sidebar badges. */
+  scheduledCallAt?: string | null;
 }
 
 export const conversations: Conversation[] = [

@@ -6,7 +6,13 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
-import { IconSearch, IconFlame, IconMail } from '@tabler/icons-react';
+import { callBadgeLabel } from './call-details-panel';
+import {
+  IconSearch,
+  IconFlame,
+  IconMail,
+  IconCalendarEvent
+} from '@tabler/icons-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -210,6 +216,17 @@ export function ConversationList({
                   <p className='text-muted-foreground mt-1 truncate text-xs'>
                     {convo.lastMessage}
                   </p>
+                  {/* Call badge: shows when a call is scheduled within the next 7 days */}
+                  {(() => {
+                    const label = callBadgeLabel(convo.scheduledCallAt);
+                    if (!label) return null;
+                    return (
+                      <span className='mt-1 inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'>
+                        <IconCalendarEvent className='h-2.5 w-2.5' />
+                        {label}
+                      </span>
+                    );
+                  })()}
                 </div>
                 {convo.unread > 0 && (
                   <span className='bg-primary text-primary-foreground mt-1 flex h-5 w-5 items-center justify-center rounded-full text-[10px]'>

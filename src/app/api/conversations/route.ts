@@ -90,6 +90,8 @@ export async function GET(request: NextRequest) {
         name: lt.tag.name,
         color: lt.tag.color
       })),
+      // Call badge in sidebar list: null if no call scheduled or >7 days out
+      scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
       createdAt: c.createdAt.toISOString()
     }));
 
