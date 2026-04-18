@@ -87,6 +87,24 @@ export async function serializeScriptForPrompt(
     return null;
   }
 
+  // R24 — Capital verification inject. We fetch the persona here so
+  // the serializer can bake a verification Q + WAIT + JUDGMENT into
+  // any "qualified" branch at SCRIPT LEVEL — the LLM follows script
+  // sequences reliably; abstract R24 rule text in the Absolute Rules
+  // section got ignored in production (Bai Sama / Stan Ley both got
+  // routed straight to booking). Putting the gate inside the flow the
+  // LLM already follows is the reliable layer. When minimumCapital is
+  // null, nothing is prepended — backward compatible.
+  const persona = await prisma.aIPersona.findFirst({
+    where: { accountId, isActive: true },
+    select: {
+      minimumCapitalRequired: true,
+      capitalVerificationPrompt: true
+    }
+  });
+  const capitalThreshold = persona?.minimumCapitalRequired ?? null;
+  const capitalCustomPrompt = persona?.capitalVerificationPrompt ?? null;
+
   const parts: string[] = [];
 
   // ── Script Framework ──────────────────────────────────────
@@ -105,6 +123,34 @@ export async function serializeScriptForPrompt(
           ? ` (${branch.conditionDescription})`
           : '';
         stepLines.push(`  IF ${branch.branchLabel}${condition}:`);
+
+        // R24 injection: prepend capital verification to any branch
+        // whose LABEL or CONDITION references qualification positively
+        // ("Lead says they qualified", "When the prospect confirms they
+        // qualified", etc.). Skip branches that explicitly say
+        // did-not / didn't / not-qualify so we don't double-gate the
+        // downsell path.
+        const labelText = `${branch.branchLabel} ${branch.conditionDescription || ''}`;
+        const isQualifiedBranch =
+          /\bqualif/i.test(labelText) &&
+          !/(did\s*not|didn'?t|not\s+qualif|no\s+qualif)/i.test(labelText);
+        if (
+          isQualifiedBranch &&
+          typeof capitalThreshold === 'number' &&
+          capitalThreshold > 0
+        ) {
+          const thresholdStr = `$${capitalThreshold.toLocaleString('en-US')}`;
+          const verificationQuestion =
+            (capitalCustomPrompt || '').trim() ||
+            `sick bro, just to confirm — you got at least ${thresholdStr} in capital ready to start?`;
+          stepLines.push(
+            `    [ASK] ${verificationQuestion}  (R24 capital verification — ask FIRST, before any action below)`
+          );
+          stepLines.push(`    [WAIT] Wait for response`);
+          stepLines.push(
+            `    [JUDGMENT] If the lead confirms clearly (yes / yeah / "I got it" / names an amount >= ${thresholdStr}) → continue with the actions below in this branch. If the lead hedges, admits less, or names an amount BELOW ${thresholdStr} ("kinda", "almost", "about half", "I got $500") → STOP this branch. Jump to the "Lead says they did NOT qualify" branch of this same step and run THAT branch's downsell actions instead. Do NOT send booking-handoff messaging.`
+          );
+        }
 
         for (const action of branch.actions) {
           stepLines.push(serializeAction(action, '    '));

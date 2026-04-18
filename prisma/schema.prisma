@@ -1273,6 +1273,30 @@ enum TriggerSuggestionStatus {
   rejected
 }
 
+// R24 audit trail. Every time the AI generates a reply that would
+// route a lead into the booking-handoff branch, we write one row
+// here so R24 compliance is queryable as a single SQL, not a full
+// diagnostic. verificationAskedAtMessageId + confirmedAtMessageId
+// are null when no verification Q&A was found in the conversation;
+// routingAllowed tells you whether the gate permitted the send.
+// regenerationForced fires when the gate blocked the first attempt
+// and pushed the LLM to retry with an override directive.
+model BookingRoutingAudit {
+  id                               String   @id @default(cuid())
+  conversationId                   String
+  accountId                        String
+  personaMinimumCapital            Int?
+  verificationAskedAtMessageId     String?
+  verificationConfirmedAtMessageId String?
+  routingAllowed                   Boolean
+  regenerationForced               Boolean  @default(false)
+  createdAt                        DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([routingAllowed, createdAt])
+}
+
 model Script {
   id          String   @id @default(cuid())
   accountId   String

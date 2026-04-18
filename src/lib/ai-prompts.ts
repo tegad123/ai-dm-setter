@@ -6,6 +6,39 @@ import {
 import { serializeScriptForPrompt } from '@/lib/script-serializer';
 
 // ---------------------------------------------------------------------------
+// Rule-authoring policy (READ THIS BEFORE ADDING A NEW R-RULE)
+// ---------------------------------------------------------------------------
+// Prompt-only enforcement of critical gates has failed in production
+// TWICE:
+//   - R19 (don't fabricate completed actions) — leaked until we added
+//     the FABRICATED_ACTION_PATTERNS regex in voice-quality-gate.ts.
+//   - R24 (verify capital before booking) — was in the master prompt
+//     with correct threshold interpolation, but the LLM still routed
+//     leads to booking-handoff without asking the verification Q.
+//     Fix required both (a) injecting the verification action into
+//     the Script Framework at serialize time (script-serializer.ts)
+//     and (b) a code-level gate in ai-engine.ts that blocks + retries
+//     with an override directive when a booking-handoff response slips
+//     through.
+//
+// POLICY: any new R-rule that gates a HIGH-STAKES OUTCOME (booking,
+// payment, escalation, content delivery, persistent state change)
+// must have code-level enforcement in addition to the prompt text.
+// The prompt is necessary-but-not-sufficient because concrete script
+// instructions outrank abstract prompt rules when they fire in the
+// same decision point — the LLM follows the script.
+//
+// Rules that only affect STYLE / VOICE / TONE can stay prompt-only.
+// Those failures are cosmetic, not correctness issues.
+//
+// When adding a new R-rule, choose the tier:
+//   Tier A (style): prompt only. Example: R17 no em-dashes.
+//   Tier B (critical gate): prompt + code enforcement. Examples:
+//     R19 fabrication regex, R24 script-inject + gate, R22 voice
+//     quality gate on [LINK] delivery (pending).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Lead Context (passed from webhook processor / API routes)
 // ---------------------------------------------------------------------------
 

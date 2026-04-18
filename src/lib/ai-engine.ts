@@ -190,12 +190,53 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // 3. Format conversation history for the LLM
   const messages = formatConversationForLLM(conversationHistory);
 
-  // 4. Call the LLM with quality gate (retry up to 2x on voice fails)
+  // Resolve the active conversationId once — reused by the R24 gate
+  // below to look up prior AI messages in this same thread. We use
+  // the last history message that has an id (persisted rows do; the
+  // live just-incoming message may not yet).
+  const lastHistoryMsgWithId = [...conversationHistory]
+    .reverse()
+    .find((m) => m.id);
+  let activeConversationId: string | null = null;
+  if (lastHistoryMsgWithId?.id) {
+    const msgRow = await prisma.message.findUnique({
+      where: { id: lastHistoryMsgWithId.id },
+      select: { conversationId: true }
+    });
+    activeConversationId = msgRow?.conversationId || null;
+  }
+
+  // R24 — capital verification gate data. We fetch the persona's
+  // threshold + optional custom phrasing ONCE, reuse inside the retry
+  // loop. When the threshold is null, the gate is disabled entirely
+  // (backward compatible for accounts that haven't configured it).
+  const personaForGate = await prisma.aIPersona.findFirst({
+    where: { accountId, isActive: true },
+    select: {
+      minimumCapitalRequired: true,
+      capitalVerificationPrompt: true
+    }
+  });
+  const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
+  const capitalCustomPrompt = personaForGate?.capitalVerificationPrompt ?? null;
+
+  // 4. Call the LLM with quality gate (retry up to 2x on voice fails
+  //    AND/OR R24 capital-verification-gate fails). systemPromptForLLM
+  //    is a mutable copy so we can append an override directive when
+  //    R24 blocks — the next attempt sees the extra instruction.
   const MAX_RETRIES = 2;
   let parsed: ParsedAIResponse | null = null;
   let qualityGateAttempts = 0;
   let finalQualityScore: number | null = null;
   let qualityGatePassedFirstAttempt = false;
+  let systemPromptForLLM = systemPrompt;
+  let r24GateEverForcedRegen = false;
+  let r24LastResult: R24GateResult = {
+    blocked: false,
+    verificationAskedAt: null,
+    verificationConfirmedAt: null
+  };
+  let r24WasEvaluatedThisTurn = false;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
@@ -203,7 +244,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       provider,
       apiKey,
       model,
-      systemPrompt,
+      systemPromptForLLM,
       messages
     );
 
@@ -216,46 +257,123 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     });
     finalQualityScore = quality.score;
 
-    if (quality.passed) {
+    // 5b. R24 CAPITAL VERIFICATION GATE. Runs only when (a) the active
+    //     account has a threshold configured, (b) we resolved a
+    //     conversationId, and (c) this reply is routing the lead into
+    //     booking-handoff messaging ("team is gonna reach out", "let's
+    //     gooo bro" wrap-up, BOOKING_CONFIRM sub-stage, etc.). When
+    //     those conditions are met, look in the conversation history
+    //     for a prior AI verification question + an affirmative lead
+    //     reply. If either is missing, BLOCK this response and retry
+    //     with a synthetic override directive appended to the system
+    //     prompt.
+    let r24Blocked = false;
+    if (
+      activeConversationId &&
+      typeof capitalThreshold === 'number' &&
+      capitalThreshold > 0 &&
+      isRoutingToBookingHandoff(parsed)
+    ) {
+      r24WasEvaluatedThisTurn = true;
+      r24LastResult = await checkR24Verification(
+        activeConversationId,
+        capitalThreshold,
+        capitalCustomPrompt
+      );
+      r24Blocked = r24LastResult.blocked;
+    }
+
+    if (quality.passed && !r24Blocked) {
       if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
         console.log(
-          `[ai-engine] Voice quality passed on retry ${attempt} (score: ${quality.score.toFixed(2)})`
+          `[ai-engine] Quality + R24 passed on retry ${attempt} (score: ${quality.score.toFixed(2)})`
         );
       }
       break;
     }
 
-    // Log the failure
-    console.warn(
-      `[ai-engine] Voice quality FAIL attempt ${attempt + 1}/${MAX_RETRIES + 1}:`,
-      {
-        score: quality.score.toFixed(2),
-        hardFails: quality.hardFails,
-        message: parsed.message.slice(0, 100)
-      }
-    );
+    // R24 regeneration path — append an override directive so the next
+    // attempt knows exactly what went wrong. Voice-quality failures
+    // already retry without mutation; R24 needs the extra nudge.
+    if (r24Blocked) {
+      r24GateEverForcedRegen = true;
+      const thresholdStr = `$${capitalThreshold!.toLocaleString('en-US')}`;
+      const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\nYour previous reply tried to route the lead into booking-handoff messaging (team reaching out, call confirmation, etc.) BUT this conversation never captured a capital verification confirmation. You MUST regenerate. Your next reply has to be the verification question — phrase it naturally, like: "sick bro, just to confirm — you got at least ${thresholdStr} in capital ready to start?". Do NOT send any booking-handoff language ("the team is gonna reach out", "let's gooo bro", "get you set up", calendar/email confirmations) until AFTER the lead explicitly confirms the capital. If you already asked earlier, the detection heuristic didn't match — ask again and include the exact dollar figure "${thresholdStr}".\n=====`;
+      systemPromptForLLM = systemPrompt + r24Override;
+      console.warn(
+        `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — forcing regen with override (verificationAsked=${r24LastResult.verificationAskedAt ? 'yes' : 'no'}, confirmed=${r24LastResult.verificationConfirmedAt ? 'yes' : 'no'})`
+      );
+    }
 
-    // Log to quality_failures for analysis (non-fatal)
-    try {
-      await prisma.voiceQualityFailure.create({
-        data: {
-          accountId,
-          message: parsed.message,
-          score: quality.score,
-          hardFails: quality.hardFails as unknown as object,
-          attempt: attempt + 1,
-          leadMessage: lastLeadMsg?.content?.slice(0, 500) || null
+    // Log voice-quality failures (existing behaviour, unchanged).
+    if (!quality.passed) {
+      console.warn(
+        `[ai-engine] Voice quality FAIL attempt ${attempt + 1}/${MAX_RETRIES + 1}:`,
+        {
+          score: quality.score.toFixed(2),
+          hardFails: quality.hardFails,
+          message: parsed.message.slice(0, 100)
         }
-      });
-    } catch {
-      // Table might not exist yet — that's fine
+      );
+
+      try {
+        await prisma.voiceQualityFailure.create({
+          data: {
+            accountId,
+            message: parsed.message,
+            score: quality.score,
+            hardFails: quality.hardFails as unknown as object,
+            attempt: attempt + 1,
+            leadMessage: lastLeadMsg?.content?.slice(0, 500) || null
+          }
+        });
+      } catch {
+        // Table might not exist yet — that's fine
+      }
     }
 
     if (attempt === MAX_RETRIES) {
-      console.warn(
-        `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
-      );
+      if (r24Blocked) {
+        console.error(
+          `[ai-engine] R24 gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
+        // Final attempt still blocked. Don't ship a bad booking routing.
+        // Flip escalate_to_human so a human teammate picks it up; the
+        // webhook-processor will pause aiActive + create a notification.
+        parsed.escalateToHuman = true;
+      } else if (!quality.passed) {
+        console.warn(
+          `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
+        );
+      }
+    }
+  }
+
+  // R24 audit log — one row per qualifying attempt. Written only when
+  // the gate actually ran (i.e. the reply was routing to booking-handoff
+  // AND a threshold was configured). Makes R24 compliance queryable via
+  // a single WHERE routingAllowed=false query.
+  if (
+    r24WasEvaluatedThisTurn &&
+    activeConversationId &&
+    typeof capitalThreshold === 'number'
+  ) {
+    try {
+      await prisma.bookingRoutingAudit.create({
+        data: {
+          conversationId: activeConversationId,
+          accountId,
+          personaMinimumCapital: capitalThreshold,
+          verificationAskedAtMessageId: r24LastResult.verificationAskedAt,
+          verificationConfirmedAtMessageId:
+            r24LastResult.verificationConfirmedAt,
+          routingAllowed: !r24LastResult.blocked,
+          regenerationForced: r24GateEverForcedRegen
+        }
+      });
+    } catch (err) {
+      console.error('[ai-engine] R24 audit write failed (non-fatal):', err);
     }
   }
 
@@ -626,4 +744,155 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     // If JSON parsing fails, treat the whole response as a plain text message
     return defaults;
   }
+}
+
+// ---------------------------------------------------------------------------
+// R24 — Capital verification gate helpers
+// ---------------------------------------------------------------------------
+// These back the code-level enforcement layer documented at the top of
+// the retry loop. The prompt-only R24 (in ai-prompts.ts master template)
+// was not reliably followed in production because the script's concrete
+// flow outranks abstract rules at decision points. This gate catches
+// bad routings post-generation and forces regeneration. See the policy
+// note at the top of ai-prompts.ts for the general principle.
+
+interface R24GateResult {
+  /** True = block this response, force regen with override directive. */
+  blocked: boolean;
+  /** Message.id of the AI message that asked the verification question. */
+  verificationAskedAt: string | null;
+  /** Message.id of the LEAD message that affirmatively confirmed. */
+  verificationConfirmedAt: string | null;
+}
+
+/**
+ * Heuristic: does this LLM response route the lead into booking-handoff
+ * messaging? Detected via sub_stage + content patterns. Handoff phrases
+ * are things like "team is gonna reach out", "let's gooo bro" wrap-ups,
+ * "set up your call", "check your email for the confirmation" — the
+ * kinds of lines that ONLY make sense once the lead is actually ready
+ * to book. A verification question ("you got at least $X ready?") does
+ * NOT match these patterns, so it correctly falls through the gate.
+ */
+function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
+  if (parsed.stage === 'BOOKING') {
+    if (
+      parsed.subStage === 'BOOKING_CONFIRM' ||
+      parsed.subStage === 'BOOKING_LINK_DROP'
+    ) {
+      return true;
+    }
+  }
+  const handoffPhrases =
+    /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+for|call\s+confirmation)\b/i;
+  return handoffPhrases.test(parsed.message);
+}
+
+/**
+ * Look through the conversation's AI messages for a prior verification
+ * question, then check the next LEAD reply for an affirmative answer.
+ * Returns { blocked: true } when either piece is missing, which signals
+ * the caller to force a regeneration. Only called when the threshold is
+ * configured and the current reply is routing to booking-handoff.
+ */
+async function checkR24Verification(
+  conversationId: string,
+  threshold: number,
+  customPrompt: string | null
+): Promise<R24GateResult> {
+  const aiMsgs = await prisma.message.findMany({
+    where: { conversationId, sender: 'AI' },
+    orderBy: { timestamp: 'asc' },
+    select: { id: true, content: true, timestamp: true }
+  });
+
+  const thresholdNoFormat = threshold.toString();
+  const thresholdFormatted = threshold.toLocaleString('en-US');
+  const patterns: RegExp[] = [
+    // Most common shape from the default R24 phrasing
+    /\byou got at least \$\d/i,
+    /\byou have at least \$\d/i,
+    /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
+    /\bcapital ready\b/i,
+    /\bready to start with \$/i,
+    /\bjust to confirm.*\$/i,
+    // Exact-threshold matches (with or without the thousands comma)
+    new RegExp(`\\$${thresholdNoFormat}\\b`, 'i'),
+    new RegExp(`\\$${thresholdFormatted.replace(/,/g, '\\,')}`, 'i')
+  ];
+  if (customPrompt && customPrompt.trim().length >= 15) {
+    // Use a distinctive slice of the custom prompt as a detector so
+    // operators with bespoke phrasing ("you sorted on starting capital?")
+    // get correctly detected without depending on the default pattern.
+    const snippet = customPrompt.trim().slice(0, 30);
+    const escaped = snippet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    patterns.push(new RegExp(escaped, 'i'));
+  }
+
+  let verificationAskedAt: { id: string; timestamp: Date } | null = null;
+  for (const msg of aiMsgs) {
+    if (patterns.some((p) => p.test(msg.content))) {
+      verificationAskedAt = { id: msg.id, timestamp: msg.timestamp };
+      break;
+    }
+  }
+
+  if (!verificationAskedAt) {
+    return {
+      blocked: true,
+      verificationAskedAt: null,
+      verificationConfirmedAt: null
+    };
+  }
+
+  // Check the immediately-following LEAD message for an affirmative
+  // reply. Hedge patterns ("kinda", "almost", dollar amounts below
+  // threshold) mean we DO NOT consider the lead confirmed even if the
+  // message started with "yeah".
+  const nextLead = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      sender: 'LEAD',
+      timestamp: { gt: verificationAskedAt.timestamp }
+    },
+    orderBy: { timestamp: 'asc' },
+    select: { id: true, content: true }
+  });
+  if (!nextLead) {
+    // Asked but no response yet — can't safely route to booking.
+    return {
+      blocked: true,
+      verificationAskedAt: verificationAskedAt.id,
+      verificationConfirmedAt: null
+    };
+  }
+  const leadReply = nextLead.content.trim();
+  const hedgePattern =
+    /\b(kinda|almost|about\s+half|working\s+on|save\s+up|not\s+yet|maybe|close\s+to|nearly|getting\s+there|don'?t\s+have|can'?t\s+afford|not\s+quite|less\s+than|under|below|only\s+\$)\b/i;
+  const affirmPattern =
+    /^(yes|yeah|yup|yep|confirmed|got\s+it|for\s+sure|i\s+do|i\s+got|i\s+have|sure|absolutely|definitely|100%|yea|y\b|\$?\d|ready|hell\s+yeah|let'?s\s+go)/i;
+  // Also detect an amount: if lead names a number, compare against threshold
+  const amountMatch = leadReply.match(/\$?(\d[\d,]*)/);
+  const namedAmount = amountMatch
+    ? parseInt(amountMatch[1].replace(/,/g, ''), 10)
+    : null;
+  const namesAmountBelowThreshold =
+    typeof namedAmount === 'number' && namedAmount < threshold;
+  const affirmed =
+    affirmPattern.test(leadReply) &&
+    !hedgePattern.test(leadReply) &&
+    !namesAmountBelowThreshold;
+
+  if (affirmed) {
+    return {
+      blocked: false,
+      verificationAskedAt: verificationAskedAt.id,
+      verificationConfirmedAt: nextLead.id
+    };
+  }
+  return {
+    blocked: true,
+    verificationAskedAt: verificationAskedAt.id,
+    verificationConfirmedAt: null
+  };
 }
