@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { rescueOrphanAISuggestions } from '@/lib/webhook-processor';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,18 @@ export async function PUT(req: NextRequest) {
       );
     }
 
+    // Fetch BEFORE state once up front. We reuse it for (a) the legacy
+    // derived-bool computation below AND (b) orphan-suggestion rescue:
+    // on any platform that transitions false → true, we re-fire any
+    // recent AISuggestion rows that were generated while the gate was
+    // closed. See rescueOrphanAISuggestions() in webhook-processor.ts.
+    const before = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: { awayModeInstagram: true, awayModeFacebook: true }
+    });
+    const beforeIg = before?.awayModeInstagram ?? false;
+    const beforeFb = before?.awayModeFacebook ?? false;
+
     const now = new Date();
     const data: Record<string, unknown> = {};
 
@@ -143,16 +156,8 @@ export async function PUT(req: NextRequest) {
     }
     // Keep the derived legacy column in sync for the deprecation window.
     if (hasIg || hasFb) {
-      const igNext = hasIg ? awayModeInstagram : undefined;
-      const fbNext = hasFb ? awayModeFacebook : undefined;
-      // Fetch current values for fields we're not updating so we can
-      // compute the derived legacy bool correctly.
-      const current = await prisma.account.findUnique({
-        where: { id: auth.accountId },
-        select: { awayModeInstagram: true, awayModeFacebook: true }
-      });
-      const nextIg = igNext ?? current?.awayModeInstagram ?? false;
-      const nextFb = fbNext ?? current?.awayModeFacebook ?? false;
+      const nextIg = hasIg ? awayModeInstagram : beforeIg;
+      const nextFb = hasFb ? awayModeFacebook : beforeFb;
       data.awayMode = nextIg || nextFb;
       data.awayModeEnabledAt = nextIg || nextFb ? now : null;
     }
@@ -171,6 +176,28 @@ export async function PUT(req: NextRequest) {
     console.log(
       `[away-mode] Account ${auth.accountId} updated by ${auth.name}: instagram=${account.awayModeInstagram} facebook=${account.awayModeFacebook}`
     );
+
+    // Orphan AISuggestion rescue — see the comment on
+    // rescueOrphanAISuggestions in webhook-processor.ts for the full
+    // explanation. Briefly: when operators flip per-chat aiActive on
+    // before the platform toggle, replies get generated but not shipped
+    // because the dual-gate blocks send. Flipping the platform now
+    // should rescue those orphans. Fire-and-forget via .catch() so the
+    // toggle response doesn't block on network round-trips for every
+    // stranded convo.
+    const platformsToRescue: Array<'INSTAGRAM' | 'FACEBOOK'> = [];
+    if (account.awayModeInstagram && !beforeIg)
+      platformsToRescue.push('INSTAGRAM');
+    if (account.awayModeFacebook && !beforeFb)
+      platformsToRescue.push('FACEBOOK');
+    for (const platform of platformsToRescue) {
+      rescueOrphanAISuggestions(auth.accountId, platform).catch((err) => {
+        console.error(
+          `[away-mode] Rescue failed for ${platform} on account ${auth.accountId}:`,
+          err
+        );
+      });
+    }
 
     const eitherOn = account.awayModeInstagram || account.awayModeFacebook;
     const timestamps = [

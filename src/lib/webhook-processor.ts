@@ -2490,6 +2490,117 @@ export async function handleAIHandoff(
 }
 
 // ---------------------------------------------------------------------------
+// Orphan AISuggestion rescue (platform away-mode flip false→true)
+// ---------------------------------------------------------------------------
+// When an operator flips per-conversation `aiActive` on for a chat BEFORE
+// flipping the platform-level away-mode on, the AI generation fires
+// immediately (via handleAIHandoff) but the `shouldAutoSend` dual-gate
+// evaluates to false (aiActive=true && awayModeFacebook=false → false).
+// The generated reply gets saved as an AISuggestion row + broadcast to
+// the dashboard websocket but NEVER shipped to Meta and NEVER saved as
+// a Message row. Later when the operator flips the platform on, nothing
+// retroactively re-fires those orphans.
+//
+// This rescue finds conversations where:
+//   - Platform matches the one that just got turned on
+//   - Conversation has aiActive=true (operator wants AI on this chat)
+//   - There's a recent AISuggestion that was never selected/rejected
+//   - The latest Message in the conversation is from LEAD (it's the
+//     AI's turn — AI hasn't already replied in the meantime, and no
+//     human has taken over)
+// For each hit, re-fire scheduleAIReply. With both gates now open, the
+// reply ships to Meta on this second run. Safe to call multiple times:
+// once an AI Message lands in the convo, the "latest = LEAD" filter
+// excludes it from subsequent rescue passes. Capped at maxConvos to
+// prevent runaway when someone accumulated hundreds of orphans.
+export async function rescueOrphanAISuggestions(
+  accountId: string,
+  platform: 'INSTAGRAM' | 'FACEBOOK',
+  options?: { sinceMinutes?: number; maxConvos?: number }
+): Promise<{ candidates: number; dispatched: number; skipped: number }> {
+  const sinceMinutes = options?.sinceMinutes ?? 30;
+  const maxConvos = options?.maxConvos ?? 50;
+  const since = new Date(Date.now() - sinceMinutes * 60 * 1000);
+
+  // Pull one orphan AISuggestion per conversationId (most recent).
+  const orphans = await prisma.aISuggestion.findMany({
+    where: {
+      accountId,
+      generatedAt: { gte: since },
+      wasSelected: false,
+      wasRejected: false,
+      conversation: {
+        aiActive: true,
+        lead: { platform }
+      }
+    },
+    orderBy: { generatedAt: 'desc' },
+    distinct: ['conversationId'],
+    take: maxConvos,
+    select: {
+      id: true,
+      conversationId: true,
+      generatedAt: true,
+      conversation: {
+        select: {
+          id: true,
+          lead: { select: { id: true, name: true, accountId: true } }
+        }
+      }
+    }
+  });
+
+  if (orphans.length === 0) {
+    console.log(
+      `[away-mode rescue] No orphan AISuggestions for ${platform} on account ${accountId} in last ${sinceMinutes}m`
+    );
+    return { candidates: 0, dispatched: 0, skipped: 0 };
+  }
+  console.log(
+    `[away-mode rescue] Found ${orphans.length} candidate orphan(s) for ${platform} on account ${accountId}`
+  );
+
+  let dispatched = 0;
+  let skipped = 0;
+  for (const orphan of orphans) {
+    const latestMsg = await prisma.message.findFirst({
+      where: { conversationId: orphan.conversationId },
+      orderBy: { timestamp: 'desc' },
+      select: { sender: true, timestamp: true }
+    });
+    if (!latestMsg || latestMsg.sender !== 'LEAD') {
+      // AI already replied, or human took over → nothing to rescue
+      console.log(
+        `[away-mode rescue] Skipping ${orphan.conversationId} (${orphan.conversation.lead.name}): latest msg is ${latestMsg?.sender || 'none'}, not LEAD`
+      );
+      skipped++;
+      continue;
+    }
+    try {
+      console.log(
+        `[away-mode rescue] Re-firing scheduleAIReply for ${orphan.conversationId} (${orphan.conversation.lead.name}) — orphan generated ${Math.round((Date.now() - orphan.generatedAt.getTime()) / 1000)}s ago`
+      );
+      await scheduleAIReply(
+        orphan.conversationId,
+        orphan.conversation.lead.accountId
+      );
+      dispatched++;
+    } catch (err) {
+      console.error(
+        `[away-mode rescue] Dispatch failed for ${orphan.conversationId}:`,
+        err
+      );
+      skipped++;
+    }
+  }
+
+  console.log(
+    `[away-mode rescue] Done. platform=${platform} candidates=${orphans.length} dispatched=${dispatched} skipped=${skipped}`
+  );
+  return { candidates: orphans.length, dispatched, skipped };
+}
+
+// ---------------------------------------------------------------------------
 // Helper: Back-fill messages from Meta Graph API
 // ---------------------------------------------------------------------------
 
