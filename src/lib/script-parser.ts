@@ -139,6 +139,7 @@ OUTPUT SCHEMA:
               "action_type": "send_message" | "ask_question" | "send_voice_note" | "send_link" | "send_video" | "form_reference" | "runtime_judgment" | "wait_for_response" | "wait_duration",
               "content": "string or null (preserve {{placeholders}} exactly as-is)",
               "label": "string or null (for VN, LINK, VIDEO, FORM — the descriptive label)",
+              "url": "string or null (for LINK or VIDEO — the raw URL if present in the script; include even if scheme-less like 'youtube.com/watch?v=abc')",
               "wait_duration_seconds": "number or null (only for wait_duration)",
               "form_ref_name": "string or null (for form_reference — the form name)",
               "confidence": "high" | "medium" | "low",
@@ -450,10 +451,26 @@ export async function parseScriptMarkdown(
         const content = rawAction.content || rawAction.label || null;
         const formRefName = rawAction.form_ref_name || null;
 
-        // Mark voice notes, links, videos as needs_user_input if no binding
+        // Try to extract a URL for send_link / send_video from any field the
+        // LLM may have tucked it into (explicit `url` field, content, label).
+        // Auto-prepends https:// for scheme-less URLs like the Step 11
+        // YouTube link ("youtube.com/watch?v=..." → "https://youtube.com/...").
+        let linkUrl: string | null = null;
+        if (actionType === 'send_link' || actionType === 'send_video') {
+          linkUrl =
+            normalizeUrl(rawAction.url) ||
+            normalizeUrl(rawAction.link_url) ||
+            extractUrl(content) ||
+            extractUrl(rawAction.label);
+        }
+
+        // Mark voice notes, links, videos as needs_user_input if no binding.
+        // If we successfully extracted a URL from the script text, the link
+        // IS filled — don't downgrade it.
         if (
           ['send_voice_note', 'send_link', 'send_video'].includes(actionType) &&
-          status === 'filled'
+          status === 'filled' &&
+          !linkUrl
         ) {
           status = 'needs_user_input';
         }
@@ -469,7 +486,7 @@ export async function parseScriptMarkdown(
             actionType === 'send_link' || actionType === 'send_video'
               ? rawAction.label || content
               : null,
-          linkUrl: null,
+          linkUrl,
           waitDuration:
             actionType === 'wait_duration'
               ? parseInt(rawAction.wait_duration_seconds) || 0
@@ -622,6 +639,68 @@ export async function extractTextFromUpload(
 
   // .txt, .md, or unknown — treat as UTF-8 text
   return buffer.toString('utf-8');
+}
+
+// ---------------------------------------------------------------------------
+// URL extraction + auto-fix
+// ---------------------------------------------------------------------------
+
+// Match bare URLs with or without a scheme. Stops at whitespace or trailing
+// punctuation that isn't typically part of a URL. Handles trailing `)`, `.`,
+// `,` etc. by excluding them from the tail.
+//
+// Examples this matches:
+//   https://calendly.com/x/30min
+//   http://foo.bar/baz
+//   calendly.com/x/30min?utm=y
+//   youtube.com/watch?v=abc&feature=youtu.be
+//
+// Examples this does NOT match:
+//   [BOOKING LINK]   — bracketed placeholder
+//   some.sentence    — no path and no TLD-ish shape
+const URL_REGEX =
+  /\b((?:https?:\/\/)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:\/[^\s<>()\[\]{}'"`]*)?(?:\?[^\s<>()\[\]{}'"`]*)?)/i;
+
+/**
+ * Pull a URL out of a free-text string. Returns the URL with scheme
+ * guaranteed (auto-prepending "https://" if missing). Returns null if no
+ * URL-like substring is found. Trims trailing punctuation that the LLM
+ * frequently tacks on ("here's the link: foo.com." → "https://foo.com").
+ */
+function extractUrl(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const match = text.match(URL_REGEX);
+  if (!match) return null;
+  let url = match[1];
+  // Strip trailing punctuation that got eaten by the regex's path group.
+  url = url.replace(/[.,;:!?)]+$/, '');
+  // Auto-prepend scheme if missing. This fixes cases like
+  // "youtube.com/watch?v=e7Ujmb019gE&feature=youtu.be" where the script
+  // writer omitted the scheme — without it the link isn't clickable and
+  // the AI may treat it as a non-URL string.
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+  return url;
+}
+
+/**
+ * Public helper so callers outside the parser (e.g. the binding preservation
+ * path in the reupload route, manual edit handlers) can normalize user-
+ * supplied URLs the same way.
+ */
+export function normalizeUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  // Try strict URL parse first (covers fully-qualified URLs with scheme).
+  try {
+    const u = new URL(trimmed);
+    return u.toString();
+  } catch {
+    // Fall through to lenient extraction.
+  }
+  return extractUrl(trimmed);
 }
 
 // ---------------------------------------------------------------------------

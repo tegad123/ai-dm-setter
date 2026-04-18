@@ -247,6 +247,49 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9b. Bracketed placeholder leak — e.g. "[BOOKING LINK]", "[CALENDAR LINK]",
+  // "[APPLICATION LINK]", "[HOMEWORK LINK]", "[LINK]", "[URL]", "[RESULTS
+  // VIDEO]". These are LITERAL placeholder tokens the LLM learned from
+  // training examples (persona breakdowns, script fragments). If one of them
+  // reaches the lead, they see raw brackets in the message instead of a real
+  // URL — a critical failure. Match any token of the form [A-Z][A-Z0-9 _]{2+}
+  // enclosed in square brackets. We do NOT match single-char or lowercase
+  // bracketed content (that can be legitimate formatting like [a] or [1]).
+  const BRACKETED_PLACEHOLDER_REGEX = /\[[A-Z][A-Z0-9 _]{2,}\]/;
+  const placeholderMatch = reply.match(BRACKETED_PLACEHOLDER_REGEX);
+  if (placeholderMatch) {
+    hardFails.push(
+      `bracketed_placeholder_leaked: "${placeholderMatch[0]}" — LITERAL placeholder token in outgoing message, not a URL. If the script has no matching URL, use the script-driven handoff flow instead of a placeholder.`
+    );
+  }
+
+  // 9c. R19 — fabricated action claims. The AI must NEVER claim to have taken
+  // actions it didn't actually take. "Just sent the link", "just got your
+  // booking", "just checked with the team", "email is on the way" — these are
+  // all LIES when the system didn't actually perform those actions in this
+  // turn. Violations degrade trust and can trigger lead confusion ("I never
+  // got the email"). Observed pattern: conversation cmo38clid003tjp04wauomdtm
+  // fired 4 fabrications on 2026-04-17. Prompt-only enforcement of R19 is
+  // insufficient — this regex guard forces regeneration when the LLM slips.
+  const FABRICATED_ACTION_PATTERNS: RegExp[] = [
+    /\bjust (sent|got|checked|received|confirmed|grabbed|booked)\b/i,
+    /\bjust (reached out|heard back|followed up)\b/i,
+    /\bemail is on the way\b/i,
+    /\blink is on the way\b/i,
+    /\bjust saw (it|your)\b/i,
+    /\bsent (the|it|this) (link|email|zoom)\b/i,
+    /\bi (just )?received your\b/i,
+    /\bi can see your (booking|email|payment|signup)\b/i
+  ];
+  for (const pat of FABRICATED_ACTION_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `r19_fabricated_action: matched "${pat.source}" — claims an action the system did not actually perform`
+      );
+      break;
+    }
+  }
+
   // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
   // the AI sends the booking link from the script and the lead picks their
   // own time. The AI must NOT propose specific day+time combinations.

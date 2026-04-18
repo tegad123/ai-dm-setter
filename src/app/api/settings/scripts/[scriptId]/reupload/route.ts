@@ -66,6 +66,14 @@ const DEEP_INCLUDE = {
 // ---------------------------------------------------------------------------
 
 interface ActionBinding {
+  // actionType of the PREVIOUS action at this position. We only carry over
+  // voiceNote / link / form bindings when the NEW action at the same position
+  // has the same actionType. Otherwise we drop the binding — a "send_message"
+  // that happens to share a position with an old "send_link" should NOT
+  // inherit the old link's URL, label, or voiceNoteId. This was the root
+  // cause of stale "Booking Calendar Link" labels attached to messages after
+  // re-upload, which contributed to the [BOOKING LINK] leak.
+  actionType: string;
   voiceNoteId: string | null;
   linkUrl: string | null;
   linkLabel: string | null;
@@ -142,6 +150,7 @@ export async function POST(
         const key = bindingKey(step.stepNumber, branchLabel, action.sortOrder);
         if (action.voiceNoteId || action.linkUrl || action.formId) {
           bindings.set(key, {
+            actionType: action.actionType,
             voiceNoteId: action.voiceNoteId,
             linkUrl: action.linkUrl,
             linkLabel: action.linkLabel,
@@ -218,17 +227,39 @@ export async function POST(
                 const key = bindingKey(step.stepNumber, branch.label, aIdx);
                 const existing = bindings.get(key);
 
+                // Only preserve VN / link / form bindings if the NEW action
+                // at this position has the SAME actionType as the old one.
+                // Otherwise the binding is cruft from a prior shape of the
+                // step — carrying it forward produces nonsense like a
+                // "send_message" that still has linkLabel="Booking Calendar
+                // Link" set. See Option C in the 2026-04-18 booking-leak fix.
+                const sameType =
+                  existing && existing.actionType === action.actionType;
+
+                if (existing && !sameType) {
+                  console.warn(
+                    `[reupload] binding dropped on actionType change at step ${step.stepNumber} branch "${branch.label}" position ${aIdx}: ${existing.actionType} -> ${action.actionType}`
+                  );
+                }
+
                 return {
                   stepId: createdStep.id,
                   branchId: createdBranch.id,
                   actionType: action.actionType,
                   content: action.content,
-                  voiceNoteId: existing?.voiceNoteId || null,
-                  linkUrl: existing?.linkUrl || action.linkUrl,
-                  linkLabel: existing?.linkLabel || action.linkLabel,
+                  voiceNoteId: sameType ? existing?.voiceNoteId || null : null,
+                  linkUrl: sameType
+                    ? existing?.linkUrl || action.linkUrl
+                    : action.linkUrl,
+                  linkLabel: sameType
+                    ? existing?.linkLabel || action.linkLabel
+                    : action.linkLabel,
                   formId: action.formRefName
-                    ? formIdMap[action.formRefName] || existing?.formId || null
-                    : existing?.formId || null,
+                    ? formIdMap[action.formRefName] ||
+                      (sameType ? existing?.formId || null : null)
+                    : sameType
+                      ? existing?.formId || null
+                      : null,
                   waitDuration: action.waitDuration,
                   sortOrder: aIdx,
                   parserConfidence: action.confidence,
