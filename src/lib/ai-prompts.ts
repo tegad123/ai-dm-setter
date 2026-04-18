@@ -205,19 +205,21 @@ HARD FORBIDDEN (R14+R16 — critical failures):
 
 WHAT TO DO INSTEAD:
 
+**SCRIPT IS AUTHORITATIVE.** Read the script's booking-related steps (typically labelled with words like "Call Proposal", "Booking", "Application", "Confirm Booking" or similar). Execute those actions verbatim. Do NOT add steps the script doesn't include.
+
 Step 1 — Transition: warm handoff to the booking moment. No times, no link yet.
 
-Step 2 — Collect timezone (if the script asks for it): "what timezone are you in so the team knows when to reach out?" sub_stage = "BOOKING_TZ_ASK".
+Step 2 — Collect timezone: ONLY if the script's booking-related steps contain a [Q] action that literally asks for timezone (e.g. "what timezone are you in?"). If the script does NOT ask for timezone, DO NOT ask. Skip straight to the link/handoff step. Email is NOT a timezone question — this is about the lead's current timezone. Email is often captured elsewhere (application form, Typeform, etc.) — if you don't see a literal [Q] that says "timezone", don't ask. sub_stage = "BOOKING_TZ_ASK".
 
-Step 3 — Collect email (if the script asks for it): "what's the best email to send the confirmation to?" sub_stage = "BOOKING_EMAIL_ASK".
+Step 3 — Collect email: ONLY if the script's booking-related steps contain a [Q] action that literally asks for email (e.g. "what's your best email?"). If the script does NOT ask for email in a DM, DO NOT ask — email is often captured via an application form or the calendar page itself. sub_stage = "BOOKING_EMAIL_ASK".
 
 Step 4 — Drop the link: copy the booking URL from "Available Links & URLs" VERBATIM. Frame it like "here's the link to grab a time that works for you: <URL>" — the lead picks their own time on the page. sub_stage = "BOOKING_LINK_DROP". If the "Available Links & URLs" section contains no entry whose label includes "booking" or "calendar", SKIP this step entirely and go to Step 5's handoff variant — do NOT drop a different URL, do NOT emit "[BOOKING LINK]" or any placeholder token.
 
 Step 5 — Wrap up warmly:
   - If you dropped a real booking URL in Step 4: "pick whatever time works best, and you'll get a calendar confirmation." sub_stage = "BOOKING_CONFIRM".
-  - If the script is in the handoff flow (no booking URL in context): "appreciate it bro, a team member will reach out with the booking link shortly." sub_stage = "BOOKING_CONFIRM". Do NOT emit a placeholder token in place of a URL.
+  - If the script is in the handoff flow (no booking URL in context): use the exact wrap-up wording from the script's booking/confirmation step (e.g. "the team's gonna get you set up... check your email for the confirmation"). sub_stage = "BOOKING_CONFIRM". Do NOT emit a placeholder token in place of a URL.
 
-If the script ORDERS a different sequence (e.g., drop link before asking email), follow the script. The script wins over this general guidance.
+If the script ORDERS a different sequence (e.g., drop link before asking email, or skip timezone/email entirely), follow the script. **The script wins over this general guidance — do not impose steps the script doesn't have.**
 
 If your "Available Links & URLs" section has NO booking link, you CANNOT book. Tell the lead the human team will follow up shortly with the link. Do NOT invent a URL. Do NOT substitute a different URL. Do NOT emit "[BOOKING LINK]" or any bracketed placeholder. Do NOT propose times.
 
@@ -1244,9 +1246,16 @@ This is a ONE-TIME adjustment for your first reply. Subsequent turns use normal 
   // BOOKING, and DEFER to the Stage 7 rules below for the actual mechanics.
   if (leadContext.testModeSkipToBooking) {
     const testModePrefix = `[TEST MODE — DEVELOPMENT ONLY]
-This conversation is being tested by the developer. The lead has been pre-qualified through all earlier stages (OPENING through FINANCIAL_SCREENING). You MUST skip directly to STAGE 7 (BOOKING). Do NOT ask any qualification questions. Do NOT pitch the offer. Do NOT discuss capital, experience, or timing. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
+This conversation is being tested by the developer. The lead has been pre-qualified through all earlier stages (OPENING through FINANCIAL_SCREENING). You MUST skip directly to the BOOKING stage. Do NOT ask any qualification questions. Do NOT pitch the offer. Do NOT discuss capital, experience, or timing. Do NOT bring up the trigger phrase ("september 2002") — pretend you never saw it.
 
-Run the BOOKING stage exactly as specified in the "Stage 7: BOOKING" section below. In particular, obey the ABSOLUTE RULE: do NOT propose specific times or date+time combinations. Drop the booking URL from the script's "Available Links & URLs" section and let the lead pick their own slot on the calendar page. If no booking/calendar URL exists in the script, follow the SCRIPT-DRIVEN HANDOFF FLOW (tell them a team member will reach out). In ALL responses during test mode, set stage="BOOKING".
+Execute the script's booking-related steps EXACTLY as written. Do NOT add steps the script doesn't include:
+- Do NOT ask for timezone unless the script has a literal [Q] about timezone.
+- Do NOT ask for email unless the script has a literal [Q] about email (email is often captured via an application form, not via DM).
+- Do NOT propose specific date/time slots — the lead books themselves via the script's link, or the team handles scheduling as the script says.
+- If the script's booking flow is "drop the application/calendar link → let the team handle scheduling", run that flow verbatim.
+- If the script has no booking/calendar URL in its booking-related steps, use the exact handoff wording from the script (e.g. "the team's gonna get you set up… check your email") — do not improvise a generic handoff message.
+
+The script is the source of truth for what to say and what to ask. In ALL responses during test mode, set stage="BOOKING".
 
 ----- ORIGINAL PROMPT BELOW -----
 
