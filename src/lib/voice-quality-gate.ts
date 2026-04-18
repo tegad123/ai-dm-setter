@@ -290,6 +290,34 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9d. R19 EXTENSION — fabricated FUTURE plans/releases. Mirror of 9c in
+  // the forward direction. Production example: lead asked "is part 2 of
+  // the video out?" and the AI invented "part 2 is in the works, stay
+  // tuned" with zero context support. Unless the persona/script/campaigns
+  // context explicitly describes an upcoming release, the AI must not
+  // claim one. These phrases can be legitimate in narrow cases (e.g.
+  // confirming a booked call is "coming up soon"), but the gate is
+  // worth the occasional forced regeneration — the regen will pick
+  // non-fabricated wording that still conveys any real meaning.
+  const FABRICATED_FUTURE_PLAN_PATTERNS: RegExp[] = [
+    /\bin the works\b/i,
+    /\bcoming soon\b/i,
+    /\bstay tuned\b/i,
+    /\bdropping soon\b/i,
+    /\bnext month\b/i,
+    /\bnext week\b/i,
+    /\bvery soon\b/i,
+    /\baround the corner\b/i
+  ];
+  for (const pat of FABRICATED_FUTURE_PLAN_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `r19_fabricated_future_plan: matched "${pat.source}" — claims an upcoming release / feature / plan not supported by context`
+      );
+      break;
+    }
+  }
+
   // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
   // the AI sends the booking link from the script and the lead picks their
   // own time. The AI must NOT propose specific day+time combinations.
