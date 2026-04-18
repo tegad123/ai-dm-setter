@@ -84,6 +84,7 @@ You are {{fullName}}, a sales closer and appointment setter{{companyContext}}. Y
 - Tone: {{toneDescription}}
 {{closerContext}}
 {{callHandoffBlock}}
+{{activeCampaignsBlock}}
 
 ## RESPONSE FORMAT
 You MUST respond with valid JSON only. No markdown, no code fences, no extra text.
@@ -1052,6 +1053,39 @@ Your job ends at booking. ${closerName}'s job starts on the call.`;
     prompt = prompt.replace(/\{\{closerContext\}\}/g, '');
     prompt = prompt.replace(/\{\{callHandoffBlock\}\}/g, '');
     prompt = prompt.replace(/\{\{callHandoffReminder\}\}/g, '');
+  }
+
+  // ── Active Campaigns (operator-maintained free-form context) ────
+  // Operator-edited via the Persona & Context editor. Lists current
+  // CTAs / content drops / promotions so the AI can recognise when a
+  // lead's message is a response to known context instead of treating
+  // it as an ambiguous cold DM. Default: null / empty → block omitted
+  // entirely (zero behaviour change from the previous prompt). Runs
+  // on every generation cycle because a lead can reference a campaign
+  // in message 3, not just message 1.
+  const activeCampaignsRaw = (
+    (p as { activeCampaignsContext?: string | null }).activeCampaignsContext ||
+    ''
+  ).trim();
+  if (activeCampaignsRaw.length > 0) {
+    const activeCampaignsBlock = `
+<active_campaigns>
+The account owner is currently running the following campaigns, CTAs, content, or promotions. When the lead's first message matches or references any of these, respond with awareness of what they signed up for — welcome them, deliver what was promised, and route to normal qualification.
+
+${activeCampaignsRaw}
+
+MATCHING GUARDRAIL: Only match when the lead's message clearly relates to an active campaign. Do NOT force connections. If unsure whether a vague message relates to a campaign, default to treating it as a cold message. Examples:
+- Lead sends the campaign keyword (e.g. "MARKET") and you have a MARKET CTA listed → match, deliver the promised link
+- Lead sends a fuzzy variation ("can i get the market thing") → match
+- Lead sends "yo" or another generic opener with no clear campaign tie → DO NOT match, use normal cold opener
+- Lead sends "saw your youtube" + you have a YouTube drop listed → match
+</active_campaigns>`;
+    prompt = prompt.replace(
+      /\{\{activeCampaignsBlock\}\}/g,
+      activeCampaignsBlock
+    );
+  } else {
+    prompt = prompt.replace(/\{\{activeCampaignsBlock\}\}/g, '');
   }
 
   // ── Trigger context ───────────────────────────────────────────────

@@ -19,7 +19,20 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ persona: null });
     }
 
-    return NextResponse.json({ persona });
+    // Manual join to User for "last edited by" attribution in the editor.
+    // We don't model contextUpdatedByUserId as a Prisma relation (see
+    // schema.prisma notes), so resolve the display name here. Falls back
+    // gracefully if the user was deleted.
+    let contextUpdatedByUser: { name: string; email: string } | null = null;
+    if (persona.contextUpdatedByUserId) {
+      const user = await prisma.user.findUnique({
+        where: { id: persona.contextUpdatedByUserId },
+        select: { name: true, email: true }
+      });
+      if (user) contextUpdatedByUser = { name: user.name, email: user.email };
+    }
+
+    return NextResponse.json({ persona, contextUpdatedByUser });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(
@@ -62,6 +75,7 @@ export async function PUT(req: NextRequest) {
       noShowProtocol,
       preCallSequence,
       closerName,
+      activeCampaignsContext,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -117,6 +131,21 @@ export async function PUT(req: NextRequest) {
     if (rawScriptFileName !== undefined)
       data.rawScriptFileName = rawScriptFileName;
     if (styleAnalysis !== undefined) data.styleAnalysis = styleAnalysis;
+
+    // Persona Editor day-to-day context fields. activeCampaignsContext
+    // is free-form operator-maintained text; on any touch (including
+    // setting it back to empty to clear expired campaigns), we record
+    // who updated the persona and when so the editor UI can render
+    // "Last updated by X, N ago".
+    if (activeCampaignsContext !== undefined) {
+      data.activeCampaignsContext =
+        typeof activeCampaignsContext === 'string' &&
+        activeCampaignsContext.trim().length > 0
+          ? activeCampaignsContext.trim()
+          : null;
+    }
+    data.contextUpdatedAt = new Date();
+    data.contextUpdatedByUserId = auth.userId || null;
 
     // AI engine settings (optional, only set if provided)
     if (responseDelayMin !== undefined)

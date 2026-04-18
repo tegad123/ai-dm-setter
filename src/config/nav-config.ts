@@ -91,6 +91,11 @@ export const navItems: NavItem[] = [
         shortcut: ['p', 'p']
       },
       {
+        title: 'Persona & Context',
+        url: '/dashboard/settings/persona-editor',
+        icon: 'settings'
+      },
+      {
         title: 'Sales Scripts',
         url: '/dashboard/settings/persona',
         icon: 'settings'

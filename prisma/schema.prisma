@@ -268,6 +268,16 @@ model AIPersona {
   noShowProtocol           Json?                     // {firstNoShow, secondNoShow, maxReschedules}
   preCallSequence          Json?                     // [{timing, message}]
   closerName               String?                   // Name of closer on calls (e.g. "Anthony")
+  // Day-to-day operator-edited context. activeCampaignsContext is free-
+  // form text listing the account's current CTAs, content drops, and
+  // promotions; the prompt injects it as an <active_campaigns> block so
+  // the AI can recognise warm CTA responses vs cold DMs. The other two
+  // fields track who last edited any persona context and when, so the
+  // persona editor UI can show "Last updated 2 days ago by X" and give
+  // operators an audit trail without a separate history table.
+  activeCampaignsContext   String?  @db.Text
+  contextUpdatedAt         DateTime?
+  contextUpdatedByUserId   String?
   responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
   responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
   voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled
