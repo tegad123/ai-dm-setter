@@ -24,24 +24,121 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
 
+// ── Module-scoped training-phase cache ─────────────────────────────
+// OverrideNoteInput self-fetches training phase so we can render
+// phase-aware copy without prop-drilling through ConversationsView →
+// ConversationThread → OverrideNoteInput. 60-second TTL, with a
+// shared in-flight promise so a page rendering dozens of override
+// inputs only fires one request.
+let trainingPhaseCache: { phase: string; fetchedAt: number } | null = null;
+let trainingPhaseInFlight: Promise<string> | null = null;
+const TRAINING_PHASE_CACHE_TTL_MS = 60_000;
+
+async function getTrainingPhase(): Promise<string> {
+  const now = Date.now();
+  if (
+    trainingPhaseCache &&
+    now - trainingPhaseCache.fetchedAt < TRAINING_PHASE_CACHE_TTL_MS
+  ) {
+    return trainingPhaseCache.phase;
+  }
+  if (trainingPhaseInFlight) return trainingPhaseInFlight;
+  trainingPhaseInFlight = (async () => {
+    try {
+      const res = await apiFetch<{
+        trainingPhase: { trainingPhase: string };
+      }>('/settings/training-phase');
+      const phase = res?.trainingPhase?.trainingPhase || 'ACTIVE';
+      trainingPhaseCache = { phase, fetchedAt: Date.now() };
+      return phase;
+    } catch {
+      return 'ACTIVE'; // safe default — skips the aggressive prompt
+    } finally {
+      trainingPhaseInFlight = null;
+    }
+  })();
+  return trainingPhaseInFlight;
+}
+
+// Placeholder examples rotate every 2s to seed the user with the kind
+// of feedback we want ("too formal", "wrong tone", etc.) without
+// locking them into any one framing.
+const PLACEHOLDER_EXAMPLES = [
+  'e.g. too formal',
+  "e.g. shouldn't have pitched yet",
+  'e.g. wrong tone',
+  'e.g. missed the objection'
+];
+const PLACEHOLDER_ROTATE_MS = 2000;
+
+// Session-scoped: once a user clicks ✕ on a specific override's note
+// prompt, don't auto-reopen it on rerender. Cleared on page reload,
+// which is intentional — a reload means a fresh look at the data.
+const dismissedMessages = new Set<string>();
+
 // ── Inline override note input ──────────────────────────────────────
 function OverrideNoteInput({
   conversationId,
   messageId,
-  initialNote
+  initialNote,
+  messageTimestamp
 }: {
   conversationId: string;
   messageId: string;
   initialNote: string | null | undefined;
+  messageTimestamp: string;
 }) {
-  const [editing, setEditing] = useState(false);
+  // "Fresh" = just sent (< 10s old). Only fresh messages autofocus
+  // the input — otherwise, scrolling through history would keep
+  // yanking focus out of the main reply box.
+  const [isFresh] = useState(() => {
+    const t = new Date(messageTimestamp).getTime();
+    if (!Number.isFinite(t)) return true; // no timestamp → treat as fresh
+    return Date.now() - t < 10_000;
+  });
+
+  // Auto-expand on mount unless (a) a note was already saved (show
+  // compact saved pill) or (b) user dismissed this message earlier
+  // this session.
+  const [dismissed, setDismissed] = useState(() =>
+    dismissedMessages.has(messageId)
+  );
+  const [editing, setEditing] = useState(
+    () => !initialNote && !dismissedMessages.has(messageId)
+  );
   const [note, setNote] = useState(initialNote || '');
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState(initialNote || '');
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const [trainingPhase, setTrainingPhase] = useState<string | null>(null);
+
+  // Fetch phase once per component instance (cache handles dedup).
+  useEffect(() => {
+    let cancelled = false;
+    getTrainingPhase().then((phase) => {
+      if (!cancelled) setTrainingPhase(phase);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Rotate placeholder while editing so users see multiple examples.
+  useEffect(() => {
+    if (!editing) return;
+    const interval = setInterval(() => {
+      setPlaceholderIndex((i) => (i + 1) % PLACEHOLDER_EXAMPLES.length);
+    }, PLACEHOLDER_ROTATE_MS);
+    return () => clearInterval(interval);
+  }, [editing]);
 
   const handleSave = async () => {
+    // Empty save with no prior saved note = treat as dismiss. Prevents
+    // a round-trip for a no-op and matches the ✕ behavior.
     if (!note.trim() && !savedNote) {
       setEditing(false);
+      dismissedMessages.add(messageId);
+      setDismissed(true);
       return;
     }
     setSaving(true);
@@ -59,6 +156,14 @@ function OverrideNoteInput({
     }
   };
 
+  const handleDismiss = () => {
+    setNote(savedNote);
+    setEditing(false);
+    dismissedMessages.add(messageId);
+    setDismissed(true);
+  };
+
+  // Saved note → show compact pill, click to re-edit.
   if (!editing && savedNote) {
     return (
       <button
@@ -71,53 +176,87 @@ function OverrideNoteInput({
     );
   }
 
-  if (!editing) {
+  // Dismissed → show a low-key "Add a note" trigger so the user can
+  // still reopen if they change their mind.
+  if (!editing && dismissed) {
     return (
       <button
         className='text-muted-foreground hover:text-foreground mt-1 flex items-center gap-1 text-[10px]'
-        onClick={() => setEditing(true)}
+        onClick={() => {
+          setEditing(true);
+          dismissedMessages.delete(messageId);
+          setDismissed(false);
+        }}
       >
         <IconPencil className='h-3 w-3' />
-        Why did you change it?
+        Add a note
       </button>
     );
   }
 
+  // Default = inline editable input. ONBOARDING gets amber-filled
+  // styling + explicit training-mode copy; other phases get a subtler
+  // muted container with softer "Why?" framing.
+  const isOnboarding = trainingPhase === 'ONBOARDING';
   return (
-    <div className='mt-1.5 flex items-center gap-1.5'>
-      <input
-        type='text'
-        value={note}
-        onChange={(e) => setNote(e.target.value.slice(0, 140))}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleSave();
-          if (e.key === 'Escape') setEditing(false);
-        }}
-        placeholder='e.g. Too formal, Wrong tone...'
-        maxLength={140}
-        autoFocus
-        className='h-6 flex-1 rounded border bg-transparent px-2 text-[11px] outline-none focus:border-amber-400'
-      />
-      <Button
-        size='sm'
-        variant='ghost'
-        className='h-6 px-2 text-[10px]'
-        onClick={handleSave}
-        disabled={saving}
+    <div
+      className={cn(
+        'mt-1.5 rounded-md border px-2 py-1.5 text-left',
+        isOnboarding
+          ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40'
+          : 'border-border bg-muted/40'
+      )}
+    >
+      <div
+        className={cn(
+          'mb-1 text-[10px]',
+          isOnboarding
+            ? 'font-medium text-amber-800 dark:text-amber-300'
+            : 'text-muted-foreground'
+        )}
       >
-        {saving ? '...' : 'Save'}
-      </Button>
-      <Button
-        size='sm'
-        variant='ghost'
-        className='h-6 px-1 text-[10px]'
-        onClick={() => {
-          setNote(savedNote);
-          setEditing(false);
-        }}
-      >
-        ✕
-      </Button>
+        {isOnboarding
+          ? "You're in training mode — a quick note makes your AI learn faster."
+          : 'Why? (helps train your AI)'}
+      </div>
+      <div className='flex items-center gap-1.5'>
+        <input
+          type='text'
+          value={note}
+          onChange={(e) => setNote(e.target.value.slice(0, 140))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleSave();
+            if (e.key === 'Escape') handleDismiss();
+          }}
+          placeholder={PLACEHOLDER_EXAMPLES[placeholderIndex]}
+          maxLength={140}
+          autoFocus={isFresh}
+          className={cn(
+            'h-6 flex-1 rounded border bg-transparent px-2 text-[11px] outline-none',
+            isOnboarding
+              ? 'border-amber-400 focus:border-amber-600'
+              : 'focus:border-amber-400'
+          )}
+        />
+        <Button
+          size='sm'
+          variant='ghost'
+          className='h-6 px-2 text-[10px]'
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? '...' : 'Save'}
+        </Button>
+        <Button
+          size='sm'
+          variant='ghost'
+          className='h-6 px-1 text-[10px]'
+          onClick={handleDismiss}
+          aria-label='Dismiss note prompt'
+        >
+          ✕
+        </Button>
+      </div>
     </div>
   );
 }
@@ -355,6 +494,7 @@ export function ConversationThread({
                             conversationId={conversation.id}
                             messageId={msg.id}
                             initialNote={msg.humanOverrideNote}
+                            messageTimestamp={msg.timestamp}
                           />
                         )}
                       </div>

@@ -2247,13 +2247,17 @@ export async function processAdminMessage(
         }
       });
 
-      // Increment override count if in onboarding
-      if (loggedDuringTrainingPhase) {
-        await prisma.account.update({
-          where: { id: accountId },
-          data: { trainingOverrideCount: { increment: 1 } }
-        });
-      }
+      // Always increment override count — phase gates the UI experience,
+      // not whether we capture the signal. Previously this was gated on
+      // `loggedDuringTrainingPhase`, which meant accounts that had been
+      // grandfathered to ACTIVE (or manually flipped) could never rebuild
+      // the counter, locking them out of Phase 1 training data forever.
+      // `loggedDuringTrainingPhase` is still set on the Message so we can
+      // filter downstream if we want "onboarding-only" subsets.
+      await prisma.account.update({
+        where: { id: accountId },
+        data: { trainingOverrideCount: { increment: 1 } }
+      });
 
       console.log(
         `[webhook-processor] Human override detected for ${conversationId}: ` +

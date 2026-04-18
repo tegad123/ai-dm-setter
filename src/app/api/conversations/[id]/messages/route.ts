@@ -164,13 +164,14 @@ export async function POST(
             }
           });
 
-          // Increment override count if onboarding
-          if (isOnboarding) {
-            await prisma.account.update({
-              where: { id: auth.accountId },
-              data: { trainingOverrideCount: { increment: 1 } }
-            });
-          }
+          // Always increment override count. Phase gates UI, not capture —
+          // see comment in webhook-processor.ts for rationale. Mirror that
+          // logic here so direct-API overrides (dashboard "send as human")
+          // also accumulate training signal regardless of phase.
+          await prisma.account.update({
+            where: { id: auth.accountId },
+            data: { trainingOverrideCount: { increment: 1 } }
+          });
         }
       } catch (err) {
         console.error('[messages] Override detection failed (non-fatal):', err);

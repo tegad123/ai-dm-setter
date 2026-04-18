@@ -69,8 +69,16 @@ export default function AccountSettingsPage() {
   }, []);
 
   const handleTrainingAction = async (
-    action: 'complete' | 'pause' | 'resume'
+    action: 'complete' | 'pause' | 'resume' | 'restart'
   ) => {
+    if (action === 'restart') {
+      const ok = window.confirm(
+        'Restart onboarding? This resets the override counter to 0 and ' +
+          'puts your AI back in training mode. Your existing AI messages ' +
+          'are not affected — only the training state is reset.'
+      );
+      if (!ok) return;
+    }
     setTrainingAction(true);
     try {
       const res = await apiFetch<{ trainingPhase: TrainingPhaseData }>(
@@ -84,7 +92,8 @@ export default function AccountSettingsPage() {
       const labels: Record<string, string> = {
         complete: 'Training complete! Your AI is now in active mode.',
         pause: 'Training paused.',
-        resume: 'Training resumed.'
+        resume: 'Training resumed.',
+        restart: 'Onboarding restarted. Counter reset to 0.'
       };
       toast.success(labels[action]);
     } catch {
@@ -369,12 +378,38 @@ export default function AccountSettingsPage() {
               )}
 
               {training.trainingPhase === 'ACTIVE' && (
-                <p className='text-muted-foreground text-xs'>
-                  Your AI is in active mode. It continues learning from every
-                  correction you make — training never truly stops.
-                  {training.trainingPhaseCompletedAt &&
-                    ` Completed on ${new Date(training.trainingPhaseCompletedAt).toLocaleDateString()}.`}
-                </p>
+                <div className='space-y-3'>
+                  <p className='text-muted-foreground text-xs'>
+                    Your AI is in active mode. It continues learning from every
+                    correction you make — training never truly stops.
+                    {training.trainingPhaseCompletedAt &&
+                      ` Completed on ${new Date(training.trainingPhaseCompletedAt).toLocaleDateString()}.`}
+                  </p>
+                  <div className='flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-950/20'>
+                    <div className='flex-1'>
+                      <p className='text-xs font-medium text-amber-900 dark:text-amber-200'>
+                        AI voice drifted? Restart onboarding.
+                      </p>
+                      <p className='mt-0.5 text-[11px] text-amber-800/80 dark:text-amber-300/80'>
+                        Resets the override counter and re-engages the
+                        structured training prompts. Your existing AI history is
+                        preserved — only the training state is reset.
+                      </p>
+                    </div>
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={() => handleTrainingAction('restart')}
+                      disabled={trainingAction}
+                      className='shrink-0 border-amber-300 bg-white text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-950/40'
+                    >
+                      {trainingAction && (
+                        <Loader2 className='mr-2 h-3.5 w-3.5 animate-spin' />
+                      )}
+                      Restart Onboarding
+                    </Button>
+                  </div>
+                </div>
               )}
 
               {training.trainingPhase === 'PAUSED' && (

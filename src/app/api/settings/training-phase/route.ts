@@ -96,6 +96,9 @@ export async function PUT(req: NextRequest) {
     }
 
     if (action === 'resume') {
+      // Resume from PAUSED: go back to ONBOARDING without wiping the
+      // accumulated counter. Used when admin had paused training and wants
+      // to keep the prior override credit.
       const account = await prisma.account.update({
         where: { id: auth.accountId },
         data: { trainingPhase: 'ONBOARDING' },
@@ -111,8 +114,33 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ trainingPhase: account });
     }
 
+    if (action === 'restart') {
+      // Full restart: used when admin wants to re-enter onboarding from
+      // ACTIVE, typically because the AI's voice drifted or because the
+      // account was grandfathered in wrongly and never actually trained.
+      // Zeroes the counter and resets the session window.
+      const account = await prisma.account.update({
+        where: { id: auth.accountId },
+        data: {
+          trainingPhase: 'ONBOARDING',
+          trainingPhaseStartedAt: new Date(),
+          trainingPhaseCompletedAt: null,
+          trainingOverrideCount: 0
+        },
+        select: {
+          trainingPhase: true,
+          trainingPhaseStartedAt: true,
+          trainingPhaseCompletedAt: true,
+          trainingTargetOverrideCount: true,
+          trainingOverrideCount: true
+        }
+      });
+
+      return NextResponse.json({ trainingPhase: account });
+    }
+
     return NextResponse.json(
-      { error: 'Invalid action. Use: complete, pause, or resume' },
+      { error: 'Invalid action. Use: complete, pause, resume, or restart' },
       { status: 400 }
     );
   } catch (error) {
