@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Loader2 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
@@ -45,6 +46,8 @@ interface PersonaResponse {
     capitalVerificationPrompt: string | null;
     outOfScopeTopics: string | null;
     verifiedDetails: string | null;
+    skipR24ScriptInject: boolean;
+    allowEarlyFinancialScreening: boolean;
     contextUpdatedAt: string | null;
     contextUpdatedByUserId: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -134,6 +137,11 @@ export default function PersonaEditorPage() {
   const [closerName, setCloserName] = useState('');
   const [closerRelation, setCloserRelation] = useState('');
   const [closerRole, setCloserRole] = useState('');
+  // Script-restructuring flags live under the Call Handoff card alongside
+  // closer fields — they shape how the AI routes the lead into booking,
+  // which conceptually belongs with handoff mechanics.
+  const [skipR24ScriptInject, setSkipR24ScriptInject] = useState(false);
+  const [allowEarlyFinancial, setAllowEarlyFinancial] = useState(false);
   const [handoffDescription, setHandoffDescription] = useState('');
   const [handoffSavedSnapshot, setHandoffSavedSnapshot] = useState('');
   const [savingHandoff, setSavingHandoff] = useState(false);
@@ -194,13 +202,20 @@ export default function PersonaEditorPage() {
         setCloserName(cName);
         setCloserRelation(handoffCfg.closerRelation || '');
         setCloserRole(handoffCfg.closerRole || '');
+        const skipInject = data.persona.skipR24ScriptInject === true;
+        const earlyFinancial =
+          data.persona.allowEarlyFinancialScreening === true;
+        setSkipR24ScriptInject(skipInject);
+        setAllowEarlyFinancial(earlyFinancial);
         // Build a single snapshot string so we can diff the whole section
-        // with one comparison (simpler than tracking 4 fields separately).
+        // with one comparison (simpler than tracking 5 fields separately).
         const snapshot = JSON.stringify({
           closerName: cName,
           closerRelation: handoffCfg.closerRelation || '',
           closerRole: handoffCfg.closerRole || '',
-          description: ''
+          description: '',
+          skipInject,
+          earlyFinancial
         });
         setHandoffDescription('');
         setHandoffSavedSnapshot(snapshot);
@@ -283,6 +298,8 @@ export default function PersonaEditorPage() {
       capitalVerificationPrompt: p.capitalVerificationPrompt ?? null,
       outOfScopeTopics: p.outOfScopeTopics ?? null,
       verifiedDetails: p.verifiedDetails ?? null,
+      skipR24ScriptInject: p.skipR24ScriptInject ?? false,
+      allowEarlyFinancialScreening: p.allowEarlyFinancialScreening ?? false,
       voiceNotesEnabled:
         (p as { voiceNotesEnabled?: boolean }).voiceNotesEnabled ?? true,
       setupComplete:
@@ -381,7 +398,9 @@ export default function PersonaEditorPage() {
       await persistAndRefresh(
         {
           promptConfig: newConfig,
-          closerName: closerName.trim() || null
+          closerName: closerName.trim() || null,
+          skipR24ScriptInject,
+          allowEarlyFinancialScreening: allowEarlyFinancial
         },
         'Call handoff saved'
       );
@@ -389,7 +408,9 @@ export default function PersonaEditorPage() {
         closerName,
         closerRelation,
         closerRole,
-        description: handoffDescription
+        description: handoffDescription,
+        skipInject: skipR24ScriptInject,
+        earlyFinancial: allowEarlyFinancial
       });
       setHandoffSavedSnapshot(snapshot);
     } catch (err) {
@@ -465,7 +486,9 @@ export default function PersonaEditorPage() {
     closerName,
     closerRelation,
     closerRole,
-    description: handoffDescription
+    description: handoffDescription,
+    skipInject: skipR24ScriptInject,
+    earlyFinancial: allowEarlyFinancial
   });
   const currentCapitalSnapshot = JSON.stringify({
     minCapital,
@@ -699,6 +722,56 @@ export default function PersonaEditorPage() {
               maxLength={MAX_CALL_HANDOFF}
             />
           </div>
+
+          {/* ── Script-flow toggles ─────────────────────────────── */}
+          <div className='border-border bg-muted/40 space-y-3 rounded-md border px-3 py-3'>
+            <p className='text-muted-foreground text-[11px] font-medium'>
+              Advanced — script structure
+            </p>
+
+            <div className='flex items-start justify-between gap-4'>
+              <div className='min-w-0 flex-1'>
+                <Label
+                  htmlFor='skipR24ScriptInject'
+                  className='cursor-pointer text-sm'
+                >
+                  I ask about capital earlier in my script
+                </Label>
+                <p className='text-muted-foreground mt-0.5 text-[11px]'>
+                  Enable when your script asks leads about their capital before
+                  the booking step. The AI won&apos;t add an extra verification
+                  question. (Capital verification still enforced at the code
+                  level.)
+                </p>
+              </div>
+              <Switch
+                id='skipR24ScriptInject'
+                checked={skipR24ScriptInject}
+                onCheckedChange={(v) => setSkipR24ScriptInject(Boolean(v))}
+              />
+            </div>
+
+            <div className='flex items-start justify-between gap-4'>
+              <div className='min-w-0 flex-1'>
+                <Label
+                  htmlFor='allowEarlyFinancial'
+                  className='cursor-pointer text-sm'
+                >
+                  Qualify finances before pitching
+                </Label>
+                <p className='text-muted-foreground mt-0.5 text-[11px]'>
+                  Enable when your flow asks about capital before presenting the
+                  offer. Default: pitch first, qualify finances after.
+                </p>
+              </div>
+              <Switch
+                id='allowEarlyFinancial'
+                checked={allowEarlyFinancial}
+                onCheckedChange={(v) => setAllowEarlyFinancial(Boolean(v))}
+              />
+            </div>
+          </div>
+
           <DocsHint section='call-handoff' />
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-xs'>

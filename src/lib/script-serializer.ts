@@ -99,11 +99,19 @@ export async function serializeScriptForPrompt(
     where: { accountId, isActive: true },
     select: {
       minimumCapitalRequired: true,
-      capitalVerificationPrompt: true
+      capitalVerificationPrompt: true,
+      skipR24ScriptInject: true
     }
   });
   const capitalThreshold = persona?.minimumCapitalRequired ?? null;
   const capitalCustomPrompt = persona?.capitalVerificationPrompt ?? null;
+  // Operator opt-out for the R24 Layer-1 inject. Set true when the
+  // account's script natively asks capital earlier in the flow (e.g.
+  // daetradez's v2 restructure asks budget at Step 8 before the
+  // booking branches). Without this flag, the inject would prepend a
+  // duplicate threshold-confirming question to every "qualified"
+  // branch. The code-level gate in ai-engine.ts still runs regardless.
+  const skipR24Inject = persona?.skipR24ScriptInject === true;
 
   const parts: string[] = [];
 
@@ -137,7 +145,8 @@ export async function serializeScriptForPrompt(
         if (
           isQualifiedBranch &&
           typeof capitalThreshold === 'number' &&
-          capitalThreshold > 0
+          capitalThreshold > 0 &&
+          !skipR24Inject
         ) {
           const thresholdStr = `$${capitalThreshold.toLocaleString('en-US')}`;
           const verificationQuestion =

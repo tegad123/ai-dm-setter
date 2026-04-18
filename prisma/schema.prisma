@@ -303,6 +303,16 @@ model AIPersona {
   // would have been blocked if verifiedDetails said nothing about
   // Anthony's languages.
   verifiedDetails          String?  @db.Text
+  // Script-restructuring flags. Operators whose scripts ask capital
+  // early (before the Typeform / booking handoff) can opt out of the
+  // Layer-1 serializer inject (which would otherwise prepend a
+  // duplicate verification question to "qualified" branches), and can
+  // relax R3's sequence lock so Financial Screening can fire before
+  // the soft pitch. Both default to false — existing accounts keep
+  // the original prompt-enforced ordering. See the dual-enforcement
+  // policy note at the top of ai-prompts.ts for rationale.
+  skipR24ScriptInject         Boolean  @default(false)
+  allowEarlyFinancialScreening Boolean  @default(false)
   responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
   responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
   voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled

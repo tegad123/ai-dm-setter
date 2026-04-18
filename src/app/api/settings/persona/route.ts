@@ -80,6 +80,8 @@ export async function PUT(req: NextRequest) {
       capitalVerificationPrompt,
       outOfScopeTopics,
       verifiedDetails,
+      skipR24ScriptInject,
+      allowEarlyFinancialScreening,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -182,6 +184,14 @@ export async function PUT(req: NextRequest) {
         typeof verifiedDetails === 'string' && verifiedDetails.trim().length > 0
           ? verifiedDetails.trim()
           : null;
+    }
+    // Script-restructuring flags. Coerce to boolean defensively since
+    // checkboxes sometimes serialize to truthy strings or "on".
+    if (skipR24ScriptInject !== undefined) {
+      data.skipR24ScriptInject = Boolean(skipR24ScriptInject);
+    }
+    if (allowEarlyFinancialScreening !== undefined) {
+      data.allowEarlyFinancialScreening = Boolean(allowEarlyFinancialScreening);
     }
     data.contextUpdatedAt = new Date();
     data.contextUpdatedByUserId = auth.userId || null;

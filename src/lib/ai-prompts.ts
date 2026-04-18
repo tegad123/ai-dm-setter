@@ -374,7 +374,7 @@ These rules override EVERYTHING else. If any logic conflicts, these rules win.
 
 R1: NEVER exit a conversation due to low liquid cash alone. Always move through the full financial waterfall (capital → credit → card → low-ticket).
 R2: NEVER skip the urgency question. It must fire before the soft pitch every single time, no exceptions.
-R3: NEVER go to financial screening before completing: urgency question → soft pitch → commitment confirmation — in that exact order.
+R3: NEVER go to financial screening before completing: urgency question → soft pitch → commitment confirmation — in that exact order.{{earlyFinancialScreeningOverride}}
 R4: NEVER discuss payment plans, split pay, or program pricing in the DM. That conversation happens on the call.
 R5: NEVER send the booking link before confirming timezone and availability.
 R6: NEVER sound scripted or robotic. Every message must read like a real person who genuinely cares.
@@ -477,8 +477,8 @@ R23: HANDLE OBJECTIONS, DO NOT ACCEPT THEM. An objection is not a rejection — 
   **MONEY OBJECTIONS** ("too expensive", "can't afford", "need to save up"):
     ✗ "all good bro, hit me up when you're ready"
     ✗ "totally understand, let me know when the timing's better"
-    ✓ If the script has a downsell branch at the current step, RUN THAT BRANCH (e.g. daetradez's Step 10 "course downsell"). Do NOT skip it.
-    ✓ If the script has a funding-partner step (e.g. Step 11), follow it to probe credit/affordability before any exit.
+    ✓ If your script has a downsell branch for unqualified leads (a lower-ticket course, a self-study option, etc.), run that branch when the lead is unqualified. Do NOT skip it.
+    ✓ If your script has a funding-partner step (an option for financing the program via credit / payment plan / partner lender), use it to probe credit or affordability before any exit. Only available when the lead qualifies for that path.
     ✓ "what's affordable look like for you? lemme see what I can work with"
     Exiting a money objection without running the script's downsell / funding branches is a failure.
 
@@ -1182,18 +1182,38 @@ MATCHING GUARDRAIL: Only match when the lead's message clearly relates to an act
     const defaultQuestion = `sick bro, just to confirm — you got at least ${thresholdStr} in capital ready to start?`;
     const verificationQuestion =
       (customVerificationPrompt || '').trim() || defaultQuestion;
-    const capitalRule = `When a lead claims they qualified on an external application form (Typeform, Google Form, etc.), DO NOT immediately route to booking. Verify their capital claim first by asking directly. Leads overclaim on forms.
-  Verification question to use (phrase naturally, don't read robotically): "${verificationQuestion}"
-  - If the lead confirms clearly ("yes", "yeah", "confirmed", "got it", specific amount >= ${thresholdStr}) → proceed to the script's "Lead qualified" booking-handoff branch.
-  - If the lead hedges, admits less, or deflects ("kinda", "almost", "about half that", "working on it", "I can get it soon", "yeah I got $500" where $500 < ${thresholdStr}) → route to the script's "Lead did NOT qualify" branch. Pitch the downsell/course if one exists, or redirect to free resources. DO NOT book.
+    const capitalRule = `Before sending ANY booking-handoff messaging (e.g. "the team will reach out", "you're all set", "your call is coming up", "the team's gonna get you set up", calendar / email confirmations), you MUST verify the lead's available capital meets the minimum threshold of ${thresholdStr}. Leads overclaim on forms and in DMs — verifying in conversation is the final gate.
+  Verification can happen AT ANY POINT in the conversation. If the lead has already stated their capital amount earlier and it meets or exceeds ${thresholdStr}, you do NOT need to re-ask — the verification is satisfied. If they have NOT stated an amount, or their stated amount is below ${thresholdStr}, you must address this before proceeding to booking.
+  Verification question to use when the topic hasn't come up yet (phrase naturally, don't read robotically): "${verificationQuestion}"
+  - If the lead confirms clearly ("yes", "yeah", "confirmed", "got it", or a specific amount >= ${thresholdStr}) → proceed to the script's qualified / booking-handoff branch.
+  - If the lead hedges, admits less, or deflects ("kinda", "almost", "about half that", "working on it", "I can get it soon", "yeah I got $500" where $500 < ${thresholdStr}) → route to the script's "lead did NOT qualify" branch. Pitch the downsell / course / funding-partner option if the script has one, or redirect to free resources. DO NOT book.
   - If the lead claims yes but names an amount BELOW ${thresholdStr}, treat as hedging. Do NOT book. Pivot to downsell.
-  This verification happens AFTER the Typeform step and BEFORE any "team will reach out" messaging. It is the final gate between conversation and booking. Never skip it.`;
+  This rule is flow-agnostic: it applies whether capital is qualified early in the conversation (before an application form) or late (after an application form). The trigger is NOT a specific step in the script — it is the ATTEMPT to send booking-handoff messaging. Never skip it.`;
     prompt = prompt.replace(/\{\{capitalVerificationRule\}\}/g, capitalRule);
   } else {
     prompt = prompt.replace(
       /\{\{capitalVerificationRule\}\}/g,
       'No minimum capital threshold configured for this account — skip capital verification and follow the script as written.'
     );
+  }
+
+  // R3 early-financial-screening override. When the persona flag is
+  // set, the operator's script legitimately asks capital BEFORE the
+  // soft pitch (e.g. to route unqualified leads into a downsell
+  // without wasting the pitch). R3's default "urgency → soft pitch →
+  // commitment, THEN financial" sequence gets a carve-out. R2
+  // (urgency before soft pitch) stays intact because it's universally
+  // good sales technique regardless of financial timing.
+  const allowEarlyFinancial =
+    (p as { allowEarlyFinancialScreening?: boolean })
+      .allowEarlyFinancialScreening === true;
+  if (allowEarlyFinancial) {
+    prompt = prompt.replace(
+      /\{\{earlyFinancialScreeningOverride\}\}/g,
+      " EXCEPTION: this account has opted into early financial screening — the script intentionally qualifies capital BEFORE the soft pitch to route unqualified leads into a downsell without wasting the pitch. Follow the script order; R2 (urgency before soft pitch) still applies, but R3's financial-after-commitment constraint does NOT apply here. When the script asks a capital question early, answer the question naturally and branch on the answer as the script directs."
+    );
+  } else {
+    prompt = prompt.replace(/\{\{earlyFinancialScreeningOverride\}\}/g, '');
   }
 
   // ── R27: Verified third-party details ──────────────────────────
@@ -1520,8 +1540,8 @@ This conversation is being tested by the developer. The qualification stages (OP
 Your job is to drive the script's booking flow forward one step at a time, based on CONVERSATION HISTORY. Figure out where you are by reading what's already been sent:
   - If this is the first reply after the trigger and no booking-related AI message has been sent yet, START at the script's first booking-related step (typically the "Call Proposal" that asks if they're down to hop on a call). Do NOT jump to later steps.
   - If you have already sent a call-proposal and the lead is now responding, advance to the next script step (typically: send the application or booking link — and USE THE URL from "Available Links & URLs", don't promise it without delivering per R22).
-  - If you have already sent the link and the lead is acknowledging ("bet", "aight", "ok", "k"), that is NOT a completion signal — the script's [WAIT] is still in effect. Either stay quiet (empty reply is fine — set "message": "" and the system will hold) OR send a short warm nudge consistent with the script's voice (e.g. "aight 🙌 lmk once you're through it"). Do NOT jump to Step 10/12 / team-handoff wording based on a bare acknowledgement.
-  - If the lead explicitly confirms completion ("done", "filled it out", "submitted"), advance to the next branch (Post-Application Routing / qualification question).
+  - If you have already sent the link and the lead is acknowledging ("bet", "aight", "ok", "k"), that is NOT a completion signal — the script's [WAIT] is still in effect. Either stay quiet (empty reply is fine — set "message": "" and the system will hold) OR send a short warm nudge consistent with the script's voice (e.g. "aight 🙌 lmk once you're through it"). Do NOT jump ahead to the final confirmation or team-handoff branch based on a bare acknowledgement.
+  - If the lead explicitly confirms completion ("done", "filled it out", "submitted"), advance to the next appropriate branch based on the lead's responses and your script structure (typically a qualification question or routing check).
   - If the lead confirms they qualified vs didn't qualify, run the matching branch verbatim.
 
 Do NOT add steps the script doesn't include:

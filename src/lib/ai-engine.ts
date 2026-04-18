@@ -233,6 +233,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
     blocked: false,
+    reason: 'confirmed_affirmative',
+    parsedAmount: null,
     verificationAskedAt: null,
     verificationConfirmedAt: null
   };
@@ -293,16 +295,42 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       break;
     }
 
-    // R24 regeneration path — append an override directive so the next
-    // attempt knows exactly what went wrong. Voice-quality failures
-    // already retry without mutation; R24 needs the extra nudge.
+    // R24 regeneration path — the override directive is REASON-
+    // specific. "Never asked" → ask the question. "Below threshold" →
+    // pivot to the downsell branch. "Ambiguous" → ask clarifying Q.
+    // Voice-quality failures retry without mutation; R24 needs this
+    // extra nudge because the LLM doesn't otherwise know which
+    // corrective path to take.
     if (r24Blocked) {
       r24GateEverForcedRegen = true;
       const thresholdStr = `$${capitalThreshold!.toLocaleString('en-US')}`;
-      const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\nYour previous reply tried to route the lead into booking-handoff messaging (team reaching out, call confirmation, etc.) BUT this conversation never captured a capital verification confirmation. You MUST regenerate. Your next reply has to be the verification question — phrase it naturally, like: "sick bro, just to confirm — you got at least ${thresholdStr} in capital ready to start?". Do NOT send any booking-handoff language ("the team is gonna reach out", "let's gooo bro", "get you set up", calendar/email confirmations) until AFTER the lead explicitly confirms the capital. If you already asked earlier, the detection heuristic didn't match — ask again and include the exact dollar figure "${thresholdStr}".\n=====`;
+      let r24Directive = '';
+      switch (r24LastResult.reason) {
+        case 'never_asked':
+          r24Directive = `Your previous reply tried to route the lead into booking-handoff messaging (team reaching out, call confirmation, etc.) BUT this conversation has not yet asked the capital verification question. You MUST regenerate. Your next reply must ask the lead about their capital — either the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") whichever fits your voice. Do NOT send any booking-handoff language until the lead confirms an amount.`;
+          break;
+        case 'asked_but_no_answer':
+          r24Directive = `You already asked the capital verification question, but the lead hasn't answered yet. Do NOT route to booking-handoff. Wait for their answer, or send a short nudge to re-ask. Do NOT advance until they state an amount.`;
+          break;
+        case 'answer_below_threshold': {
+          const stated =
+            r24LastResult.parsedAmount !== null
+              ? `$${r24LastResult.parsedAmount.toLocaleString('en-US')}`
+              : 'an amount below the threshold';
+          r24Directive = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Do NOT route to booking. Your next reply MUST pivot to the script's downsell / funding-partner branch — acknowledge their capital situation empathetically (no judgment, no lecture), then present the alternative path their script provides (a lower-ticket course, a funding-partner option, or a free YouTube/resource redirect). Do NOT send booking-handoff messaging, do NOT suggest the Typeform / application form, do NOT say "the team will reach out". If your script doesn't have a downsell, send a soft-exit message that keeps the door open for when they're in a better financial position.`;
+          break;
+        }
+        case 'answer_hedging':
+          r24Directive = `The lead hedged on the capital question ("kinda", "working on it", "almost", etc.) without giving a concrete number. Do NOT route to booking. Ask a single follow-up that pins down a concrete dollar figure — for example "no stress, what's the number you're working with rn?". Do NOT send booking-handoff messaging until you have a concrete amount.`;
+          break;
+        case 'answer_ambiguous':
+          r24Directive = `The lead's reply to the capital question didn't give a clear answer ("depends", "varies", "not sure", etc.). Do NOT route to booking. Ask a short clarifying question that gets a concrete dollar figure. Do NOT send booking-handoff messaging yet.`;
+          break;
+      }
+      const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
       systemPromptForLLM = systemPrompt + r24Override;
       console.warn(
-        `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — forcing regen with override (verificationAsked=${r24LastResult.verificationAskedAt ? 'yes' : 'no'}, confirmed=${r24LastResult.verificationConfirmedAt ? 'yes' : 'no'})`
+        `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'}`
       );
     }
 
@@ -756,12 +784,32 @@ function parseAIResponse(raw: string): ParsedAIResponse {
 // bad routings post-generation and forces regeneration. See the policy
 // note at the top of ai-prompts.ts for the general principle.
 
+/**
+ * Discriminated reason for why the R24 gate made its decision. The
+ * caller uses this to pick the right override directive on regen:
+ * "ask the question" vs "pivot to downsell — lead is below threshold"
+ * vs "ask clarifying question". `confirmed_*` reasons mean the gate
+ * passed; everything else means blocked.
+ */
+type R24Reason =
+  | 'confirmed_amount' // Lead stated a concrete amount >= threshold
+  | 'confirmed_affirmative' // Lead said "yeah" to a threshold-confirming Q (legacy path)
+  | 'never_asked' // No verification Q found in conversation history
+  | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet
+  | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
+  | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
+  | 'answer_ambiguous'; // Lead's reply didn't parse ("depends", "varies")
+
 interface R24GateResult {
   /** True = block this response, force regen with override directive. */
   blocked: boolean;
+  /** Fine-grained reason — drives which override directive the caller injects. */
+  reason: R24Reason;
+  /** Concrete amount parsed from the lead's reply (if any). */
+  parsedAmount: number | null;
   /** Message.id of the AI message that asked the verification question. */
   verificationAskedAt: string | null;
-  /** Message.id of the LEAD message that affirmatively confirmed. */
+  /** Message.id of the LEAD message that confirmed. */
   verificationConfirmedAt: string | null;
 }
 
@@ -789,11 +837,94 @@ function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
 }
 
 /**
- * Look through the conversation's AI messages for a prior verification
- * question, then check the next LEAD reply for an affirmative answer.
- * Returns { blocked: true } when either piece is missing, which signals
- * the caller to force a regeneration. Only called when the threshold is
- * configured and the current reply is routing to booking-handoff.
+ * Extract a dollar amount from a free-form lead reply. Handles
+ * "$5k", "5,000", "$3,000.00", "around 500", "about $2000", "3500
+ * give or take", bare-number strings, and the "5k"/"2.5k" shorthand.
+ * Returns null when no number is present.
+ */
+function parseLeadAmountFromReply(text: string): number | null {
+  // Match optional $, digits with thousands-commas OR plain digits,
+  // optional decimal, optional k/K suffix. First hit wins.
+  const m = text.match(/\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?([kK])?/);
+  if (!m) return null;
+  let amount = parseInt(m[1].replace(/,/g, ''), 10);
+  if (!Number.isFinite(amount)) return null;
+  if (m[2]) amount *= 1000; // "5k" → 5000, "2k" → 2000
+  return amount;
+}
+
+/**
+ * Classify a lead's reply to a capital question into one of five
+ * kinds. Order matters: disqualifiers ("broke", "no money", "I'm a
+ * student") take precedence over amount parsing, so "I got nothing, bro"
+ * classifies as disqualifier even if a stray number could be extracted.
+ * Hedging without a number comes next. Amount parsing fires if none
+ * of the above matched. Then affirmative (for back-compat with the
+ * legacy "you got at least $X?" Q). Anything else → ambiguous.
+ */
+interface ParsedLeadAnswer {
+  kind: 'amount' | 'disqualifier' | 'hedging' | 'affirmative' | 'ambiguous';
+  amount: number | null;
+}
+function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
+  const text = raw.trim();
+
+  // 1. Non-numeric disqualifiers — handle first so "I got nothing" doesn't
+  //    get amount-parsed into some weird accidental hit.
+  if (
+    /\b(not\s+much|not\s+a\s+lot|nothing\s+really|^nothing\b|\bbroke\b|don'?t\s+have\s+(any\s+)?(money|capital|anything|much)|can'?t\s+afford|no\s+money|i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school)\b/i.test(
+      text
+    )
+  ) {
+    return { kind: 'disqualifier', amount: 0 };
+  }
+
+  // 2. Amount (numeric parse). Even if the lead also says "kinda" or
+  //    includes hedging words, a concrete number beats the hedge —
+  //    we'll compare it to threshold later.
+  const parsed = parseLeadAmountFromReply(text);
+  if (parsed !== null) {
+    return { kind: 'amount', amount: parsed };
+  }
+
+  // 3. Hedging without a concrete number.
+  if (
+    /\b(kinda|almost|about\s+half|working\s+on|save\s+up|not\s+yet|close\s+to|nearly|getting\s+there|not\s+quite|less\s+than|under|below|only|i\s+can\s+get\s+it|soon|in\s+a\s+bit)\b/i.test(
+      text
+    )
+  ) {
+    return { kind: 'hedging', amount: null };
+  }
+
+  // 4. Ambiguous — can't tell. Don't pass the gate.
+  if (
+    /\b(depends|varies|some|a\s+bit|not\s+sure|dunno|idk|i'?ll\s+let\s+you\s+know|it'?s\s+complicated|maybe)\b/i.test(
+      text
+    )
+  ) {
+    return { kind: 'ambiguous', amount: null };
+  }
+
+  // 5. Legacy affirmative ("yeah" / "got it" / "for sure") with no
+  //    number — back-compat with the threshold-confirming Q. The caller
+  //    accepts this as a confirmation.
+  if (
+    /^(yes|yeah|yup|yep|confirmed|got\s+it|for\s+sure|i\s+do|sure|absolutely|definitely|100%|yea|ready|hell\s+yeah|let'?s\s+go)\b/i.test(
+      text
+    )
+  ) {
+    return { kind: 'affirmative', amount: null };
+  }
+
+  return { kind: 'ambiguous', amount: null };
+}
+
+/**
+ * Look through the conversation's AI messages for a prior capital
+ * verification question (threshold-confirming OR open-ended), then
+ * check the next LEAD reply. Return a structured reason so the caller
+ * can pick the right regen directive ("pivot to downsell", "ask
+ * clarifying Q", "just ask the verification question").
  */
 async function checkR24Verification(
   conversationId: string,
@@ -809,21 +940,28 @@ async function checkR24Verification(
   const thresholdNoFormat = threshold.toString();
   const thresholdFormatted = threshold.toLocaleString('en-US');
   const patterns: RegExp[] = [
-    // Most common shape from the default R24 phrasing
+    // Threshold-confirming shapes (from legacy default R24 phrasing)
     /\byou got at least \$\d/i,
     /\byou have at least \$\d/i,
     /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
     /\bcapital ready\b/i,
     /\bready to start with \$/i,
     /\bjust to confirm.*\$/i,
-    // Exact-threshold matches (with or without the thousands comma)
+    // Exact-threshold matches (with or without thousands comma)
     new RegExp(`\\$${thresholdNoFormat}\\b`, 'i'),
-    new RegExp(`\\$${thresholdFormatted.replace(/,/g, '\\,')}`, 'i')
+    new RegExp(`\\$${thresholdFormatted.replace(/,/g, '\\,')}`, 'i'),
+    // Open-ended shapes (Daniel's new flow and similar). These pick up
+    // questions like "how much do you have set aside for the markets
+    // and your education in USD", "what's your budget for this",
+    // "what are you working with on the capital side", etc.
+    /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
+    /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
+    /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
+    /\bwhat are you working with\b/i,
+    /\bon the (capital|money|budget) side\b/i
   ];
   if (customPrompt && customPrompt.trim().length >= 15) {
-    // Use a distinctive slice of the custom prompt as a detector so
-    // operators with bespoke phrasing ("you sorted on starting capital?")
-    // get correctly detected without depending on the default pattern.
     const snippet = customPrompt.trim().slice(0, 30);
     const escaped = snippet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     patterns.push(new RegExp(escaped, 'i'));
@@ -840,15 +978,13 @@ async function checkR24Verification(
   if (!verificationAskedAt) {
     return {
       blocked: true,
+      reason: 'never_asked',
+      parsedAmount: null,
       verificationAskedAt: null,
       verificationConfirmedAt: null
     };
   }
 
-  // Check the immediately-following LEAD message for an affirmative
-  // reply. Hedge patterns ("kinda", "almost", dollar amounts below
-  // threshold) mean we DO NOT consider the lead confirmed even if the
-  // message started with "yeah".
   const nextLead = await prisma.message.findFirst({
     where: {
       conversationId,
@@ -859,40 +995,70 @@ async function checkR24Verification(
     select: { id: true, content: true }
   });
   if (!nextLead) {
-    // Asked but no response yet — can't safely route to booking.
     return {
       blocked: true,
+      reason: 'asked_but_no_answer',
+      parsedAmount: null,
       verificationAskedAt: verificationAskedAt.id,
       verificationConfirmedAt: null
     };
   }
-  const leadReply = nextLead.content.trim();
-  const hedgePattern =
-    /\b(kinda|almost|about\s+half|working\s+on|save\s+up|not\s+yet|maybe|close\s+to|nearly|getting\s+there|don'?t\s+have|can'?t\s+afford|not\s+quite|less\s+than|under|below|only\s+\$)\b/i;
-  const affirmPattern =
-    /^(yes|yeah|yup|yep|confirmed|got\s+it|for\s+sure|i\s+do|i\s+got|i\s+have|sure|absolutely|definitely|100%|yea|y\b|\$?\d|ready|hell\s+yeah|let'?s\s+go)/i;
-  // Also detect an amount: if lead names a number, compare against threshold
-  const amountMatch = leadReply.match(/\$?(\d[\d,]*)/);
-  const namedAmount = amountMatch
-    ? parseInt(amountMatch[1].replace(/,/g, ''), 10)
-    : null;
-  const namesAmountBelowThreshold =
-    typeof namedAmount === 'number' && namedAmount < threshold;
-  const affirmed =
-    affirmPattern.test(leadReply) &&
-    !hedgePattern.test(leadReply) &&
-    !namesAmountBelowThreshold;
 
-  if (affirmed) {
-    return {
-      blocked: false,
-      verificationAskedAt: verificationAskedAt.id,
-      verificationConfirmedAt: nextLead.id
-    };
+  const classification = parseLeadCapitalAnswer(nextLead.content);
+  const askedId = verificationAskedAt.id;
+
+  switch (classification.kind) {
+    case 'amount': {
+      const amt = classification.amount!;
+      if (amt >= threshold) {
+        return {
+          blocked: false,
+          reason: 'confirmed_amount',
+          parsedAmount: amt,
+          verificationAskedAt: askedId,
+          verificationConfirmedAt: nextLead.id
+        };
+      }
+      return {
+        blocked: true,
+        reason: 'answer_below_threshold',
+        parsedAmount: amt,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: null
+      };
+    }
+    case 'affirmative':
+      return {
+        blocked: false,
+        reason: 'confirmed_affirmative',
+        parsedAmount: null,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: nextLead.id
+      };
+    case 'disqualifier':
+      return {
+        blocked: true,
+        reason: 'answer_below_threshold',
+        parsedAmount: 0,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: null
+      };
+    case 'hedging':
+      return {
+        blocked: true,
+        reason: 'answer_hedging',
+        parsedAmount: null,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: null
+      };
+    case 'ambiguous':
+    default:
+      return {
+        blocked: true,
+        reason: 'answer_ambiguous',
+        parsedAmount: null,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: null
+      };
   }
-  return {
-    blocked: true,
-    verificationAskedAt: verificationAskedAt.id,
-    verificationConfirmedAt: null
-  };
 }
