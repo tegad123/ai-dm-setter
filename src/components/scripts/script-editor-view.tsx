@@ -7,7 +7,14 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, Loader2, Check, FileText, ListChecks } from 'lucide-react';
+import {
+  ArrowLeft,
+  Loader2,
+  Check,
+  FileText,
+  ListChecks,
+  Upload
+} from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import StepSidebar from './step-sidebar';
 import StepDetail from './step-detail';
@@ -137,6 +144,14 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
         )}
 
         <div className='ml-auto flex items-center gap-3'>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => setReuploadOpen(true)}
+          >
+            <Upload className='mr-1.5 h-3.5 w-3.5' />
+            Import / Re-parse
+          </Button>
           <div className='flex items-center gap-2'>
             <span className='text-muted-foreground text-sm'>
               {script.isActive ? 'Active' : 'Inactive'}
@@ -243,15 +258,13 @@ export default function ScriptEditorView({ scriptId }: ScriptEditorViewProps) {
         </div>
       )}
 
-      {/* Re-upload dialog */}
-      {script.createdVia === 'upload_parsed' && (
-        <ReuploadScriptDialog
-          scriptId={scriptId}
-          open={reuploadOpen}
-          onOpenChange={setReuploadOpen}
-          onComplete={() => load()}
-        />
-      )}
+      {/* Re-upload dialog — available for ALL scripts, not just parsed ones */}
+      <ReuploadScriptDialog
+        scriptId={scriptId}
+        open={reuploadOpen}
+        onOpenChange={setReuploadOpen}
+        onComplete={() => load()}
+      />
     </div>
   );
 }

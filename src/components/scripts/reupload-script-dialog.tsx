@@ -101,13 +101,15 @@ export default function ReuploadScriptDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className='max-w-lg'>
+      <DialogContent className='flex max-h-[92vh] w-[92vw] max-w-5xl flex-col overflow-hidden sm:w-[90vw]'>
         {step === 'upload' && (
           <>
             <DialogHeader>
-              <DialogTitle>Re-upload Script</DialogTitle>
+              <DialogTitle>Re-parse Script</DialogTitle>
               <DialogDescription>
-                Upload a corrected version of your formatted script.
+                Paste or upload a formatted script. Re-parsing replaces all
+                steps but preserves URL fills, voice note bindings, and form
+                content.
               </DialogDescription>
             </DialogHeader>
 
@@ -115,22 +117,28 @@ export default function ReuploadScriptDialog({
             <div className='flex items-start gap-2 rounded-lg bg-amber-50 p-3 dark:bg-amber-950/20'>
               <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0 text-amber-600' />
               <p className='text-sm text-amber-800 dark:text-amber-300'>
-                Re-uploading will replace parsed text content but keep your URL
-                fills, voice note bindings, and form content.
+                Re-parsing will replace all step text. URL fills, voice note
+                bindings, and form content are preserved by position.
               </p>
             </div>
 
-            <Tabs defaultValue='upload' className='mt-2'>
+            <Tabs
+              defaultValue='paste'
+              className='mt-2 flex min-h-0 flex-1 flex-col'
+            >
               <TabsList className='w-full'>
-                <TabsTrigger value='upload' className='flex-1'>
-                  Upload File
-                </TabsTrigger>
                 <TabsTrigger value='paste' className='flex-1'>
                   Paste Text
                 </TabsTrigger>
+                <TabsTrigger value='upload' className='flex-1'>
+                  Upload File
+                </TabsTrigger>
               </TabsList>
 
-              <TabsContent value='upload' className='mt-3'>
+              <TabsContent
+                value='upload'
+                className='mt-3 flex min-h-0 flex-1 flex-col'
+              >
                 <div
                   onClick={() => fileInputRef.current?.click()}
                   className='border-border hover:border-primary/50 cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors'
@@ -162,20 +170,31 @@ export default function ReuploadScriptDialog({
                 </div>
               </TabsContent>
 
-              <TabsContent value='paste' className='mt-3'>
+              <TabsContent
+                value='paste'
+                className='mt-3 flex min-h-0 flex-1 flex-col'
+              >
                 <Textarea
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
                   placeholder={`# STEP 1: Intro\n## BRANCH: Default\n[MSG]: Hey! Thanks for reaching out...\n...`}
-                  className='min-h-[200px] font-mono text-sm'
+                  className='h-[60vh] min-h-[320px] flex-1 resize-none overflow-auto font-mono text-xs leading-relaxed'
                 />
-                <p className='text-muted-foreground mt-1 text-xs'>
-                  {pasteText.length} characters
-                </p>
+                <div className='text-muted-foreground mt-1 flex items-center justify-between text-xs'>
+                  <span>{pasteText.length.toLocaleString()} characters</span>
+                  {pasteText.length > 0 && pasteText.length < 50 && (
+                    <span className='text-amber-600'>
+                      Need at least 50 characters
+                    </span>
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
 
-            <div className='flex justify-end pt-2'>
+            <div className='flex justify-end gap-2 pt-2'>
+              <Button variant='ghost' onClick={() => handleOpenChange(false)}>
+                Cancel
+              </Button>
               <Button onClick={handleReupload} disabled={!canParse}>
                 Re-parse Script
               </Button>
