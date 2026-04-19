@@ -143,6 +143,7 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
   "suggested_tags": ["tag1", "tag2"],
   "voice_note_action": null | { "slot_id": "<voice_note_slot_id>" }
 }
+{{multiBubbleSchemaExtension}}
 
 **voice_note_action**: When your Script Framework indicates a "send_voice_note" action at the current conversation point AND a matching voice note slot is listed in "Available Voice Note Slots", set voice_note_action to { "slot_id": "<id>" }. The system will send the pre-recorded audio file. Set "message" to a brief transition line or empty string — the voice note IS the message. Only use this for pre-recorded slots; for AI-generated voice notes, use "format": "voice_note" instead.
 
@@ -1215,6 +1216,53 @@ GUARDRAIL: Only match when the lead's message CLEARLY relates to an active campa
     );
   } else {
     prompt = prompt.replace(/\{\{activeCampaignsBlock\}\}/g, '');
+  }
+
+  // ── Multi-bubble schema extension ─────────────────────────────
+  // When the persona has multiBubbleEnabled=true, instruct the LLM to
+  // emit a `messages: string[]` array alongside (or instead of) the
+  // legacy `message` string. The delivery pipeline ships each entry
+  // as a separate DM with realistic typing delays. For flag-off
+  // personas the placeholder is stripped entirely — their LLM continues
+  // emitting single `message` strings exactly as it does today.
+  const multiBubbleEnabled =
+    (p as { multiBubbleEnabled?: boolean }).multiBubbleEnabled === true;
+  if (multiBubbleEnabled) {
+    const multiBubbleBlock = `
+**MULTI-BUBBLE OUTPUT** — You can respond with 1-4 separate messages per turn, the way real humans text in bursts instead of one long message. To do it, add a "messages" field to your JSON output:
+
+  "messages": [
+    "yo bro caught the story 💪🏿",
+    "https://youtu.be/example",
+    "watch through it and lmk what you think. you new to trading or been at it a while?"
+  ]
+
+WHEN to split into multiple bubbles:
+- You have multiple distinct thoughts (acknowledgment + content + question)
+- You're sharing a link — put the URL in its own bubble
+- You're transitioning between greeting and substance
+- The operator's natural texting rhythm does this (match their style from few-shot examples and style analysis)
+
+WHEN to stick with one bubble:
+- Short single-thought response ("bet bro", "got it", "appreciate that")
+- Direct answer to a single question
+- Closing / sign-off
+
+GUARDRAILS:
+- Maximum 4 bubbles per turn. Emitting more drops the extras.
+- Each bubble must be at least 2 characters — no empty strings
+- Don't split mid-sentence. Each bubble is a complete thought or a URL on its own line.
+- Total character count across all bubbles stays under 600 chars
+- Voice-quality rules apply PER BUBBLE: no banned phrases / em-dashes / banned emojis in ANY bubble, or the group fails
+- If you use "messages", still fill "message" with the first bubble (back-compat)
+- When you do NOT need multi-bubble (single-thought reply), just use "message" — leave "messages" off entirely
+`;
+    prompt = prompt.replace(
+      /\{\{multiBubbleSchemaExtension\}\}/g,
+      multiBubbleBlock
+    );
+  } else {
+    prompt = prompt.replace(/\{\{multiBubbleSchemaExtension\}\}/g, '');
   }
 
   // ── R24: Capital verification rule ─────────────────────────────

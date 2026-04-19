@@ -7,6 +7,13 @@ export interface Message {
   voiceNoteUrl?: string;
   isHumanOverride?: boolean;
   humanOverrideNote?: string | null;
+  // Multi-bubble grouping. Null for legacy / single-message rows — the
+  // renderer treats absence as an implicit 1-bubble group. Present
+  // rows with the same messageGroupId render together with tight
+  // spacing and share a single timestamp on the last bubble.
+  messageGroupId?: string | null;
+  bubbleIndex?: number | null;
+  bubbleTotalCount?: number | null;
 }
 
 export interface ConversationTag {

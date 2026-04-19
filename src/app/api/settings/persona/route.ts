@@ -82,6 +82,7 @@ export async function PUT(req: NextRequest) {
       verifiedDetails,
       skipR24ScriptInject,
       allowEarlyFinancialScreening,
+      multiBubbleEnabled,
       responseDelayMin,
       responseDelayMax,
       voiceNotesEnabled,
@@ -192,6 +193,9 @@ export async function PUT(req: NextRequest) {
     }
     if (allowEarlyFinancialScreening !== undefined) {
       data.allowEarlyFinancialScreening = Boolean(allowEarlyFinancialScreening);
+    }
+    if (multiBubbleEnabled !== undefined) {
+      data.multiBubbleEnabled = Boolean(multiBubbleEnabled);
     }
     data.contextUpdatedAt = new Date();
     data.contextUpdatedByUserId = auth.userId || null;

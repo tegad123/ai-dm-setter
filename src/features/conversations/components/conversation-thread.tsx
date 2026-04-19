@@ -408,29 +408,54 @@ export function ConversationThread({
                 ))}
               </div>
             ) : (
-              <div className='space-y-4'>
-                {conversation.messages.map((msg) => {
+              <div>
+                {conversation.messages.map((msg, idx) => {
                   const sender = msg.sender.toLowerCase();
                   const isLead = sender === 'lead';
                   const isAI = sender === 'ai';
                   const isHuman = sender === 'human';
+                  // Multi-bubble grouping: a message is part of a group
+                  // when messageGroupId is set. The previous/next sibling
+                  // sharing the same non-null groupId determines whether
+                  // this bubble is first / middle / last in its group.
+                  // Messages without a groupId are "standalone" (implicit
+                  // 1-bubble group) — same spacing as between groups.
+                  const prevMsg =
+                    idx > 0 ? conversation.messages[idx - 1] : null;
+                  const nextMsg =
+                    idx < conversation.messages.length - 1
+                      ? conversation.messages[idx + 1]
+                      : null;
+                  const groupId = msg.messageGroupId ?? null;
+                  const inGroup = groupId !== null;
+                  const sameGroupAsPrev =
+                    inGroup && prevMsg?.messageGroupId === groupId;
+                  const sameGroupAsNext =
+                    inGroup && nextMsg?.messageGroupId === groupId;
+                  const isFirstInGroup = !sameGroupAsPrev;
+                  const isLastInGroup = !sameGroupAsNext;
                   return (
                     <div
                       key={msg.id}
                       className={cn(
                         'flex',
-                        isLead ? 'justify-start' : 'justify-end'
+                        isLead ? 'justify-start' : 'justify-end',
+                        // Tight 4px between bubbles of the same group,
+                        // 16px between groups / standalone messages. The
+                        // first rendered row gets no top margin.
+                        idx === 0 ? '' : sameGroupAsPrev ? 'mt-1' : 'mt-4'
                       )}
                     >
                       <div
                         className={cn('max-w-[70%]', !isLead && 'text-right')}
                       >
-                        {isAI && (
+                        {/* Sender label shown only on the first bubble of a group */}
+                        {isFirstInGroup && isAI && (
                           <span className='mb-0.5 inline-block text-[10px] text-blue-400'>
                             AI Setter
                           </span>
                         )}
-                        {isHuman && (
+                        {isFirstInGroup && isHuman && (
                           <span className='mb-0.5 inline-block text-[10px] text-emerald-400'>
                             Human Setter
                           </span>
@@ -463,30 +488,35 @@ export function ConversationThread({
                             </div>
                           )}
                           <p className='text-sm'>{msg.content}</p>
-                          <div className='mt-1 flex items-center gap-1'>
-                            <p
-                              className={cn(
-                                'text-[10px]',
-                                isLead ? 'text-muted-foreground' : 'opacity-60'
+                          {/* Timestamp + icon row shown only on the last bubble of a group */}
+                          {isLastInGroup && (
+                            <div className='mt-1 flex items-center gap-1'>
+                              <p
+                                className={cn(
+                                  'text-[10px]',
+                                  isLead
+                                    ? 'text-muted-foreground'
+                                    : 'opacity-60'
+                                )}
+                              >
+                                {new Date(msg.timestamp).toLocaleTimeString(
+                                  'en-US',
+                                  {
+                                    hour: 'numeric',
+                                    minute: '2-digit'
+                                  }
+                                )}
+                              </p>
+                              {isAI && (
+                                <IconRobot className='h-3 w-3 opacity-60' />
                               )}
-                            >
-                              {new Date(msg.timestamp).toLocaleTimeString(
-                                'en-US',
-                                {
-                                  hour: 'numeric',
-                                  minute: '2-digit'
-                                }
+                              {isHuman && (
+                                <span className='text-[10px] opacity-60'>
+                                  Manual
+                                </span>
                               )}
-                            </p>
-                            {isAI && (
-                              <IconRobot className='h-3 w-3 opacity-60' />
-                            )}
-                            {isHuman && (
-                              <span className='text-[10px] opacity-60'>
-                                Manual
-                              </span>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
                         {/* Override note input — shown for human override messages */}
                         {isHuman && msg.isHumanOverride && (

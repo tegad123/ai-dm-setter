@@ -398,40 +398,15 @@ export function scoreVoiceQuality(
     }
   }
 
-  // 9g. CTA acknowledgment-only truncation. Sibling guard to 9f. The
-  // active_campaigns prompt block shows MULTI-LINE example replies (one
-  // "message" field with acknowledgment + optional URL + qualifying
-  // question). An earlier version of the prompt used "Message 1 /
-  // Message 2 / Message 3" numbered language that the LLM interpreted
-  // as separate outputs — it shipped only "Message 1" ("yo bro caught
-  // the story 💪🏿") and stopped, stalling the conversation (real
-  // production failure: daetradez @Tega Umukoro 2026-04-19).
-  //
-  // The prompt rewrite in 1080cb2 addressed the numbered-list language,
-  // but the failure pattern can recur under prompt drift. This guard
-  // hard-fails when the reply is short, contains a recognizable campaign
-  // acknowledgment phrase, AND has no question mark — a strong signal
-  // it's truncated. Scoped to short+acknowledgment+no-? so it doesn't
-  // false-fire on legitimate short nudges ("aight 🙌", "gotchu", etc.).
-  const ACKNOWLEDGMENT_ONLY_PATTERNS: RegExp[] = [
-    /\bcaught\s+(the|your)\s+(story|post|content|ad|video|drop|ig|instagram|vid|yt|youtube|reel)\b/i,
-    /\bsliding\s+through\b/i,
-    /\bappreciate\s+you\s+(sliding|reaching|messaging|pulling\s+up)\b/i,
-    /\bsaw\s+you\s+through\s+the\s+(content|post|story|video|ad|reel)\b/i,
-    /\bcaught\s+your\s+(message|dm|post|comment)\b/i,
-    /\bglad\s+you\s+(reached\s+out|slid\s+through|messaged)\b/i
-  ];
-  const isShortNoQuestion = reply.trim().length < 80 && !reply.includes('?');
-  if (isShortNoQuestion) {
-    for (const pat of ACKNOWLEDGMENT_ONLY_PATTERNS) {
-      if (pat.test(reply)) {
-        hardFails.push(
-          `cta_acknowledgment_only_truncation: matched "${pat.source}" — reply is a short campaign acknowledgment with no qualifying question; the conversation stalls. Every campaign-matched reply MUST end with a forward-moving question in the same "message" field.`
-        );
-        break;
-      }
-    }
-  }
+  // 9g. CTA acknowledgment-only truncation check moved out of
+  // scoreVoiceQuality and into scoreVoiceQualityGroup (see
+  // checkCtaAckOnlyTruncation below). Rationale: when a multi-bubble
+  // response splits the acknowledgment and the question across bubbles,
+  // bubble 0 alone would false-fire this check. The correct check
+  // operates on the CONCATENATED group so a legit split passes. For
+  // single-message (flag-off) calls, the group wrapper still fires this
+  // check over the one-element array, so single-message accounts see
+  // identical behaviour to the pre-multi-bubble state.
 
   // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
   // the AI sends the booking link from the script and the lead picks their
@@ -589,5 +564,140 @@ export function scoreVoiceQuality(
     passed: hardFails.length === 0 && score >= 0.7,
     hardFails,
     softSignals
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-bubble group scorer
+// ---------------------------------------------------------------------------
+// Wraps scoreVoiceQuality per-bubble and adds two group-level checks that
+// must evaluate the joined string rather than each bubble independently:
+//
+//   1. cta_acknowledgment_only_truncation — a legitimate 2-bubble split
+//      like ["yo bro caught the story 💪🏿", "what got you into trading?"]
+//      has bubble-0 that matches the ack-only pattern but the group has a
+//      "?" and is long enough. Running per-bubble would false-fire.
+//
+//   2. cliffhanger / isUnkeptPromise — a cliffhanger in a non-final bubble
+//      is fine when a follow-on bubble fulfils it. isUnkeptPromise is only
+//      interesting CROSS-TURN (did the previous turn's last bubble stall
+//      the conversation) — that check stays in ai-engine.ts using the
+//      last bubble. Inside a single turn, mid-group cliffhangers are OK.
+//
+// Everything else (R19/R22/R24/R26/R27, CTA mechanism leak, banned phrases,
+// em-dashes, emoji, length) is per-bubble: any bubble with a violation
+// fails the whole group. Individual hardFails are prefixed with [bubble=N]
+// so the retry directive can tell the LLM which bubble to fix.
+//
+// Legacy single-message callers (flag-off path) pass [reply] and see
+// byte-identical behaviour — the concatenated-group check sees the same
+// string the per-bubble check would have.
+
+const CTA_ACKNOWLEDGMENT_ONLY_PATTERNS: RegExp[] = [
+  /\bcaught\s+(the|your)\s+(story|post|content|ad|video|drop|ig|instagram|vid|yt|youtube|reel)\b/i,
+  /\bsliding\s+through\b/i,
+  /\bappreciate\s+you\s+(sliding|reaching|messaging|pulling\s+up)\b/i,
+  /\bsaw\s+you\s+through\s+the\s+(content|post|story|video|ad|reel)\b/i,
+  /\bcaught\s+your\s+(message|dm|post|comment)\b/i,
+  /\bglad\s+you\s+(reached\s+out|slid\s+through|messaged)\b/i
+];
+
+/**
+ * Returns a hardFail reason string if the joined group is a stalled
+ * acknowledgment (short + no `?` + matches an opener pattern). Returns
+ * null if the group is fine. Operates on the concatenated string so
+ * multi-bubble splits don't false-fire.
+ */
+function checkCtaAckOnlyTruncation(joinedText: string): string | null {
+  const trimmed = joinedText.trim();
+  if (trimmed.length >= 80) return null;
+  if (trimmed.includes('?')) return null;
+  for (const pat of CTA_ACKNOWLEDGMENT_ONLY_PATTERNS) {
+    if (pat.test(trimmed)) {
+      return `cta_acknowledgment_only_truncation: matched "${pat.source}" — reply is a short campaign acknowledgment with no qualifying question; the conversation stalls. Every campaign-matched reply MUST end with a forward-moving question in the same "message" field.`;
+    }
+  }
+  return null;
+}
+
+export interface GroupQualityResult {
+  /** Worst (minimum) per-bubble score. */
+  score: number;
+  /** All bubbles passed individually AND group-level checks passed. */
+  passed: boolean;
+  /** All hard-fail reasons, prefixed with [bubble=N] for per-bubble issues. */
+  hardFails: string[];
+  /** Per-bubble soft signals, flattened. */
+  softSignals: Record<string, number>;
+  /** Per-bubble individual results — useful for tests / diagnostics. */
+  perBubble: QualityResult[];
+}
+
+export function scoreVoiceQualityGroup(
+  messages: string[],
+  options?: VoiceQualityOptions
+): GroupQualityResult {
+  if (messages.length === 0) {
+    return {
+      score: 0,
+      passed: false,
+      hardFails: ['empty_group: messages array is empty'],
+      softSignals: {},
+      perBubble: []
+    };
+  }
+
+  // Hard fails: per-bubble. A banned phrase anywhere fails the group.
+  // Exception: cliffhanger_preamble ("I'll explain", "lemme break it
+  // down", etc.) in a non-final bubble is fine when a follow-on bubble
+  // fulfills the promise in the same turn — that's the whole point of
+  // splitting. Suppress that specific failure when the bubble isn't
+  // last. On the FINAL bubble, cliffhanger still fires (the turn would
+  // genuinely stall).
+  const perBubble: QualityResult[] = messages.map((bubble) =>
+    scoreVoiceQuality(bubble, options)
+  );
+  const lastIndex = messages.length - 1;
+  const hardFails: string[] = [];
+  perBubble.forEach((r, i) => {
+    for (const failure of r.hardFails) {
+      if (i !== lastIndex && failure.startsWith('cliffhanger_preamble:')) {
+        continue; // follow-on bubble fulfills this — legit split
+      }
+      hardFails.push(`[bubble=${i}] ${failure}`);
+    }
+  });
+
+  // Group-level ack-only check on the concatenated string — catches the
+  // "yo bro caught the story 💪🏿" stall without false-firing on legit
+  // multi-bubble splits where bubble 1 carries the question.
+  const joined = messages.join(' ');
+  const ackFailure = checkCtaAckOnlyTruncation(joined);
+  if (ackFailure) {
+    hardFails.push(`[group] ${ackFailure}`);
+  }
+
+  // Voice quality score: evaluate the JOINED turn, NOT per-bubble.
+  // Per-bubble scoring is too strict — a legitimate split like
+  // ["yo bro caught the story 💪🏿", "what got you into trading?"] has
+  // a pure-question bubble 1 with no Daniel vocab that scores below
+  // the 0.7 threshold on its own, even though the full turn reads
+  // like Daniel. Scoring the concatenation preserves single-message
+  // semantics for flag-off accounts (joined one-element array is the
+  // same string) and handles the multi-bubble case correctly.
+  const joinedQuality = scoreVoiceQuality(joined, options);
+  const softSignals = joinedQuality.softSignals;
+  const score = joinedQuality.score;
+
+  return {
+    score,
+    // Pass iff no hard fails AND the joined turn clears the soft-score
+    // threshold. joinedQuality.passed already encodes both its own
+    // hardFails-empty and score>=0.7, but we've pulled hardFails out
+    // to per-bubble tagging so recompute the soft-only gate here.
+    passed: hardFails.length === 0 && score >= 0.7,
+    hardFails,
+    softSignals,
+    perBubble
   };
 }

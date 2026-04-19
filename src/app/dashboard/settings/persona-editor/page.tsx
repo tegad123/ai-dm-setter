@@ -48,6 +48,7 @@ interface PersonaResponse {
     verifiedDetails: string | null;
     skipR24ScriptInject: boolean;
     allowEarlyFinancialScreening: boolean;
+    multiBubbleEnabled: boolean;
     contextUpdatedAt: string | null;
     contextUpdatedByUserId: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,6 +143,7 @@ export default function PersonaEditorPage() {
   // which conceptually belongs with handoff mechanics.
   const [skipR24ScriptInject, setSkipR24ScriptInject] = useState(false);
   const [allowEarlyFinancial, setAllowEarlyFinancial] = useState(false);
+  const [multiBubbleEnabled, setMultiBubbleEnabled] = useState(false);
   const [handoffDescription, setHandoffDescription] = useState('');
   const [handoffSavedSnapshot, setHandoffSavedSnapshot] = useState('');
   const [savingHandoff, setSavingHandoff] = useState(false);
@@ -205,8 +207,10 @@ export default function PersonaEditorPage() {
         const skipInject = data.persona.skipR24ScriptInject === true;
         const earlyFinancial =
           data.persona.allowEarlyFinancialScreening === true;
+        const multiBubble = data.persona.multiBubbleEnabled === true;
         setSkipR24ScriptInject(skipInject);
         setAllowEarlyFinancial(earlyFinancial);
+        setMultiBubbleEnabled(multiBubble);
         // Build a single snapshot string so we can diff the whole section
         // with one comparison (simpler than tracking 5 fields separately).
         const snapshot = JSON.stringify({
@@ -215,7 +219,8 @@ export default function PersonaEditorPage() {
           closerRole: handoffCfg.closerRole || '',
           description: '',
           skipInject,
-          earlyFinancial
+          earlyFinancial,
+          multiBubble
         });
         setHandoffDescription('');
         setHandoffSavedSnapshot(snapshot);
@@ -300,6 +305,7 @@ export default function PersonaEditorPage() {
       verifiedDetails: p.verifiedDetails ?? null,
       skipR24ScriptInject: p.skipR24ScriptInject ?? false,
       allowEarlyFinancialScreening: p.allowEarlyFinancialScreening ?? false,
+      multiBubbleEnabled: p.multiBubbleEnabled ?? false,
       voiceNotesEnabled:
         (p as { voiceNotesEnabled?: boolean }).voiceNotesEnabled ?? true,
       setupComplete:
@@ -400,7 +406,8 @@ export default function PersonaEditorPage() {
           promptConfig: newConfig,
           closerName: closerName.trim() || null,
           skipR24ScriptInject,
-          allowEarlyFinancialScreening: allowEarlyFinancial
+          allowEarlyFinancialScreening: allowEarlyFinancial,
+          multiBubbleEnabled
         },
         'Call handoff saved'
       );
@@ -410,7 +417,8 @@ export default function PersonaEditorPage() {
         closerRole,
         description: handoffDescription,
         skipInject: skipR24ScriptInject,
-        earlyFinancial: allowEarlyFinancial
+        earlyFinancial: allowEarlyFinancial,
+        multiBubble: multiBubbleEnabled
       });
       setHandoffSavedSnapshot(snapshot);
     } catch (err) {
@@ -488,7 +496,8 @@ export default function PersonaEditorPage() {
     closerRole,
     description: handoffDescription,
     skipInject: skipR24ScriptInject,
-    earlyFinancial: allowEarlyFinancial
+    earlyFinancial: allowEarlyFinancial,
+    multiBubble: multiBubbleEnabled
   });
   const currentCapitalSnapshot = JSON.stringify({
     minCapital,
@@ -768,6 +777,28 @@ export default function PersonaEditorPage() {
                 id='allowEarlyFinancial'
                 checked={allowEarlyFinancial}
                 onCheckedChange={(v) => setAllowEarlyFinancial(Boolean(v))}
+              />
+            </div>
+
+            <div className='flex items-start justify-between gap-4'>
+              <div className='min-w-0 flex-1'>
+                <Label
+                  htmlFor='multiBubbleEnabled'
+                  className='cursor-pointer text-sm'
+                >
+                  Multi-bubble messages
+                </Label>
+                <p className='text-muted-foreground mt-0.5 text-[11px]'>
+                  Let the AI send 2-3 short messages in a row (like natural
+                  texting) instead of one long message. Recommended for most
+                  accounts. Lead sees separate chat bubbles with realistic
+                  typing delays between.
+                </p>
+              </div>
+              <Switch
+                id='multiBubbleEnabled'
+                checked={multiBubbleEnabled}
+                onCheckedChange={(v) => setMultiBubbleEnabled(Boolean(v))}
               />
             </div>
           </div>

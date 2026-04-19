@@ -50,6 +50,12 @@ export function broadcastNewMessage(data: {
   sender: string;
   content: string;
   timestamp: string;
+  // Multi-bubble fields. Null/undefined for legacy single-message sends
+  // (the UI treats absence as an implicit 1-bubble group). When present,
+  // the UI groups bubbles with the same messageGroupId visually.
+  messageGroupId?: string | null;
+  bubbleIndex?: number | null;
+  bubbleTotalCount?: number | null;
 }): void {
   eventBus.publish({ type: 'message:new', data });
 }

@@ -1,9 +1,13 @@
 import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
 import type { LeadContext } from '@/lib/ai-prompts';
 import { getCredentials } from '@/lib/credential-store';
 import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
-import { scoreVoiceQuality, isUnkeptPromise } from '@/lib/voice-quality-gate';
+import {
+  scoreVoiceQualityGroup,
+  isUnkeptPromise
+} from '@/lib/voice-quality-gate';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,6 +23,14 @@ export interface ConversationMessage {
 
 export interface GenerateReplyResult {
   reply: string;
+  /**
+   * Multi-bubble output. Always a populated array — single-message
+   * responses appear as `[reply]` (backward compat). When the persona
+   * has multiBubbleEnabled=true AND the LLM emits messages[], this
+   * contains 2-4 ordered bubbles that sendAIReply delivers as
+   * separate platform sends.
+   */
+  messages: string[];
   format: 'text' | 'voice_note';
   stage: string;
   subStage: string | null;
@@ -252,9 +264,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
     parsed = parseAIResponse(rawResponse);
 
-    // 5. Voice quality gate — relax length cap when this turn is
-    // delivering a promise (it needs room to actually explain).
-    const quality = scoreVoiceQuality(parsed.message, {
+    // 5. Voice quality gate — runs per-bubble via scoreVoiceQualityGroup.
+    // For single-message responses (flag-off persona), parsed.messages is
+    // [parsed.message] and the group wrapper degenerates to a single call
+    // — byte-identical to the pre-multi-bubble behaviour. Multi-bubble
+    // responses get per-bubble hardFails tagged [bubble=N] plus the
+    // group-level cta_ack_only_truncation check on the joined string.
+    const quality = scoreVoiceQualityGroup(parsed.messages, {
       relaxLengthLimit: !!unkeptPattern
     });
     finalQualityScore = quality.score;
@@ -368,8 +384,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       // the specific correction required: put the whole multi-line
       // reply in the single "message" field AND include a qualifying
       // question. This mirrors the R24 directive-injection pattern.
+      // Group scorer prefixes failures with "[bubble=N] " or "[group] "
+      // depending on scope, so match on the reason token via .includes()
+      // instead of .startsWith() now.
       const ackTruncationFailed = quality.hardFails.some((f) =>
-        f.startsWith('cta_acknowledgment_only_truncation:')
+        f.includes('cta_acknowledgment_only_truncation:')
       );
       if (ackTruncationFailed) {
         const ackOverride = `\n\n===== ACKNOWLEDGMENT-ONLY TRUNCATION OVERRIDE =====\nYour previous response was just an acknowledgment — it did not include a qualifying question, so the lead has nothing to respond to and the conversation stalls. You MUST regenerate. Your next "message" field MUST contain BOTH the acknowledgment AND a forward-moving qualifying question in the SAME single "message" string. Multi-line is fine — use line breaks between acknowledgment, any URL, and the question. Do NOT write "Message 1 / Message 2 / Message 3" — the schema is one "message" field; if you only put the acknowledgment there, that is literally all the lead sees.\n=====`;
@@ -481,11 +500,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     if (convoId) {
+      // Multi-bubble: persist the full array on messageBubbles so override
+      // detection can Jaccard-compare the human's takeover against the
+      // joined group. responseText still carries messages[0] for
+      // back-compat with any legacy consumer that reads it directly.
       const suggestion = await prisma.aISuggestion.create({
         data: {
           conversationId: convoId,
           accountId,
           responseText: parsed.message,
+          messageBubbles:
+            parsed.messages.length > 1
+              ? (parsed.messages as Prisma.InputJsonValue)
+              : undefined,
+          bubbleCount: parsed.messages.length,
           retrievalTier: null, // TODO: pipe from retriever in future
           qualityGateAttempts,
           qualityGateScore: finalQualityScore,
@@ -505,6 +533,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
   return {
     reply: parsed.message,
+    messages: parsed.messages,
     format: parsed.format as 'text' | 'voice_note',
     stage: parsed.stage,
     subStage: parsed.subStage,
@@ -689,7 +718,18 @@ function mergeConsecutiveRoles(
 
 interface ParsedAIResponse {
   format: string;
+  /**
+   * First bubble of the group. Backward-compat field — all existing
+   * downstream consumers can keep reading `.message`. When the LLM
+   * emits messages[], this equals messages[0].
+   */
   message: string;
+  /**
+   * Always populated array of 1-4 bubble strings. Single-message
+   * responses appear as `[message]`. Multi-bubble responses contain
+   * the full ordered array. Downstream delivery iterates over this.
+   */
+  messages: string[];
   stage: string;
   subStage: string | null;
   stageConfidence: number;
@@ -709,10 +749,40 @@ interface ParsedAIResponse {
   voiceNoteAction: { slot_id: string } | null;
 }
 
+// Multi-bubble constants — enforced at parse time regardless of
+// whether the persona's multiBubbleEnabled flag is on. LLM-side
+// guardrails in the prompt also mention these, but parse-side
+// validation is the source of truth.
+const MAX_BUBBLES_PER_GROUP = 4;
+const MIN_BUBBLE_CHARS = 2;
+
+/**
+ * Normalise the bubble array extracted from the LLM JSON. Filters
+ * empty / too-short entries, coerces non-strings to strings, caps at
+ * MAX_BUBBLES_PER_GROUP with a soft-warn on overflow. Returns null
+ * when the input doesn't parse as a usable array — caller falls back
+ * to the single-message path.
+ */
+function normaliseBubbles(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const strings = raw
+    .map((x) => (typeof x === 'string' ? x : String(x ?? '')))
+    .map((s) => s.trim())
+    .filter((s) => s.length >= MIN_BUBBLE_CHARS);
+  if (strings.length === 0) return null;
+  if (raw.length > MAX_BUBBLES_PER_GROUP) {
+    console.warn(
+      `[ai-engine] LLM emitted ${raw.length} bubbles; capping at ${MAX_BUBBLES_PER_GROUP} and dropping the remainder`
+    );
+  }
+  return strings.slice(0, MAX_BUBBLES_PER_GROUP);
+}
+
 function parseAIResponse(raw: string): ParsedAIResponse {
   const defaults: ParsedAIResponse = {
     format: 'text',
     message: raw,
+    messages: [raw],
     stage: '',
     subStage: null,
     stageConfidence: 0.5,
@@ -743,9 +813,21 @@ function parseAIResponse(raw: string): ParsedAIResponse {
 
     const obj = JSON.parse(jsonStr);
 
+    // Pick bubbles from either messages[] (multi-bubble persona) or
+    // wrap message (single-message). Both paths end with a populated
+    // `messages: string[]` — downstream never has to branch on format.
+    const fromArray = normaliseBubbles(obj.messages);
+    const fromString =
+      typeof obj.message === 'string' && obj.message.trim().length > 0
+        ? obj.message
+        : raw;
+    const messages: string[] = fromArray ?? [fromString];
+    const message = messages[0] ?? fromString;
+
     return {
       format: obj.format || 'text',
-      message: obj.message || raw,
+      message,
+      messages,
       stage: obj.stage || '',
       subStage: obj.sub_stage || null,
       stageConfidence:

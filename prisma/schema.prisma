@@ -313,6 +313,12 @@ model AIPersona {
   // policy note at the top of ai-prompts.ts for rationale.
   skipR24ScriptInject         Boolean  @default(false)
   allowEarlyFinancialScreening Boolean  @default(false)
+  // Multi-bubble delivery (single-message default preserves current
+  // behaviour). When true, the system prompt injects a messages[]
+  // schema so the LLM emits 1-4 short DM bubbles per turn, and the
+  // delivery pipeline ships each one as a separate send with
+  // realistic typing delays between.
+  multiBubbleEnabled          Boolean  @default(false)
   responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
   responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
   voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled
@@ -838,15 +844,55 @@ model Message {
   humanOverrideNote          String?   @db.Text        // Optional 1-line reason from human
   loggedDuringTrainingPhase  Boolean   @default(false) // Snapshot: was account in ONBOARDING when saved?
 
+  // ── Multi-Bubble Delivery ──────────────────────────────────
+  // Nullable so legacy single-message rows remain unchanged. When
+  // the AI generates 2-4 bubbles per turn, each bubble becomes its
+  // own Message row linked via messageGroupId; bubbleIndex gives the
+  // order within the group, bubbleTotalCount is denormalised for
+  // easy queries. Rows with null messageGroupId are single-message
+  // (implicit 1-bubble group).
+  messageGroupId             String?
+  bubbleIndex                Int?
+  bubbleTotalCount           Int?
+  intraGroupDelayMs          Int?
+
   // Relations
   conversation        Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sentByUser          User?         @relation("HumanSender", fields: [sentByUserId], references: [id])
   suggestion          AISuggestion? @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
   rejectedSuggestion  AISuggestion? @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
+  messageGroup        MessageGroup? @relation(fields: [messageGroupId], references: [id], onDelete: SetNull)
 
   @@unique([conversationId, platformMessageId])
   @@index([conversationId, timestamp])
   @@index([conversationId, sender, timestamp])
+  @@index([messageGroupId])
+}
+
+// Multi-bubble message group. When the AI emits messages: string[]
+// (via the multiBubbleEnabled persona flag), each string becomes a
+// separate Message row all linked to one MessageGroup. The group
+// tracks delivery lifecycle: bubbleCount, totalCharacters, when the
+// last bubble completed, whether delivery failed mid-group, and any
+// delivery notes (rate-limit events, human-aborted). completedAt and
+// failedAt are mutually exclusive — one is set when the loop ends.
+model MessageGroup {
+  id              String    @id @default(cuid())
+  conversationId  String
+  generatedAt     DateTime  @default(now())
+  aiSuggestionId  String?
+  bubbleCount     Int
+  totalCharacters Int
+  sentByType      String    @default("AI") // 'AI' | 'HUMAN_BURST' (HUMAN_BURST deferred)
+  completedAt     DateTime?
+  failedAt        DateTime?
+  deliveryNotes   Json?
+
+  messages        Message[]
+  aiSuggestion    AISuggestion? @relation(fields: [aiSuggestionId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, generatedAt(sort: Desc)])
+  @@index([aiSuggestionId])
 }
 
 model Notification {
@@ -1511,11 +1557,20 @@ model AISuggestion {
   // Training phase context
   generatedDuringTrainingPhase Boolean @default(false)  // Snapshot: was account in ONBOARDING?
 
+  // Multi-bubble delivery. When the LLM emitted messages[] the full
+  // array lives here (ordered). bubbleCount mirrors length. Override
+  // detection prefers messageBubbles.join('\n') over responseText
+  // when available. Legacy suggestions have messageBubbles=null and
+  // bubbleCount=1.
+  messageBubbles              Json?
+  bubbleCount                 Int      @default(1)
+
   // Relations
   conversation                Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   account                     Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
   selectedByMessages          Message[]    @relation("SelectedSuggestion")
   rejectedByMessages          Message[]    @relation("RejectedSuggestion")
+  messageGroups               MessageGroup[]
 
   @@index([conversationId, generatedAt(sort: Desc)])
   @@index([accountId, generatedAt(sort: Desc)])
