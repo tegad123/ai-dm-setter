@@ -1958,6 +1958,63 @@ async function sendAIReply(
     return;
   }
 
+  // ── Zero-tolerance empty-message guard ────────────────────────
+  // A 0-char / whitespace-only payload shipped to production on
+  // 2026-04-19 11:21:39 (conv cmo5lrc9q0002l404xcdt13zv): the voice
+  // quality retry loop exhausted 3 attempts on a low-scoring reply
+  // and fell through to a "best effort" ship path that never
+  // re-checked the payload length. The LLM's final parsed.message
+  // ended up as the empty string, parseAIResponse wrapped it as
+  // [""], and this function saved a Message row with `content=""`
+  // and called the platform-send API with empty text. Hard gate
+  // here guarantees that can never happen: if the entire turn has
+  // no non-whitespace content, pause the AI, create a SYSTEM
+  // notification, and return without any save or send.
+  const bubblesForEmptyCheck =
+    Array.isArray(result.messages) && result.messages.length > 0
+      ? result.messages
+      : [result.reply ?? ''];
+  const hasRealContent = bubblesForEmptyCheck.some(
+    (b) => typeof b === 'string' && b.trim().length > 0
+  );
+  if (!hasRealContent) {
+    console.error(
+      `[webhook-processor] empty_message_blocked for conv ${conversationId} — AI produced 0-char / whitespace-only content across ${bubblesForEmptyCheck.length} bubble(s). Pausing AI, notifying operator, no platform send.`
+    );
+    try {
+      // Mark the suggestion rejected so analytics / override
+      // detection don't treat it as selected-and-sent.
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'AI produced empty response — human takeover required',
+          body: `${lead.name} (@${lead.handle}): the AI's last generation had no text content to send (voice quality gate likely exhausted retries on a failing reply). AI is now paused on this conversation. Please review and take over.`,
+          leadId: lead.id
+        }
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Empty-message escalation bookkeeping failed (non-fatal):',
+        err
+      );
+    }
+    return;
+  }
+
   // ── Dedup safety net ──────────────────────────────────────────
   // Last-line defense against near-duplicate sends that slip through the
   // debounce + cancel-pending + 25s recency guard. Compare the new reply

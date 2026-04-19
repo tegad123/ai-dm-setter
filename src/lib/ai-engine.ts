@@ -409,9 +409,30 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // webhook-processor will pause aiActive + create a notification.
         parsed.escalateToHuman = true;
       } else if (!quality.passed) {
-        console.warn(
-          `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
-        );
+        // Voice quality gate exhausted. Normally we ship best-effort —
+        // a low-scoring reply is still useful context for the operator
+        // and the downstream dedup + empty guard catch the truly bad
+        // cases. But if all retries returned empty / whitespace-only
+        // content, best-effort means shipping nothing: escalate instead
+        // so the empty-message guard in sendAIReply doesn't have to be
+        // the ONLY defense (and so the operator sees the escalation
+        // rather than a silent pause).
+        const allBubblesEmpty =
+          !Array.isArray(parsed.messages) ||
+          parsed.messages.length === 0 ||
+          parsed.messages.every(
+            (b) => typeof b !== 'string' || b.trim().length === 0
+          );
+        if (allBubblesEmpty) {
+          console.error(
+            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
+          );
+          parsed.escalateToHuman = true;
+        } else {
+          console.warn(
+            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
+          );
+        }
       }
     }
   }
@@ -823,6 +844,22 @@ function parseAIResponse(raw: string): ParsedAIResponse {
         : raw;
     const messages: string[] = fromArray ?? [fromString];
     const message = messages[0] ?? fromString;
+
+    // Observability for the 2026-04-19 empty-message incident: if the
+    // LLM emitted JSON with no usable text anywhere, loudly log the
+    // raw payload (first 500 chars) so we can root-cause whether the
+    // model is returning {}/null or formatting the reply outside the
+    // expected fields. The retry loop's MAX_RETRIES-empty branch and
+    // sendAIReply's hard gate both backstop this — this is purely a
+    // diagnostic breadcrumb.
+    const allEmpty = messages.every(
+      (m) => typeof m !== 'string' || m.trim().length === 0
+    );
+    if (allEmpty) {
+      console.warn(
+        `[ai-engine] parseAIResponse produced empty messages[] — downstream will escalate. Raw first 500 chars: ${raw.slice(0, 500)}`
+      );
+    }
 
     return {
       format: obj.format || 'text',
