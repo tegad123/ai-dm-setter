@@ -359,6 +359,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       } catch {
         // Table might not exist yet — that's fine
       }
+
+      // CTA-acknowledgment-only truncation directive injection. When the
+      // voice gate fires `cta_acknowledgment_only_truncation`, just
+      // retrying the same prompt tends to produce the same truncated
+      // reply — the model has already decided the acknowledgment-only
+      // shape. Append an explicit override so the next attempt knows
+      // the specific correction required: put the whole multi-line
+      // reply in the single "message" field AND include a qualifying
+      // question. This mirrors the R24 directive-injection pattern.
+      const ackTruncationFailed = quality.hardFails.some((f) =>
+        f.startsWith('cta_acknowledgment_only_truncation:')
+      );
+      if (ackTruncationFailed) {
+        const ackOverride = `\n\n===== ACKNOWLEDGMENT-ONLY TRUNCATION OVERRIDE =====\nYour previous response was just an acknowledgment — it did not include a qualifying question, so the lead has nothing to respond to and the conversation stalls. You MUST regenerate. Your next "message" field MUST contain BOTH the acknowledgment AND a forward-moving qualifying question in the SAME single "message" string. Multi-line is fine — use line breaks between acknowledgment, any URL, and the question. Do NOT write "Message 1 / Message 2 / Message 3" — the schema is one "message" field; if you only put the acknowledgment there, that is literally all the lead sees.\n=====`;
+        systemPromptForLLM = systemPrompt + ackOverride;
+        console.warn(
+          `[ai-engine] CTA acknowledgment-only truncation detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
     }
 
     if (attempt === MAX_RETRIES) {

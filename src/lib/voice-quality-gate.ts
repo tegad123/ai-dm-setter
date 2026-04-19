@@ -398,6 +398,41 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9g. CTA acknowledgment-only truncation. Sibling guard to 9f. The
+  // active_campaigns prompt block shows MULTI-LINE example replies (one
+  // "message" field with acknowledgment + optional URL + qualifying
+  // question). An earlier version of the prompt used "Message 1 /
+  // Message 2 / Message 3" numbered language that the LLM interpreted
+  // as separate outputs — it shipped only "Message 1" ("yo bro caught
+  // the story 💪🏿") and stopped, stalling the conversation (real
+  // production failure: daetradez @Tega Umukoro 2026-04-19).
+  //
+  // The prompt rewrite in 1080cb2 addressed the numbered-list language,
+  // but the failure pattern can recur under prompt drift. This guard
+  // hard-fails when the reply is short, contains a recognizable campaign
+  // acknowledgment phrase, AND has no question mark — a strong signal
+  // it's truncated. Scoped to short+acknowledgment+no-? so it doesn't
+  // false-fire on legitimate short nudges ("aight 🙌", "gotchu", etc.).
+  const ACKNOWLEDGMENT_ONLY_PATTERNS: RegExp[] = [
+    /\bcaught\s+(the|your)\s+(story|post|content|ad|video|drop|ig|instagram|vid|yt|youtube|reel)\b/i,
+    /\bsliding\s+through\b/i,
+    /\bappreciate\s+you\s+(sliding|reaching|messaging|pulling\s+up)\b/i,
+    /\bsaw\s+you\s+through\s+the\s+(content|post|story|video|ad|reel)\b/i,
+    /\bcaught\s+your\s+(message|dm|post|comment)\b/i,
+    /\bglad\s+you\s+(reached\s+out|slid\s+through|messaged)\b/i
+  ];
+  const isShortNoQuestion = reply.trim().length < 80 && !reply.includes('?');
+  if (isShortNoQuestion) {
+    for (const pat of ACKNOWLEDGMENT_ONLY_PATTERNS) {
+      if (pat.test(reply)) {
+        hardFails.push(
+          `cta_acknowledgment_only_truncation: matched "${pat.source}" — reply is a short campaign acknowledgment with no qualifying question; the conversation stalls. Every campaign-matched reply MUST end with a forward-moving question in the same "message" field.`
+        );
+        break;
+      }
+    }
+  }
+
   // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
   // the AI sends the booking link from the script and the lead picks their
   // own time. The AI must NOT propose specific day+time combinations.
