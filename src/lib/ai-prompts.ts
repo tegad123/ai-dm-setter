@@ -505,6 +505,8 @@ R23: HANDLE OBJECTIONS, DO NOT ACCEPT THEM. An objection is not a rejection — 
 
 R24: VERIFY CAPITAL BEFORE BOOKING. {{capitalVerificationRule}}
 
+DISTRESS SIGNALS: If the lead indicates they are jobless, desperate, or treating trading as their last financial hope ("this is my only hope", "last chance", "I'm jobless", "lost my job", "can't pay rent", "nothing left"), do NOT pitch any paid product or call. Share free resources (YouTube link if available), encourage them genuinely, and soft exit. These leads need support, not a sales pitch. Even a single clear distress signal is enough — you do NOT need 2+ signals to trigger this path. This overrides R25's "pitch the downsell once" allowance: for distress-signal leads, skip the downsell too and route directly to free content.
+
 R25: RECOGNIZE LOW-CAPITAL SIGNALS EARLY AND SOFT-EXIT. Watch for low-capital signals throughout qualification: "I'm a student", "still in school", "I don't have money", "can't afford", "tight right now", amounts below the minimum capital threshold, "waiting to save up", "once I have capital", "working on getting the money", "as soon as I have the funds". When you detect 2+ clear low-capital signals from the lead:
   1. Do NOT deepen discovery — the lead has already told you they can't buy. Don't ask about strategy, experience, years trading, goals, etc.
   2. Do NOT keep pitching the main offer — they said no.
@@ -640,6 +642,7 @@ REGISTER MATCHING:
 - Trigger: {{triggerType}}{{triggerSourceContext}}
 - Quality Score: {{qualityScore}}/100
 {{enrichmentContext}}
+{{linksAlreadySentBlock}}
 
 ## CONVERSATION HISTORY
 The messages below are the full conversation so far. Continue naturally from the last message.
@@ -1012,7 +1015,15 @@ function buildLegacyTenantData(
 export async function buildDynamicSystemPrompt(
   accountId: string,
   leadContext: LeadContext,
-  fewShotBlock?: string
+  fewShotBlock?: string,
+  /**
+   * Prior AI messages in this conversation — used to build the
+   * "links already sent" block so the LLM doesn't re-send the same
+   * URL. Pass the full AI-side history; extraction, dedup, and
+   * formatting happen inside this function. Omit when there's no
+   * conversation history yet (e.g. new-lead first-turn contexts).
+   */
+  priorAIMessages?: Array<{ content: string; timestamp: Date | string }>
 ): Promise<string> {
   // Fetch the active persona for this account
   const persona = await prisma.aIPersona.findFirst({
@@ -1409,6 +1420,61 @@ ${verifiedDetailsRaw}
     /\{\{enrichmentContext\}\}/g,
     enrichmentParts.length > 0 ? enrichmentParts.join('\n') : ''
   );
+
+  // ── Links already sent in this conversation ─────────────────────
+  // Scan prior AI messages for URLs. When the lead asks for "another
+  // video" or similar, the LLM needs to know it already sent a link so
+  // it doesn't resend the same asset. Dedup by normalized URL; keep the
+  // earliest timestamp for each unique link since that's "when it was
+  // sent" from the lead's perspective.
+  // Regex captures http(s) and bare-domain URLs (www.example.com style)
+  // up to the first whitespace or closing quote / paren / bracket.
+  const URL_REGEX = /\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[^\s<>"')\]]+/gi;
+  const linksSeen = new Map<string, Date>();
+  if (Array.isArray(priorAIMessages)) {
+    for (const msg of priorAIMessages) {
+      if (typeof msg.content !== 'string') continue;
+      const matches = msg.content.match(URL_REGEX);
+      if (!matches) continue;
+      const ts =
+        msg.timestamp instanceof Date ? msg.timestamp : new Date(msg.timestamp);
+      for (const raw of matches) {
+        // Strip trailing punctuation the regex's character class doesn't
+        // (periods / commas at the end of a sentence get swept in).
+        const cleaned = raw.replace(/[.,;:!?]+$/, '');
+        const key = cleaned.toLowerCase();
+        const existing = linksSeen.get(key);
+        if (!existing || ts.getTime() < existing.getTime()) {
+          linksSeen.set(key, ts);
+        }
+      }
+    }
+  }
+  if (linksSeen.size > 0) {
+    const formatTime = (d: Date): string => {
+      // Keep format short and human-readable — matches the "5:26 AM"
+      // style in the spec. Uses UTC to avoid server-vs-lead timezone
+      // confusion (the lead sees the same time the AI references).
+      const h = d.getUTCHours();
+      const m = d.getUTCMinutes();
+      const suffix = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      return `${h12}:${m.toString().padStart(2, '0')} ${suffix} UTC`;
+    };
+    const lines = Array.from(linksSeen.entries())
+      .sort((a, b) => a[1].getTime() - b[1].getTime())
+      .map(([url, ts]) => `- ${url} (sent at ${formatTime(ts)})`);
+    const linksBlock = `
+<links_already_sent>
+You have already sent these links in this conversation:
+${lines.join('\n')}
+
+Do NOT send the same link twice. If the lead asks for more content and you only have one link available, acknowledge that you already shared it: "I actually already sent you that one bro, check it out when you get a chance." If you have a different link available, send that instead.
+</links_already_sent>`;
+    prompt = prompt.replace(/\{\{linksAlreadySentBlock\}\}/g, linksBlock);
+  } else {
+    prompt = prompt.replace(/\{\{linksAlreadySentBlock\}\}/g, '');
+  }
 
   // ── Booking state (what the lead has already disclosed) ──────────
   const booking = leadContext.booking || {};

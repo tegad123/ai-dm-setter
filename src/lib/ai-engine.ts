@@ -121,10 +121,18 @@ export async function generateReply(
   }
 
   // 1. Build the dynamic system prompt with few-shot examples
+  // Prior AI-side messages drive the "links already sent" context
+  // block so the LLM doesn't resend the same URL when the lead asks
+  // for "another video". Pass full history (no slice) — dedup + most-
+  // recent-wins selection happens inside buildDynamicSystemPrompt.
+  const priorAIMessages = conversationHistory
+    .filter((m) => m.sender === 'AI')
+    .map((m) => ({ content: m.content, timestamp: m.timestamp }));
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     leadContext,
-    fewShotBlock || undefined
+    fewShotBlock || undefined,
+    priorAIMessages
   );
 
   // 1b. Append scoring intelligence if available
@@ -1008,11 +1016,26 @@ function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
 
   // 1. Non-numeric disqualifiers — handle first so "I got nothing" doesn't
-  //    get amount-parsed into some weird accidental hit.
+  //    get amount-parsed into some weird accidental hit. Split across
+  //    themed groups so each signal type is self-documenting:
+  //      (a) "low capital" baseline ("broke", "no money", "student")
+  //      (b) "no job / no income" employment disqualifiers
+  //      (c) "desperation / last hope" language — trader-of-last-resort
+  //          framing is a strong R24 stop even without an explicit number
+  //      (d) "can't pay basics" financial distress
+  const noCapital =
+    /\b(not\s+much|not\s+a\s+lot|nothing\s+really|^nothing\b|\bbroke\b|don'?t\s+have\s+(any\s+)?(money|capital|anything|much)|can'?t\s+afford|no\s+money|i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school)\b/i;
+  const jobless =
+    /\b(jobless|job less|unemployed|no job|lost my job|between jobs|laid off|let go|no income|no work|out of work)\b/i;
+  const desperation =
+    /\b(only hope|last hope|last chance|desperate|nothing left)\b/i;
+  const cantAffordBasics =
+    /\b(can'?t eat|can'?t pay rent|can'?t pay bills|struggling to survive)\b/i;
   if (
-    /\b(not\s+much|not\s+a\s+lot|nothing\s+really|^nothing\b|\bbroke\b|don'?t\s+have\s+(any\s+)?(money|capital|anything|much)|can'?t\s+afford|no\s+money|i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school)\b/i.test(
-      text
-    )
+    noCapital.test(text) ||
+    jobless.test(text) ||
+    desperation.test(text) ||
+    cantAffordBasics.test(text)
   ) {
     return { kind: 'disqualifier', amount: 0 };
   }
