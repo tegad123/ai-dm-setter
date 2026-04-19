@@ -361,6 +361,43 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9f. CTA mechanism leak — the active_campaigns prompt block asks the
+  // AI to RECOGNISE a lead coming from a campaign and respond naturally,
+  // not announce the matching mechanism. A real production failure had
+  // the AI emit "welcome, my G! since you sent the word 'market', I'll
+  // hook you up with some free insights. here's a link to get
+  // started:..." — four violations in one message: it quoted the keyword,
+  // over-narrated the link drop, used a corporate "welcome" opener, and
+  // wall-of-texted everything into a single turn.
+  //
+  // These patterns hard-fail the obvious leaks. Not exhaustive (the LLM
+  // can paraphrase), but catches the 80%+ shape of the failure mode.
+  // Always on — no persona opt-out, because no legitimate account wants
+  // the AI to quote the lead's keyword or open with "welcome".
+  const CTA_MECHANISM_LEAK_PATTERNS: RegExp[] = [
+    // "since you sent 'market'" / "since you typed the keyword"
+    /\bsince\s+you\s+(sent|typed|wrote|used|messaged|dropped|commented)\s+(the\s+)?(word|keyword|magic\s+word|phrase|comment)\b/i,
+    /\bsince\s+you\s+(sent|typed|wrote|dropped|commented)\s+['"\u2018\u2019\u201C\u201D][^'"\u2018\u2019\u201C\u201D]{1,40}['"\u2018\u2019\u201C\u201D]/i,
+    // "you used the magic word" / "you said the keyword"
+    /\byou\s+(used|said|sent|typed)\s+the\s+(magic\s+word|keyword|code\s+word|trigger\s+word)/i,
+    // "I'll hook you up with some (free) insights/content/breakdown/video"
+    /\bI'?ll\s+hook\s+you\s+up\s+with\s+(some\s+|a\s+|the\s+)?(free\s+)?(insights?|content|breakdown|info|video|training|resource)/i,
+    // "here's a link to get started" / "here's the link to get you started"
+    /\bhere'?s\s+(a|the)\s+link\s+to\s+get\s+(started|you\s+started)/i,
+    // "thanks for reaching out via (the/my) campaign/post/story"
+    /\bthanks\s+for\s+reaching\s+out\s+(via|through)\s+(the|my)\s+(campaign|story|post|content)/i,
+    // Corporate opener at start of message
+    /^(welcome\s+(my\s+g|to\s+the|aboard|in)|welcome[,!]|hey\s+there[,!]|greetings)/i
+  ];
+  for (const pat of CTA_MECHANISM_LEAK_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `cta_mechanism_leak: matched "${pat.source}" — AI exposed the campaign matching mechanism or used a corporate onboarding opener instead of recognising the lead naturally`
+      );
+      break;
+    }
+  }
+
   // 10b. Fabricated time-slot proposal — the booking flow is script-driven:
   // the AI sends the booking link from the script and the lead picks their
   // own time. The AI must NOT propose specific day+time combinations.
