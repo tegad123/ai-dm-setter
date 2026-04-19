@@ -89,6 +89,19 @@ export interface GenerateReplyResult {
    * passing should NOT promote to QUALIFIED).
    */
   capitalOutcome: CapitalOutcome;
+  /**
+   * Layer 2 safety net: the last LEAD message matched the distress
+   * detector. When true, sendAIReply MUST abort the normal ship path
+   * and route through the distress / supportive response flow
+   * instead (flip aiActive=false, flag the conversation, notify the
+   * operator, ship a dedicated non-sales message via Haiku). Layer 1
+   * (webhook-processor pre-generation gate) normally catches this —
+   * Layer 2 is the backstop for race conditions, retried webhooks, or
+   * any future entry point that bypasses Layer 1.
+   */
+  distressDetected?: boolean;
+  distressMatch?: string | null;
+  distressLabel?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +125,68 @@ export async function generateReply(
   const lastLeadMsg = [...conversationHistory]
     .reverse()
     .find((m) => m.sender === 'LEAD');
+
+  // 0a. LAYER 2 SAFETY NET — distress detection on the last LEAD
+  // message. Layer 1 (webhook-processor.ts pre-generation gate) is the
+  // primary defense; this fires when Layer 1 was somehow bypassed
+  // (retried webhook, race condition with a cron-fired ScheduledReply
+  // that predates the lead's new message, or any future code path
+  // that enters generateReply without going through processIncomingMessage).
+  // On detection we short-circuit — no LLM call, no retry loop. Return
+  // a sentinel result with `distressDetected: true` so sendAIReply
+  // aborts normal delivery and routes through the supportive response
+  // flow (identical to Layer 1's path). This wastes zero tokens and
+  // guarantees a distress message can never receive a sales reply.
+  if (lastLeadMsg) {
+    try {
+      const { detectDistress } = await import('@/lib/distress-detector');
+      const distress = detectDistress(lastLeadMsg.content);
+      if (distress.detected) {
+        console.warn(
+          `[ai-engine] LAYER 2 distress detected — aborting generation. label=${distress.label} match="${distress.match}"`
+        );
+        return {
+          reply: '',
+          messages: [],
+          format: 'text',
+          stage: '',
+          subStage: null,
+          stageConfidence: 0,
+          sentimentScore: 0,
+          experiencePath: null,
+          objectionDetected: null,
+          stallType: null,
+          affirmationDetected: false,
+          followUpNumber: null,
+          softExit: false,
+          escalateToHuman: true,
+          leadTimezone: null,
+          selectedSlotIso: null,
+          leadEmail: null,
+          suggestedTag: '',
+          suggestedTags: [],
+          shouldVoiceNote: false,
+          voiceNoteAction: null,
+          qualityScore: 0,
+          suggestedDelay: 0,
+          systemPromptVersion: 'distress-layer2',
+          suggestionId: null,
+          capitalOutcome: 'not_evaluated',
+          distressDetected: true,
+          distressMatch: distress.match,
+          distressLabel: distress.label
+        };
+      }
+    } catch (err) {
+      // Detection errors must NEVER block normal generation. The Layer 1
+      // gate in webhook-processor.ts already caught anything critical
+      // at the entry point. Log loudly and continue.
+      console.error(
+        '[ai-engine] Layer 2 distress detector threw (non-fatal, continuing):',
+        err
+      );
+    }
+  }
 
   // 0b. Retrieve few-shot examples from training data (non-fatal)
   //     Uses metadata-filtered 3-tier retrieval when context is available.

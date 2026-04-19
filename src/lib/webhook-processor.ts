@@ -556,6 +556,171 @@ export async function processIncomingMessage(
     }
   });
 
+  // ── Step 3b: Distress / crisis detection (SAFETY GATE) ─────────
+  // Scan the inbound message for suicidal ideation, self-harm, and
+  // giving-up-on-life language. When ANY pattern matches:
+  //   1. Flip conversation.aiActive=false and set the distress fields
+  //   2. Cancel any PENDING ScheduledReply rows so the normal pipeline
+  //      can't fire after this point
+  //   3. Create an URGENT SYSTEM notification for the operator
+  //   4. Generate a dedicated supportive (non-sales) response via Haiku
+  //   5. Save + ship + broadcast the supportive response
+  //   6. Return { skipReply: true } so the caller doesn't schedule a
+  //      normal AI reply for this turn
+  // This gate runs BEFORE backfill / re-engagement / broadcast / scoring
+  // so no downstream logic touches a conversation that's been flagged.
+  // Incident: daetradez 2026-04-18 — AI pitched trading at a lead who
+  // said "i want to give up on life itself". This code is the code-
+  // level enforcement that prevents a repeat.
+  try {
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { distressDetectionEnabled: true }
+    });
+    if (account?.distressDetectionEnabled) {
+      const { detectDistress } = await import('@/lib/distress-detector');
+      const distress = detectDistress(messageText);
+      if (distress.detected) {
+        console.warn(
+          `[webhook-processor] DISTRESS DETECTED on conv ${conversationId} — label=${distress.label} match="${distress.match}" lead=@${senderHandle}`
+        );
+        // Pause AI + mark distress atomically. These fields are permanent
+        // — the flag stays true even if an operator re-enables AI later,
+        // so the prompt override can check-in instead of pitching.
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            aiActive: false,
+            distressDetected: true,
+            distressDetectedAt: now,
+            distressMessageId: message.id
+          }
+        });
+        // Cancel any pending scheduled replies — if one was already in
+        // flight from a prior lead message in this batch, it must not
+        // fire. sendAIReply's preflight also re-checks aiActive, so this
+        // is defense-in-depth.
+        await prisma.scheduledReply.updateMany({
+          where: { conversationId, status: 'PENDING' },
+          data: { status: 'CANCELLED' }
+        });
+        // Create the urgent notification. SYSTEM type + prefixed title
+        // so it sorts / renders distinctly in the operator's feed.
+        try {
+          await prisma.notification.create({
+            data: {
+              accountId,
+              type: 'SYSTEM',
+              title: 'URGENT — distress signal detected, review immediately',
+              body: `${senderName} (@${senderHandle}): the lead's latest message matched a crisis / distress pattern ("${distress.match}"). AI has been paused on this conversation. Please review and respond personally.`,
+              leadId: lead.id
+            }
+          });
+        } catch (notifErr) {
+          console.error(
+            '[webhook-processor] Distress notification create failed (non-fatal):',
+            notifErr
+          );
+        }
+        // Broadcast the inbound lead message (so operator sees context
+        // before the supportive response arrives). Normal broadcast
+        // happens later in Step 6 but we haven't gotten there — do it
+        // here explicitly.
+        broadcastNewMessage({
+          id: message.id,
+          conversationId,
+          sender: 'LEAD',
+          content: messageText,
+          timestamp: now.toISOString()
+        });
+        broadcastConversationUpdate({
+          id: conversationId,
+          leadId: lead.id,
+          aiActive: false,
+          unreadCount: (lead.conversation!.unreadCount || 0) + 1,
+          lastMessageAt: now.toISOString()
+        });
+
+        // Generate + ship the supportive (non-sales) response.
+        try {
+          const { generateSupportiveResponse } = await import(
+            '@/lib/distress-response'
+          );
+          const supportiveText = await generateSupportiveResponse(messageText);
+          const supportiveMsg = await prisma.message.create({
+            data: {
+              conversationId,
+              sender: 'AI',
+              content: supportiveText,
+              timestamp: new Date(),
+              // Deliberately no stage / sub_stage — this is not a sales
+              // turn and should not count toward stage progression or
+              // funnel analytics.
+              stage: null,
+              subStage: null
+            }
+          });
+          // Platform send. Use the existing helpers — same retry
+          // behaviour as the normal send path. Failure here is logged
+          // but non-fatal: the message row exists, operator can resend.
+          if (lead.platformUserId) {
+            try {
+              if (lead.platform === 'INSTAGRAM') {
+                await sendInstagramDM(
+                  accountId,
+                  lead.platformUserId,
+                  supportiveText
+                );
+              } else if (lead.platform === 'FACEBOOK') {
+                await sendFacebookMessage(
+                  accountId,
+                  lead.platformUserId,
+                  supportiveText
+                );
+              }
+            } catch (sendErr) {
+              console.error(
+                '[webhook-processor] Distress supportive response platform send failed:',
+                sendErr
+              );
+            }
+          }
+          broadcastNewMessage({
+            id: supportiveMsg.id,
+            conversationId,
+            sender: 'AI',
+            content: supportiveText,
+            timestamp: supportiveMsg.timestamp.toISOString()
+          });
+          broadcastAIStatusChange({ conversationId, aiActive: false });
+        } catch (supErr) {
+          console.error(
+            '[webhook-processor] Distress supportive-response path failed (non-fatal):',
+            supErr
+          );
+        }
+        // Skip the rest of normal processing — no effectiveness backfill,
+        // no re-engagement, no scoring. Return early so caller doesn't
+        // schedule an AI reply.
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: message.id,
+          isNewLead,
+          skipReply: true
+        };
+      }
+    }
+  } catch (detectErr) {
+    // A bug in the detector must NEVER stop normal message processing.
+    // Log loudly and continue — the Layer 2 safety net in ai-engine.ts
+    // runs on every generation as a backstop.
+    console.error(
+      '[webhook-processor] Distress detection threw (non-fatal, continuing to normal processing):',
+      detectErr
+    );
+  }
+
   // ── Step 4: Back-fill effectiveness tracking on previous AI messages
   await backfillEffectivenessTracking(conversationId).catch((err) =>
     console.error('[webhook-processor] Effectiveness tracking error:', err)
@@ -867,7 +1032,12 @@ export async function scheduleAIReply(
     experience: lead.experience || undefined,
     incomeLevel: lead.incomeLevel || undefined,
     geography: lead.geography || undefined,
-    timezone: lead.timezone || undefined
+    timezone: lead.timezone || undefined,
+    // Safety: when the conversation has a previously-detected distress
+    // flag and the operator has re-enabled AI, the prompt needs to
+    // know so it can soft check-in instead of pitching. Permanent flag
+    // — stays true for the life of the conversation.
+    distressDetected: conversation.distressDetected === true
   };
 
   // ── Step 3.0: Inbound qualification classifier (first AI gen only) ──
@@ -1909,8 +2079,122 @@ async function sendAIReply(
       | 'ambiguous'
       | 'not_asked'
       | 'not_evaluated';
+    // Layer 2 safety net: ai-engine flagged the last LEAD message as
+    // distress. sendAIReply MUST reroute through the supportive path
+    // instead of shipping the (empty) normal result.
+    distressDetected?: boolean;
+    distressMatch?: string | null;
+    distressLabel?: string | null;
   }
 ): Promise<void> {
+  // ── LAYER 2 distress handler ──────────────────────────────────
+  // ai-engine.generateReply sets distressDetected=true when the lead's
+  // latest message matched the distress detector — happens when Layer 1
+  // (processIncomingMessage pre-generation gate) was bypassed somehow
+  // (retried webhook, stale cron-fired ScheduledReply, etc.). We run
+  // the SAME flow Layer 1 runs: flip aiActive, flag the conversation,
+  // cancel pending replies, notify the operator, ship a dedicated
+  // supportive response. Skip all normal ship logic below.
+  if (result.distressDetected) {
+    console.warn(
+      `[webhook-processor] Layer 2 distress path engaged for conv ${conversationId} — match="${result.distressMatch}" label=${result.distressLabel}`
+    );
+    try {
+      // Find the lead's most recent message — that's the one that
+      // triggered detection. distressMessageId points at it so the
+      // operator review can jump straight to the offending turn.
+      const latestLead = await prisma.message.findFirst({
+        where: { conversationId, sender: 'LEAD' },
+        orderBy: { timestamp: 'desc' },
+        select: { id: true, content: true }
+      });
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: {
+          aiActive: false,
+          distressDetected: true,
+          distressDetectedAt: new Date(),
+          distressMessageId: latestLead?.id ?? null
+        }
+      });
+      await prisma.scheduledReply.updateMany({
+        where: { conversationId, status: 'PENDING' },
+        data: { status: 'CANCELLED' }
+      });
+      try {
+        await prisma.notification.create({
+          data: {
+            accountId: lead.accountId,
+            type: 'SYSTEM',
+            title: 'URGENT — distress signal detected, review immediately',
+            body: `${lead.name} (@${lead.handle}): the lead's latest message matched a crisis / distress pattern ("${result.distressMatch ?? 'unknown'}"). AI has been paused. Please review and respond personally. (Layer 2 safety net — Layer 1 was bypassed, investigate.)`,
+            leadId: lead.id
+          }
+        });
+      } catch (notifErr) {
+        console.error(
+          '[webhook-processor] Layer 2 distress notification failed (non-fatal):',
+          notifErr
+        );
+      }
+      // Ship the supportive response through the same helper as Layer 1.
+      if (latestLead?.content) {
+        const { generateSupportiveResponse } = await import(
+          '@/lib/distress-response'
+        );
+        const supportiveText = await generateSupportiveResponse(
+          latestLead.content
+        );
+        const supportiveMsg = await prisma.message.create({
+          data: {
+            conversationId,
+            sender: 'AI',
+            content: supportiveText,
+            timestamp: new Date(),
+            stage: null,
+            subStage: null
+          }
+        });
+        if (lead.platformUserId) {
+          try {
+            if (lead.platform === 'INSTAGRAM') {
+              await sendInstagramDM(
+                lead.accountId,
+                lead.platformUserId,
+                supportiveText
+              );
+            } else if (lead.platform === 'FACEBOOK') {
+              await sendFacebookMessage(
+                lead.accountId,
+                lead.platformUserId,
+                supportiveText
+              );
+            }
+          } catch (sendErr) {
+            console.error(
+              '[webhook-processor] Layer 2 supportive platform send failed:',
+              sendErr
+            );
+          }
+        }
+        broadcastNewMessage({
+          id: supportiveMsg.id,
+          conversationId,
+          sender: 'AI',
+          content: supportiveText,
+          timestamp: supportiveMsg.timestamp.toISOString()
+        });
+      }
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Layer 2 distress handler failed (non-fatal, AI still paused):',
+        err
+      );
+    }
+    return;
+  }
+
   // Belt-and-suspenders: re-check that AI is still active at DELIVERY
   // time. This covers two race conditions the scheduling-time check
   // above can't catch on its own:

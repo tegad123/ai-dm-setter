@@ -197,6 +197,16 @@ model Account {
   awayModeFacebookEnabledAt   DateTime?
   ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
 
+  // ── Safety: distress / crisis detection ───────────────────────
+  // True by default. Cannot be toggled via the Persona Editor UI —
+  // this is a safety feature, not a preference. Only an admin with
+  // DB access can disable it. When true, every inbound lead message
+  // is scanned against DISTRESS_PATTERNS before entering the AI
+  // pipeline. Any match pauses AI on the conversation, notifies the
+  // operator, and routes the response through a dedicated supportive
+  // (non-sales) reply path.
+  distressDetectionEnabled   Boolean       @default(true)
+
   // ── Closed-Loop Training ──────────────────────────────────
   trainingPhase              TrainingPhase @default(ONBOARDING)
   trainingPhaseStartedAt     DateTime      @default(now())
@@ -759,6 +769,18 @@ model Conversation {
   leadIntentTag   LeadIntentTag       @default(NEUTRAL)
   dataSource      DataSource          @default(LIVE)
   consentToLog    Boolean             @default(true)
+
+  // ── Safety: distress / crisis detection ───────────────────────
+  // Set true when the lead's message triggered the distress-detector
+  // (suicidal ideation, self-harm, giving-up-on-life language).
+  // Permanent flag — stays true even if an operator re-enables AI
+  // later, so the prompt can inject a "soft check-in, no pitch"
+  // override on resume. distressMessageId points at the Message that
+  // triggered detection so the operator's review can jump straight
+  // to the right turn.
+  distressDetected     Boolean   @default(false)
+  distressDetectedAt   DateTime?
+  distressMessageId    String?
 
   // Stage reached timestamps (set once, when first reached)
   // Legacy stages (kept for historical data)

@@ -102,6 +102,16 @@ export interface LeadContext {
   // when the lead arrived pre-qualified. Tells the AI which stage to start
   // at and summarizes what the lead already told us so we don't re-ask.
   preQualified?: PreQualifiedContext;
+  /**
+   * True when this conversation was previously flagged by the distress
+   * detector and the operator has since re-enabled AI. Injects a
+   * system-prompt override that forces a soft check-in instead of a
+   * sales pitch on the next turn. Flag persists on the conversation
+   * row permanently, so the override applies to every subsequent AI
+   * generation — the intent is: this lead told us something serious,
+   * do NOT pivot back to selling without real human care first.
+   */
+  distressDetected?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,6 +1743,38 @@ The script is the source of truth for what to say and in what order. CONVERSATIO
 
 `;
     prompt = testModePrefix + prompt;
+  }
+
+  // ── Post-distress check-in override ───────────────────────────
+  // When the conversation was previously flagged by the distress
+  // detector (suicidal ideation, self-harm, giving-up-on-life
+  // language) and an operator has re-enabled AI, the next AI turn
+  // MUST NOT resume the sales pitch. Force a soft check-in that
+  // acknowledges the lead's wellbeing without pushing product. The
+  // flag stays permanent on the conversation row, so this override
+  // applies to every AI turn for the life of the conversation. An
+  // operator who explicitly wants sales conversation again can
+  // always take over via manual messages; they cannot inadvertently
+  // route the AI back to pitching someone in crisis.
+  if (leadContext.distressDetected) {
+    const distressOverride = `
+===== POST-DISTRESS CHECK-IN OVERRIDE (CRITICAL SAFETY) =====
+This conversation was previously flagged for distress / crisis language. An operator has re-enabled AI. Your JOB for every turn in this conversation is simple:
+
+1. Do NOT pitch anything. Not the call, not the course, not the downsell, not the YouTube link, not any paid or free resource. NOTHING.
+2. Do NOT ask qualifying questions. Do NOT try to advance the funnel. Do NOT mention trading, strategy, goals, or money.
+3. Check in genuinely. Example tones:
+   - "hey bro, hope you're doing alright. just wanted to check in, no pressure on anything."
+   - "yo man, how you holding up? only reason I'm reaching out is to see how you're doing."
+4. Keep it SHORT — 1-2 sentences max. Genuine, not scripted.
+5. If the lead brings up business, it's OK to engage softly — but YOU never initiate business topics on this conversation.
+
+If the lead explicitly says they're doing better and want to continue the original conversation, you may resume the script on their lead — but only after they've signaled that clearly. Default: check-in, nothing else.
+
+Override this at your peril. A wrong turn here means pitching a person in crisis. That is unacceptable under every circumstance.
+=====
+`;
+    prompt = distressOverride + '\n' + prompt;
   }
 
   return prompt;
