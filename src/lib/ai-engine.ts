@@ -21,6 +21,30 @@ export interface ConversationMessage {
   isVoiceNote?: boolean;
 }
 
+/**
+ * R24 capital-verification outcome for the current turn — exposed so
+ * the webhook-processor can drive the `Lead.stage` update from the
+ * gate result instead of blindly mapping conversation-stage names.
+ *
+ *  - `passed`: lead's stated amount meets or exceeds the threshold
+ *    (or confirmed affirmative on a threshold-confirming Q).
+ *  - `failed`: lead disqualified on capital (stated below threshold
+ *    or hit a disqualifier phrase like "broke" / "jobless").
+ *  - `hedging`: lead hedged without a concrete number — wait for it.
+ *  - `ambiguous`: lead's reply didn't parse — wait for clarification.
+ *  - `not_asked`: verification Q wasn't found in history (or asked
+ *    but not yet answered) — not enough signal to classify.
+ *  - `not_evaluated`: R24 wasn't evaluated this turn (no threshold
+ *    configured, or this turn wasn't routing to booking handoff).
+ */
+export type CapitalOutcome =
+  | 'passed'
+  | 'failed'
+  | 'hedging'
+  | 'ambiguous'
+  | 'not_asked'
+  | 'not_evaluated';
+
 export interface GenerateReplyResult {
   reply: string;
   /**
@@ -57,6 +81,14 @@ export interface GenerateReplyResult {
   systemPromptVersion: string;
   // Closed-loop training
   suggestionId: string | null;
+  /**
+   * R24 gate outcome for the CURRENT turn. Used by the delivery layer
+   * to set `Lead.stage` correctly — a `failed` outcome routes the lead
+   * to UNQUALIFIED, `passed` unlocks QUALIFIED, everything else keeps
+   * the lead's prior stage (reaching FINANCIAL_SCREENING without
+   * passing should NOT promote to QUALIFIED).
+   */
+  capitalOutcome: CapitalOutcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +592,41 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     console.error('[ai-engine] AISuggestion write failed (non-fatal):', err);
   }
 
+  // Derive the R24 capital-verification outcome for this turn. The
+  // webhook-processor consumes this to drive Lead.stage — a FAILED
+  // outcome must route the lead to UNQUALIFIED rather than QUALIFIED,
+  // and a non-passing outcome must not promote past QUALIFYING.
+  // If R24 wasn't evaluated (no threshold configured, or this turn
+  // wasn't routing to booking handoff) we emit `not_evaluated` — the
+  // consumer treats that as "no signal" and falls back to the
+  // stage-name mapping.
+  let capitalOutcome: CapitalOutcome;
+  if (!r24WasEvaluatedThisTurn) {
+    capitalOutcome = 'not_evaluated';
+  } else {
+    switch (r24LastResult.reason) {
+      case 'confirmed_amount':
+      case 'confirmed_affirmative':
+        capitalOutcome = 'passed';
+        break;
+      case 'answer_below_threshold':
+        capitalOutcome = 'failed';
+        break;
+      case 'answer_hedging':
+        capitalOutcome = 'hedging';
+        break;
+      case 'answer_ambiguous':
+        capitalOutcome = 'ambiguous';
+        break;
+      case 'never_asked':
+      case 'asked_but_no_answer':
+        capitalOutcome = 'not_asked';
+        break;
+      default:
+        capitalOutcome = 'not_asked';
+    }
+  }
+
   return {
     reply: parsed.message,
     messages: parsed.messages,
@@ -585,7 +652,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     qualityScore: Math.round(parsed.stageConfidence * 100),
     suggestedDelay,
     systemPromptVersion,
-    suggestionId
+    suggestionId,
+    capitalOutcome
   };
 }
 
