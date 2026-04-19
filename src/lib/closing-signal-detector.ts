@@ -106,6 +106,38 @@ const RECENT_SIGNOFF_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
  */
 const SHORT_MESSAGE_THRESHOLD = 20;
 
+/**
+ * Pure-gratitude patterns. Matches messages like "thank you", "am grateful",
+ * "god bless you", "bless up", "appreciate it". Used for the 2+ consecutive
+ * gratitude detection — after the AI has delivered a final resource (URL)
+ * or signed off, the first gratitude gets a warm LLM response, but further
+ * consecutive gratitude messages are suppressed to avoid thanks-loop spam.
+ *
+ * The threshold for "pure" gratitude is: regex match, no question mark, and
+ * under a generous length (80 chars) so "thank you so much bro you're a
+ * legend 🙏" still counts but a substantive follow-up question doesn't.
+ */
+const GRATITUDE_PATTERN =
+  /\b(thank\s*you|thanks|thx|ty|grateful|appreciate|god\s+bless|bless\s+you|bless\s+up|blessed)\b/i;
+const PURE_GRATITUDE_MAX_CHARS = 80;
+
+/**
+ * URL detection in the AI's last message. When the AI has just delivered a
+ * link (YouTube video, downsell URL, booking link) we treat that as a
+ * "final resource delivered" signal even if no soft-exit phrase was used.
+ * The lead's gratitude that follows is acknowledging the resource, not
+ * asking a question — the 2+ gratitude suppression applies.
+ */
+const URL_PATTERN = /\bhttps?:\/\/|\bwww\./i;
+
+function isPureGratitude(s: string): boolean {
+  const trimmed = s.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.length > PURE_GRATITUDE_MAX_CHARS) return false;
+  if (/\?/.test(trimmed)) return false;
+  return GRATITUDE_PATTERN.test(trimmed);
+}
+
 export interface ClosingSignalResult {
   isClosing: boolean;
   reason: string;
@@ -147,11 +179,17 @@ function normalizeForAckMatch(s: string): string {
  * @param lastAIMessage      Content of the AI's most recent message in
  *                           this conversation, or null.
  * @param lastAIMessageAt    Timestamp of that AI message, or null.
+ * @param priorLeadMessage   The lead's PREVIOUS message (the one before
+ *                           `leadMessage`), regardless of any AI reply in
+ *                           between. Used to detect 2+ consecutive
+ *                           gratitude messages. Pass null when there is
+ *                           no prior lead message (new conversation).
  */
 export function isClosingSignal(
   leadMessage: string,
   lastAIMessage: string | null,
-  lastAIMessageAt: Date | null
+  lastAIMessageAt: Date | null,
+  priorLeadMessage?: string | null
 ): ClosingSignalResult {
   const trimmed = leadMessage.trim();
   if (!trimmed) {
@@ -179,9 +217,41 @@ export function isClosingSignal(
     };
   }
 
-  // Did the AI sign off?
+  // Did the AI sign off OR deliver a final resource (URL)?
+  // URL presence is a strong "handed off something for you to go do"
+  // signal — after the AI drops a YouTube link or downsell URL, any
+  // gratitude that follows is ack'ing the resource, not asking.
   const aiLower = lastAIMessage.toLowerCase();
   const signoffMatch = AI_SIGNOFF_PATTERNS.find((p) => aiLower.includes(p));
+  const aiDeliveredResource = URL_PATTERN.test(lastAIMessage);
+  const aiClosed = Boolean(signoffMatch) || aiDeliveredResource;
+
+  // ── 2+ consecutive gratitude suppression ──────────────────────
+  // Pattern: AI closes (signoff or resource URL). Lead says "thanks"
+  // — AI responds with one warm close via normal LLM generation. Lead
+  // then says "god bless" / "appreciate you" / etc. — THAT second
+  // gratitude is where we suppress, because the conversation has
+  // naturally ended and further acknowledgments are noise. This logic
+  // runs BEFORE the existing word-list ack check so gratitude paths
+  // get their dedicated treatment (first gratitude always allowed
+  // through when AI closed, regardless of CLOSING_WORDS overlap).
+  if (aiClosed && isPureGratitude(trimmed)) {
+    if (priorLeadMessage && isPureGratitude(priorLeadMessage)) {
+      return {
+        isClosing: true,
+        reason: `2+ consecutive gratitude after AI ${aiDeliveredResource ? 'delivered resource' : `signoff "${signoffMatch}"`} — suppressing thanks-loop`
+      };
+    }
+    // First gratitude after AI closed — let the LLM respond warmly
+    // ("appreciate you bro, keep grinding 💪🏿" or similar). The
+    // prompt's close-conversation guidance handles the tone; we just
+    // need to not block the response here.
+    return {
+      isClosing: false,
+      reason: 'first gratitude after AI closed — allow warm close response'
+    };
+  }
+
   if (!signoffMatch) {
     return { isClosing: false, reason: 'AI did not sign off' };
   }

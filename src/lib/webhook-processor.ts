@@ -682,11 +682,24 @@ export async function scheduleAIReply(
         orderBy: { timestamp: 'desc' },
         select: { content: true, timestamp: true }
       });
+      // Lead's previous message (the one immediately before `latestMsg`,
+      // regardless of AI interspersing) — drives the 2+ consecutive
+      // gratitude detection in closing-signal-detector.
+      const prevLead = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          sender: 'LEAD',
+          timestamp: { lt: latestMsg.timestamp }
+        },
+        orderBy: { timestamp: 'desc' },
+        select: { content: true }
+      });
       const { isClosingSignal } = await import('@/lib/closing-signal-detector');
       const check = isClosingSignal(
         latestMsg.content,
         prevAI?.content ?? null,
-        prevAI?.timestamp ?? null
+        prevAI?.timestamp ?? null,
+        prevLead?.content ?? null
       );
       if (check.isClosing) {
         log(
