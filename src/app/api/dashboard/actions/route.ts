@@ -273,6 +273,79 @@ export async function GET(request: NextRequest) {
       )
     ]);
 
+    // ── Dismissal state ──────────────────────────────────────────────
+    // Collect all conversationIds referenced by action items so we can
+    // (a) fetch any DismissedActionItem rows for them and (b) look up
+    // the latest LEAD message per conversation (needed for the
+    // "resurface when lead messages after dismissal" rule).
+    const referencedConvIds = new Set<string>();
+    distressRows.forEach((c) => referencedConvIds.add(c.id));
+    stuckCandidates.forEach((c) => referencedConvIds.add(c.id));
+    pausedSystemRows.forEach((c) => referencedConvIds.add(c.id));
+    capitalRoutingRows.forEach((r) => referencedConvIds.add(r.conversationId));
+    upcomingCallRows.forEach((c) => referencedConvIds.add(c.id));
+    const referencedConvIdList = Array.from(referencedConvIds);
+    const [dismissedRows, latestLeadMsgs] = await Promise.all([
+      referencedConvIdList.length > 0
+        ? safe(
+            prisma.dismissedActionItem.findMany({
+              where: {
+                accountId,
+                conversationId: { in: referencedConvIdList }
+              },
+              select: {
+                conversationId: true,
+                actionType: true,
+                dismissedAt: true
+              }
+            }),
+            []
+          )
+        : Promise.resolve(
+            [] as Array<{
+              conversationId: string;
+              actionType: string;
+              dismissedAt: Date;
+            }>
+          ),
+      referencedConvIdList.length > 0
+        ? safe(
+            prisma.message.findMany({
+              where: {
+                conversationId: { in: referencedConvIdList },
+                sender: 'LEAD'
+              },
+              orderBy: { timestamp: 'desc' },
+              distinct: ['conversationId'],
+              select: { conversationId: true, timestamp: true }
+            }),
+            []
+          )
+        : Promise.resolve(
+            [] as Array<{ conversationId: string; timestamp: Date }>
+          )
+    ]);
+    // Map: convId → latest LEAD message timestamp (or 0 when none).
+    const latestLeadByConv = new Map<string, number>();
+    for (const m of latestLeadMsgs) {
+      latestLeadByConv.set(m.conversationId, m.timestamp.getTime());
+    }
+    // Map: `${convId}:${actionType}` → effective dismissedAt ms. Only
+    // populated when the dismissal is still valid (latest LEAD msg <=
+    // dismissedAt). If a LEAD message arrived after dismissedAt, we
+    // drop the entry — the item resurfaces.
+    const effectiveDismissals = new Map<string, number>();
+    for (const d of dismissedRows) {
+      const latestLead = latestLeadByConv.get(d.conversationId) ?? 0;
+      if (latestLead > d.dismissedAt.getTime()) continue;
+      effectiveDismissals.set(
+        `${d.conversationId}:${d.actionType}`,
+        d.dismissedAt.getTime()
+      );
+    }
+    const isDismissed = (convId: string, actionType: string) =>
+      effectiveDismissals.has(`${convId}:${actionType}`);
+
     // ── Build response payload ──────────────────────────────────────
 
     // PRIORITY 1.A — distress
@@ -283,6 +356,7 @@ export async function GET(request: NextRequest) {
         const lastHuman = c.messages[0]?.timestamp;
         return !lastHuman || lastHuman < c.distressDetectedAt;
       })
+      .filter((c) => !isDismissed(c.id, 'distress'))
       .map((c) => ({
         type: 'distress' as const,
         conversationId: c.id,
@@ -318,6 +392,7 @@ export async function GET(request: NextRequest) {
     const pendingByConv = new Set(pendingReplies.map((p) => p.conversationId));
     const urgentStuck = stuckByLastLead
       .filter((c) => !pendingByConv.has(c.id))
+      .filter((c) => !isDismissed(c.id, 'stuck'))
       .map((c) => {
         const lastTs = c.messages[0].timestamp;
         const hoursWaiting = Math.floor(
@@ -405,6 +480,7 @@ export async function GET(request: NextRequest) {
         }
       }
       attentionPaused = pausedSystemRows
+        .filter((c) => !isDismissed(c.id, 'ai_paused'))
         .map((c) => {
           const notif = latestByLead.get(c.lead.id);
           if (!notif) return null;
@@ -480,6 +556,7 @@ export async function GET(request: NextRequest) {
         if (passingAt && passingAt > r.createdAt) return false;
         return true;
       })
+      .filter((r) => !isDismissed(r.conversationId, 'capital_verification'))
       .map((r) => {
         const conv = convById.get(r.conversationId);
         if (!conv) return null;
@@ -496,15 +573,17 @@ export async function GET(request: NextRequest) {
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
     // PRIORITY 2.C — upcoming calls
-    const attentionUpcomingCalls = upcomingCallRows.map((c) => ({
-      type: 'upcoming_call' as const,
-      conversationId: c.id,
-      leadId: c.lead.id,
-      leadName: c.lead.name,
-      leadHandle: c.lead.handle,
-      callAt: c.scheduledCallAt!.toISOString(),
-      callTimezone: c.scheduledCallTimezone ?? null
-    }));
+    const attentionUpcomingCalls = upcomingCallRows
+      .filter((c) => !isDismissed(c.id, 'upcoming_call'))
+      .map((c) => ({
+        type: 'upcoming_call' as const,
+        conversationId: c.id,
+        leadId: c.lead.id,
+        leadName: c.lead.name,
+        leadHandle: c.lead.handle,
+        callAt: c.scheduledCallAt!.toISOString(),
+        callTimezone: c.scheduledCallTimezone ?? null
+      }));
 
     // PRIORITY 2.D — unreviewed count
     const attentionUnreviewed =

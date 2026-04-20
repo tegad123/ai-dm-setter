@@ -14,7 +14,8 @@ import {
   IconChevronRight,
   IconHeart,
   IconCash,
-  IconChecklist
+  IconChecklist,
+  IconX
 } from '@tabler/icons-react';
 
 // ---------------------------------------------------------------------------
@@ -125,20 +126,24 @@ function relativeTime(iso: string | null, now: number): string {
 }
 
 // Each row looks the same — a coloured priority dot, label, time
-// context, chevron. Clickable wrapper navigates to `href`.
+// context, optional dismiss X, chevron. Clickable wrapper navigates to
+// `href`. The dismiss X is a nested button — we stopPropagation +
+// preventDefault on its click so the Link navigation doesn't fire.
 interface ActionRowProps {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   iconClassName: string;
   primary: React.ReactNode;
   meta?: React.ReactNode;
+  onDismiss?: () => void;
 }
 function ActionRow({
   href,
   icon: Icon,
   iconClassName,
   primary,
-  meta
+  meta,
+  onDismiss
 }: ActionRowProps) {
   return (
     <Link
@@ -154,6 +159,24 @@ function ActionRow({
         <span className='text-muted-foreground text-xs whitespace-nowrap'>
           {meta}
         </span>
+      ) : null}
+      {onDismiss ? (
+        <button
+          type='button'
+          aria-label='Dismiss'
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDismiss();
+          }}
+          className={cn(
+            'text-muted-foreground/60 hover:text-foreground',
+            'hover:bg-muted flex h-6 w-6 shrink-0 items-center justify-center rounded',
+            'opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100'
+          )}
+        >
+          <IconX className='h-3.5 w-3.5' />
+        </button>
       ) : null}
       <IconChevronRight className='text-muted-foreground h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5' />
     </Link>
@@ -172,6 +195,13 @@ function SectionLabel({ label, count }: SectionLabelProps) {
   );
 }
 
+type DismissibleActionType =
+  | 'distress'
+  | 'stuck'
+  | 'ai_paused'
+  | 'capital_verification'
+  | 'upcoming_call';
+
 export function ActionRequired() {
   const [data, setData] = React.useState<ActionsResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -179,6 +209,37 @@ export function ActionRequired() {
   // Tick to force re-render so relative timestamps stay fresh
   // between polls. 60s is fine — finer granularity isn't worth it.
   const [now, setNow] = React.useState(() => Date.now());
+
+  // Optimistic dismiss: remove the item from local state immediately,
+  // then POST to the dismiss endpoint. On network error we log but
+  // leave the UI optimistic — the next 30s poll will re-fetch. If the
+  // server really didn't persist the dismissal, the item resurfaces
+  // on that poll. Net effect: dismiss feels instant, and the rare
+  // failure degrades gracefully.
+  const dismissItem = React.useCallback(
+    (conversationId: string, actionType: DismissibleActionType) => {
+      setData((prev) => {
+        if (!prev) return prev;
+        const filterPred = (item: { type: string; conversationId?: string }) =>
+          !(item.type === actionType && item.conversationId === conversationId);
+        return {
+          ...prev,
+          urgent: prev.urgent.filter(filterPred) as typeof prev.urgent,
+          attention: prev.attention.filter(filterPred) as typeof prev.attention
+        };
+      });
+      void fetch('/api/dashboard/actions/dismiss', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId, actionType })
+      }).catch((err) => {
+        // Non-fatal — next poll will reconcile server state.
+        console.error('[action-required] dismiss POST failed:', err);
+      });
+    },
+    []
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -276,14 +337,20 @@ export function ActionRequired() {
             {urgentCount > 0 && (
               <>
                 <SectionLabel label='Urgent' count={urgentCount} />
-                <div>{data!.urgent.map((item) => renderUrgent(item, now))}</div>
+                <div>
+                  {data!.urgent.map((item) =>
+                    renderUrgent(item, now, dismissItem)
+                  )}
+                </div>
               </>
             )}
             {attentionCount > 0 && (
               <>
                 <SectionLabel label='Needs Attention' count={attentionCount} />
                 <div>
-                  {data!.attention.map((item) => renderAttention(item, now))}
+                  {data!.attention.map((item) =>
+                    renderAttention(item, now, dismissItem)
+                  )}
                 </div>
               </>
             )}
@@ -307,7 +374,11 @@ function EmptyState() {
   );
 }
 
-function renderUrgent(item: UrgentItem, now: number): React.ReactNode {
+function renderUrgent(
+  item: UrgentItem,
+  now: number,
+  onDismiss: (convId: string, type: DismissibleActionType) => void
+): React.ReactNode {
   switch (item.type) {
     case 'distress':
       return (
@@ -326,6 +397,7 @@ function renderUrgent(item: UrgentItem, now: number): React.ReactNode {
             </span>
           }
           meta={relativeTime(item.detectedAt, now)}
+          onDismiss={() => onDismiss(item.conversationId, 'distress')}
         />
       );
     case 'stuck':
@@ -345,9 +417,12 @@ function renderUrgent(item: UrgentItem, now: number): React.ReactNode {
             </span>
           }
           meta={`${item.hoursWaiting}h ago`}
+          onDismiss={() => onDismiss(item.conversationId, 'stuck')}
         />
       );
     case 'delivery_failure':
+      // Aggregate row — not dismissible at the account level.
+      // Operators resolve by fixing the underlying delivery issue.
       return (
         <ActionRow
           key='delivery-failure'
@@ -370,7 +445,11 @@ function renderUrgent(item: UrgentItem, now: number): React.ReactNode {
   }
 }
 
-function renderAttention(item: AttentionItem, now: number): React.ReactNode {
+function renderAttention(
+  item: AttentionItem,
+  now: number,
+  onDismiss: (convId: string, type: DismissibleActionType) => void
+): React.ReactNode {
   switch (item.type) {
     case 'ai_paused':
       return (
@@ -389,6 +468,7 @@ function renderAttention(item: AttentionItem, now: number): React.ReactNode {
             </span>
           }
           meta={relativeTime(item.pausedAt, now)}
+          onDismiss={() => onDismiss(item.conversationId, 'ai_paused')}
         />
       );
     case 'capital_verification':
@@ -408,6 +488,9 @@ function renderAttention(item: AttentionItem, now: number): React.ReactNode {
             </span>
           }
           meta={relativeTime(item.flaggedAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'capital_verification')
+          }
         />
       );
     case 'upcoming_call':
@@ -432,9 +515,12 @@ function renderAttention(item: AttentionItem, now: number): React.ReactNode {
             hour: 'numeric',
             minute: '2-digit'
           })}
+          onDismiss={() => onDismiss(item.conversationId, 'upcoming_call')}
         />
       );
     case 'unreviewed':
+      // Aggregate row — operators resolve by completing reviews, not
+      // by dismissing.
       return (
         <ActionRow
           key='unreviewed'

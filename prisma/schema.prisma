@@ -1359,6 +1359,37 @@ enum TriggerSuggestionStatus {
 // routingAllowed tells you whether the gate permitted the send.
 // regenerationForced fires when the gate blocked the first attempt
 // and pushed the LLM to retry with an override directive.
+// ---------------------------------------------------------------------------
+// Dismissed Action Item — operator-level "I've seen this, stop surfacing it"
+// ---------------------------------------------------------------------------
+// Powers the dismiss button on the Dashboard Overview Action Required
+// section. Each row represents "operator dismissed an action item of type
+// X for conversation Y at time T". The unique constraint on
+// (accountId, conversationId, actionType) makes POST idempotent — the
+// client can retry safely.
+//
+// Auto-resurface: dismissals are void the moment a new LEAD message
+// arrives in the conversation after dismissedAt. The GET endpoint does
+// this comparison at read time using the latest LEAD message timestamp
+// — we don't delete stale DismissedActionItem rows, we just ignore
+// them for surfacing decisions. Keeps the audit trail intact (useful
+// for "has this operator seen the distress signal yet?" questions)
+// while still letting legitimately re-engaged leads bubble back up.
+// ---------------------------------------------------------------------------
+
+model DismissedActionItem {
+  id                String   @id @default(cuid())
+  accountId         String
+  conversationId    String
+  actionType        String   // 'distress' | 'stuck' | 'ai_paused' | 'capital_verification' | 'upcoming_call'
+  dismissedAt       DateTime @default(now())
+  dismissedByUserId String?
+
+  @@unique([accountId, conversationId, actionType])
+  @@index([accountId, conversationId])
+  @@index([dismissedAt])
+}
+
 model BookingRoutingAudit {
   id                               String   @id @default(cuid())
   conversationId                   String
