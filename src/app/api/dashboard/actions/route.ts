@@ -503,16 +503,33 @@ export async function GET(request: NextRequest) {
     }
 
     // PRIORITY 2.B — capital verification (unique by conversation)
+    // Split by blockReason: rows with reason='gate_exhausted_sent_
+    // best_effort' are a DIFFERENT action type (the AI actually sent
+    // the response, now needs review) vs the pre-send block rows
+    // which are "verify before call". Both come from the same
+    // bookingRoutingAudit table, so we partition in JS.
     const seenCapital = new Set<string>();
+    const seenUnverifiedSent = new Set<string>();
     const capitalNeedsResolution: typeof capitalRoutingRows = [];
+    const unverifiedSentRows: typeof capitalRoutingRows = [];
     for (const r of capitalRoutingRows) {
-      if (seenCapital.has(r.conversationId)) continue;
-      seenCapital.add(r.conversationId);
-      capitalNeedsResolution.push(r);
+      if (r.blockReason === 'gate_exhausted_sent_best_effort') {
+        if (seenUnverifiedSent.has(r.conversationId)) continue;
+        seenUnverifiedSent.add(r.conversationId);
+        unverifiedSentRows.push(r);
+      } else {
+        if (seenCapital.has(r.conversationId)) continue;
+        seenCapital.add(r.conversationId);
+        capitalNeedsResolution.push(r);
+      }
     }
-    // Pull the lead names for these conversations + check if a more
-    // recent passing audit row exists (= verified, drop).
-    const capitalConvIds = capitalNeedsResolution.map((r) => r.conversationId);
+    // Pull the lead names for BOTH sets in one query + check if a
+    // more recent passing audit row exists (= verified, drop).
+    const allAuditConvIds = [
+      ...capitalNeedsResolution.map((r) => r.conversationId),
+      ...unverifiedSentRows.map((r) => r.conversationId)
+    ];
+    const capitalConvIds = Array.from(new Set(allAuditConvIds));
     const passingAudits =
       capitalConvIds.length > 0
         ? await safe(
@@ -572,6 +589,35 @@ export async function GET(request: NextRequest) {
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
+    // PRIORITY 2.B2 — unverified AI response sent (best-effort exhaust)
+    // Fix B / booking-fabrication gate exhausted its retries and shipped
+    // the last response as-is rather than escalating. Operator reviews
+    // during daily check; no hard pause. Same dismiss semantics as
+    // other items — resurface if a new LEAD message arrives after
+    // dismissal.
+    const attentionUnverifiedSent = unverifiedSentRows
+      .filter((r) => {
+        const passingAt = passingByConv.get(r.conversationId);
+        // If a passing audit exists AFTER the gate exhaustion, the
+        // lead effectively verified after the fact — drop.
+        if (passingAt && passingAt > r.createdAt) return false;
+        return true;
+      })
+      .filter((r) => !isDismissed(r.conversationId, 'unverified_sent'))
+      .map((r) => {
+        const conv = convById.get(r.conversationId);
+        if (!conv) return null;
+        return {
+          type: 'unverified_sent' as const,
+          conversationId: r.conversationId,
+          leadId: conv.lead.id,
+          leadName: conv.lead.name,
+          leadHandle: conv.lead.handle,
+          flaggedAt: r.createdAt.toISOString()
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
     // PRIORITY 2.C — upcoming calls
     const attentionUpcomingCalls = upcomingCallRows
       .filter((c) => !isDismissed(c.id, 'upcoming_call'))
@@ -596,6 +642,7 @@ export async function GET(request: NextRequest) {
       attention: [
         ...attentionPaused,
         ...attentionCapital,
+        ...attentionUnverifiedSent,
         ...attentionUpcomingCalls,
         ...attentionUnreviewed
       ],

@@ -89,9 +89,22 @@ interface AttentionUnreviewed {
   type: 'unreviewed';
   count: number;
 }
+// Fix B / booking-fabrication gate exhausted retries and shipped the
+// last response as-is. AI stayed active, lead got a reply. Operator
+// reviews during their daily check to confirm the response was
+// reasonable.
+interface AttentionUnverifiedSent {
+  type: 'unverified_sent';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  flaggedAt: string;
+}
 type AttentionItem =
   | AttentionPaused
   | AttentionCapital
+  | AttentionUnverifiedSent
   | AttentionUpcomingCall
   | AttentionUnreviewed;
 
@@ -200,7 +213,8 @@ type DismissibleActionType =
   | 'stuck'
   | 'ai_paused'
   | 'capital_verification'
-  | 'upcoming_call';
+  | 'upcoming_call'
+  | 'unverified_sent';
 
 export function ActionRequired() {
   const [data, setData] = React.useState<ActionsResponse | null>(null);
@@ -491,6 +505,29 @@ function renderAttention(
           onDismiss={() =>
             onDismiss(item.conversationId, 'capital_verification')
           }
+        />
+      );
+    case 'unverified_sent':
+      // Fix B / booking-fabrication exhausted retries, shipped best
+      // effort. Copy tells the operator to review the reply content,
+      // not to jump into the conversation.
+      return (
+        <ActionRow
+          key={`unverified-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconAlertCircle}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — AI sent unverified response, review recommended
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.flaggedAt, now)}
+          onDismiss={() => onDismiss(item.conversationId, 'unverified_sent')}
         />
       );
     case 'upcoming_call':

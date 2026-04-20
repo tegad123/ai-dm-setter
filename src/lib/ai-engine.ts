@@ -669,22 +669,47 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // Flip escalate_to_human so a human teammate picks it up; the
         // webhook-processor will pause aiActive + create a notification.
         parsed.escalateToHuman = true;
-      } else if (fixBBlocked) {
-        // Fix B exhaustion — mirror the R24 escalation. The LLM has
-        // repeatedly tried to advance despite the override directive,
-        // so a human needs to pick up the conversation.
-        console.error(
-          `[ai-engine] Fix B gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+      } else if (fixBBlocked || fabricationBlocked) {
+        // Fix B / booking-fabrication exhaustion — soft-fail policy
+        // (2026-04-20 policy change). Shipping d2a03e8's hard-escalate
+        // created too many cold pauses on conversations where the LLM
+        // was being overly cautious or where the gate pattern tripped
+        // on legitimate content. New behavior: ship the last
+        // best-effort response AS-IS, keep aiActive=true, log an
+        // audit row with a dedicated reason. The dashboard Action
+        // Required surfaces the row as an amber "unverified_sent"
+        // item so the operator reviews during their daily check
+        // without the lead getting ghosted mid-conversation.
+        //
+        // R24 (pre-Fix-A/B behavior) and distress detection retain
+        // their hard-escalation behavior — they catch stricter
+        // classes of failure (capital-below-threshold booking
+        // attempts, suicidal language) where silent best-effort is
+        // not acceptable.
+        const which = fixBBlocked ? 'Fix B' : 'booking fabrication';
+        console.warn(
+          `[ai-engine] ${which} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review`
         );
-        parsed.escalateToHuman = true;
-      } else if (fabricationBlocked) {
-        // Booking fabrication exhaustion — same escalation pattern.
-        // If the LLM keeps claiming real-time booking state after
-        // multiple override attempts, a human needs to handle it.
-        console.error(
-          `[ai-engine] Booking fabrication gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
-        );
-        parsed.escalateToHuman = true;
+        try {
+          await prisma.bookingRoutingAudit.create({
+            data: {
+              conversationId: activeConversationId!,
+              accountId,
+              personaMinimumCapital: capitalThreshold,
+              routingAllowed: false,
+              regenerationForced: true,
+              blockReason: 'gate_exhausted_sent_best_effort',
+              aiStageReported: parsed.stage || null,
+              aiSubStageReported: parsed.subStage || null,
+              contentPreview: parsed.message.slice(0, 200)
+            }
+          });
+        } catch (auditErr) {
+          console.error(
+            '[ai-engine] gate_exhausted_sent_best_effort audit write failed (non-fatal):',
+            auditErr
+          );
+        }
       } else if (!quality.passed) {
         // Voice quality gate exhausted. Normally we ship best-effort —
         // a low-scoring reply is still useful context for the operator
