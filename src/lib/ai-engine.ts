@@ -341,11 +341,29 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     where: { accountId, isActive: true },
     select: {
       minimumCapitalRequired: true,
-      capitalVerificationPrompt: true
+      capitalVerificationPrompt: true,
+      closerName: true,
+      // Fix B uses closer names to catch "call with Anthony" / "chat
+      // with {closerName}" phrases at any stage.
+      promptConfig: true
     }
   });
   const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
   const capitalCustomPrompt = personaForGate?.capitalVerificationPrompt ?? null;
+  // Harvest closer names from both the legacy closerName field and the
+  // newer promptConfig.callHandoff.closerName. Lowercased for case-
+  // insensitive regex construction inside detectBookingAdvancement.
+  const closerNames: string[] = [];
+  if (personaForGate?.closerName) closerNames.push(personaForGate.closerName);
+  const handoffCfg =
+    (personaForGate?.promptConfig as { callHandoff?: { closerName?: string } })
+      ?.callHandoff ?? null;
+  if (
+    handoffCfg?.closerName &&
+    handoffCfg.closerName !== personaForGate?.closerName
+  ) {
+    closerNames.push(handoffCfg.closerName);
+  }
 
   // 4. Call the LLM with quality gate (retry up to 2x on voice fails
   //    AND/OR R24 capital-verification-gate fails). systemPromptForLLM
@@ -416,7 +434,35 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       r24Blocked = r24LastResult.blocked;
     }
 
-    if (quality.passed && !r24Blocked) {
+    // 5c. FIX B — broader capital-advancement gate. Independent of R24's
+    //     `isRoutingToBookingHandoff` trigger; fires on ANY response
+    //     that attempts to advance the lead (by stage OR content) when
+    //     the capital question hasn't been verified yet. Catches LLM
+    //     outputs that mislabel their stage (e.g., reported OPENING
+    //     with "hop on a quick chat with Anthony" in the message),
+    //     which is the Nez Futurez 2026-04-20 failure mode. Creates a
+    //     BookingRoutingAudit row on every block so ops has a 48h
+    //     diagnostic log. Skipped if R24 already blocked this turn —
+    //     one block directive at a time to avoid conflicting overrides.
+    let fixBBlocked = false;
+    let fixBResult: CapitalVerificationBlockResult | null = null;
+    if (
+      !r24Blocked &&
+      activeConversationId &&
+      typeof capitalThreshold === 'number' &&
+      capitalThreshold > 0
+    ) {
+      fixBResult = await shouldBlockForCapitalVerification({
+        parsed,
+        conversationId: activeConversationId,
+        capitalThreshold,
+        capitalCustomPrompt,
+        closerNames
+      });
+      fixBBlocked = fixBResult.blocked;
+    }
+
+    if (quality.passed && !r24Blocked && !fixBBlocked) {
       if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
         console.log(
@@ -462,6 +508,42 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       systemPromptForLLM = systemPrompt + r24Override;
       console.warn(
         `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'}`
+      );
+    }
+
+    // FIX B regeneration path — fires when R24 didn't trigger but the
+    // content-level advancement gate did. Writes a dedicated audit row
+    // so operators can distinguish R24 blocks from Fix B blocks in the
+    // 48h diagnostic review. Injects an override that's almost
+    // identical to R24's `never_asked` directive — the LLM still needs
+    // to ask the capital question, just via a different upstream path.
+    if (fixBBlocked && fixBResult) {
+      const thresholdStr = `$${capitalThreshold!.toLocaleString('en-US')}`;
+      try {
+        await prisma.bookingRoutingAudit.create({
+          data: {
+            conversationId: activeConversationId!,
+            accountId,
+            personaMinimumCapital: capitalThreshold,
+            routingAllowed: false,
+            regenerationForced: true,
+            blockReason: fixBResult.reason,
+            aiStageReported: parsed.stage || null,
+            aiSubStageReported: parsed.subStage || null,
+            contentPreview: parsed.message.slice(0, 200)
+          }
+        });
+      } catch (auditErr) {
+        console.error(
+          '[ai-engine] Fix B BookingRoutingAudit write failed (non-fatal):',
+          auditErr
+        );
+      }
+      const fixBDirective = `Your previous reply attempted to advance this conversation toward a call pitch, booking, or resource handoff — but the lead has NOT yet confirmed they have at least ${thresholdStr} in capital available to start. You MUST regenerate. Your next reply MUST ask the capital verification question before pitching the call, application, or any next step. Use the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") — whichever fits your voice. Do NOT pitch the call or drop any link until the lead confirms an amount. This was detected at LLM stage=${parsed.stage || 'unknown'}, sub_stage=${parsed.subStage ?? 'null'} — so your internal stage labeling is not enough: you must actually ask the question before any advancement language.`;
+      const fixBOverride = `\n\n===== CRITICAL CAPITAL-VERIFICATION OVERRIDE (Fix B) =====\n${fixBDirective}\n=====`;
+      systemPromptForLLM = systemPrompt + fixBOverride;
+      console.warn(
+        `[ai-engine] Fix B gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${fixBResult.reason} stage=${parsed.stage} sub=${parsed.subStage ?? 'null'}`
       );
     }
 
@@ -522,6 +604,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // Final attempt still blocked. Don't ship a bad booking routing.
         // Flip escalate_to_human so a human teammate picks it up; the
         // webhook-processor will pause aiActive + create a notification.
+        parsed.escalateToHuman = true;
+      } else if (fixBBlocked) {
+        // Fix B exhaustion — mirror the R24 escalation. The LLM has
+        // repeatedly tried to advance despite the override directive,
+        // so a human needs to pick up the conversation.
+        console.error(
+          `[ai-engine] Fix B gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
         parsed.escalateToHuman = true;
       } else if (!quality.passed) {
         // Voice quality gate exhausted. Normally we ship best-effort —
@@ -1104,25 +1194,181 @@ interface R24GateResult {
 
 /**
  * Heuristic: does this LLM response route the lead into booking-handoff
- * messaging? Detected via sub_stage + content patterns. Handoff phrases
- * are things like "team is gonna reach out", "let's gooo bro" wrap-ups,
- * "set up your call", "check your email for the confirmation" — the
- * kinds of lines that ONLY make sense once the lead is actually ready
- * to book. A verification question ("you got at least $X ready?") does
- * NOT match these patterns, so it correctly falls through the gate.
+ * messaging? Widened (Fix A, 2026-04-20) after the Nez Futurez incident
+ * where `stage='BOOKING'` with `sub_stage=null` bypassed the gate. Fires
+ * on ANY of these conditions — one match is enough:
+ *
+ *   1. `stage === 'BOOKING'` — regardless of sub_stage. If the LLM self-
+ *      reports BOOKING, treat it as attempted routing, full stop.
+ *   2. `stage === 'SOFT_PITCH_COMMITMENT'` AND the reply contains a URL.
+ *      A URL drop at soft-pitch stage IS a booking attempt even when the
+ *      LLM didn't promote itself to BOOKING.
+ *   3. Reply content matches any handoff / call-pitch phrase — catches
+ *      "hop on a quick chat with Anthony" at ANY stage including the
+ *      early-qualification ones the LLM sometimes mislabels. A
+ *      verification question ("you got at least $X ready?") does NOT
+ *      match these patterns so it correctly falls through the gate.
  */
-function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
+export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
+  // Rule 1: BOOKING stage at any sub_stage.
   if (parsed.stage === 'BOOKING') {
-    if (
-      parsed.subStage === 'BOOKING_CONFIRM' ||
-      parsed.subStage === 'BOOKING_LINK_DROP'
-    ) {
-      return true;
-    }
+    return true;
   }
+  // Rule 2: SOFT_PITCH_COMMITMENT + any URL in the reply body.
+  // Look at the JOINED group text so a multi-bubble turn where the URL
+  // is in bubble 1 and the pitch is in bubble 0 gets caught as a unit.
+  const joinedReply =
+    Array.isArray(parsed.messages) && parsed.messages.length > 0
+      ? parsed.messages.join(' ')
+      : parsed.message;
+  const hasUrl = /\bhttps?:\/\/\S+|\bwww\.\S+/i.test(joinedReply);
+  if (parsed.stage === 'SOFT_PITCH_COMMITMENT' && hasUrl) {
+    return true;
+  }
+  // Rule 3: phrase-match handoff / call-pitch language regardless of
+  // reported stage. Widened phrase list — catches Nez's "send you the
+  // link to apply" at 01:48 plus the soft-pitch "hop on a quick chat
+  // with Anthony" pattern that doesn't name-check the closer in the
+  // existing patterns.
   const handoffPhrases =
-    /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+for|call\s+confirmation)\b/i;
-  return handoffPhrases.test(parsed.message);
+    /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+for|call\s+confirmation|send(ing)?\s+you\s+(the|a)\s+link\s+(to|for)\s+(apply|book|grab|schedule)|here'?s\s+the\s+link|hop\s+on\s+a\s+(quick\s+)?(call|chat)|get\s+you\s+(all\s+)?set\s+up|link\s+to\s+(book|apply|grab|schedule)|gonna\s+send\s+you\s+the\s+link|fill\s+(it\s+|everything\s+)?out\s+and\s+(lmk|let\s+me\s+know)|ready\s+to\s+scale\s+up.*call|break\s+everything\s+down\s+for\s+you)\b/i;
+  return handoffPhrases.test(joinedReply);
+}
+
+/**
+ * Fix B — content-level advancement detection, independent of what the
+ * LLM self-reports for `stage`. An implicit "let me get you on a call
+ * with Anthony" pitched at stage=SITUATION_DISCOVERY is still an
+ * advancement attempt and must hit the capital gate. Wider net than
+ * `isRoutingToBookingHandoff` so it catches LLM outputs that mislabel
+ * their stage.
+ *
+ * Fires on any of:
+ *   - Reported stage in the advancement set (BOOKING,
+ *     SOFT_PITCH_COMMITMENT, FINANCIAL_SCREENING)
+ *   - Content matches a pitch / handoff / book-the-call phrase
+ *
+ * Returns false for verification questions ("you got at least $X?")
+ * and for normal qualification Q&A.
+ */
+export function detectBookingAdvancement(
+  parsed: ParsedAIResponse,
+  closerNames: string[] = []
+): boolean {
+  const stage = (parsed.stage || '').toUpperCase();
+  if (
+    stage === 'BOOKING' ||
+    stage === 'SOFT_PITCH_COMMITMENT' ||
+    stage === 'FINANCIAL_SCREENING'
+  ) {
+    return true;
+  }
+  const joined =
+    Array.isArray(parsed.messages) && parsed.messages.length > 0
+      ? parsed.messages.join(' ')
+      : parsed.message;
+  // Content phrase list — tuned to Daniel's script patterns.
+  // Includes "right hand man" / closer-name mentions because the AI
+  // frequently pitches the call by name-checking the closer.
+  const advancementPhrases: RegExp[] = [
+    /\bhop\s+on\s+a\s+(quick\s+)?(call|chat)\b/i,
+    /\bget\s+you\s+on\s+a\s+(quick\s+)?(call|chat)\b/i,
+    /\bsend(ing)?\s+you\s+the\s+link\b/i,
+    /\blink\s+to\s+(apply|book|grab|schedule)\b/i,
+    /\bfill\s+(it\s+|everything\s+)?out\b/i,
+    /\bset\s+(it\s+|you\s+)?up\s+with\b/i,
+    /\bbreak\s+everything\s+down\s+for\s+you\b/i,
+    /\bright\s+hand\s+man\b/i,
+    /\bready\s+to\s+(scale|level)\s+up\b/i,
+    /\bgonna\s+send\s+you\s+the\s+link\b/i,
+    /\bhere'?s\s+the\s+link\b/i,
+    /\b(you'?re\s+)?all\s+set\b/i
+  ];
+  if (advancementPhrases.some((p) => p.test(joined))) return true;
+  // Closer-name mentions combined with call-arrangement language.
+  // Fires when the LLM says "chat with {closerName}" or similar at
+  // ANY stage — Daniel's AI has pitched "Anthony" at OPENING before.
+  for (const name of closerNames) {
+    if (!name || name.trim().length < 2) continue;
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pat = new RegExp(
+      `\\b(call|chat|hop\\s+on.*|set\\s+(it|you)\\s+up|link.*apply|link.*book|get\\s+you\\s+set).*${escaped}|${escaped}.*\\b(call|chat|reach\\s+out|gonna\\s+contact|get\\s+in\\s+touch)\\b`,
+      'i'
+    );
+    if (pat.test(joined)) return true;
+  }
+  return false;
+}
+
+interface CapitalVerificationBlockResult {
+  blocked: boolean;
+  reason:
+    | 'no_threshold_configured'
+    | 'already_verified'
+    | 'verified_in_history'
+    | 'not_advancing'
+    | 'capital_not_verified_before_advancement';
+}
+
+/**
+ * Fix B — advancement-gate. Independent of R24's `isRoutingToBooking
+ * Handoff` trigger: fires on ANY AI response that attempts to advance
+ * the lead toward booking, regardless of how the LLM labeled its
+ * stage. Skips when:
+ *   - No capital threshold configured on the persona
+ *   - A prior BookingRoutingAudit already recorded routingAllowed=true
+ *     for this conversation (the lead was verified once, we don't
+ *     re-gate every subsequent advancement attempt)
+ *   - The capital question has been asked AND the lead's answer maps
+ *     to `confirmed_amount` / `confirmed_affirmative` per the existing
+ *     R24 classifier
+ * Blocks when the response advances toward booking AND none of the
+ * skip conditions apply. Caller is expected to inject a directive and
+ * regenerate, identical in shape to R24's `never_asked` flow.
+ */
+async function shouldBlockForCapitalVerification(params: {
+  parsed: ParsedAIResponse;
+  conversationId: string;
+  capitalThreshold: number | null;
+  capitalCustomPrompt: string | null;
+  closerNames?: string[];
+}): Promise<CapitalVerificationBlockResult> {
+  const { parsed, conversationId, capitalThreshold, capitalCustomPrompt } =
+    params;
+  if (typeof capitalThreshold !== 'number' || capitalThreshold <= 0) {
+    return { blocked: false, reason: 'no_threshold_configured' };
+  }
+  // Short-circuit 1: prior routingAllowed=true audit for this convo
+  // means the lead has passed R24 at least once. Don't re-gate further
+  // advancement attempts (Daniel's script may pitch twice, confirm
+  // email, etc. — we don't want to spam-block the follow-up turns).
+  const prior = await prisma.bookingRoutingAudit.findFirst({
+    where: { conversationId, routingAllowed: true },
+    select: { id: true }
+  });
+  if (prior) {
+    return { blocked: false, reason: 'already_verified' };
+  }
+  // Short-circuit 2: run the existing R24 classifier against history.
+  // If the lead has stated an adequate amount or affirmed the
+  // threshold-Q, treat as verified even without a prior audit row.
+  const r24 = await checkR24Verification(
+    conversationId,
+    capitalThreshold,
+    capitalCustomPrompt
+  );
+  if (
+    !r24.blocked &&
+    (r24.reason === 'confirmed_amount' ||
+      r24.reason === 'confirmed_affirmative')
+  ) {
+    return { blocked: false, reason: 'verified_in_history' };
+  }
+  // Check the current response for advancement. If yes → block.
+  if (detectBookingAdvancement(parsed, params.closerNames ?? [])) {
+    return { blocked: true, reason: 'capital_not_verified_before_advancement' };
+  }
+  return { blocked: false, reason: 'not_advancing' };
 }
 
 /**

@@ -554,10 +554,54 @@ export function scoreVoiceQuality(
   const hasApprovedEmoji = approvedEmojis.some((e) => reply.includes(e));
   softSignals.approved_emoji = hasApprovedEmoji ? 0.5 : 0;
 
+  // ── R22 SOFT SIGNAL: stall-acceptance detection ─────────────────
+  // Daniel's R22 (timing objections must be pinned, not accepted)
+  // policy. Detect AI replies that let the lead walk away with
+  // zero commitment ("hit me up when ready", "I'm here when you
+  // need", "reach out whenever", "take your time"). These phrases
+  // mean the conversation is ending without a follow-up anchor and
+  // — empirically — those leads don't come back.
+  //
+  // Scored as a soft penalty (-0.3) rather than a hard fail:
+  //   - The exact wording sometimes appears legitimately AFTER a
+  //     lead has actually committed to a follow-up time, in which
+  //     case context (not pattern alone) determines validity.
+  //   - We want to accumulate signal in production before
+  //     escalating to hard-fail status. -0.3 is enough to push a
+  //     borderline reply (~0.7 score) under the 0.7 pass threshold
+  //     when combined with other soft losses, but not enough to
+  //     unilaterally fail an otherwise-clean reply.
+  //
+  // If this flags too many false positives in production logs,
+  // tighten the regex; if it's reliable, upgrade to hard-fail.
+  const stallAcceptancePatterns: RegExp[] = [
+    /\bhit\s+me\s+up\s+when(\s+you'?re|\s+u'?re)?\s+ready\b/i,
+    /\blet\s+me\s+know\s+when(\s+you'?re|\s+u'?re)?\s+ready\b/i,
+    /\b(i'?m|im)\s+here\s+when\s+you\s+need\b/i,
+    /\breach\s+out\s+whenever\b/i,
+    /\bhit\s+me\s+up\s+whenever\b/i,
+    /\btake\s+your\s+time\s+bro\b/i,
+    /\bno\s+rush\s+(bro|man)?,?\s+(hit|reach|let)/i,
+    /\bjust\s+let\s+me\s+know\s+when\s+you'?re\s+ready\b/i,
+    /\b(i'?m|im)\s+here\s+whenever\s+you'?re\s+ready\b/i
+  ];
+  const stallAcceptanceMatched = stallAcceptancePatterns.some((p) =>
+    p.test(reply)
+  );
+  if (stallAcceptanceMatched) {
+    // Negative value — subtracts from rawScore. Tracked under a
+    // distinct key so analytics can count fires over time.
+    softSignals.r22_stall_acceptance = -0.3;
+  }
+
   // ── Calculate final score ───────────────────────────────────────
   const maxScore = 4.0; // 1 + 1 + 1 + 0.5 + 0.5 (emoji is bonus, not required)
   const rawScore = Object.values(softSignals).reduce((a, b) => a + b, 0);
-  const score = Math.min(1.0, rawScore / maxScore);
+  // Clamp to [0, 1] — the R22 negative penalty can push rawScore
+  // below 0 on otherwise-empty replies; a negative score is
+  // meaningless to downstream consumers and breaks the >= 0.7
+  // pass threshold semantics.
+  const score = Math.max(0, Math.min(1.0, rawScore / maxScore));
 
   return {
     score,

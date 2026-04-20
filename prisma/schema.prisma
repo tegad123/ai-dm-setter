@@ -1368,6 +1368,16 @@ model BookingRoutingAudit {
   verificationConfirmedAtMessageId String?
   routingAllowed                   Boolean
   regenerationForced               Boolean  @default(false)
+  // Fix B additions — a "why did the gate fire" column so 48h
+  // diagnostic reviews can distinguish R24 audits (sub_stage-
+  // specific) from Fix B's broader advancement gate. Plus the LLM's
+  // self-reported stage / sub_stage and a preview of the blocked
+  // content so operators don't need to cross-reference the Message
+  // table to review what the LLM tried to ship.
+  blockReason                      String?
+  aiStageReported                  String?
+  aiSubStageReported               String?
+  contentPreview                   String?
   createdAt                        DateTime @default(now())
 
   @@index([conversationId, createdAt])
