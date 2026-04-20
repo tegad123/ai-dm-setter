@@ -533,6 +533,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         case 'answer_ambiguous':
           r24Directive = `The lead's reply to the capital question didn't give a clear answer ("depends", "varies", "not sure", etc.). Do NOT route to booking. Ask a short clarifying question that gets a concrete dollar figure. Do NOT send booking-handoff messaging yet.`;
           break;
+        case 'answer_prop_firm_only':
+          r24Directive = `The lead mentioned a prop firm, funded account, or challenge (FTMO / Apex / Topstep / etc.) but did NOT state personal capital they have set aside. Firm capital is NOT personal capital — the lead accessing a $100k challenge account means the FIRM put up that money, not the lead. Do NOT route to booking. Ask specifically about PERSONAL capital: something like "respect bro, prop firms are solid. but what I'm asking is what YOU'VE got set aside for your own education and trading — not the firm's money. you got ${thresholdStr} ready on your end?". Make the distinction clear and wait for a concrete answer.`;
+          break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
       systemPromptForLLM = systemPrompt + r24Override;
@@ -878,6 +881,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         capitalOutcome = 'hedging';
         break;
       case 'answer_ambiguous':
+      case 'answer_prop_firm_only':
+        // Prop-firm-only is an ambiguous-class outcome for the
+        // downstream `capitalOutcome` consumer (lead.stage mapping).
+        // The directive-specific handling lives in the R24 override
+        // switch above; the lead.stage side just needs "not passed".
         capitalOutcome = 'ambiguous';
         break;
       case 'never_asked':
@@ -1274,7 +1282,8 @@ type R24Reason =
   | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet
   | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
   | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
-  | 'answer_ambiguous'; // Lead's reply didn't parse ("depends", "varies")
+  | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
+  | 'answer_prop_firm_only'; // Lead mentioned a prop firm but no personal capital
 
 interface R24GateResult {
   /** True = block this response, force regen with override directive. */
@@ -1620,7 +1629,36 @@ function parseLeadAmountFromReply(text: string): number | null {
 interface ParsedLeadAnswer {
   kind: 'amount' | 'disqualifier' | 'hedging' | 'affirmative' | 'ambiguous';
   amount: number | null;
+  /**
+   * Optional fine-grained reason — lets callers pick a more specific
+   * override directive when regenerating. Set for the prop-firm
+   * edge case so the directive can ask for PERSONAL capital
+   * specifically rather than a generic clarifier.
+   */
+  reason?:
+    | 'prop_firm_mentioned_no_personal_capital_stated'
+    | 'no_pattern_matched'
+    | 'generic';
 }
+
+// Prop-firm phrase list. Lead responses that reference a prop firm but
+// don't clearly state personal capital need a clarifying follow-up
+// because firm capital !== personal capital — the $1k-$100k the lead
+// "has" via an FTMO / Apex / Topstep challenge is the FIRM's money.
+// See Tahir 2026-04-20 incident.
+const PROP_FIRM_PATTERN =
+  /\b(prop\s+firm|funded\s+account|funded\s+trader|ftmo|apex|topstep|the5ers|my\s+funded|firm'?s?\s+capital|firm\s+account|prop\s+challenge|challenge\s+account|funded\s+challenge|evaluation\s+account|\$k?\s*challenge|10k\s+challenge|25k\s+challenge|50k\s+challenge|100k\s+challenge|200k\s+challenge)\b/i;
+
+// Personal-capital indicators: when these appear alongside a prop-firm
+// mention, the number in the message is more likely tied to personal
+// savings than firm capital ("Yeah I got 4k plus my prop firm" → 4k
+// is personal). Without these, prop-firm + number classifies as
+// ambiguous with the prop-firm reason.
+const PERSONAL_CAPITAL_INDICATOR =
+  /\b(i\s+(have|got|saved|put|set)|i'?ve\s+(got|saved|put|set)|my\s+(savings|personal|own|capital|money|side))\b/i;
+const PLUS_PHRASE =
+  /\b(plus|also|on\s+top\s+of|besides|separate\s+from|aside\s+from|in\s+addition\s+to|as\s+well\s+as)\b/i;
+
 export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
 
@@ -1649,6 +1687,27 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     return { kind: 'disqualifier', amount: 0 };
   }
 
+  // 1b. PROP-FIRM GUARD (Tahir Khan 2026-04-20).
+  //     Lead says "I'm on FTMO 100k challenge" — the number refers to
+  //     the FIRM's capital, not personal. Without this check the amount
+  //     parser below would happily accept 100000 and R24 would pass.
+  //     Only tolerate the number when a personal-capital indicator or
+  //     "plus X" phrase is present alongside the prop-firm mention
+  //     (e.g. "I got 4k plus my prop firm" → 4k IS personal).
+  if (PROP_FIRM_PATTERN.test(text)) {
+    const hasPersonalIndicator =
+      PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text);
+    if (!hasPersonalIndicator) {
+      return {
+        kind: 'ambiguous',
+        amount: null,
+        reason: 'prop_firm_mentioned_no_personal_capital_stated'
+      };
+    }
+    // else: personal-capital language is present → fall through to
+    // amount parse; the number is (likely) personal not firm-tied.
+  }
+
   // 2. Amount (numeric parse). Even if the lead also says "kinda" or
   //    includes hedging words, a concrete number beats the hedge —
   //    we'll compare it to threshold later.
@@ -1672,7 +1731,7 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
       text
     )
   ) {
-    return { kind: 'ambiguous', amount: null };
+    return { kind: 'ambiguous', amount: null, reason: 'generic' };
   }
 
   // 5. Legacy affirmative ("yeah" / "got it" / "for sure") with no
@@ -1686,7 +1745,12 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     return { kind: 'affirmative', amount: null };
   }
 
-  return { kind: 'ambiguous', amount: null };
+  // Default fallback — nothing matched any category. Treat as
+  // ambiguous so the gate asks a clarifying question rather than
+  // silently passing. The reason tag lets the directive layer
+  // distinguish "lead said something unparseable" from the other
+  // explicit-ambiguous cases above.
+  return { kind: 'ambiguous', amount: null, reason: 'no_pattern_matched' };
 }
 
 /**
@@ -1900,7 +1964,11 @@ async function checkR24Verification(
     default:
       return {
         blocked: true,
-        reason: 'answer_ambiguous',
+        reason:
+          classification.reason ===
+          'prop_firm_mentioned_no_personal_capital_stated'
+            ? 'answer_prop_firm_only'
+            : 'answer_ambiguous',
         parsedAmount: null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
