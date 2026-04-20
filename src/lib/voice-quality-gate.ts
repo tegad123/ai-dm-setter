@@ -594,6 +594,35 @@ export function scoreVoiceQuality(
     softSignals.r22_stall_acceptance = -0.3;
   }
 
+  // ── R28 SOFT SIGNAL: free-resources mentioned without a URL ─────
+  // Daniel's R28 (downsell-then-free-resources, with URL inline)
+  // policy. When the AI references "my channel", "my yt", "free
+  // content", "videos on my page" etc. WITHOUT a URL in the same
+  // reply, the lead is being told to go searching for the resource.
+  // Empirically they don't — naming the channel without dropping
+  // the link is the same as not sending the resource at all. The
+  // R22 free-resources rule (don't ask permission) already says
+  // "just send it"; this signal catches the variant where the AI
+  // thinks it's sending the resource by namechecking the channel
+  // but never includes the URL.
+  //
+  // Scored as a soft penalty (-0.3) so the gate doesn't false-fire
+  // on legitimate mentions like "we'll have content on the channel
+  // soon" — those are rare. If the production logs show this is
+  // reliable, upgrade to hard-fail.
+  const hasUrl = /\bhttps?:\/\/\S+|\bwww\.\S+/i.test(reply);
+  const channelMentionPatterns: RegExp[] = [
+    /\bcheck\s+out\s+(my|the|our|some)\s+(channel|resources|free\s+content|videos|yt|youtube)\b/i,
+    /\bgo\s+(check|look|see)\s+(out\s+)?(my|the|our)\s+(channel|yt|youtube|resources|videos)\b/i,
+    /\bi\s+(have|got)\s+some\s+(free\s+)?(resources|videos|content)\s+(for\s+you|to\s+share)?\b/i,
+    /\b(my|the|our)\s+(yt|youtube)\s+(channel\s+)?(has|got)\b/i,
+    /\bon\s+(my|the|our)\s+(channel|yt|youtube|page)\b/i
+  ];
+  const channelMentioned = channelMentionPatterns.some((p) => p.test(reply));
+  if (channelMentioned && !hasUrl) {
+    softSignals.r28_free_resources_no_link = -0.3;
+  }
+
   // ── Calculate final score ───────────────────────────────────────
   const maxScore = 4.0; // 1 + 1 + 1 + 0.5 + 0.5 (emoji is bonus, not required)
   const rawScore = Object.values(softSignals).reduce((a, b) => a + b, 0);
