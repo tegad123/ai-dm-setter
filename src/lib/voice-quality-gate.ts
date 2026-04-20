@@ -693,6 +693,59 @@ function checkCtaAckOnlyTruncation(joinedText: string): string | null {
   return null;
 }
 
+// Link-promise-without-URL patterns. Match future/present-tense
+// announcements of delivering a link / URL / application. Past-tense
+// references ("I sent you the link yesterday") must NOT match — only
+// current-turn promises that should include the URL inline.
+//
+// Incident driving this gate (Shishir 2026-04-20): AI said "I'm gonna
+// send you the link to apply. fill everything out and lmk when you're
+// done 💪🏿" with NO URL in the reply. Lead sat waiting. R22's [LINK]
+// placeholder guard (commit 14e8115) covers "[BOOKING LINK]" literal
+// leaks, but not this case where the AI announces the send in natural
+// prose and never attaches the URL.
+const LINK_PROMISE_PATTERNS: RegExp[] = [
+  // "I'll send you the link" / "gonna send you the link" / "lemme
+  // send you the link" / "i'm about to send you the link"
+  /\b(i'?ll|lemme|let\s+me|gonna|going\s+to|about\s+to|i'?m\s+(gonna|going\s+to|about\s+to))\s+(send|drop|shoot|share|grab|get)\s+(you\s+)?(the\s+|a\s+|this\s+|your\s+|my\s+)?(link|url|application|typeform|form|booking\s+link|booking\s+url)\b/i,
+  // Present continuous: "sending you the link" / "dropping the link"
+  /\b(sending|dropping|shooting|sharing|grabbing)\s+(you\s+)?(the\s+|a\s+|this\s+|your\s+|my\s+)?(link|url|application|typeform|form|booking\s+link|booking\s+url)\b/i,
+  // "here's the link" / "here is the link" — colon often follows with URL.
+  // The URL-absence check in the caller is what makes this a fail.
+  /\bhere'?s\s+(the\s+|a\s+|your\s+|my\s+)?(link|url|application|booking\s+link|typeform|form)\b/i,
+  // "check your dm" / "check the link above" style — ambiguous. Skip
+  // for now; false-positive risk too high.
+  // Bare "send you the link" / "drop the link" / "shoot you the link"
+  /\b(send|drop|shoot)\s+you\s+the\s+link\b/i
+];
+
+function containsUrl(text: string): boolean {
+  return /\bhttps?:\/\/\S+|\bwww\.\S+\.\S+/i.test(text);
+}
+
+/**
+ * Returns a hardFail reason string if the joined group promises to
+ * send a link / URL / application but no URL is actually present.
+ * Returns null if the group is fine (URL present, or no promise).
+ *
+ * Past-tense references ("I sent you the link earlier") do NOT match
+ * because LINK_PROMISE_PATTERNS require present/future tense verbs.
+ *
+ * Multi-bubble safe: evaluates the JOINED group text. If bubble 0
+ * promises and bubble 1 contains the URL, no fire — the URL IS in
+ * the turn, just in a later bubble.
+ */
+function checkLinkPromiseWithoutUrl(joinedText: string): string | null {
+  if (containsUrl(joinedText)) return null;
+  for (const pat of LINK_PROMISE_PATTERNS) {
+    const m = joinedText.match(pat);
+    if (m) {
+      return `link_promise_without_url: matched "${m[0]}" — reply announces sending a link but the URL is missing from the group. The lead is left waiting. Every link-promise reply MUST include the actual URL (from the script's Available Links & URLs section) in the same turn.`;
+    }
+  }
+  return null;
+}
+
 export interface GroupQualityResult {
   /** Worst (minimum) per-bubble score. */
   score: number;
@@ -748,6 +801,14 @@ export function scoreVoiceQualityGroup(
   const ackFailure = checkCtaAckOnlyTruncation(joined);
   if (ackFailure) {
     hardFails.push(`[group] ${ackFailure}`);
+  }
+
+  // Group-level link-promise check (Shishir 2026-04-20 incident).
+  // Evaluates the joined group so a multi-bubble turn where the URL
+  // is in bubble 1 and the announcement is in bubble 0 doesn't fire.
+  const linkPromiseFailure = checkLinkPromiseWithoutUrl(joined);
+  if (linkPromiseFailure) {
+    hardFails.push(`[group] ${linkPromiseFailure}`);
   }
 
   // Voice quality score: evaluate the JOINED turn, NOT per-bubble.

@@ -661,6 +661,23 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] CTA acknowledgment-only truncation detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
+
+      // Link-promise-without-URL directive (Shishir 2026-04-20).
+      // The LLM announced a link send but didn't include the URL.
+      // Same class of failure as ack-truncation: natural regen
+      // tends to reproduce the same mistake. Inject an explicit
+      // override telling the model to INCLUDE the URL from the
+      // script's Available Links section.
+      const linkPromiseFailed = quality.hardFails.some((f) =>
+        f.includes('link_promise_without_url:')
+      );
+      if (linkPromiseFailed) {
+        const linkOverride = `\n\n===== LINK-PROMISE-WITHOUT-URL OVERRIDE =====\nYour previous reply announced sending a link ("I'll send you the link" / "here's the link" / "sending you the link" / etc.) but did NOT include the actual URL. The lead is now waiting with nothing to click. You MUST regenerate. Your next reply MUST include the EXACT URL from the script's "Available Links & URLs" section inline with your message. Do NOT say you'll send a link and then fail to include it. The URL IS the delivery — the words around it are just framing. Put the URL on its own line or inline: "here's the link: <URL>" / "grab a time that works for you: <URL>" / "<URL> fill it out and lmk when done". The URL must be a real https:// link from the script, not a placeholder like [LINK] or [BOOKING LINK].\n=====`;
+        systemPromptForLLM = systemPrompt + linkOverride;
+        console.warn(
+          `[ai-engine] Link promise without URL detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
     }
 
     if (attempt === MAX_RETRIES) {
