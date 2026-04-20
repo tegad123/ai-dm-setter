@@ -2333,6 +2333,61 @@ async function sendAIReply(
     return;
   }
 
+  // ── Ship-time bracketed-placeholder guard (P0) ────────────────
+  // Defense-in-depth: even though voice-quality-gate.ts's
+  // bracketed_placeholder_leaked hard fail is supposed to block
+  // this at generation time AND ai-engine.ts's retry-exhaustion
+  // branch now escalates rather than ships on that hard fail,
+  // we re-scan right before the platform send. [BOOKING LINK]
+  // reaching a lead is a P0 (Steven Petty 2026-04-20) — the lead
+  // cannot click a literal placeholder, the conversation is
+  // broken, and we'd rather pause + notify than ship a dead
+  // message.
+  //
+  // Pattern matches any [A-Z][A-Z0-9 _]{2+} token (same as the
+  // voice-gate regex). Scans EVERY bubble in the group — if
+  // any contains a placeholder, the entire send is blocked.
+  const BRACKETED_PLACEHOLDER_AT_SHIP = /\[[A-Z][A-Z0-9 _]{2,}\]/;
+  const placeholderBubble = bubblesForEmptyCheck.find(
+    (b) => typeof b === 'string' && BRACKETED_PLACEHOLDER_AT_SHIP.test(b)
+  );
+  if (placeholderBubble) {
+    const match = placeholderBubble.match(BRACKETED_PLACEHOLDER_AT_SHIP);
+    console.error(
+      `[webhook-processor] bracketed_placeholder_at_ship for conv ${conversationId} — AI output still contained "${match?.[0]}" after retry loop. Pausing AI, notifying operator, no platform send.`
+    );
+    try {
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'AI produced bracketed placeholder — human takeover required',
+          body: `${lead.name} (@${lead.handle}): the AI's last generation contained a literal placeholder token (${match?.[0] ?? '[PLACEHOLDER]'}) that cannot reach the lead — typically "[BOOKING LINK]" or similar. AI is now paused on this conversation. Please review and send the correct URL manually.`,
+          leadId: lead.id
+        }
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Bracketed-placeholder escalation bookkeeping failed (non-fatal):',
+        err
+      );
+    }
+    return;
+  }
+
   // ── Dedup safety net ──────────────────────────────────────────
   // Last-line defense against near-duplicate sends that slip through the
   // debounce + cancel-pending + 25s recency guard. Compare the new reply

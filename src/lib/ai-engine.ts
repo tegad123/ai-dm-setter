@@ -731,23 +731,42 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           );
         }
       } else if (!quality.passed) {
-        // Voice quality gate exhausted. Normally we ship best-effort —
-        // a low-scoring reply is still useful context for the operator
-        // and the downstream dedup + empty guard catch the truly bad
-        // cases. But if all retries returned empty / whitespace-only
-        // content, best-effort means shipping nothing: escalate instead
-        // so the empty-message guard in sendAIReply doesn't have to be
-        // the ONLY defense (and so the operator sees the escalation
-        // rather than a silent pause).
+        // Voice quality gate exhausted. Most voice-quality failures are
+        // "soft" — low score from missing emoji, one long sentence,
+        // minor voice drift. Best-effort ship for those is fine.
+        //
+        // But some voice-quality hard fails produce output that's
+        // objectively UNSHIPPABLE regardless of the rest of the
+        // message:
+        //   - bracketed_placeholder_leaked: literal "[BOOKING LINK]"
+        //     reaches the lead, who can't click it — Steven Petty
+        //     2026-04-20 incident.
+        //   - link_promise_without_url: "I'll send you the link" with
+        //     no URL anywhere — the ship has nothing to deliver.
+        //   - empty output: nothing to send at all.
+        //
+        // For these unshippable classes, escalate to human instead of
+        // best-effort shipping. The operator review workflow is a
+        // better fallback than shipping a broken message to the lead.
         const allBubblesEmpty =
           !Array.isArray(parsed.messages) ||
           parsed.messages.length === 0 ||
           parsed.messages.every(
             (b) => typeof b !== 'string' || b.trim().length === 0
           );
+        const hasUnshippableFailure = quality.hardFails.some(
+          (f) =>
+            f.includes('bracketed_placeholder_leaked:') ||
+            f.includes('link_promise_without_url:')
+        );
         if (allBubblesEmpty) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
+          );
+          parsed.escalateToHuman = true;
+        } else if (hasUnshippableFailure) {
+          console.error(
+            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts with UNSHIPPABLE hard fail — forcing escalate_to_human on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
           );
           parsed.escalateToHuman = true;
         } else {
