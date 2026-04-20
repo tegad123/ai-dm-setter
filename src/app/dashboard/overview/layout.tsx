@@ -1,5 +1,6 @@
 import PageContainer from '@/components/layout/page-container';
 import { Badge } from '@/components/ui/badge';
+import { ActionRequired } from '@/features/overview/components/action-required';
 import { KpiCards } from '@/features/overview/components/kpi-cards';
 import React from 'react';
 
@@ -25,6 +26,11 @@ export default function OverviewLayout({
             Live
           </Badge>
         </div>
+
+        {/* Action Required — operator command center, sits above
+            metrics so the FIRST thing the operator sees is what
+            needs their attention right now. */}
+        <ActionRequired />
 
         {/* KPI Cards */}
         <KpiCards />

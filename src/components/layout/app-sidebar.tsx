@@ -48,6 +48,11 @@ export default function AppSidebar() {
   const pathname = usePathname();
   const { user, account, logout } = useAuth();
   const [unreadCount, setUnreadCount] = React.useState(0);
+  // Action Required count drives the Dashboard nav badge so the
+  // operator sees pending tasks even from non-dashboard pages.
+  // Polled at the same 30s cadence as conversations to share the
+  // request rhythm.
+  const [actionCount, setActionCount] = React.useState(0);
 
   React.useEffect(() => {
     async function fetchUnread() {
@@ -68,8 +73,28 @@ export default function AppSidebar() {
         // Silently fail
       }
     }
+    async function fetchActions() {
+      try {
+        const res = await fetch('/api/dashboard/actions', {
+          credentials: 'include'
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const total =
+          (data.urgent?.length ?? 0) + (data.attention?.length ?? 0);
+        setActionCount(total);
+      } catch {
+        // Silently fail — sidebar badge isn't worth surfacing
+        // errors. Operator opens the dashboard to see the full
+        // panel and any error there.
+      }
+    }
     fetchUnread();
-    const interval = setInterval(fetchUnread, 30000);
+    fetchActions();
+    const interval = setInterval(() => {
+      fetchUnread();
+      fetchActions();
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -105,6 +130,7 @@ export default function AppSidebar() {
             {navItems.map((item) => {
               const Icon = item.icon ? Icons[item.icon] : Icons.logo;
               const isConversations = item.title === 'Conversations';
+              const isDashboard = item.title === 'Dashboard';
               return item?.items && item?.items?.length > 0 ? (
                 <Collapsible
                   key={item.title}
@@ -156,6 +182,11 @@ export default function AppSidebar() {
                   {isConversations && unreadCount > 0 && (
                     <SidebarMenuBadge className='bg-primary text-primary-foreground rounded-full px-1.5 text-[10px]'>
                       {unreadCount}
+                    </SidebarMenuBadge>
+                  )}
+                  {isDashboard && actionCount > 0 && (
+                    <SidebarMenuBadge className='rounded-full bg-amber-500 px-1.5 text-[10px] text-white'>
+                      {actionCount}
                     </SidebarMenuBadge>
                   )}
                 </SidebarMenuItem>
