@@ -112,6 +112,18 @@ export interface LeadContext {
    * do NOT pivot back to selling without real human care first.
    */
   distressDetected?: boolean;
+  /**
+   * Conversation-level stats used to prevent the LLM from restarting
+   * the funnel when a returning lead sends an ambiguous single-word
+   * keyword (e.g. Rufaro "Change" incident, 2026-04-20). When the
+   * conversation has significant history (10+ messages), the prompt
+   * injects an "ongoing conversation" block telling the LLM to
+   * continue from where things left off, not restart from OPENING.
+   */
+  conversationStats?: {
+    messageCount: number;
+    firstMessageAt: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1818,6 +1830,39 @@ Override this at your peril. A wrong turn here means pitching a person in crisis
 =====
 `;
     prompt = distressOverride + '\n' + prompt;
+  }
+
+  // ── Ongoing-conversation anti-restart override ────────────────
+  // Rufaro 2026-04-20 incident: a lead returned after 48h, sent the
+  // single word "Change" (an ad-keyword), and the LLM decided to
+  // restart the funnel from OPENING — ignoring 30 messages of prior
+  // context. When the conversation has 10+ messages, inject explicit
+  // guidance: this is ONGOING, do not restart, acknowledge history.
+  // Threshold = 10 so brand-new leads who send a second short message
+  // (e.g. "Market" then "?" while waiting for the bot to reply)
+  // don't trigger the anti-restart tone.
+  const stats = leadContext.conversationStats;
+  if (stats && stats.messageCount >= 10) {
+    const firstMsgMs = new Date(stats.firstMessageAt).getTime();
+    const ageMs = Date.now() - firstMsgMs;
+    const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+    const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
+    const duration =
+      ageDays >= 1
+        ? `${ageDays} day${ageDays === 1 ? '' : 's'}`
+        : `${ageHours} hour${ageHours === 1 ? '' : 's'}`;
+    const ongoingOverride = `
+===== ONGOING CONVERSATION CONTEXT (DO NOT RESTART) =====
+This is an ONGOING conversation with ${stats.messageCount} messages over ${duration}. The lead may send short messages, CTA keywords (like "Market" / "Change" / a single emoji), or seemingly-fresh openers mid-conversation. These are NOT new conversations.
+
+Do NOT restart the funnel from OPENING. Do NOT re-ask questions the lead has already answered. Continue from where the conversation left off.
+
+If the lead's latest message looks like it could be a brand-new opener but you have significant prior context, acknowledge the history warmly and pick up the thread: "yo bro, good to hear from you again" / "yo welcome back" / "aye bro, was just thinking about you". Then reference what you were last discussing, or the stage the lead had reached.
+
+Your "stage" field in the JSON output must reflect where the conversation actually is, NOT OPENING. Review the conversation history carefully before deciding.
+=====
+`;
+    prompt = ongoingOverride + '\n' + prompt;
   }
 
   return prompt;

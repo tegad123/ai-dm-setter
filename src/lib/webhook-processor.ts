@@ -1037,7 +1037,18 @@ export async function scheduleAIReply(
     // flag and the operator has re-enabled AI, the prompt needs to
     // know so it can soft check-in instead of pitching. Permanent flag
     // — stays true for the life of the conversation.
-    distressDetected: conversation.distressDetected === true
+    distressDetected: conversation.distressDetected === true,
+    // Conversation-level stats drive the ongoing-conversation anti-
+    // restart override. Surface messageCount + first-message timestamp
+    // so buildDynamicSystemPrompt can inject the block when the
+    // conversation has 10+ messages. Rufaro 2026-04-20 fix.
+    conversationStats:
+      conversation.messages.length > 0
+        ? {
+            messageCount: conversation.messages.length,
+            firstMessageAt: conversation.messages[0].timestamp.toISOString()
+          }
+        : undefined
   };
 
   // ── Step 3.0: Inbound qualification classifier (first AI gen only) ──

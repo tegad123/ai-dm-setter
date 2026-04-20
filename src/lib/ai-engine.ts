@@ -429,7 +429,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       r24LastResult = await checkR24Verification(
         activeConversationId,
         capitalThreshold,
-        capitalCustomPrompt
+        capitalCustomPrompt,
+        // Pass the current-turn LEAD message as a timing-defensive
+        // override — if it happens to be saved microseconds after
+        // the gate's own DB snapshot, the override guarantees the
+        // answer-to-the-Q still gets classified. See checkR24
+        // Verification doc for the specifics.
+        lastLeadMsg
+          ? { content: lastLeadMsg.content, timestamp: lastLeadMsg.timestamp }
+          : undefined
       );
       r24Blocked = r24LastResult.blocked;
     }
@@ -457,12 +465,34 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         conversationId: activeConversationId,
         capitalThreshold,
         capitalCustomPrompt,
-        closerNames
+        closerNames,
+        currentTurnLeadMsg: lastLeadMsg
+          ? { content: lastLeadMsg.content, timestamp: lastLeadMsg.timestamp }
+          : undefined
       });
       fixBBlocked = fixBResult.blocked;
     }
 
-    if (quality.passed && !r24Blocked && !fixBBlocked) {
+    // 5d. BOOKING FABRICATION GATE (Rufaro 2026-04-18 fix).
+    //     Independent of R24/Fix B. Fires whenever the AI's reply
+    //     claims real-time booking state (anthony-is-ready, zoom-link-
+    //     incoming, you're-all-set) AND the conversation has no actual
+    //     scheduledCallAt / bookingId. Skips entirely when a real
+    //     booking exists — the AI CAN reference a call that's
+    //     actually scheduled. This is a pure content detector, so it
+    //     runs even when R24/Fix B didn't block.
+    let fabricationBlocked = false;
+    let fabricationResult: BookingFabricationBlockResult | null = null;
+    if (activeConversationId && !r24Blocked && !fixBBlocked) {
+      fabricationResult = await shouldBlockForBookingFabrication({
+        parsed,
+        conversationId: activeConversationId,
+        closerNames
+      });
+      fabricationBlocked = fabricationResult.blocked;
+    }
+
+    if (quality.passed && !r24Blocked && !fixBBlocked && !fabricationBlocked) {
       if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
         console.log(
@@ -547,6 +577,40 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
     }
 
+    // BOOKING FABRICATION regeneration path. Logged to
+    // BookingRoutingAudit so the 48h diagnostic review can filter on
+    // `blockReason='booking_state_fabrication'`. Directive is direct:
+    // don't claim real-time booking state, route the lead to the
+    // booking link instead.
+    if (fabricationBlocked && fabricationResult) {
+      try {
+        await prisma.bookingRoutingAudit.create({
+          data: {
+            conversationId: activeConversationId!,
+            accountId,
+            personaMinimumCapital: capitalThreshold,
+            routingAllowed: false,
+            regenerationForced: true,
+            blockReason: 'booking_state_fabrication',
+            aiStageReported: parsed.stage || null,
+            aiSubStageReported: parsed.subStage || null,
+            contentPreview: parsed.message.slice(0, 200)
+          }
+        });
+      } catch (auditErr) {
+        console.error(
+          '[ai-engine] Booking-fabrication BookingRoutingAudit write failed (non-fatal):',
+          auditErr
+        );
+      }
+      const fabricationDirective = `CRITICAL: You claimed a call or meeting is happening or about to happen, but NO call has been booked in the system. There is no zoom link being sent. No one is standing by on a call. The system does NOT auto-book calls.\n\nYour reply must ONLY instruct the lead to use the booking link to schedule a time themselves. Do NOT claim:\n- Anyone is about to join a call or is on the call\n- A zoom link is being sent or is on the way\n- A calendar invite is coming through or in their email\n- The lead is "all set" or "locked in"\n\nCorrect framing: "the team handles scheduling on their end, they'll reach out with the call details" OR "go ahead and grab a time that works for you with the link above, you'll get a confirmation when you book".`;
+      const fabricationOverride = `\n\n===== CRITICAL BOOKING-FABRICATION OVERRIDE =====\n${fabricationDirective}\n=====`;
+      systemPromptForLLM = systemPrompt + fabricationOverride;
+      console.warn(
+        `[ai-engine] Booking fabrication BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${fabricationResult.reason} content="${parsed.message.slice(0, 120)}"`
+      );
+    }
+
     // Log voice-quality failures (existing behaviour, unchanged).
     if (!quality.passed) {
       console.warn(
@@ -611,6 +675,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // so a human needs to pick up the conversation.
         console.error(
           `[ai-engine] Fix B gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
+        parsed.escalateToHuman = true;
+      } else if (fabricationBlocked) {
+        // Booking fabrication exhaustion — same escalation pattern.
+        // If the LLM keeps claiming real-time booking state after
+        // multiple override attempts, a human needs to handle it.
+        console.error(
+          `[ai-engine] Booking fabrication gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
         );
         parsed.escalateToHuman = true;
       } else if (!quality.passed) {
@@ -1332,9 +1404,15 @@ async function shouldBlockForCapitalVerification(params: {
   capitalThreshold: number | null;
   capitalCustomPrompt: string | null;
   closerNames?: string[];
+  currentTurnLeadMsg?: { content: string; timestamp: Date | string };
 }): Promise<CapitalVerificationBlockResult> {
-  const { parsed, conversationId, capitalThreshold, capitalCustomPrompt } =
-    params;
+  const {
+    parsed,
+    conversationId,
+    capitalThreshold,
+    capitalCustomPrompt,
+    currentTurnLeadMsg
+  } = params;
   if (typeof capitalThreshold !== 'number' || capitalThreshold <= 0) {
     return { blocked: false, reason: 'no_threshold_configured' };
   }
@@ -1352,10 +1430,13 @@ async function shouldBlockForCapitalVerification(params: {
   // Short-circuit 2: run the existing R24 classifier against history.
   // If the lead has stated an adequate amount or affirmed the
   // threshold-Q, treat as verified even without a prior audit row.
+  // Pass the current-turn LEAD message so the classifier sees it
+  // regardless of DB-snapshot timing.
   const r24 = await checkR24Verification(
     conversationId,
     capitalThreshold,
-    capitalCustomPrompt
+    capitalCustomPrompt,
+    currentTurnLeadMsg
   );
   if (
     !r24.blocked &&
@@ -1371,21 +1452,135 @@ async function shouldBlockForCapitalVerification(params: {
   return { blocked: false, reason: 'not_advancing' };
 }
 
+// ---------------------------------------------------------------------------
+// Booking-state fabrication detector
+// ---------------------------------------------------------------------------
+// Daniel's system does NOT auto-book calls. The booking flow is: AI drops
+// the script's booking link → lead clicks it → books themselves → team
+// handles the actual call externally. There is no "anthony is on the call
+// shortly" mechanism, no real-time zoom link dispatch, no automatic
+// calendar-invite send.
+//
+// Incident driving this gate: Rufaro (daetradez, 2026-04-18) — AI said
+// "anthony will be on the call with you shortly. check your email for
+// the confirmation and the zoom link." Pure fabrication. R19 (never
+// fabricate completed actions) was live at the prompt level but the LLM
+// ignored it. This gate is the code-level enforcement.
+//
+// Fires when: response matches a fabrication pattern AND the conversation
+// has no real scheduledCallAt + no real bookingId. Skips entirely when a
+// real booking exists — the AI CAN reference a call that's actually
+// scheduled.
+// ---------------------------------------------------------------------------
+
+const BOOKING_FABRICATION_PATTERNS: RegExp[] = [
+  // "anthony will be on the call shortly" / "X is going to be on..."
+  // and closer-name variants. Replaced `{{closerName}}` in the original
+  // spec with an any-name pattern — we check both "anthony" and the
+  // persona's configured closer names via caller.
+  /\b(anthony|your\s+closer|the\s+closer|my\s+partner|our\s+closer)\s+(will\s+be|is\s+going\s+to\s+be|is)\s+(on\s+the\s+call|in\s+the\s+call|ready|waiting|standing\s+by|available)\s*(shortly|soon|now|with\s+you|momentarily|for\s+you)?\b/i,
+  /\b(check\s+your\s+(email|inbox)|keep\s+an\s+eye\s+on\s+(your\s+)?email)\s+(for|to\s+see)\s+(the|your|a)?\s*(confirmation|zoom|link|invite|call\s+details)/i,
+  /\byou'?re\s+all\s+set\s+for\s+(the|your|our)\s+(call|meeting|chat)\b/i,
+  /\b(calendar|zoom|meeting|google\s+meet)\s+(invite|link|confirmation)\s+(is|has\s+been|will\s+be)?\s*(on\s+the\s+way|sent|coming|being\s+sent|in\s+your\s+inbox)/i,
+  /\b(I'?ll|let\s+me|lemme|gonna|going\s+to)\s+(send|get|grab|share|drop)\s+(you\s+)?(the|that|your|a)\s*(zoom|meeting|call)\s+(link|invite|url)\b/i,
+  /\bjump\s+on\s+(the\s+call|a\s+call|it)\s+(now|right\s+now|real\s+quick)\b/i,
+  /\b(booked|locked)\s+(you\s+)?in\s+(for|with)\b/i,
+  /\bexpect\s+(the\s+)?(zoom|meeting|calendar|confirmation)\s+(link|invite)\s+(shortly|soon|any\s+minute)/i
+];
+
+export function matchesBookingFabrication(
+  reply: string,
+  closerNames: string[] = []
+): boolean {
+  if (BOOKING_FABRICATION_PATTERNS.some((p) => p.test(reply))) return true;
+  // Closer-name-specific patterns: "{closerName} will be on the call",
+  // "{closerName} is ready now", etc. Run dynamically for each
+  // configured closer name the persona has.
+  for (const name of closerNames) {
+    if (!name || name.trim().length < 2) continue;
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pat = new RegExp(
+      `\\b${escaped}\\s+(will\\s+be|is\\s+going\\s+to\\s+be|is)\\s+(on\\s+the\\s+call|in\\s+the\\s+call|ready|waiting|standing\\s+by|available)`,
+      'i'
+    );
+    if (pat.test(reply)) return true;
+  }
+  return false;
+}
+
+interface BookingFabricationBlockResult {
+  blocked: boolean;
+  reason: 'no_real_booking' | 'real_booking_exists' | 'no_fabrication';
+}
+
+/**
+ * Fix (2026-04-20) — fabrication gate. Runs on every AI response.
+ * Mirrors the shape of shouldBlockForCapitalVerification.
+ *
+ * Blocks when:
+ *   1. The reply claims real-time booking state (matches a pattern)
+ *   2. The conversation has NO actual scheduledCallAt set
+ *   3. The conversation has NO bookingId from a calendar integration
+ *
+ * Skips (returns blocked=false) when:
+ *   - No fabrication pattern matched → no risk
+ *   - A real booking/scheduled call exists → the AI can legitimately
+ *     reference it
+ */
+async function shouldBlockForBookingFabrication(params: {
+  parsed: ParsedAIResponse;
+  conversationId: string;
+  closerNames?: string[];
+}): Promise<BookingFabricationBlockResult> {
+  const { parsed, conversationId, closerNames = [] } = params;
+  const joined =
+    Array.isArray(parsed.messages) && parsed.messages.length > 0
+      ? parsed.messages.join(' ')
+      : parsed.message;
+  if (!matchesBookingFabrication(joined, closerNames)) {
+    return { blocked: false, reason: 'no_fabrication' };
+  }
+  // Fabrication pattern matched — check for a real booking.
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { scheduledCallAt: true, bookingId: true }
+  });
+  if (!conv) {
+    // Defensive: treat as no-booking-exists if we can't read the row.
+    return { blocked: true, reason: 'no_real_booking' };
+  }
+  if (conv.scheduledCallAt || conv.bookingId) {
+    return { blocked: false, reason: 'real_booking_exists' };
+  }
+  return { blocked: true, reason: 'no_real_booking' };
+}
+
 /**
  * Extract a dollar amount from a free-form lead reply. Handles
  * "$5k", "5,000", "$3,000.00", "around 500", "about $2000", "3500
  * give or take", bare-number strings, and the "5k"/"2.5k" shorthand.
  * Returns null when no number is present.
+ *
+ * Bug fix (Tahir Khan false-positive, 2026-04-20): the previous regex
+ * non-captured the decimal part, so "2.5k" parsed as 2000 instead of
+ * 2500 (the `.5` was dropped before the k-multiplier). Now we capture
+ * the decimal and use parseFloat → multiplying by 1000 for the k
+ * suffix produces 2500. All existing test cases still pass.
  */
 function parseLeadAmountFromReply(text: string): number | null {
-  // Match optional $, digits with thousands-commas OR plain digits,
-  // optional decimal, optional k/K suffix. First hit wins.
-  const m = text.match(/\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?([kK])?/);
+  // Match optional $, integer portion (thousands-commas OR plain
+  // digits), optional decimal portion, optional k/K suffix. Decimal
+  // capture is necessary so "2.5k" → 2500 rather than 2000.
+  const m = text.match(/\$?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/);
   if (!m) return null;
-  let amount = parseInt(m[1].replace(/,/g, ''), 10);
+  const intPart = m[1].replace(/,/g, '');
+  const decPart = m[2] ?? '';
+  let amount = parseFloat(intPart + decPart);
   if (!Number.isFinite(amount)) return null;
-  if (m[2]) amount *= 1000; // "5k" → 5000, "2k" → 2000
-  return amount;
+  if (m[3]) amount *= 1000; // "5k" → 5000, "2.5k" → 2500
+  // Round to nearest whole dollar — we compare against integer
+  // thresholds, and the lead means "about $2,500" either way.
+  return Math.round(amount);
 }
 
 /**
@@ -1401,7 +1596,7 @@ interface ParsedLeadAnswer {
   kind: 'amount' | 'disqualifier' | 'hedging' | 'affirmative' | 'ambiguous';
   amount: number | null;
 }
-function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
+export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
 
   // 1. Non-numeric disqualifiers — handle first so "I got nothing" doesn't
@@ -1479,7 +1674,8 @@ function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
 async function checkR24Verification(
   conversationId: string,
   threshold: number,
-  customPrompt: string | null
+  customPrompt: string | null,
+  currentTurnLeadMsg?: { content: string; timestamp: Date | string }
 ): Promise<R24GateResult> {
   const aiMsgs = await prisma.message.findMany({
     where: { conversationId, sender: 'AI' },
@@ -1535,16 +1731,61 @@ async function checkR24Verification(
     };
   }
 
-  const nextLead = await prisma.message.findFirst({
+  // Collect ALL LEAD messages after the verification Q, not just the
+  // first. Two reasons:
+  //   1. Tahir-class false-positive: lead sends "kinda" then
+  //      immediately "actually I have 5k" — the earlier message
+  //      classifies as hedging, but the later one is the real
+  //      answer. Taking only `findFirst` misclassifies these as
+  //      hedging when the actual answer is a number.
+  //   2. Current-turn belt-and-suspenders: if the caller passed
+  //      `currentTurnLeadMsg` explicitly (from conversationHistory),
+  //      use it even if it's newer than the DB-queried set — rules
+  //      out any webhook-timing race where the current turn's LEAD
+  //      message was saved microseconds after checkR24Verification
+  //      snapshot'd its Message query.
+  const laterLeadMsgs = await prisma.message.findMany({
     where: {
       conversationId,
       sender: 'LEAD',
       timestamp: { gt: verificationAskedAt.timestamp }
     },
     orderBy: { timestamp: 'asc' },
-    select: { id: true, content: true }
+    select: { id: true, content: true, timestamp: true }
   });
-  if (!nextLead) {
+  // Merge in the current-turn override if it sits after the Q AND is
+  // not already in the DB result (dedupe by content + timestamp).
+  const mergedAnswers: Array<{
+    id: string | null;
+    content: string;
+    timestamp: Date;
+  }> = laterLeadMsgs.map((m) => ({
+    id: m.id,
+    content: m.content,
+    timestamp: m.timestamp
+  }));
+  if (currentTurnLeadMsg) {
+    const overrideTs =
+      currentTurnLeadMsg.timestamp instanceof Date
+        ? currentTurnLeadMsg.timestamp
+        : new Date(currentTurnLeadMsg.timestamp);
+    const afterQ =
+      overrideTs.getTime() > verificationAskedAt.timestamp.getTime();
+    const alreadyInSet = mergedAnswers.some(
+      (m) =>
+        m.content === currentTurnLeadMsg.content &&
+        Math.abs(m.timestamp.getTime() - overrideTs.getTime()) < 2000
+    );
+    if (afterQ && !alreadyInSet) {
+      mergedAnswers.push({
+        id: null,
+        content: currentTurnLeadMsg.content,
+        timestamp: overrideTs
+      });
+    }
+  }
+  mergedAnswers.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  if (mergedAnswers.length === 0) {
     return {
       blocked: true,
       reason: 'asked_but_no_answer',
@@ -1553,8 +1794,37 @@ async function checkR24Verification(
       verificationConfirmedAt: null
     };
   }
-
-  const classification = parseLeadCapitalAnswer(nextLead.content);
+  // Classify each candidate answer; prefer the STRONGEST signal.
+  // Strongest = amount (any number wins). Next = affirmative.
+  // Next = disqualifier. Fallback = hedging / ambiguous from the
+  // LATEST message (most recent intent).
+  const classifications = mergedAnswers.map((m) => ({
+    msg: m,
+    cls: parseLeadCapitalAnswer(m.content)
+  }));
+  // Find the highest-priority classification across all messages.
+  // amount → affirmative → disqualifier → hedging → ambiguous.
+  const priority: Record<string, number> = {
+    amount: 5,
+    affirmative: 4,
+    disqualifier: 3,
+    hedging: 2,
+    ambiguous: 1
+  };
+  let best = classifications[classifications.length - 1]; // default: latest
+  for (const c of classifications) {
+    if (priority[c.cls.kind] > priority[best.cls.kind]) {
+      best = c;
+    } else if (
+      priority[c.cls.kind] === priority[best.cls.kind] &&
+      c.msg.timestamp.getTime() > best.msg.timestamp.getTime()
+    ) {
+      // Tie → prefer the later message (most recent intent).
+      best = c;
+    }
+  }
+  const classification = best.cls;
+  const nextLead = { id: best.msg.id, content: best.msg.content };
   const askedId = verificationAskedAt.id;
 
   switch (classification.kind) {
