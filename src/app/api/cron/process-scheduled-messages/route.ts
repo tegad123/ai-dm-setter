@@ -7,6 +7,7 @@ import {
   broadcastNewMessage,
   broadcastConversationUpdate
 } from '@/lib/realtime';
+import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { NextRequest, NextResponse } from 'next/server';
 import type { LeadContext } from '@/lib/ai-prompts';
 
@@ -19,6 +20,11 @@ export const maxDuration = 60;
 // still apply), and sends to the platform.
 // ---------------------------------------------------------------------------
 
+// Rows stuck in FIRING for longer than this are assumed to have crashed
+// mid-fire (lambda timeout, etc.) and get reclaimed on the next tick so
+// we don't silently lose reminders.
+const FIRING_STALE_MS = 5 * 60 * 1000;
+
 export async function GET(req: NextRequest) {
   try {
     const authHeader = req.headers.get('authorization');
@@ -29,6 +35,19 @@ export async function GET(req: NextRequest) {
 
     const now = new Date();
     console.log('[cron/scheduled-messages] tick', now.toISOString());
+
+    // Recover rows stuck in FIRING from a prior crashed tick. Flip back
+    // to PENDING so they become eligible pickups this run.
+    const staleCutoff = new Date(now.getTime() - FIRING_STALE_MS);
+    const reclaimed = await prisma.scheduledMessage.updateMany({
+      where: { status: 'FIRING', updatedAt: { lt: staleCutoff } },
+      data: { status: 'PENDING' }
+    });
+    if (reclaimed.count > 0) {
+      console.warn(
+        `[cron/scheduled-messages] reclaimed ${reclaimed.count} stale FIRING rows`
+      );
+    }
 
     const due = await prisma.scheduledMessage.findMany({
       where: {
@@ -44,9 +63,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ processed: 0 });
     }
 
-    // Dedup: at most ONE scheduled message per conversation per tick so we
-    // don't fire 2 reminders back-to-back if somehow two rows ended up due
-    // at the same time.
+    // Dedup within-tick: at most ONE scheduled message per conversation
+    // so we don't fire 2 reminders back-to-back if somehow two rows
+    // ended up due at the same time.
     const seen = new Set<string>();
     const toProcess: typeof due = [];
     const skipDupIds: string[] = [];
@@ -64,27 +83,57 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Optimistic lock: flip PENDING → FIRING so concurrent cron runs don't
-    // double-process.
-    const processIds = toProcess.map((r) => r.id);
-    const locked = await prisma.scheduledMessage.updateMany({
-      where: { id: { in: processIds }, status: 'PENDING' },
-      data: { status: 'FIRING' }
-    });
-    console.log(
-      `[cron/scheduled-messages] locked ${locked.count}/${processIds.length} rows`
-    );
-
     let sent = 0;
     let failed = 0;
+    let skippedRace = 0;
+    let skippedDedup = 0;
     for (const row of toProcess) {
+      // Atomic per-row lock: only this tick gets to fire `row.id`. If
+      // the updateMany's count is 0 another tick already locked it OR
+      // something cancelled it between our findMany and this step.
+      const lockRes = await prisma.scheduledMessage.updateMany({
+        where: { id: row.id, status: 'PENDING' },
+        data: { status: 'FIRING' }
+      });
+      if (lockRes.count === 0) {
+        console.log(
+          `[cron/scheduled-messages] ${row.id} race-locked by another tick — skipping`
+        );
+        skippedRace++;
+        continue;
+      }
+
       try {
-        await fireScheduledMessage(row.id);
-        await prisma.scheduledMessage.update({
-          where: { id: row.id },
-          data: { status: 'FIRED', firedAt: new Date() }
-        });
-        sent++;
+        const outcome = await fireScheduledMessage(row.id);
+        if (outcome === 'sent') {
+          await prisma.scheduledMessage.update({
+            where: { id: row.id },
+            data: { status: 'FIRED', firedAt: new Date() }
+          });
+          sent++;
+        } else if (outcome === 'deduped') {
+          // Dedup suppressed the send — record as FIRED with a note
+          // so we don't retry, but track separately.
+          await prisma.scheduledMessage.update({
+            where: { id: row.id },
+            data: {
+              status: 'FIRED',
+              firedAt: new Date(),
+              lastError: 'dedup:suppressed_near_duplicate'
+            }
+          });
+          skippedDedup++;
+        } else if (outcome === 'skipped_ai_inactive') {
+          // AI turned off on this convo — mark FIRED to stop retries.
+          await prisma.scheduledMessage.update({
+            where: { id: row.id },
+            data: {
+              status: 'FIRED',
+              firedAt: new Date(),
+              lastError: 'skipped:ai_inactive'
+            }
+          });
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(
@@ -107,6 +156,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       processed: sent,
       failed,
+      skippedRace,
+      skippedDedup,
       total: toProcess.length
     });
   } catch (err) {
@@ -117,9 +168,20 @@ export async function GET(req: NextRequest) {
 
 // ---------------------------------------------------------------------------
 // Core: generate + send ONE scheduled message
+// Returns 'sent' | 'deduped' | 'skipped_ai_inactive'. Throws on
+// platform send failure so the caller can bump attempts + set status.
+//
+// CRITICAL ORDER: platform send FIRST, then Message row + broadcast.
+// The old order (create row → broadcast → send) meant a failed send
+// left a phantom Message visible in the dashboard AND, on retry with
+// `generateAtSendTime: true`, a fresh text generation would write a
+// SECOND phantom row. This is what produced Tahir Khan's 3 visible
+// duplicates on 2026-04-21 even though Meta rejected every send.
 // ---------------------------------------------------------------------------
 
-async function fireScheduledMessage(scheduledMessageId: string): Promise<void> {
+async function fireScheduledMessage(
+  scheduledMessageId: string
+): Promise<'sent' | 'deduped' | 'skipped_ai_inactive'> {
   const row = await prisma.scheduledMessage.findUnique({
     where: { id: scheduledMessageId },
     include: {
@@ -152,9 +214,9 @@ async function fireScheduledMessage(scheduledMessageId: string): Promise<void> {
   // Guardrail: AI must be active on this conversation.
   if (!conversation.aiActive) {
     console.log(
-      `[cron/scheduled-messages] ${row.id}: aiActive=false, skipping (marked FIRED to clean up)`
+      `[cron/scheduled-messages] ${row.id}: aiActive=false, skipping`
     );
-    return; // let the caller mark FIRED so we don't keep retrying
+    return 'skipped_ai_inactive';
   }
 
   let messageBody = row.messageBody;
@@ -211,7 +273,54 @@ async function fireScheduledMessage(scheduledMessageId: string): Promise<void> {
     throw new Error('generated empty body');
   }
 
-  // Save the outbound message
+  // Dedup: if this body is a near-duplicate of a recent AI message in
+  // the same conversation, skip the send entirely. Catches two bad
+  // patterns: (1) a keepalive that already said roughly "pumped for the
+  // call tomorrow" then a day-before reminder rehashes the same sentiment;
+  // (2) a retry-after-platform-failure that generated near-identical
+  // text (was the classic 4-copies-per-tick symptom).
+  const dedup = await isNearDuplicateOfRecentAiMessages(
+    conversation.id,
+    messageBody
+  );
+  if (dedup.isDuplicate) {
+    console.warn(
+      `[cron/scheduled-messages] ${row.id}: dedup_suppressed — sim=${dedup.maxSimilarity.toFixed(2)} vs recent AI msg. body="${messageBody.slice(0, 80)}"`
+    );
+    return 'deduped';
+  }
+
+  // Platform send FIRST. If Meta rejects (e.g. "outside allowed window"
+  // past the 24h mark) we raise so the caller bumps attempts + retries
+  // — no phantom Message row, no phantom SSE.
+  if (!lead.platformUserId) {
+    console.warn(
+      `[cron/scheduled-messages] ${row.id}: no platformUserId — cannot send`
+    );
+    throw new Error('no platformUserId on lead');
+  }
+
+  try {
+    if (lead.platform === 'INSTAGRAM') {
+      await sendInstagramDM(lead.accountId, lead.platformUserId, messageBody);
+    } else if (lead.platform === 'FACEBOOK') {
+      await sendFacebookMessage(
+        lead.accountId,
+        lead.platformUserId,
+        messageBody
+      );
+    } else {
+      throw new Error(`unsupported platform: ${lead.platform}`);
+    }
+  } catch (err) {
+    console.error(
+      `[cron/scheduled-messages] delivery failed for ${row.id}:`,
+      err
+    );
+    throw err;
+  }
+
+  // Platform send succeeded — now persist the Message row + broadcast.
   const now = new Date();
   const saved = await prisma.message.create({
     data: {
@@ -242,32 +351,8 @@ async function fireScheduledMessage(scheduledMessageId: string): Promise<void> {
     lastMessageAt: now.toISOString()
   });
 
-  // Deliver to platform
-  if (!lead.platformUserId) {
-    console.warn(
-      `[cron/scheduled-messages] ${row.id}: no platformUserId — message saved locally only`
-    );
-    return;
-  }
-
-  try {
-    if (lead.platform === 'INSTAGRAM') {
-      await sendInstagramDM(lead.accountId, lead.platformUserId, messageBody);
-    } else if (lead.platform === 'FACEBOOK') {
-      await sendFacebookMessage(
-        lead.accountId,
-        lead.platformUserId,
-        messageBody
-      );
-    }
-    console.log(
-      `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} (${lead.platform}/${lead.name})`
-    );
-  } catch (err) {
-    console.error(
-      `[cron/scheduled-messages] delivery failed for ${row.id}:`,
-      err
-    );
-    throw err;
-  }
+  console.log(
+    `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} (${lead.platform}/${lead.name})`
+  );
+  return 'sent';
 }

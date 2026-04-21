@@ -4,6 +4,7 @@ import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { generateKeepaliveMessage } from '@/lib/keepalive-generator';
 import { isClosingSignal } from '@/lib/closing-signal-detector';
+import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import {
   broadcastNewMessage,
   broadcastConversationUpdate
@@ -46,6 +47,11 @@ export const maxDuration = 60;
 const LOWER_BOUND_MS = 18 * 60 * 60 * 1000;
 const UPPER_BOUND_MS = 23 * 60 * 60 * 1000;
 const DEDUP_WINDOW_MS = 20 * 60 * 60 * 1000;
+// If a DAY_BEFORE_REMINDER or MORNING_OF_REMINDER fired (or got marked
+// FIRED with a dedup note) within this window, suppress the keepalive
+// so the lead doesn't get back-to-back nudges from two different
+// subsystems.
+const REMINDER_COORDINATION_WINDOW_MS = 12 * 60 * 60 * 1000;
 const MAX_BATCH = 25;
 const EXHAUSTION_THRESHOLD = 3;
 
@@ -108,6 +114,8 @@ export async function GET(req: NextRequest) {
     let skippedClose = 0;
     let skippedExhausted = 0;
     let skippedNoPlatformUser = 0;
+    let skippedReminderNear = 0;
+    let skippedNearDuplicate = 0;
     let errors = 0;
 
     for (const conv of candidates) {
@@ -130,6 +138,30 @@ export async function GET(req: NextRequest) {
         });
         if (recentKeepalive) {
           skippedDedup++;
+          continue;
+        }
+
+        // Guardrail 4b: reminder coordination. If a DAY_BEFORE or
+        // MORNING_OF reminder has already fired (or been recorded as
+        // dedup-suppressed) within the past 12h, skip the keepalive
+        // so the lead doesn't get back-to-back "pumped for tomorrow"
+        // nudges from both the reminder cron and the keepalive cron.
+        const recentReminder = await prisma.scheduledMessage.findFirst({
+          where: {
+            conversationId: conv.id,
+            messageType: { in: ['DAY_BEFORE_REMINDER', 'MORNING_OF_REMINDER'] },
+            status: 'FIRED',
+            firedAt: {
+              gte: new Date(now.getTime() - REMINDER_COORDINATION_WINDOW_MS)
+            }
+          },
+          select: { id: true, messageType: true, firedAt: true }
+        });
+        if (recentReminder) {
+          console.log(
+            `[cron/window-keepalive] conv=${conv.id} skipped — ${recentReminder.messageType} fired at ${recentReminder.firedAt?.toISOString()} (within 12h coordination window)`
+          );
+          skippedReminderNear++;
           continue;
         }
 
@@ -204,6 +236,43 @@ export async function GET(req: NextRequest) {
           scheduledCallAt: conv.scheduledCallAt!,
           now
         });
+
+        // Final dedup pass: even with all the structural guardrails
+        // above, Haiku can regenerate a line that rehashes a recent
+        // AI message (the Tahir Khan 2026-04-21 symptom — keepalive
+        // text was indistinguishable from the future reminder text).
+        // Compare against the last 3 AI messages before shipping.
+        const dedup = await isNearDuplicateOfRecentAiMessages(
+          conv.id,
+          keepaliveText
+        );
+        if (dedup.isDuplicate) {
+          console.warn(
+            `[cron/window-keepalive] conv=${conv.id} dedup_suppressed sim=${dedup.maxSimilarity.toFixed(2)} text="${keepaliveText.slice(0, 80)}"`
+          );
+          // Record a FIRED row with a note so we don't retry-in-tight-loop,
+          // and the 20h dedup window kicks in naturally.
+          await prisma.scheduledMessage
+            .create({
+              data: {
+                conversationId: conv.id,
+                accountId: conv.lead.accountId,
+                scheduledFor: now,
+                messageType: 'WINDOW_KEEPALIVE',
+                messageBody: keepaliveText,
+                generateAtSendTime: false,
+                status: 'FIRED',
+                firedAt: now,
+                relatedCallAt: conv.scheduledCallAt,
+                createdBy: 'SYSTEM',
+                attempts: 1,
+                lastError: 'dedup:suppressed_near_duplicate'
+              }
+            })
+            .catch(() => {});
+          skippedNearDuplicate++;
+          continue;
+        }
 
         // Platform send first — if Meta rejects, we don't want a
         // phantom Message row claiming we sent something we didn't.
@@ -326,6 +395,8 @@ export async function GET(req: NextRequest) {
       skippedClose,
       skippedExhausted,
       skippedNoPlatformUser,
+      skippedReminderNear,
+      skippedNearDuplicate,
       errors
     });
   } catch (err) {

@@ -25,6 +25,7 @@ import { getMessages as getInstagramMessages } from '@/lib/instagram';
 import { getMessages as getFacebookMessages } from '@/lib/facebook';
 import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
+import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 
 // ---------------------------------------------------------------------------
 // URL hallucination guard
@@ -2390,59 +2391,28 @@ async function sendAIReply(
 
   // ── Dedup safety net ──────────────────────────────────────────
   // Last-line defense against near-duplicate sends that slip through the
-  // debounce + cancel-pending + 25s recency guard. Compare the new reply
-  // against the last 3 AI messages using word-level Jaccard. Threshold
-  // 0.85 catches copy-pastes and trivial rewordings but allows genuinely
-  // different responses that happen to share common words (like "bro"
-  // or "gotchu").
-  try {
-    const last3 = await prisma.message.findMany({
-      where: { conversationId, sender: 'AI' },
-      orderBy: { timestamp: 'desc' },
-      take: 3,
-      select: { content: true }
-    });
-    const tokenize = (s: string) =>
-      s
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(/\s+/)
-        .filter((w) => w.length > 0);
-    const newArr = tokenize(result.reply);
-    const newTokens = new Set(newArr);
-    for (const prev of last3) {
-      const prevArr = tokenize(prev.content);
-      const prevTokens = new Set(prevArr);
-      if (newTokens.size === 0 || prevTokens.size === 0) continue;
-      let intersection = 0;
-      for (const w of newArr) if (prevTokens.has(w)) intersection++;
-      // Correct intersection: use set semantics (count unique words in common)
-      intersection = newArr.filter(
-        (w, i) => prevTokens.has(w) && newArr.indexOf(w) === i
-      ).length;
-      const union = new Set(newArr.concat(prevArr)).size;
-      const similarity = union > 0 ? intersection / union : 0;
-      if (similarity >= 0.85) {
-        console.warn(
-          `[webhook-processor] duplicate_suppressed ${conversationId} — sim=${similarity.toFixed(2)} vs prior AI msg. Not sending: "${result.reply.slice(0, 80)}"`
-        );
-        // Mark the suggestion as rejected-by-dedup so analytics can track it
-        if (result.suggestionId) {
-          await prisma.aISuggestion
-            .update({
-              where: { id: result.suggestionId },
-              data: { wasRejected: true, finalSentText: null }
-            })
-            .catch(() => {});
-        }
-        return;
-      }
-    }
-  } catch (err) {
-    console.error(
-      '[webhook-processor] Dedup check failed (non-fatal, proceeding with send):',
-      err
+  // debounce + cancel-pending + 25s recency guard. Uses the shared
+  // `isNearDuplicateOfRecentAiMessages` helper so scheduled-message /
+  // keepalive crons apply the same 85% Jaccard threshold against the
+  // last 3 AI messages.
+  const dedup = await isNearDuplicateOfRecentAiMessages(
+    conversationId,
+    result.reply
+  );
+  if (dedup.isDuplicate) {
+    console.warn(
+      `[webhook-processor] duplicate_suppressed ${conversationId} — sim=${dedup.maxSimilarity.toFixed(2)} vs prior AI msg. Not sending: "${result.reply.slice(0, 80)}"`
     );
+    // Mark the suggestion as rejected-by-dedup so analytics can track it
+    if (result.suggestionId) {
+      await prisma.aISuggestion
+        .update({
+          where: { id: result.suggestionId },
+          data: { wasRejected: true, finalSentText: null }
+        })
+        .catch(() => {});
+    }
+    return;
   }
 
   // ── Decide single-send vs multi-bubble path ──────────────────

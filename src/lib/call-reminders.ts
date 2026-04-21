@@ -192,6 +192,12 @@ export async function cancelCallReminders(
  * Idempotent: cancel existing PENDING reminders, then create fresh ones
  * for the new scheduledCallAt. If the call is in the past or the computed
  * reminder times are in the past, skips that specific reminder.
+ *
+ * Invariant: after this call returns, the conversation has AT MOST ONE
+ * PENDING row per reminder type. Enforced via a transaction (cancel
+ * old → create new within the same atomic block) plus a post-create
+ * assertion that sweeps and cancels any surplus duplicates that a
+ * concurrent Save click might have slipped in.
  */
 export async function scheduleCallReminders(params: {
   conversationId: string;
@@ -208,50 +214,110 @@ export async function scheduleCallReminders(params: {
     createdByUserId
   } = params;
 
-  await cancelCallReminders(conversationId);
-
   const { dayBefore, morningOf } = computeReminderTimes(
     scheduledCallAt,
     leadTimezone
   );
   const now = Date.now();
 
-  const created: { dayBeforeId: string | null; morningOfId: string | null } = {
-    dayBeforeId: null,
-    morningOfId: null
-  };
-
-  if (dayBefore.getTime() > now) {
-    const row = await prisma.scheduledMessage.create({
-      data: {
+  // Transaction: cancel any existing PENDING reminders and create the
+  // fresh pair atomically, so a failure mid-way doesn't leave us with
+  // half-updated state.
+  const created = await prisma.$transaction(async (tx) => {
+    await tx.scheduledMessage.updateMany({
+      where: {
         conversationId,
-        accountId,
-        scheduledFor: dayBefore,
-        messageType: 'DAY_BEFORE_REMINDER',
-        generateAtSendTime: true,
-        relatedCallAt: scheduledCallAt,
-        createdBy: createdByUserId ? 'HUMAN' : 'SYSTEM',
-        createdByUserId: createdByUserId ?? null
-      }
+        status: 'PENDING',
+        messageType: { in: ['DAY_BEFORE_REMINDER', 'MORNING_OF_REMINDER'] }
+      },
+      data: { status: 'CANCELLED' }
     });
-    created.dayBeforeId = row.id;
-  }
 
-  if (morningOf.getTime() > now) {
-    const row = await prisma.scheduledMessage.create({
-      data: {
-        conversationId,
-        accountId,
-        scheduledFor: morningOf,
-        messageType: 'MORNING_OF_REMINDER',
-        generateAtSendTime: true,
-        relatedCallAt: scheduledCallAt,
-        createdBy: createdByUserId ? 'HUMAN' : 'SYSTEM',
-        createdByUserId: createdByUserId ?? null
-      }
-    });
-    created.morningOfId = row.id;
-  }
+    const out: { dayBeforeId: string | null; morningOfId: string | null } = {
+      dayBeforeId: null,
+      morningOfId: null
+    };
+
+    if (dayBefore.getTime() > now) {
+      const row = await tx.scheduledMessage.create({
+        data: {
+          conversationId,
+          accountId,
+          scheduledFor: dayBefore,
+          messageType: 'DAY_BEFORE_REMINDER',
+          generateAtSendTime: true,
+          relatedCallAt: scheduledCallAt,
+          createdBy: createdByUserId ? 'HUMAN' : 'SYSTEM',
+          createdByUserId: createdByUserId ?? null
+        }
+      });
+      out.dayBeforeId = row.id;
+    }
+
+    if (morningOf.getTime() > now) {
+      const row = await tx.scheduledMessage.create({
+        data: {
+          conversationId,
+          accountId,
+          scheduledFor: morningOf,
+          messageType: 'MORNING_OF_REMINDER',
+          generateAtSendTime: true,
+          relatedCallAt: scheduledCallAt,
+          createdBy: createdByUserId ? 'HUMAN' : 'SYSTEM',
+          createdByUserId: createdByUserId ?? null
+        }
+      });
+      out.morningOfId = row.id;
+    }
+
+    return out;
+  });
+
+  // Invariant sweep. Defends against a concurrent scheduleCallReminders
+  // call (e.g. double-clicked Save) that landed between our transaction's
+  // cancel and create. For each reminder type, if there are multiple
+  // PENDING rows, keep the one we just created (or the newest if ours is
+  // null) and cancel the rest.
+  await enforceSinglePendingReminder(
+    conversationId,
+    'DAY_BEFORE_REMINDER',
+    created.dayBeforeId
+  );
+  await enforceSinglePendingReminder(
+    conversationId,
+    'MORNING_OF_REMINDER',
+    created.morningOfId
+  );
 
   return created;
+}
+
+async function enforceSinglePendingReminder(
+  conversationId: string,
+  messageType: 'DAY_BEFORE_REMINDER' | 'MORNING_OF_REMINDER',
+  keepId: string | null
+): Promise<void> {
+  const pending = await prisma.scheduledMessage.findMany({
+    where: { conversationId, messageType, status: 'PENDING' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true }
+  });
+  if (pending.length <= 1) return;
+
+  // Determine which row to keep: the one we just created OR (if that's
+  // null / not present, e.g. returned before write) the newest one.
+  const canonical =
+    (keepId && pending.find((p) => p.id === keepId)?.id) ?? pending[0].id;
+  const cancelIds = pending.filter((p) => p.id !== canonical).map((p) => p.id);
+
+  if (cancelIds.length > 0) {
+    await prisma.scheduledMessage.updateMany({
+      where: { id: { in: cancelIds } },
+      data: { status: 'CANCELLED' }
+    });
+    console.warn(
+      `[call-reminders] invariant_violation_fixed conv=${conversationId} type=${messageType} ` +
+        `found ${pending.length} PENDING rows, cancelled ${cancelIds.length}, kept ${canonical}`
+    );
+  }
 }
