@@ -132,7 +132,8 @@ export function useConversations(
   search?: string,
   priority?: boolean,
   unread?: boolean,
-  platform?: string
+  platform?: string,
+  qualification?: 'qualified' | 'unqualified'
 ) {
   const {
     data: raw,
@@ -145,8 +146,9 @@ export function useConversations(
     if (priority) p.priority = 'true';
     if (unread) p.unread = 'true';
     if (platform) p.platform = platform;
+    if (qualification) p.qualification = qualification;
     return getConversations(Object.keys(p).length ? p : undefined);
-  }, [search, priority, unread, platform]);
+  }, [search, priority, unread, platform, qualification]);
   // API returns { conversations: [...] } — unwrap
   const conversations = Array.isArray(raw)
     ? raw

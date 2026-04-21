@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     const priority = searchParams.get('priority'); // "true" to filter high-priority
     const unreadOnly = searchParams.get('unread'); // "true" to filter unread only
     const platform = searchParams.get('platform'); // "INSTAGRAM" | "FACEBOOK"
+    const qualification = searchParams.get('qualification'); // "qualified" | "unqualified"
 
     const leadFilter: Record<string, unknown> = {
       accountId: auth.accountId,
@@ -25,6 +26,18 @@ export async function GET(request: NextRequest) {
     };
     if (platform === 'INSTAGRAM' || platform === 'FACEBOOK') {
       leadFilter.platform = platform;
+    }
+    // "Qualified" = past the capital gate and still in-flight toward revenue.
+    // We include CLOSED_WON (revenue already recorded) but NOT CLOSED_LOST,
+    // NO_SHOWED, GHOSTED, NURTURE — those are terminal non-revenue states
+    // that belong in their own buckets even though the lead was once
+    // qualified. UNQUALIFIED is its own tab.
+    if (qualification === 'qualified') {
+      leadFilter.stage = {
+        in: ['QUALIFIED', 'CALL_PROPOSED', 'BOOKED', 'SHOWED', 'CLOSED_WON']
+      };
+    } else if (qualification === 'unqualified') {
+      leadFilter.stage = 'UNQUALIFIED';
     }
 
     const where: Record<string, unknown> = { lead: leadFilter };

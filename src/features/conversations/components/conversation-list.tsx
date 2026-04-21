@@ -11,12 +11,14 @@ import {
   IconSearch,
   IconFlame,
   IconMail,
-  IconCalendarEvent
+  IconCalendarEvent,
+  IconCircleCheck,
+  IconCircleX
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
-type InboxTab = 'all' | 'priority' | 'unread';
+type InboxTab = 'all' | 'priority' | 'unread' | 'qualified' | 'unqualified';
 type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
 
 interface ConversationListProps {
@@ -48,29 +50,71 @@ export function ConversationList({
       <div className='border-b p-4'>
         <h2 className='mb-3 text-lg font-semibold'>Conversations</h2>
 
-        {/* Tab Switcher */}
+        {/* Tab Switcher — row 1: inbox-state filters */}
         {onTabChange && (
-          <div className='mb-3 flex rounded-lg border p-0.5'>
-            {[
-              { key: 'all' as const, label: 'All', icon: null },
-              { key: 'priority' as const, label: 'Priority', icon: IconFlame },
-              { key: 'unread' as const, label: 'Unread', icon: IconMail }
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => onTabChange(tab.key)}
-                className={cn(
-                  'flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
-                  activeTab === tab.key
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {tab.icon && <tab.icon className='h-3 w-3' />}
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className='mb-2 flex rounded-lg border p-0.5'>
+              {[
+                { key: 'all' as const, label: 'All', icon: null },
+                {
+                  key: 'priority' as const,
+                  label: 'Priority',
+                  icon: IconFlame
+                },
+                { key: 'unread' as const, label: 'Unread', icon: IconMail }
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => onTabChange(tab.key)}
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                    activeTab === tab.key
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {tab.icon && <tab.icon className='h-3 w-3' />}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Row 2: qualification filters. Active state uses colored
+                backgrounds (emerald for qualified, red for unqualified)
+                so the inbox-state row and the qualification row remain
+                visually distinguishable even when both have an active
+                selection. */}
+            <div className='mb-3 flex rounded-lg border p-0.5'>
+              {[
+                {
+                  key: 'qualified' as const,
+                  label: 'Qualified',
+                  icon: IconCircleCheck,
+                  activeClass: 'bg-emerald-600 text-white dark:bg-emerald-700'
+                },
+                {
+                  key: 'unqualified' as const,
+                  label: 'Unqualified',
+                  icon: IconCircleX,
+                  activeClass: 'bg-red-600 text-white dark:bg-red-700'
+                }
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => onTabChange(tab.key)}
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                    activeTab === tab.key
+                      ? tab.activeClass
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <tab.icon className='h-3 w-3' />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </>
         )}
 
         {/* Platform Filter */}
@@ -118,7 +162,11 @@ export function ConversationList({
               ? 'No high-priority conversations'
               : activeTab === 'unread'
                 ? 'All caught up!'
-                : 'No conversations found'}
+                : activeTab === 'qualified'
+                  ? 'No qualified leads yet'
+                  : activeTab === 'unqualified'
+                    ? 'No unqualified leads'
+                    : 'No conversations found'}
           </div>
         ) : (
           filtered.map((convo) => {

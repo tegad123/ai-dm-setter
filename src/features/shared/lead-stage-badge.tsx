@@ -73,9 +73,12 @@ const stageConfig: Record<LeadStage, { label: string; className: string }> = {
       'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 border-rose-200 dark:border-rose-800'
   },
   unqualified: {
+    // Red styling signals "do not pursue" without being alarming.
+    // Slightly heavier font weight + stronger text contrast than the
+    // neutral stages so the badge visually reads as terminal.
     label: 'Unqualified',
     className:
-      'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400 border-slate-200 dark:border-slate-800'
+      'bg-red-100 text-red-800 font-semibold dark:bg-red-900/40 dark:text-red-200 border-red-300 dark:border-red-800'
   },
   ghosted: {
     label: 'Ghosted',

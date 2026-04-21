@@ -45,7 +45,7 @@ function toLocalConvo(
   };
 }
 
-type InboxTab = 'all' | 'priority' | 'unread';
+type InboxTab = 'all' | 'priority' | 'unread' | 'qualified' | 'unqualified';
 
 type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
 
@@ -60,7 +60,12 @@ export function ConversationsView() {
     undefined,
     inboxTab === 'priority' ? true : undefined,
     inboxTab === 'unread' ? true : undefined,
-    platformFilter || undefined
+    platformFilter || undefined,
+    inboxTab === 'qualified'
+      ? 'qualified'
+      : inboxTab === 'unqualified'
+        ? 'unqualified'
+        : undefined
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 

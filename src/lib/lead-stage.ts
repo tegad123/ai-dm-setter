@@ -38,6 +38,21 @@ const TERMINAL_STAGES: Set<LeadStage> = new Set<LeadStage>([
   'NURTURE'
 ]);
 
+// Auto-generated positive-intent tag names that stop making sense once a
+// lead is disqualified. Stripped from the lead when stage → UNQUALIFIED
+// so the operator's view doesn't show a "Hot Lead + Ready To Book"
+// combination on someone who can't book. Only tags with isAuto=true AND
+// a name in this set get cleaned up — operator-added tags (isAuto=false)
+// and AI-added non-positive tags (e.g. the "UNQUALIFIED" intent tag
+// created by the scoring engine) are preserved because they still
+// describe the lead's actual state.
+export const POSITIVE_INTENT_AUTO_TAGS: ReadonlySet<string> = new Set([
+  'ON_FIRE',
+  'HOT_LEAD',
+  'HIGH_INTENT',
+  'READY_TO_BOOK'
+]);
+
 // -- Helpers -----------------------------------------------------------------
 
 /**
@@ -136,6 +151,20 @@ export async function transitionLeadStage(
     })
   ]);
 
+  // 3b. Tag cleanup on disqualification. Fires AFTER the stage commit so
+  //     a crash mid-cleanup still leaves the stage transition intact.
+  //     Best-effort — tag cleanup errors don't unwind the transition.
+  if (toStage === 'UNQUALIFIED') {
+    try {
+      await cleanupPositiveIntentTagsOnDisqualify(leadId);
+    } catch (err) {
+      console.error(
+        '[lead-stage] Tag cleanup on UNQUALIFIED transition failed (non-fatal):',
+        err
+      );
+    }
+  }
+
   // 4. Broadcast update (dynamic import to avoid circular dependencies)
   const { broadcastLeadUpdate } = await import('@/lib/realtime');
   broadcastLeadUpdate({
@@ -146,4 +175,35 @@ export async function transitionLeadStage(
   });
 
   return updatedLead;
+}
+
+/**
+ * Remove auto-generated positive-intent tags from a lead. Called when
+ * the lead transitions to UNQUALIFIED — a "Hot Lead" badge on a
+ * disqualified lead is actively misleading to the operator.
+ *
+ * Deletes `LeadTag` rows where:
+ *   - The linked `Tag.isAuto === true` (never touch operator-added tags)
+ *   - The `Tag.name` is in `POSITIVE_INTENT_AUTO_TAGS`
+ *
+ * Returns the number of LeadTag rows removed.
+ */
+export async function cleanupPositiveIntentTagsOnDisqualify(
+  leadId: string
+): Promise<number> {
+  const result = await prisma.leadTag.deleteMany({
+    where: {
+      leadId,
+      tag: {
+        isAuto: true,
+        name: { in: Array.from(POSITIVE_INTENT_AUTO_TAGS) }
+      }
+    }
+  });
+  if (result.count > 0) {
+    console.log(
+      `[lead-stage] Stripped ${result.count} positive-intent auto tag(s) from UNQUALIFIED lead ${leadId}`
+    );
+  }
+  return result.count;
 }
