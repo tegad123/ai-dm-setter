@@ -1391,37 +1391,51 @@ GUARDRAILS:
   // without wasting the pitch). R3's default "urgency → soft pitch →
   // commitment, THEN financial" sequence gets a carve-out.
   //
-  // IMPORTANT (2026-04-20 tightening): the original carve-out said
-  // "R3's financial-after-commitment constraint does NOT apply here"
-  // which the LLM interpreted as "financial can happen any time after
-  // Discovery" — and it started asking about capital before the lead
-  // had stated goals/why. That makes the AI look transactional.
-  // Narrowed: Opening + Discovery + Goal/Why must still complete
-  // first. Urgency + Soft Pitch are recommended but skippable in
-  // early-financial-screening mode. Discovery → Financial direct is
-  // explicitly banned.
+  // IMPORTANT (2026-04-20 → 2026-04-21 tightening).
+  //
+  // v1 (original): said "R3's financial-after-commitment constraint
+  //   does NOT apply here". LLM read it as "financial any time after
+  //   Discovery" and started asking about capital before lead had
+  //   stated goals/why. Transactional.
+  //
+  // v2 (2026-04-20): required Opening + Discovery + Goal/Why. Urgency
+  //   + Soft Pitch labeled "recommended but skippable based on lead
+  //   engagement". Production reality: the LLM read "skippable" as
+  //   "default skip" and jumped from Goal/Why → Financial on
+  //   literally every conversation. Social proof never got surfaced,
+  //   urgency never got built.
+  //
+  // v3 (this change): Urgency + Social Proof + Soft Pitch are ALL
+  //   now hard requirements before Financial. No "skippable" language
+  //   anywhere. The LLM needs to hear "cannot skip, every time" or
+  //   it defaults to the path of least resistance. The flag still
+  //   means "capital before Typeform" (Step 8 before Step 10) — it
+  //   does NOT mean "skip Steps 4-7".
   const allowEarlyFinancial =
     (p as { allowEarlyFinancialScreening?: boolean })
       .allowEarlyFinancialScreening === true;
   if (allowEarlyFinancial) {
     prompt = prompt.replace(
       /\{\{earlyFinancialScreeningOverride\}\}/g,
-      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrowed, not a free pass): this account's script asks capital BEFORE the soft pitch so unqualified leads route to a downsell without wasting the pitch. You may ask the capital qualification question earlier than the default flow, BUT you MUST still complete these stages first:
+      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrow carve-out, not a free pass): this account's script asks capital BEFORE the Typeform handoff so unqualified leads route to a downsell without wasting the application step. You may ask the capital qualification question earlier than the default post-commitment flow, but you MUST still complete these steps IN ORDER before asking about capital:
 
-REQUIRED before Financial Screening:
-  • Opening (who they are, how long trading)
-  • Discovery (biggest challenge, current situation)
-  • Goal / Why (what they want from trading, income target)
+REQUIRED before Financial (CANNOT skip any of these):
+  1. Opening — who they are, how long trading
+  2. Discovery — biggest challenge, current situation
+  3. Goal / Why — what they want from trading, income target
+  4. Urgency — how soon they want to make this change, why now
+  5. Social Proof — mention your results and student success
+  6. Soft Pitch — propose that you can help, gauge interest
 
-RECOMMENDED but skippable based on lead engagement:
-  • Urgency (how soon they want to act)
-  • Soft Pitch (social proof, value proposition)
+THEN Financial — ask about capital.
 
-You CANNOT go from Discovery directly to Financial. The lead must have stated their goal and income target before you ask about capital. Asking about money before understanding what they want makes you look transactional.
+You CANNOT go from Goal/Why directly to the capital question. You CANNOT skip Urgency. You CANNOT skip Social Proof. You CANNOT skip Soft Pitch. Every single one of Steps 1 through 6 must be in the conversation history before you ask about money. No exceptions based on "engagement", no shortcuts for "hot" leads, no compressing two steps into one turn.
 
-The script's step ordering is your guide — follow Steps 1-7 before Step 8 (the capital question). If the lead NATURALLY surfaces financial information early ("I have $5k ready to invest" during Discovery), acknowledge it and continue qualifying goals/why before formally asking the capital question. Do NOT INITIATE the capital question yourself until Goal/Why is complete.
+The lead must hear WHY you can help them (social proof + soft pitch) and feel the URGENCY of acting now before you ask about money. Asking about money before building value makes you look transactional.
 
-R2 (urgency before soft pitch) still applies when you reach those stages. The only constraint this flag lifts is: financial screening may happen BEFORE urgency + soft pitch, provided Opening + Discovery + Goal/Why have been completed.`
+Follow the script's step ordering: Steps 1 through 7 before Step 8. Every time. If the lead NATURALLY surfaces financial information early ("I have $5k ready to invest" during Discovery), acknowledge it and continue qualifying through Steps 4-6 before formally asking the capital question. Do NOT INITIATE the capital question yourself until Step 7 is complete.
+
+The flag name is "allow EARLY financial screening" — EARLY relative to the default R3 flow (capital after commitment confirmation). It does NOT mean "skip the middle of the funnel". If you want to think of it literally: Step 8 before Step 10, not Step 8 before Step 4.`
     );
   } else {
     prompt = prompt.replace(/\{\{earlyFinancialScreeningOverride\}\}/g, '');
