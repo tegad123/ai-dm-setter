@@ -2,6 +2,7 @@ import { bookUnifiedAppointment } from '@/lib/calendar-adapter';
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { calculateAndApplyCommissions } from '@/lib/commission-calculator';
+import { transitionLeadStage } from '@/lib/lead-stage';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
@@ -43,13 +44,19 @@ export async function POST(req: NextRequest) {
         `Auto-booked via DM Setter. Platform: ${lead.platform}. Lead stage: ${lead.stage}.`
     });
 
-    // Update lead stage to BOOKED
+    // Update lead stage to BOOKED via the sanctioned helper so the
+    // transition lands an audit row + SSE broadcast. The `bookedAt`
+    // timestamp is updated separately because it isn't part of the
+    // stage-transition schema.
+    await transitionLeadStage(
+      leadId,
+      'BOOKED',
+      'user',
+      `Calendar booking created (provider=${result.provider}, slot=${slotStart})`
+    );
     await prisma.lead.update({
       where: { id: leadId },
-      data: {
-        stage: 'BOOKED',
-        bookedAt: new Date()
-      }
+      data: { bookedAt: new Date() }
     });
 
     // Update content attribution callsBooked count if linked

@@ -1,5 +1,7 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { transitionLeadStage } from '@/lib/lead-stage';
+import type { LeadStage } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(
@@ -41,19 +43,32 @@ export async function POST(
       }
     });
 
-    // Update lead stage based on outcome
-    const leadUpdate: Record<string, unknown> = { showedUp: showed };
-    if (showed) leadUpdate.stage = 'SHOWED';
+    // Determine target stage and transition via the sanctioned helper
+    // so every CRM outcome lands an audit row. Non-stage fields
+    // (showedUp, closedAt, revenue) are updated separately.
+    let nextStage: LeadStage;
     if (closed) {
-      leadUpdate.stage = 'CLOSED_WON';
-      leadUpdate.closedAt = new Date();
-      if (dealValue) leadUpdate.revenue = dealValue;
+      nextStage = 'CLOSED_WON';
+    } else if (showed) {
+      nextStage = 'SHOWED';
+    } else {
+      nextStage = 'NO_SHOWED';
     }
-    if (!showed) leadUpdate.stage = 'NO_SHOWED';
 
+    const reasonBits: string[] = [`Manual CRM outcome: showed=${showed}`];
+    if (closed) reasonBits.push('closed=true');
+    if (dealValue != null) reasonBits.push(`deal=${dealValue}`);
+    if (closeReason) reasonBits.push(`reason="${closeReason}"`);
+    await transitionLeadStage(id, nextStage, 'user', reasonBits.join(', '));
+
+    const nonStageUpdate: Record<string, unknown> = { showedUp: showed };
+    if (closed) {
+      nonStageUpdate.closedAt = new Date();
+      if (dealValue) nonStageUpdate.revenue = dealValue;
+    }
     const updatedLead = await prisma.lead.update({
       where: { id },
-      data: leadUpdate
+      data: nonStageUpdate
     });
 
     return NextResponse.json({ crmOutcome, lead: updatedLead });

@@ -26,6 +26,8 @@ import { getMessages as getFacebookMessages } from '@/lib/facebook';
 import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
+import { transitionLeadStage } from '@/lib/lead-stage';
+import type { LeadStage } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // URL hallucination guard
@@ -487,12 +489,20 @@ export async function processIncomingMessage(
         bookingUrl: null
       }
     });
+    // Stage transition goes through the sanctioned helper so the
+    // reset produces an audit row (+ SSE broadcast). The remaining
+    // non-stage fields are cleared in a separate update.
+    if (lead.stage !== 'NEW_LEAD') {
+      await transitionLeadStage(
+        lead.id,
+        'NEW_LEAD',
+        'system',
+        'clear conversation reset command'
+      );
+    }
     await prisma.lead.update({
       where: { id: lead.id },
       data: {
-        stage: 'NEW_LEAD',
-        previousStage: null,
-        stageEnteredAt: new Date(),
         qualityScore: 0,
         bookedAt: null,
         showedUp: false,
@@ -3621,10 +3631,18 @@ async function updateLeadStageFromConversation(
   const newPriority = stagePriority[newStage] ?? 0;
 
   if (newPriority > currentPriority && currentPriority < 10) {
-    await prisma.lead.update({
-      where: { id: leadId },
-      data: { stage: newStage as any }
-    });
+    // Route through the sanctioned helper so every stage change gets an
+    // audit row + real-time broadcast. Pre-this-fix, 71/823 daetradez
+    // leads had stages set without any audit row — impossible to tell
+    // "when did this lead become QUALIFYING" from the DB. Steven Petty's
+    // silent CALL_PROPOSED → UNQUALIFIED revert on 2026-04-20 was the
+    // first incident to surface the class.
+    await transitionLeadStage(
+      leadId,
+      newStage as LeadStage,
+      'ai',
+      `auto: conv=${conversationStage}, sub=${subStage ?? 'null'}, capital=${capitalOutcome}${isDownsellBranch ? ', downsell' : ''}`
+    );
     console.log(
       `[webhook-processor] Lead ${leadId} stage: ${currentStage} → ${newStage} (conv=${conversationStage}, sub=${subStage ?? 'null'}, capital=${capitalOutcome})`
     );

@@ -65,10 +65,13 @@ export async function PATCH(
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
+    // Stage-related fields are deliberately EXCLUDED from this endpoint.
+    // Every stage transition must go through PUT /api/leads/[id]/stage
+    // (which calls `transitionLeadStage`) so an audit row + SSE broadcast
+    // always lands. Allowing `stage` here was a silent-revert vector —
+    // Steven Petty's 2026-04-20 CALL_PROPOSED → UNQUALIFIED flip with no
+    // LeadStageTransition record traces to a path like this one.
     const allowedFields = [
-      'stage',
-      'previousStage',
-      'stageEnteredAt',
       'qualityScore',
       'bookedAt',
       'showedUp',
@@ -80,6 +83,21 @@ export async function PATCH(
       if (body[field] !== undefined) {
         data[field] = body[field];
       }
+    }
+    // Surface an explicit 400 if a caller still tries to send stage via
+    // this endpoint — silent drops would mask bugs.
+    if (
+      body.stage !== undefined ||
+      body.previousStage !== undefined ||
+      body.stageEnteredAt !== undefined
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Stage fields are not modifiable via PATCH /api/leads/[id]. Use PUT /api/leads/[id]/stage instead so the transition is audited.'
+        },
+        { status: 400 }
+      );
     }
 
     const lead = await prisma.lead.update({
