@@ -2939,46 +2939,47 @@ export async function processAdminMessage(
     }
   }
 
-  // ── AI echo detection ─────────────────────────────────────────────
-  // When AI sends a reply via the Instagram / Facebook Send API, Meta
-  // echoes it back as an admin message (is_echo=true). The AI-saved
-  // message won't have a platformMessageId, so the platformMessageId
-  // dedup above won't catch it. Instead, check if a recent AI message
-  // with equivalent content exists — if so, this is just the echo of
-  // the AI's own message. Link the platformMessageId to the existing
-  // AI message and skip the "human took over" logic.
+  // ── Our-own-send echo detection (AI + HUMAN) ──────────────────────
+  // When WE send a reply via the Instagram / Facebook Send API, Meta
+  // echoes it back as an admin message (is_echo=true). If our originally-
+  // saved Message row is missing a platformMessageId (because the
+  // fire-and-forget patch hasn't committed yet, or Meta's return was
+  // lost), the platformMessageId dedup above won't catch it. Fall back
+  // to content matching.
   //
-  // IMPORTANT: compare on TRIMMED content. Meta strips trailing
-  // whitespace from echoes, so a 1-char trailing-space difference
-  // between our saved AI text and Meta's echo was enough to bust the
-  // exact-match dedup and cause the echo to be saved as a second HUMAN
-  // message (see daetradez @l.galeza 2026-04-18 16:44). Both messages
-  // then rendered in the UI as separate bubbles ("AI Setter" + "Human
-  // Setter") for what was really one send + its echo.
+  // Widened on 2026-04-21 to include HUMAN in addition to AI. Before:
+  // only AI echoes were deduped; Daniel's manual HUMAN send got
+  // duplicated because its echo matched nothing. After: we look for
+  // any recent OWN-SIDE message (AI or HUMAN) and dedup against both.
+  //
+  // Compare on TRIMMED content — Meta strips trailing whitespace from
+  // echoes, so a 1-char trailing-space difference was enough to bust
+  // the exact-match dedup (daetradez @l.galeza 2026-04-18 16:44).
   const echoSearchWindow = new Date(Date.now() - 60000);
   const trimmedIncoming = (messageText ?? '').trim();
-  const recentAIMessages = await prisma.message.findMany({
+  const recentOwnMessages = await prisma.message.findMany({
     where: {
       conversationId,
-      sender: 'AI',
+      sender: { in: ['AI', 'HUMAN'] },
       timestamp: { gte: echoSearchWindow }
     },
     orderBy: { timestamp: 'desc' }
   });
-  const recentAIMessage = recentAIMessages.find(
+  const recentOwnMessage = recentOwnMessages.find(
     (m) => m.content.trim() === trimmedIncoming
   );
 
-  if (recentAIMessage) {
-    // Link the platform message ID to the existing AI message for future dedup
-    if (platformMessageId && !recentAIMessage.platformMessageId) {
+  if (recentOwnMessage) {
+    // Link the platform message ID to the existing own-side message so
+    // future dedup lookups find it directly.
+    if (platformMessageId && !recentOwnMessage.platformMessageId) {
       await prisma.message.update({
-        where: { id: recentAIMessage.id },
+        where: { id: recentOwnMessage.id },
         data: { platformMessageId }
       });
     }
     console.log(
-      `[webhook-processor] Admin message is echo of AI message ${recentAIMessage.id} — skipping, AI stays active`
+      `[webhook-processor] Admin message is echo of own ${recentOwnMessage.sender} message ${recentOwnMessage.id} — skipping duplicate save`
     );
     return;
   }

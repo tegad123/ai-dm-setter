@@ -457,7 +457,9 @@ export function ConversationThread({
                         )}
                         {isFirstInGroup && isHuman && (
                           <span className='mb-0.5 inline-block text-[10px] text-emerald-400'>
-                            Human Setter
+                            {msg.sentByUser?.name
+                              ? `${msg.sentByUser.name} · Human Setter`
+                              : 'Human Setter'}
                           </span>
                         )}
                         <div

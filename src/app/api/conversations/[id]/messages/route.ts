@@ -48,7 +48,16 @@ export async function GET(
         ...(before ? { timestamp: { lt: new Date(before) } } : {})
       },
       orderBy: { timestamp: 'desc' },
-      take: limit
+      take: limit,
+      // Pull the sending user's name for HUMAN messages so the UI can
+      // show "Daniel" (vs another team member) instead of a generic
+      // "Human Setter" label. Only populated when `sentByUserId` is
+      // set — NULL for legacy HUMAN rows and for webhook-originated
+      // admin messages (the operator sent from Meta Inbox directly,
+      // not from the app, so we don't have their userId).
+      include: {
+        sentByUser: { select: { id: true, name: true, email: true } }
+      }
     });
     // Reverse in-place to ASC so the client renders oldest→newest
     // without any UI-side changes needed.
@@ -184,6 +193,11 @@ export async function POST(
         content,
         sender,
         timestamp: now,
+        // Populate sentByUserId for HUMAN messages so the UI can show
+        // WHICH operator sent it (Daniel vs another setter on the
+        // team) instead of the generic "Human Setter" label. Prior to
+        // this, every HUMAN message had sentByUserId: null.
+        ...(sender === 'HUMAN' ? { sentByUserId: auth.userId } : {}),
         ...overrideFields,
         // Self-optimizing layer tracking fields (only set for AI messages)
         ...(sender === 'AI'
@@ -260,7 +274,16 @@ export async function POST(
     }
 
     // Fire-and-forget: send the message to the platform (Facebook/Instagram)
-    // Don't block the API response — deliver in background
+    // Don't block the API response — deliver in background.
+    //
+    // IMPORTANT: capture Meta's returned messageId and patch it onto
+    // the Message row we already created. When Meta echoes our send
+    // back via webhook (`processAdminMessage`), it arrives with the
+    // same platformMessageId — the webhook's primary dedup is a
+    // "already exists with this platformMessageId" check. Without
+    // patching, the echo doesn't find a match and saves as a DUPLICATE
+    // HUMAN message (Daniel reported seeing his manual sends with
+    // incorrect/missing attribution — the dup was part of this).
     if (sender === 'HUMAN' || sender === 'AI') {
       prisma.lead
         .findUnique({
@@ -270,22 +293,43 @@ export async function POST(
         .then(async (lead) => {
           if (!lead?.platformUserId) return;
           try {
+            let sendResult: { messageId: string } | undefined;
             if (lead.platform === 'FACEBOOK') {
-              await sendFacebookMessage(
+              sendResult = await sendFacebookMessage(
                 lead.accountId,
                 lead.platformUserId,
                 content
               );
               console.log(
-                `[send] Facebook message sent to ${lead.platformUserId}`
+                `[send] Facebook message sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
               );
             } else if (lead.platform === 'INSTAGRAM') {
-              await sendInstagramDM(
+              sendResult = await sendInstagramDM(
                 lead.accountId,
                 lead.platformUserId,
                 content
               );
-              console.log(`[send] Instagram DM sent to ${lead.platformUserId}`);
+              console.log(
+                `[send] Instagram DM sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
+              );
+            }
+            // Patch platformMessageId for echo dedup. Best-effort —
+            // a failure here just means the echo might save a duplicate
+            // HUMAN row (which the widened echo-detection in
+            // processAdminMessage also catches as a belt-and-suspenders
+            // fallback).
+            if (sendResult?.messageId) {
+              await prisma.message
+                .update({
+                  where: { id: message.id },
+                  data: { platformMessageId: sendResult.messageId }
+                })
+                .catch((err) => {
+                  console.error(
+                    '[send] Failed to patch platformMessageId (non-fatal):',
+                    err
+                  );
+                });
             }
           } catch (sendErr) {
             console.error(

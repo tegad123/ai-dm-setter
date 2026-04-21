@@ -7,6 +7,12 @@ export interface Message {
   voiceNoteUrl?: string;
   isHumanOverride?: boolean;
   humanOverrideNote?: string | null;
+  // Operator identity for HUMAN messages. Populated from Message.sentByUser
+  // when the app's POST /messages endpoint is used. NULL for legacy rows
+  // and for webhook-originated admin messages (operator sent from Meta
+  // Inbox directly, so we don't have their userId). UI renders the name
+  // in the "Human Setter" label when present.
+  sentByUser?: { id: string; name: string; email?: string } | null;
   // Multi-bubble grouping. Null for legacy / single-message rows — the
   // renderer treats absence as an implicit 1-bubble group. Present
   // rows with the same messageGroupId render together with tight

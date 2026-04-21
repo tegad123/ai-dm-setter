@@ -81,15 +81,26 @@ export function ConversationsView() {
     refetch: refetchMessages
   } = useMessages(activeId);
 
-  // Map API messages to local Message shape
-  const localMessages: Message[] = apiMessages.map((m) => ({
-    id: m.id,
-    sender: m.sender as 'ai' | 'lead' | 'human',
-    content: m.content,
-    timestamp: m.sentAt || m.timestamp || '',
-    isHumanOverride: m.isHumanOverride,
-    humanOverrideNote: m.humanOverrideNote
-  }));
+  // Map API messages to local Message shape. The API returns uppercase
+  // `sender` ("HUMAN" / "AI" / "LEAD") from the Prisma enum; the
+  // renderer lowercases it before comparison. `sentByUser` is a new
+  // join (Apr 21) used to show the operator's name on manual sends.
+  const localMessages: Message[] = apiMessages.map((m) => {
+    // `sentByUser` isn't on the narrow `ApiMessage` type yet — read it
+    // as an unknown extra field rather than growing the type so other
+    // consumers of the Message API stay unaffected.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const extra = m as any;
+    return {
+      id: m.id,
+      sender: m.sender as 'ai' | 'lead' | 'human',
+      content: m.content,
+      timestamp: m.sentAt || m.timestamp || '',
+      isHumanOverride: m.isHumanOverride,
+      humanOverrideNote: m.humanOverrideNote,
+      sentByUser: extra.sentByUser ?? null
+    };
+  });
 
   // Map conversations list
   const localConversations: Conversation[] = apiConversations.map((c) =>
