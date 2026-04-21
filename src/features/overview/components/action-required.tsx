@@ -101,10 +101,34 @@ interface AttentionUnverifiedSent {
   leadHandle: string;
   flaggedAt: string;
 }
+// 24h window keepalive fired 6+ hours ago without a lead response.
+// Operator may want to manually reach out before the window closes.
+interface AttentionKeepaliveNoResponse {
+  type: 'keepalive_no_response';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  firedAt: string;
+  callAt: string | null;
+}
+// Three consecutive keepalives fired with no lead response. The
+// conversation is effectively dead — the cron stopped firing and
+// needs operator decision.
+interface AttentionKeepaliveExhausted {
+  type: 'keepalive_exhausted';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  callAt: string | null;
+}
 type AttentionItem =
   | AttentionPaused
   | AttentionCapital
   | AttentionUnverifiedSent
+  | AttentionKeepaliveNoResponse
+  | AttentionKeepaliveExhausted
   | AttentionUpcomingCall
   | AttentionUnreviewed;
 
@@ -214,7 +238,9 @@ type DismissibleActionType =
   | 'ai_paused'
   | 'capital_verification'
   | 'upcoming_call'
-  | 'unverified_sent';
+  | 'unverified_sent'
+  | 'keepalive_no_response'
+  | 'keepalive_exhausted';
 
 export function ActionRequired() {
   const [data, setData] = React.useState<ActionsResponse | null>(null);
@@ -528,6 +554,58 @@ function renderAttention(
           }
           meta={relativeTime(item.flaggedAt, now)}
           onDismiss={() => onDismiss(item.conversationId, 'unverified_sent')}
+        />
+      );
+    case 'keepalive_no_response':
+      // Keepalive fired 6+ hours ago, no lead response yet. Window
+      // may close before the call. Operator can manually reach out.
+      return (
+        <ActionRow
+          key={`keepalive-no-response-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconClock}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — keepalive sent, no response yet
+                {item.callAt ? `, call ${relativeTime(item.callAt, now)}` : ''}
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.firedAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'keepalive_no_response')
+          }
+        />
+      );
+    case 'keepalive_exhausted':
+      // 3 consecutive keepalives fired with no lead response. The
+      // cron has stopped trying. Operator needs to decide whether
+      // to reach out manually or let it go.
+      return (
+        <ActionRow
+          key={`keepalive-exhausted-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconAlertCircle}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — lead unresponsive, 24h window may close before call
+                {item.callAt
+                  ? ` on ${new Date(item.callAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`
+                  : ''}
+              </span>
+            </span>
+          }
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'keepalive_exhausted')
+          }
         />
       );
     case 'upcoming_call':

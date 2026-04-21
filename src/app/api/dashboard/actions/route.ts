@@ -65,7 +65,8 @@ export async function GET(request: NextRequest) {
       pausedSystemRows,
       capitalRoutingRows,
       upcomingCallRows,
-      unreviewedCount
+      unreviewedCount,
+      keepaliveRows
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
       // Conversations flagged distressDetected=true within the last
@@ -270,6 +271,32 @@ export async function GET(request: NextRequest) {
           }
         }),
         0
+      ),
+      // ── PRIORITY 2.E: Window-keepalive status ─────────────────────
+      // All WINDOW_KEEPALIVE scheduled messages fired in the last 7
+      // days. We post-process to split into two action categories:
+      //   - keepalive_no_response: most-recent keepalive was 6h+ ago
+      //     and the lead hasn't responded yet — window may close.
+      //   - keepalive_exhausted: 3+ consecutive FIRED keepalives since
+      //     the last LEAD message — the conversation is dead, the
+      //     cron already stopped firing, operator needs to decide.
+      safe(
+        prisma.scheduledMessage.findMany({
+          where: {
+            accountId,
+            messageType: 'WINDOW_KEEPALIVE',
+            status: 'FIRED',
+            firedAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) }
+          },
+          select: {
+            id: true,
+            conversationId: true,
+            firedAt: true,
+            relatedCallAt: true
+          },
+          orderBy: { firedAt: 'desc' }
+        }),
+        []
       )
     ]);
 
@@ -637,12 +664,119 @@ export async function GET(request: NextRequest) {
         ? [{ type: 'unreviewed' as const, count: unreviewedCount }]
         : [];
 
+    // ── PRIORITY 2.E: Window-keepalive items ─────────────────────
+    // Group fired keepalives by conversation, count how many fired
+    // since the most-recent LEAD message. 3+ → exhausted.
+    // Most-recent ≥ 6h ago and no LEAD since → no_response.
+    const keepaliveConvIds = Array.from(
+      new Set(keepaliveRows.map((r) => r.conversationId))
+    );
+    const keepaliveConvs =
+      keepaliveConvIds.length > 0
+        ? await safe(
+            prisma.conversation.findMany({
+              where: { id: { in: keepaliveConvIds }, ...accountConvFilter },
+              select: {
+                id: true,
+                scheduledCallAt: true,
+                lead: { select: { id: true, name: true, handle: true } }
+              }
+            }),
+            []
+          )
+        : [];
+    const keepaliveConvById = new Map(keepaliveConvs.map((c) => [c.id, c]));
+    const latestLeadForKeepalive =
+      keepaliveConvIds.length > 0
+        ? await safe(
+            prisma.message.findMany({
+              where: {
+                conversationId: { in: keepaliveConvIds },
+                sender: 'LEAD'
+              },
+              orderBy: { timestamp: 'desc' },
+              distinct: ['conversationId'],
+              select: { conversationId: true, timestamp: true }
+            }),
+            []
+          )
+        : [];
+    const latestLeadByKeepaliveConv = new Map<string, Date>();
+    for (const m of latestLeadForKeepalive) {
+      latestLeadByKeepaliveConv.set(m.conversationId, m.timestamp);
+    }
+    // Partition rows per conversation, ordered newest-first
+    const rowsByConv = new Map<string, typeof keepaliveRows>();
+    for (const r of keepaliveRows) {
+      const arr = rowsByConv.get(r.conversationId) ?? [];
+      arr.push(r);
+      rowsByConv.set(r.conversationId, arr);
+    }
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const KEEPALIVE_EXHAUSTION = 3;
+    const attentionKeepaliveNoResponse: Array<{
+      type: 'keepalive_no_response';
+      conversationId: string;
+      leadId: string;
+      leadName: string;
+      leadHandle: string;
+      firedAt: string;
+      callAt: string | null;
+    }> = [];
+    const attentionKeepaliveExhausted: Array<{
+      type: 'keepalive_exhausted';
+      conversationId: string;
+      leadId: string;
+      leadName: string;
+      leadHandle: string;
+      callAt: string | null;
+    }> = [];
+    for (const [convId, rows] of Array.from(rowsByConv.entries())) {
+      const conv = keepaliveConvById.get(convId);
+      if (!conv) continue;
+      const latestLead = latestLeadByKeepaliveConv.get(convId) ?? new Date(0);
+      const keepalivesSinceLead = rows.filter(
+        (r) => r.firedAt && r.firedAt.getTime() > latestLead.getTime()
+      );
+      const mostRecent = rows[0]; // rows are ordered firedAt desc
+      if (!mostRecent.firedAt) continue;
+      if (keepalivesSinceLead.length >= KEEPALIVE_EXHAUSTION) {
+        if (!isDismissed(convId, 'keepalive_exhausted')) {
+          attentionKeepaliveExhausted.push({
+            type: 'keepalive_exhausted',
+            conversationId: convId,
+            leadId: conv.lead.id,
+            leadName: conv.lead.name,
+            leadHandle: conv.lead.handle,
+            callAt: conv.scheduledCallAt?.toISOString() ?? null
+          });
+        }
+      } else if (
+        keepalivesSinceLead.length >= 1 &&
+        now.getTime() - mostRecent.firedAt.getTime() >= SIX_HOURS_MS
+      ) {
+        if (!isDismissed(convId, 'keepalive_no_response')) {
+          attentionKeepaliveNoResponse.push({
+            type: 'keepalive_no_response',
+            conversationId: convId,
+            leadId: conv.lead.id,
+            leadName: conv.lead.name,
+            leadHandle: conv.lead.handle,
+            firedAt: mostRecent.firedAt.toISOString(),
+            callAt: conv.scheduledCallAt?.toISOString() ?? null
+          });
+        }
+      }
+    }
+
     return NextResponse.json({
       urgent: [...urgentDistress, ...urgentStuck, ...urgentDeliveryFailures],
       attention: [
         ...attentionPaused,
         ...attentionCapital,
         ...attentionUnverifiedSent,
+        ...attentionKeepaliveExhausted,
+        ...attentionKeepaliveNoResponse,
         ...attentionUpcomingCalls,
         ...attentionUnreviewed
       ],

@@ -25,7 +25,9 @@ const ALLOWED_ACTION_TYPES = new Set([
   'ai_paused',
   'capital_verification',
   'upcoming_call',
-  'unverified_sent'
+  'unverified_sent',
+  'keepalive_no_response',
+  'keepalive_exhausted'
 ]);
 
 export async function POST(request: NextRequest) {
