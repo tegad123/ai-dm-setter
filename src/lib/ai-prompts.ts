@@ -1402,40 +1402,50 @@ GUARDRAILS:
   //   + Soft Pitch labeled "recommended but skippable based on lead
   //   engagement". Production reality: the LLM read "skippable" as
   //   "default skip" and jumped from Goal/Why → Financial on
-  //   literally every conversation. Social proof never got surfaced,
-  //   urgency never got built.
+  //   literally every conversation.
   //
-  // v3 (this change): Urgency + Social Proof + Soft Pitch are ALL
-  //   now hard requirements before Financial. No "skippable" language
-  //   anywhere. The LLM needs to hear "cannot skip, every time" or
-  //   it defaults to the path of least resistance. The flag still
-  //   means "capital before Typeform" (Step 8 before Step 10) — it
-  //   does NOT mean "skip Steps 4-7".
+  // v3 (2026-04-21 morning): promoted all six qualifying steps to
+  //   hard requirements, said "Steps 1-6 must be in the conversation
+  //   history before you ask about money". Too absolute — breaks
+  //   the pre-qualification classifier path where a hot lead with
+  //   explicit intent legitimately enters the sequence mid-funnel.
+  //
+  // v4 (this change): linear-forward progression (cannot skip
+  //   AHEAD mid-conversation) but variable ENTRY POINT (classifier
+  //   decides where to start based on what the lead's opening
+  //   messages already revealed). If you enter at Stage 4, you
+  //   still go 4 → 5 → 6 → Financial — you don't also do
+  //   1 → 2 → 3 retroactively. If you enter at Stage 1, you go
+  //   1 → 2 → 3 → 4 → 5 → 6 → Financial. Either way, no
+  //   mid-conversation jumps FORWARD.
   const allowEarlyFinancial =
     (p as { allowEarlyFinancialScreening?: boolean })
       .allowEarlyFinancialScreening === true;
   if (allowEarlyFinancial) {
     prompt = prompt.replace(
       /\{\{earlyFinancialScreeningOverride\}\}/g,
-      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrow carve-out, not a free pass): this account's script asks capital BEFORE the Typeform handoff so unqualified leads route to a downsell without wasting the application step. You may ask the capital qualification question earlier than the default post-commitment flow, but you MUST still complete these steps IN ORDER before asking about capital:
+      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrow carve-out, not a free pass): this account's script asks capital BEFORE the Typeform handoff so unqualified leads route to a downsell without wasting the application step. You may ask the capital qualification question earlier than the default post-commitment flow, but you MUST follow the qualifying sequence below LINEARLY before asking about capital.
 
-REQUIRED before Financial (CANNOT skip any of these):
+QUALIFYING SEQUENCE (strict forward order, Financial is last):
   1. Opening — who they are, how long trading
   2. Discovery — biggest challenge, current situation
   3. Goal / Why — what they want from trading, income target
   4. Urgency — how soon they want to make this change, why now
   5. Social Proof — mention your results and student success
   6. Soft Pitch — propose that you can help, gauge interest
+  → THEN Financial — ask about capital
 
-THEN Financial — ask about capital.
+TWO RULES govern this sequence:
 
-You CANNOT go from Goal/Why directly to the capital question. You CANNOT skip Urgency. You CANNOT skip Social Proof. You CANNOT skip Soft Pitch. Every single one of Steps 1 through 6 must be in the conversation history before you ask about money. No exceptions based on "engagement", no shortcuts for "hot" leads, no compressing two steps into one turn.
+Rule A — NO FORWARD SKIPS MID-CONVERSATION. Once the conversation has started at a particular stage, you progress LINEARLY forward. If the last AI turn was at Goal/Why (Stage 3), the next AI turn is at Urgency (Stage 4) — NOT at Social Proof, NOT at Soft Pitch, NOT at Financial. One stage at a time. You cannot compress Urgency + Social Proof + Soft Pitch into one turn, and you cannot skip any of them to get to Financial faster. Asking about money before hearing Urgency + Social Proof + Soft Pitch makes you look transactional.
 
-The lead must hear WHY you can help them (social proof + soft pitch) and feel the URGENCY of acting now before you ask about money. Asking about money before building value makes you look transactional.
+Rule B — ENTRY POINT CAN VARY based on what the lead already revealed. If a pre-qualified-context block appears at the top of this prompt ("lead arrived with explicit intent / capital / urgency already stated"), you may ENTER the sequence at a later stage — e.g., start directly at Stage 4 (Urgency) if Stages 1-3 are already covered by the lead's opening messages. That's legitimate. You still progress linearly from that entry point: 4 → 5 → 6 → Financial. You do NOT retroactively ask Stages 1-3 questions after starting at Stage 4. You also do NOT use "the lead is hot" as justification to jump FROM Stage 4 straight to Financial — the entry-point shift applies once at the start, not to each successive stage.
 
-Follow the script's step ordering: Steps 1 through 7 before Step 8. Every time. If the lead NATURALLY surfaces financial information early ("I have $5k ready to invest" during Discovery), acknowledge it and continue qualifying through Steps 4-6 before formally asking the capital question. Do NOT INITIATE the capital question yourself until Step 7 is complete.
+Combined plainly: start wherever the classifier says is appropriate for THIS lead. Then move ONE stage forward per AI turn until you reach Financial. No mid-conversation jumps. No compressing multiple stages into one turn.
 
-The flag name is "allow EARLY financial screening" — EARLY relative to the default R3 flow (capital after commitment confirmation). It does NOT mean "skip the middle of the funnel". If you want to think of it literally: Step 8 before Step 10, not Step 8 before Step 4.`
+The flag name is "allow EARLY financial screening" — EARLY relative to the default R3 flow (capital after commitment confirmation). It means Step 8 before Step 10, not "skip stages within the qualifying sequence".
+
+If the lead NATURALLY surfaces financial information early ("I have $5k ready to invest" during Discovery), acknowledge it and continue at the current stage — do NOT jump to Financial just because the information came up. Natural surfacing of info does not change the stage-progression rules.`
     );
   } else {
     prompt = prompt.replace(/\{\{earlyFinancialScreeningOverride\}\}/g, '');
