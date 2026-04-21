@@ -166,6 +166,36 @@ export interface VoiceQualityOptions {
    * accounts should leave this false.
    */
   allowGeneralAdvice?: boolean;
+  /**
+   * Total number of messages in the conversation so far (LEAD + AI
+   * combined). Used by the premature_soft_exit_warm_lead signal — a
+   * "here's the video, good luck" style wrap on message 4 is almost
+   * always an AI ghosting a warm lead, whereas the same phrasing
+   * after message 20 is usually a legitimate close.
+   */
+  conversationMessageCount?: number;
+  /**
+   * Current Lead.stage snapshot (the same value that rides on
+   * leadContext.status). Used by the premature_soft_exit signal to
+   * skip firing on leads who have already been disqualified — "good
+   * luck with your journey" after R24 failed is a legitimate SOFT_EXIT,
+   * not a premature one.
+   */
+  leadStage?: string;
+  /**
+   * Current-turn R24 capital-verification outcome when available. Used
+   * as a second safety net against firing premature_soft_exit on leads
+   * whose most recent capital answer failed this turn (leadStage lags
+   * by one webhook cycle; capitalOutcome is authoritative for the
+   * current turn).
+   */
+  capitalOutcome?:
+    | 'passed'
+    | 'failed'
+    | 'hedging'
+    | 'ambiguous'
+    | 'not_asked'
+    | 'not_evaluated';
 }
 
 export function scoreVoiceQuality(
@@ -621,6 +651,49 @@ export function scoreVoiceQuality(
   const channelMentioned = channelMentionPatterns.some((p) => p.test(reply));
   if (channelMentioned && !hasUrl) {
     softSignals.r28_free_resources_no_link = -0.3;
+  }
+
+  // ── PREMATURE SOFT EXIT SIGNAL (soft penalty -0.4) ──────────────
+  // Mbaabu Denis / Badchild Meshach / Jeffrey Barrios / Shishir Ibna
+  // Moin / Nez Futurez (2026-04-20/21) all got soft-exited to YouTube
+  // by the AI on messages 3-5 without ever being asked about capital,
+  // pitched the call, or offered the downsell. The AI interpreted the
+  // allowEarlyFinancialScreening flag as permission to bail out
+  // entirely when a warm lead asked "can you recommend something to
+  // backtest?" — treating the resource request as a goodbye instead of
+  // a mid-funnel engagement signal.
+  //
+  // Pattern alone is insufficient (the same wording is fine after a
+  // lead is R24-failed or has declined the downsell). Gate on three
+  // additional conditions:
+  //   • conversation < 12 total messages (warm / mid-funnel)
+  //   • capitalOutcome !== 'failed' (this turn's R24 didn't disqualify)
+  //   • leadStage !== 'UNQUALIFIED' (no prior terminal disqualification)
+  //
+  // Weighted -0.4 — stronger than R22/R28 (-0.3) because the failure
+  // mode is a full conversation death, not a rhetorical flaw. Combined
+  // with any other soft loss it pushes a reply under the 0.7 pass
+  // threshold and triggers regen.
+  const prematureSoftExitPatterns: RegExp[] = [
+    /\bcheck\s+(it\s+|this\s+)?out\s+and\s+let\s+me\s+know\b/i,
+    /\bbacktest\s+(it|this)\s+over\b/i,
+    /\bgood\s+luck\b/i,
+    /\bkeep\s+grinding\b/i,
+    /\bhit\s+me\s+up\s+if\s+you\s+need\b/i,
+    /\b(i'?m|im)\s+here\s+if\s+you\s+need\s+(anything|it|help)\b/i
+  ];
+  const prematureExitPatternMatched = prematureSoftExitPatterns.some((p) =>
+    p.test(reply)
+  );
+  if (prematureExitPatternMatched) {
+    const msgCount = options?.conversationMessageCount;
+    const conversationShort =
+      typeof msgCount === 'number' ? msgCount < 12 : false;
+    const capitalNotFailed = options?.capitalOutcome !== 'failed';
+    const leadNotUnqualified = options?.leadStage !== 'UNQUALIFIED';
+    if (conversationShort && capitalNotFailed && leadNotUnqualified) {
+      softSignals.premature_soft_exit_warm_lead = -0.4;
+    }
   }
 
   // ── Calculate final score ───────────────────────────────────────

@@ -1410,40 +1410,75 @@ GUARDRAILS:
   //   the pre-qualification classifier path where a hot lead with
   //   explicit intent legitimately enters the sequence mid-funnel.
   //
-  // v4 (this change): linear-forward progression (cannot skip
-  //   AHEAD mid-conversation) but variable ENTRY POINT (classifier
-  //   decides where to start based on what the lead's opening
-  //   messages already revealed). If you enter at Stage 4, you
-  //   still go 4 → 5 → 6 → Financial — you don't also do
-  //   1 → 2 → 3 retroactively. If you enter at Stage 1, you go
-  //   1 → 2 → 3 → 4 → 5 → 6 → Financial. Either way, no
-  //   mid-conversation jumps FORWARD.
+  // v4 (2026-04-21 morning): linear-forward progression (cannot skip
+  //   AHEAD mid-conversation) but variable ENTRY POINT. Still too weak
+  //   in production: the LLM interpreted "early financial screening"
+  //   as permission to BAIL OUT entirely, soft-exiting warm leads to
+  //   YouTube on message 3-5 without ever reaching Urgency / Soft Pitch
+  //   / Financial (Mbaabu Denis, Badchild Meshach, Jeffrey Barrios,
+  //   Shishir Ibna Moin, Nez Futurez — all on 2026-04-20/21).
+  //
+  // v5 (this change, 2026-04-21 afternoon): keeps v4's linear + entry-
+  //   point rules AND adds an explicit CRITICAL-DO-NOT block with a
+  //   worked wrong-vs-right example showing how to send a requested
+  //   resource without ending the conversation, plus a conditions
+  //   whitelist for when soft-exit IS appropriate. The bug pattern
+  //   wasn't "LLM chose the wrong stage to be at" — it was "LLM
+  //   chose to exit entirely because resource request looked like
+  //   a graceful off-ramp."
   const allowEarlyFinancial =
     (p as { allowEarlyFinancialScreening?: boolean })
       .allowEarlyFinancialScreening === true;
   if (allowEarlyFinancial) {
     prompt = prompt.replace(
       /\{\{earlyFinancialScreeningOverride\}\}/g,
-      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrow carve-out, not a free pass): this account's script asks capital BEFORE the Typeform handoff so unqualified leads route to a downsell without wasting the application step. You may ask the capital qualification question earlier than the default post-commitment flow, but you MUST follow the qualifying sequence below LINEARLY before asking about capital.
+      ` EXCEPTION — EARLY FINANCIAL SCREENING (narrow carve-out, not a free pass): this account's script asks capital BEFORE the Typeform handoff so unqualified leads route to a downsell without wasting the application step. You may ask the capital qualification question earlier than the default post-commitment flow, but you MUST complete the qualifying sequence below IN ORDER before Financial Screening — and you MUST NOT soft-exit a warm lead who hasn't been through the sequence yet.
 
-QUALIFYING SEQUENCE (strict forward order, Financial is last):
-  1. Opening — who they are, how long trading
+REQUIRED SEQUENCE (cannot skip or reorder):
+  1. Opening — acknowledge them, basic context (new or experienced)
   2. Discovery — biggest challenge, current situation
-  3. Goal / Why — what they want from trading, income target
+  3. Goal / Why — what they want from trading, income target, personal motivation
   4. Urgency — how soon they want to make this change, why now
   5. Social Proof — mention your results and student success
-  6. Soft Pitch — propose that you can help, gauge interest
-  → THEN Financial — ask about capital
+  6. Soft Pitch — propose working together, gauge interest
+  → ONLY AFTER ALL SIX: Financial Screening (capital question)
 
-TWO RULES govern this sequence:
+WHAT allowEarlyFinancialScreening MEANS:
+  ✓ You can ask about capital BEFORE sending the Typeform (Step 8 before Step 10 in the script).
+  ✗ You CANNOT skip Steps 3-7 and jump straight to capital.
+  ✗ You CANNOT skip the full sequence and soft-exit to YouTube / a free resource / a generic "good luck" wrap.
+
+TWO RULES govern progression through the sequence:
 
 Rule A — NO FORWARD SKIPS MID-CONVERSATION. Once the conversation has started at a particular stage, you progress LINEARLY forward. If the last AI turn was at Goal/Why (Stage 3), the next AI turn is at Urgency (Stage 4) — NOT at Social Proof, NOT at Soft Pitch, NOT at Financial. One stage at a time. You cannot compress Urgency + Social Proof + Soft Pitch into one turn, and you cannot skip any of them to get to Financial faster. Asking about money before hearing Urgency + Social Proof + Soft Pitch makes you look transactional.
 
 Rule B — ENTRY POINT CAN VARY based on what the lead already revealed. If a pre-qualified-context block appears at the top of this prompt ("lead arrived with explicit intent / capital / urgency already stated"), you may ENTER the sequence at a later stage — e.g., start directly at Stage 4 (Urgency) if Stages 1-3 are already covered by the lead's opening messages. That's legitimate. You still progress linearly from that entry point: 4 → 5 → 6 → Financial. You do NOT retroactively ask Stages 1-3 questions after starting at Stage 4. You also do NOT use "the lead is hot" as justification to jump FROM Stage 4 straight to Financial — the entry-point shift applies once at the start, not to each successive stage.
 
-Combined plainly: start wherever the classifier says is appropriate for THIS lead. Then move ONE stage forward per AI turn until you reach Financial. No mid-conversation jumps. No compressing multiple stages into one turn.
+CRITICAL — DO NOT:
+  • Soft-exit to YouTube / a free resource / a "good luck" wrap on messages 3-5 when the lead is warm and engaged.
+  • Send a free resource AS A REPLACEMENT for the qualification flow.
+  • Interpret a warm lead's resource question ("can you recommend something to watch?" / "anything I can backtest?") as an exit signal — it's a mid-funnel engagement signal, not a goodbye.
+  • Skip Urgency, Soft Pitch, or Social Proof for any reason other than the Rule-B entry-point shift at conversation start.
+  • Treat "here's the video, let me know how it goes" as a finished turn when the lead hasn't been qualified yet.
 
-The flag name is "allow EARLY financial screening" — EARLY relative to the default R3 flow (capital after commitment confirmation). It means Step 8 before Step 10, not "skip stages within the qualifying sequence".
+WARM LEAD ASKS FOR A RESOURCE — the resource is SUPPLEMENTARY, not a replacement. Send the resource AND continue the qualification flow in the same turn or the immediate next turn.
+
+  Lead: "can you recommend something I can backtest?"
+
+  WRONG (premature soft exit — what Mbaabu/Badchild/Jeffrey got):
+    "here's the video: [URL] check it out and let me know after you backtest it!"
+    [conversation ends]
+
+  RIGHT (resource + continued qualification):
+    "for sure bro, here's the video that breaks it down: [URL]. watch it tonight and lmk what you think. real quick tho, what's your goal with trading? you looking to replace your income or build a second stream?"
+
+SOFT EXIT is ONLY appropriate when at least one of these is true:
+  • Lead has been financially disqualified (R24 failed).
+  • Lead has explicitly declined the call offer after seeing it.
+  • Lead has declined the downsell.
+  • Lead has completed the full funnel (booked / closed / terminally off).
+
+Never soft-exit a warm engaged lead who hasn't been qualified yet.
 
 If the lead NATURALLY surfaces financial information early ("I have $5k ready to invest" during Discovery), acknowledge it and continue at the current stage — do NOT jump to Financial just because the information came up. Natural surfacing of info does not change the stage-progression rules.`
     );

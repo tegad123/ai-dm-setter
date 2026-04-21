@@ -403,8 +403,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // — byte-identical to the pre-multi-bubble behaviour. Multi-bubble
     // responses get per-bubble hardFails tagged [bubble=N] plus the
     // group-level cta_ack_only_truncation check on the joined string.
+    //
+    // conversationMessageCount + leadStage power the new
+    // premature_soft_exit_warm_lead signal (soft -0.4). R24 hasn't run
+    // yet for this iteration, so we use the LAST iteration's outcome
+    // as capitalOutcome — good enough to gate the signal, since the
+    // current-iteration R24 only matters for the PROMOTION step.
     const quality = scoreVoiceQualityGroup(parsed.messages, {
-      relaxLengthLimit: !!unkeptPattern
+      relaxLengthLimit: !!unkeptPattern,
+      conversationMessageCount: conversationHistory.length,
+      leadStage: leadContext.status || undefined,
+      capitalOutcome:
+        r24LastResult.reason === 'answer_below_threshold' ? 'failed' : undefined
     });
     finalQualityScore = quality.score;
 
