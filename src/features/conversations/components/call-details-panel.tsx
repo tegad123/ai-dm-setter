@@ -304,13 +304,13 @@ export function CallDetailsPanel({ conversationId }: Props) {
               {state.scheduledCallSource.replace(/_/g, ' ').toLowerCase()}
             </div>
           )}
-          {state.reminders.length > 0 && (
+          {(state.reminders?.length ?? 0) > 0 && (
             <div className='space-y-1 border-t pt-2'>
               <div className='text-muted-foreground flex items-center gap-1 text-[10px] font-medium'>
                 <IconClock className='h-3 w-3' />
                 Reminders
               </div>
-              {state.reminders.map((r) => (
+              {(state.reminders ?? []).map((r) => (
                 <div
                   key={r.id}
                   className='text-muted-foreground flex items-center gap-1 text-[10px]'

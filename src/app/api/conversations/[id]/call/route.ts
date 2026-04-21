@@ -177,7 +177,7 @@ export async function PUT(
 
     // Cancel any existing reminders tied to the previous call time and
     // create fresh ones for the new call.
-    const reminders = await scheduleCallReminders({
+    const remindersCreated = await scheduleCallReminders({
       conversationId: id,
       accountId: auth.accountId,
       scheduledCallAt: scheduledDate,
@@ -186,8 +186,29 @@ export async function PUT(
     });
 
     console.log(
-      `[api/call] Call set for ${id} at ${scheduledDate.toISOString()} (${tz}) by user ${auth.userId} — reminders: dayBefore=${reminders.dayBeforeId} morningOf=${reminders.morningOfId}`
+      `[api/call] Call set for ${id} at ${scheduledDate.toISOString()} (${tz}) by user ${auth.userId} — reminders: dayBefore=${remindersCreated.dayBeforeId} morningOf=${remindersCreated.morningOfId}`
     );
+
+    // Re-fetch the newly-scheduled PENDING reminder rows so the
+    // response shape matches GET exactly — the client stores this
+    // response directly via setState and renders `state.reminders`
+    // on the next paint. Previous shape mismatch (`remindersCreated`
+    // vs `reminders`) crashed the UI with "Cannot read properties of
+    // undefined (reading 'length')". Keep the shape identical here.
+    const reminders = await prisma.scheduledMessage.findMany({
+      where: {
+        conversationId: id,
+        status: 'PENDING',
+        messageType: { in: ['DAY_BEFORE_REMINDER', 'MORNING_OF_REMINDER'] }
+      },
+      orderBy: { scheduledFor: 'asc' },
+      select: {
+        id: true,
+        messageType: true,
+        scheduledFor: true,
+        relatedCallAt: true
+      }
+    });
 
     return NextResponse.json({
       scheduledCallAt: updated.scheduledCallAt?.toISOString() ?? null,
@@ -199,10 +220,12 @@ export async function PUT(
         updated.scheduledCallUpdatedAt?.toISOString() ?? null,
       scheduledCallUpdatedBy: updated.scheduledCallUpdatedBy,
       leadTimezone: updated.leadTimezone,
-      remindersCreated: {
-        dayBeforeId: reminders.dayBeforeId,
-        morningOfId: reminders.morningOfId
-      }
+      reminders: reminders.map((r) => ({
+        id: r.id,
+        messageType: r.messageType,
+        scheduledFor: r.scheduledFor.toISOString(),
+        relatedCallAt: r.relatedCallAt?.toISOString() ?? null
+      }))
     });
   } catch (error) {
     if (error instanceof AuthError) {
