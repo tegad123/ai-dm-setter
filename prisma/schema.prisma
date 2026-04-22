@@ -783,6 +783,15 @@ model Conversation {
   distressDetectedAt   DateTime?
   distressMessageId    String?
 
+  // ── Per-conversation auto-send override ───────────────────────
+  // When true, this specific conversation auto-sends even if the
+  // account-level platform away-mode is OFF (i.e. the rest of the
+  // platform is still in review-banner / suggestion mode). Lets an
+  // operator "graduate" an individual lead to AI-autonomous while
+  // keeping training-mode intact for everyone else. Evaluated in
+  // `shouldAutoSend` as OR alongside `awayModeForPlatform`.
+  autoSendOverride     Boolean   @default(false)
+
   // Stage reached timestamps (set once, when first reached)
   // Legacy stages (kept for historical data)
   stageQualificationAt         DateTime?

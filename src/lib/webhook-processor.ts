@@ -982,13 +982,18 @@ export async function scheduleAIReply(
         ? (account?.awayModeFacebook ?? false)
         : false;
 
-  // Auto-send only when the platform is enabled AND the per-conversation
-  // AI toggle is on. Either off → suggestion-only mode (no auto-send).
+  // Auto-send only when the per-conversation AI toggle is ON AND
+  // EITHER the account-level platform away-mode is on OR the
+  // conversation has `autoSendOverride` set — the latter lets an
+  // operator graduate one lead to AI-autonomous while keeping the
+  // rest of the platform in review-banner mode (see the per-
+  // conversation override doc on Conversation.autoSendOverride).
   const aiActive = conversation.aiActive;
-  const shouldAutoSend = aiActive && awayModeForPlatform;
+  const autoSendOverride = conversation.autoSendOverride;
+  const shouldAutoSend = aiActive && (awayModeForPlatform || autoSendOverride);
   log(
     'sched.step1.aiActive',
-    `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} shouldAutoSend=${shouldAutoSend}`
+    `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} override=${autoSendOverride} shouldAutoSend=${shouldAutoSend}`
   );
 
   if (!shouldAutoSend) {
