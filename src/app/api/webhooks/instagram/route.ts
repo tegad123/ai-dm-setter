@@ -324,12 +324,18 @@ async function processInstagramEvents(payload: any): Promise<void> {
           continue;
         }
 
-        // Only schedule AI reply if AI is active on this conversation
-        const convo = await prisma.conversation.findUnique({
-          where: { id: result.conversationId },
-          select: { aiActive: true }
-        });
-        if (convo?.aiActive) {
+        // Check conversation AI toggle AND account-level away mode
+        const [convo, account] = await Promise.all([
+          prisma.conversation.findUnique({
+            where: { id: result.conversationId },
+            select: { aiActive: true }
+          }),
+          prisma.account.findUnique({
+            where: { id: accountId },
+            select: { awayMode: true }
+          })
+        ]);
+        if (convo?.aiActive || account?.awayMode) {
           // Decide between inline (after()) and queued (cron) execution.
           // The cron runs every minute, so a 30-45s configured delay would
           // typically wait an extra 0-60s for the next tick, making the

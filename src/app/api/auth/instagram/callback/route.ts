@@ -1,16 +1,18 @@
 import { saveCredentials } from '@/lib/credential-store';
 import { NextRequest, NextResponse } from 'next/server';
 
-// Instagram OAuth callback needs time for: token exchange + long-lived exchange + profile fetch + save
-export const maxDuration = 30;
+// Instagram OAuth callback needs time for: token exchange + long-lived exchange + profile fetch + subscription
+export const maxDuration = 45;
 
 // ---------------------------------------------------------------------------
 // GET — Instagram OAuth Callback
 // Exchanges the code for a short-lived token, then a long-lived token,
-// fetches the user's IG profile, and stores credentials.
+// fetches the user's IG profile, stores credentials, and subscribes to
+// webhook events so DMs are forwarded to our endpoint.
 // ---------------------------------------------------------------------------
 
 const GRAPH_API = 'https://graph.instagram.com';
+const FB_GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 export async function GET(req: NextRequest) {
   try {
@@ -177,6 +179,11 @@ export async function GET(req: NextRequest) {
       `[instagram-oauth] Successfully connected @${username} (${igUserId}) for account ${state.accountId}`
     );
 
+    // Step 5: Subscribe to webhook events so Meta forwards DMs.
+    // Instagram DM webhooks are delivered via the linked Facebook Page.
+    // We need to find the Page that owns this IG account and subscribe it.
+    await subscribeInstagramWebhooks(accessToken, igUserId, state.accountId);
+
     return NextResponse.redirect(
       `${baseUrl}/dashboard/settings/integrations?connected=instagram&ig=${encodeURIComponent(username)}`
     );
@@ -188,6 +195,113 @@ export async function GET(req: NextRequest) {
       'http://localhost:3000';
     return NextResponse.redirect(
       `${baseUrl}/dashboard/settings/integrations?error=ig_unknown`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subscribe to Instagram webhook events via the linked Facebook Page.
+// Instagram DM webhooks are delivered through the Facebook Page that owns
+// the IG Business/Creator account. We try two approaches:
+// 1. Use the Meta/Facebook credentials already stored for this account
+// 2. Use the IG token to discover the linked page via the Facebook Graph API
+// ---------------------------------------------------------------------------
+
+async function subscribeInstagramWebhooks(
+  igAccessToken: string,
+  igUserId: string,
+  accountId: string
+): Promise<void> {
+  try {
+    // Approach 1: Check if this account already has a META credential with a pageId
+    const { getCredentials } = await import('@/lib/credential-store');
+    const metaCreds = await getCredentials(accountId, 'META');
+
+    if (metaCreds) {
+      const metaRecord = await (await import('@/lib/prisma')).default.integrationCredential.findFirst({
+        where: { accountId, provider: 'META', isActive: true },
+        select: { metadata: true }
+      });
+      const pageId = (metaRecord?.metadata as any)?.pageId;
+      const pageToken = metaCreds.accessToken;
+
+      if (pageId && pageToken) {
+        console.log(
+          `[instagram-oauth] Found existing META credential with pageId=${pageId}, subscribing to webhooks`
+        );
+        await subscribePageToWebhooks(pageId, pageToken);
+        return;
+      }
+    }
+
+    // Approach 2: Use the IG token to find the linked Facebook Page.
+    try {
+      const pagesRes = await fetch(
+        `${FB_GRAPH_API}/me/accounts?fields=id,name,instagram_business_account,access_token&access_token=${igAccessToken}`
+      );
+
+      if (pagesRes.ok) {
+        const pagesData = await pagesRes.json();
+        const pages = pagesData.data || [];
+
+        const linkedPage = pages.find(
+          (p: any) => p.instagram_business_account?.id === igUserId
+        ) || pages[0];
+
+        if (linkedPage) {
+          console.log(
+            `[instagram-oauth] Discovered linked page: ${linkedPage.name} (${linkedPage.id})`
+          );
+          await subscribePageToWebhooks(linkedPage.id, linkedPage.access_token || igAccessToken);
+          return;
+        }
+      } else {
+        const err = await pagesRes.text();
+        console.warn(
+          `[instagram-oauth] Pages discovery failed (may lack pages_read_engagement scope):`,
+          err.slice(0, 300)
+        );
+      }
+    } catch (err: any) {
+      console.warn('[instagram-oauth] Page discovery error:', err?.message || err);
+    }
+
+    console.warn(
+      `[instagram-oauth] Could not subscribe to webhooks for IG user ${igUserId}. ` +
+        `Webhooks must be configured manually in Meta Developer Dashboard, or connect via Meta OAuth (which auto-subscribes).`
+    );
+  } catch (err) {
+    console.error('[instagram-oauth] Webhook subscription error:', err);
+  }
+}
+
+async function subscribePageToWebhooks(
+  pageId: string,
+  accessToken: string
+): Promise<void> {
+  const res = await fetch(`${FB_GRAPH_API}/${pageId}/subscribed_apps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      subscribed_fields: [
+        'messages',
+        'messaging_postbacks',
+        'messaging_optins',
+        'message_deliveries',
+        'message_reads'
+      ].join(','),
+      access_token: accessToken
+    })
+  });
+
+  if (res.ok) {
+    const data = await res.json();
+    console.log(`[instagram-oauth] Subscribed page ${pageId} to webhooks:`, data);
+  } else {
+    const err = await res.text();
+    console.error(
+      `[instagram-oauth] Failed to subscribe page ${pageId} to webhooks:`,
+      err.slice(0, 300)
     );
   }
 }
