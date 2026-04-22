@@ -7,7 +7,8 @@ type EventType =
   | 'conversation:updated'
   | 'notification:new'
   | 'lead:updated'
-  | 'ai:status_changed';
+  | 'ai:status_changed'
+  | 'ai:suggestion';
 
 type RealtimeHandler = (data: unknown) => void;
 

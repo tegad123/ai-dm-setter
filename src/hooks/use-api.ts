@@ -18,7 +18,9 @@ import {
   getContentAttributions,
   getContentAnalytics,
   getTeamAnalytics,
-  getLeadStageHistory
+  getLeadStageHistory,
+  getPendingSuggestion,
+  type PendingSuggestion
 } from '@/lib/api';
 import type {
   Lead,
@@ -182,6 +184,29 @@ export function useConversation(id: string | undefined) {
     error,
     refetch
   };
+}
+
+// ---------------------------------------------------------------------------
+// Pending AI suggestion (test-mode review flow)
+// ---------------------------------------------------------------------------
+
+export function usePendingSuggestion(conversationId: string | undefined) {
+  const {
+    data: raw,
+    loading,
+    error,
+    refetch
+  } = useApiFetch(
+    () =>
+      conversationId
+        ? getPendingSuggestion(conversationId)
+        : Promise.resolve({ suggestion: null as PendingSuggestion | null }),
+    [conversationId]
+  );
+  const suggestion =
+    (raw as { suggestion: PendingSuggestion | null } | null)?.suggestion ??
+    null;
+  return { suggestion, loading, error, refetch };
 }
 
 export function useMessages(

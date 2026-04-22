@@ -55,6 +55,9 @@ export async function GET(request: NextRequest) {
         ? { priorityScore: 'desc' as const }
         : { lastMessageAt: 'desc' as const };
 
+    // Pending-suggestion cutoff — mirrors GET /api/conversations/[id]/suggestion.
+    const pendingSuggestionCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
     const rawConversations = await prisma.conversation.findMany({
       where,
       include: {
@@ -78,6 +81,20 @@ export async function GET(request: NextRequest) {
           orderBy: { timestamp: 'desc' },
           take: 1,
           select: { content: true }
+        },
+        // Zero-or-one lookup of the most recent unactioned suggestion.
+        // The frontend just needs a boolean ("show the ⚡ indicator");
+        // taking 1 row keeps the payload small.
+        aiSuggestions: {
+          where: {
+            dismissed: false,
+            actionedAt: null,
+            wasSelected: false,
+            generatedAt: { gte: pendingSuggestionCutoff }
+          },
+          orderBy: { generatedAt: 'desc' },
+          take: 1,
+          select: { id: true }
         }
       },
       orderBy
@@ -105,6 +122,10 @@ export async function GET(request: NextRequest) {
       })),
       // Call badge in sidebar list: null if no call scheduled or >7 days out
       scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
+      // Boolean hint for the ⚡ indicator on the list item — drives the
+      // "pending AI suggestion awaiting your review" marker when auto-
+      // send is off for this platform.
+      hasPendingSuggestion: c.aiSuggestions.length > 0,
       createdAt: c.createdAt.toISOString()
     }));
 

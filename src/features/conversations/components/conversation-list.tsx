@@ -13,7 +13,8 @@ import {
   IconMail,
   IconCalendarEvent,
   IconCircleCheck,
-  IconCircleX
+  IconCircleX,
+  IconBolt
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -224,6 +225,15 @@ export function ConversationList({
                       )}
                       {priorityScore >= 50 && priorityScore < 80 && (
                         <span className='h-2 w-2 rounded-full bg-amber-400' />
+                      )}
+                      {/* Pending AI suggestion awaiting operator review —
+                          amber bolt to differentiate from the blue "unread"
+                          dot (which means the LEAD messaged us). */}
+                      {convo.hasPendingSuggestion && (
+                        <IconBolt
+                          className='h-3.5 w-3.5 text-amber-500'
+                          aria-label='AI suggestion pending review'
+                        />
                       )}
                     </div>
                     <span className='text-muted-foreground text-[10px]'>

@@ -23,6 +23,8 @@ import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
+import type { PendingSuggestion } from '@/lib/api';
+import { SuggestionBanner } from './suggestion-banner';
 
 // ── Module-scoped training-phase cache ─────────────────────────────
 // OverrideNoteInput self-fetches training phase so we can render
@@ -266,13 +268,19 @@ interface ConversationThreadProps {
   loading?: boolean;
   onSendMessage?: (content: string) => Promise<void>;
   onToggleAI?: (aiActive: boolean) => Promise<void>;
+  /** Latest unactioned AI suggestion (test-mode platforms with auto-send off). */
+  pendingSuggestion?: PendingSuggestion | null;
+  /** Called after approve / edit / dismiss so the parent can refetch. */
+  onSuggestionActioned?: () => void;
 }
 
 export function ConversationThread({
   conversation,
   loading,
   onSendMessage,
-  onToggleAI
+  onToggleAI,
+  pendingSuggestion,
+  onSuggestionActioned
 }: ConversationThreadProps) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -539,8 +547,24 @@ export function ConversationThread({
           </div>
         </div>
 
+        {/* Suggestion banner — shown when auto-send is off and the AI
+            has generated a reply the operator hasn't actioned yet.
+            Sits above the input so the operator sees "approve / edit /
+            dismiss" options without scrolling. */}
+        {pendingSuggestion && (
+          <div className='mt-3 shrink-0'>
+            <SuggestionBanner
+              conversationId={conversation.id}
+              suggestion={pendingSuggestion}
+              onActioned={() => onSuggestionActioned?.()}
+            />
+          </div>
+        )}
+
         {/* Input — fixed at bottom below messages */}
-        <div className='mt-3 shrink-0 pb-2'>
+        <div
+          className={cn('shrink-0 pb-2', pendingSuggestion ? 'mt-1' : 'mt-3')}
+        >
           <div className='flex items-center gap-2'>
             <Input
               placeholder='Type a message...'

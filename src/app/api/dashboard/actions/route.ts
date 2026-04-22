@@ -769,6 +769,65 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // ── INFO: auto-send readiness ─────────────────────────────────
+    // Per platform where awayMode is currently OFF, count
+    // TrainingEvents over the last 7 days. If approval_rate is ≥85%
+    // across ≥20 events, surface a "ready for auto-send" info item
+    // with an Enable CTA. Gives operators a data-driven signal for
+    // when to exit test mode instead of guessing.
+    const readinessWindow = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const account = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: { awayModeInstagram: true, awayModeFacebook: true }
+    });
+    const infoReadiness: Array<{
+      type: 'autosend_ready';
+      platform: 'INSTAGRAM' | 'FACEBOOK';
+      approvalRate: number;
+      totalEvents: number;
+      approved: number;
+      edited: number;
+      rejected: number;
+    }> = [];
+    const platformsToCheck: Array<'INSTAGRAM' | 'FACEBOOK'> = [];
+    if (account && !account.awayModeInstagram)
+      platformsToCheck.push('INSTAGRAM');
+    if (account && !account.awayModeFacebook) platformsToCheck.push('FACEBOOK');
+
+    for (const platform of platformsToCheck) {
+      const grouped = await prisma.trainingEvent.groupBy({
+        by: ['type'],
+        where: {
+          accountId: auth.accountId,
+          platform,
+          createdAt: { gte: readinessWindow }
+        },
+        _count: true
+      });
+      const approved = grouped.find((g) => g.type === 'APPROVED')?._count ?? 0;
+      const edited = grouped.find((g) => g.type === 'EDITED')?._count ?? 0;
+      const rejected = grouped.find((g) => g.type === 'REJECTED')?._count ?? 0;
+      const totalEvents = approved + edited + rejected;
+      if (totalEvents < 20) continue;
+      // Approval rate: APPROVED / total. Edited counts as "the AI got
+      // it close but not perfect" — excluded from the numerator so
+      // accounts only promote when the verbatim-approval rate is
+      // strong. This matches the spec's "approval_rate = approved /
+      // (approved + edited + rejected)" formula.
+      const approvalRate = approved / totalEvents;
+      if (approvalRate >= 0.85) {
+        infoReadiness.push({
+          type: 'autosend_ready',
+          platform,
+          approvalRate: Number(approvalRate.toFixed(3)),
+          totalEvents,
+          approved,
+          edited,
+          rejected
+        });
+      }
+    }
+
     return NextResponse.json({
       urgent: [...urgentDistress, ...urgentStuck, ...urgentDeliveryFailures],
       attention: [
@@ -780,7 +839,7 @@ export async function GET(request: NextRequest) {
         ...attentionUpcomingCalls,
         ...attentionUnreviewed
       ],
-      info: [],
+      info: infoReadiness,
       generatedAt: now.toISOString()
     });
   } catch (err) {

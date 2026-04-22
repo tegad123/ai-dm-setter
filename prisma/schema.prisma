@@ -249,6 +249,7 @@ model Account {
   trainingAnalyses   TrainingDataAnalysis[]
   aiSuggestions      AISuggestion[]
   inboundQualifications InboundQualification[]
+  trainingEvents     TrainingEvent[]
 
   @@index([slug])
 }
@@ -826,6 +827,7 @@ model Conversation {
   aiSuggestions  AISuggestion[]
   inboundQualification InboundQualification?
   scheduledMessages ScheduledMessage[]
+  trainingEvents TrainingEvent[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
@@ -1628,18 +1630,72 @@ model AISuggestion {
   messageBubbles              Json?
   bubbleCount                 Int      @default(1)
 
+  // ── Manual-review flow (test-mode platforms where awayMode is OFF) ──
+  // When auto-send is disabled for a platform, the AI generates
+  // suggestions and holds them here for operator review via the
+  // in-conversation banner. `dismissed` + `actionedAt` mark the
+  // operator's explicit choice; `manuallyApproved` + `editedByHuman`
+  // + `humanEditedContent` capture whether they shipped verbatim or
+  // after edits. Distinct from `wasSelected` (which means "AI
+  // auto-sent") and `wasEdited` (which is the similarity-based
+  // auto-detect for override path). Together these drive the
+  // approval-rate metric that gates the "ready to enable auto-send"
+  // dashboard prompt.
+  dismissed                   Boolean  @default(false)
+  actionedAt                  DateTime?
+  editedByHuman               Boolean  @default(false)
+  humanEditedContent          String?  @db.Text
+  manuallyApproved            Boolean  @default(false)
+
   // Relations
-  conversation                Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  account                     Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  selectedByMessages          Message[]    @relation("SelectedSuggestion")
-  rejectedByMessages          Message[]    @relation("RejectedSuggestion")
+  conversation                Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  account                     Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  selectedByMessages          Message[]       @relation("SelectedSuggestion")
+  rejectedByMessages          Message[]       @relation("RejectedSuggestion")
   messageGroups               MessageGroup[]
+  trainingEvents              TrainingEvent[]
 
   @@index([conversationId, generatedAt(sort: Desc)])
   @@index([accountId, generatedAt(sort: Desc)])
   @@index([accountId, generatedDuringTrainingPhase, generatedAt(sort: Desc)])
   @@index([wasSelected, generatedAt(sort: Desc)])
   @@index([wasRejected, generatedAt(sort: Desc)])
+  @@index([conversationId, dismissed, actionedAt, generatedAt(sort: Desc)])
+}
+
+// ─── Training Event (manual-review approvals / edits / rejects) ─────
+// Every operator action in the suggestion-review UI produces one row
+// here: approving verbatim, editing before send, or dismissing.
+// Drives the approval-rate metric that signals "your AI is ready to
+// auto-send on this platform". Distinct from `AISuggestion.wasSelected/
+// wasRejected/wasEdited`: those track the AI auto-send override flow;
+// TrainingEvent only fires in test-mode (manual-review) and scopes by
+// platform for the per-platform readiness check.
+
+enum TrainingEventType {
+  APPROVED     // Operator hit Send without changes
+  EDITED       // Operator edited the text before sending
+  REJECTED     // Operator dismissed the suggestion
+}
+
+model TrainingEvent {
+  id              String            @id @default(cuid())
+  accountId       String
+  conversationId  String
+  suggestionId    String
+  type            TrainingEventType
+  platform        Platform
+  originalContent String            @db.Text
+  editedContent   String?           @db.Text
+  createdAt       DateTime          @default(now())
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  suggestion   AISuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, platform, createdAt(sort: Desc)])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([suggestionId])
 }
 
 // ─── Inbound Qualification: stage-skip intelligence ─────────────────

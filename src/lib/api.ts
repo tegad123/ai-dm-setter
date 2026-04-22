@@ -70,6 +70,8 @@ export interface Conversation {
   qualityScore: number;
   tags: Array<{ id: string; name: string; color: string }>;
   scheduledCallAt?: string | null;
+  /** True when the AI has generated a reply the operator hasn't actioned yet. */
+  hasPendingSuggestion?: boolean;
   createdAt: string;
 }
 
@@ -276,6 +278,53 @@ export async function toggleAI(
   return apiFetch(`/api/conversations/${conversationId}/toggle-ai`, {
     method: 'POST',
     body: JSON.stringify({ aiActive })
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Suggestion review flow (test-mode platforms with auto-send off)
+// ---------------------------------------------------------------------------
+
+export interface PendingSuggestion {
+  id: string;
+  responseText: string;
+  messageBubbles: string[] | null;
+  bubbleCount: number;
+  qualityGateScore: number | null;
+  intentClassification: string | null;
+  intentConfidence: number | null;
+  leadStageSnapshot: string | null;
+  generatedAt: string;
+}
+
+export async function getPendingSuggestion(
+  conversationId: string
+): Promise<{ suggestion: PendingSuggestion | null }> {
+  return apiFetch(`/api/conversations/${conversationId}/suggestion`);
+}
+
+export async function sendSuggestion(
+  conversationId: string,
+  suggestionId: string,
+  editedContent?: string
+): Promise<{
+  messageIds: string[];
+  sentAt: string;
+  mode: 'approved' | 'edited';
+}> {
+  return apiFetch(`/api/conversations/${conversationId}/suggestion/send`, {
+    method: 'POST',
+    body: JSON.stringify({ suggestionId, editedContent: editedContent ?? null })
+  });
+}
+
+export async function dismissSuggestion(
+  conversationId: string,
+  suggestionId: string
+): Promise<{ dismissed: true; actionedAt: string }> {
+  return apiFetch(`/api/conversations/${conversationId}/suggestion/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({ suggestionId })
   });
 }
 

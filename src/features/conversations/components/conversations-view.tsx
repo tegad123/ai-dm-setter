@@ -1,7 +1,12 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { useConversations, useMessages } from '@/hooks/use-api';
+import {
+  useConversations,
+  useMessages,
+  usePendingSuggestion
+} from '@/hooks/use-api';
+import { useRealtime } from '@/hooks/use-realtime';
 import { sendMessage, toggleAI } from '@/lib/api';
 import type { Conversation as ApiConversation } from '@/lib/api';
 import type {
@@ -41,7 +46,8 @@ function toLocalConvo(
     tags: c.tags ?? [],
     priorityScore: c.priorityScore ?? 0,
     qualityScore: c.qualityScore ?? 0,
-    scheduledCallAt: c.scheduledCallAt ?? null
+    scheduledCallAt: c.scheduledCallAt ?? null,
+    hasPendingSuggestion: c.hasPendingSuggestion ?? false
   };
 }
 
@@ -80,6 +86,12 @@ export function ConversationsView() {
     loading: msgLoading,
     refetch: refetchMessages
   } = useMessages(activeId);
+
+  // Pending-suggestion fetch (test-mode platforms with auto-send off).
+  // Silently returns null when the platform has auto-send on or when
+  // nothing's pending — hook is safe to call unconditionally.
+  const { suggestion, refetch: refetchSuggestion } =
+    usePendingSuggestion(activeId);
 
   // Map API messages to local Message shape. The API returns uppercase
   // `sender` ("HUMAN" / "AI" / "LEAD") from the Prisma enum; the
@@ -136,14 +148,32 @@ export function ConversationsView() {
     [activeId, refetchList]
   );
 
-  // Auto-refresh conversations every 8s to pick up new tags, scores, and messages
+  // SSE subscription: when the AI emits a new suggestion for any
+  // conversation on this account, re-pull both the pending-suggestion
+  // for the focused convo AND the conversation list (so the ⚡ icon
+  // on a non-focused convo updates without waiting for the 8s poll).
+  useRealtime('ai:suggestion', (data) => {
+    const payload = data as { conversationId?: string } | null;
+    refetchList();
+    if (payload?.conversationId && payload.conversationId === activeId) {
+      refetchSuggestion();
+    }
+  });
+
+  // Auto-refresh conversations every 8s for tags, scores, messages,
+  // and anything the SSE path might miss (cold-start, missed events,
+  // etc.). The suggestion banner also piggybacks on this poll so it
+  // catches the initial mount and any late-arriving broadcasts.
   useEffect(() => {
     const interval = setInterval(() => {
       refetchList();
-      if (activeId) refetchMessages();
+      if (activeId) {
+        refetchMessages();
+        refetchSuggestion();
+      }
     }, 8000);
     return () => clearInterval(interval);
-  }, [refetchList, refetchMessages, activeId]);
+  }, [refetchList, refetchMessages, refetchSuggestion, activeId]);
 
   if (listLoading) {
     return (
@@ -186,6 +216,15 @@ export function ConversationsView() {
         loading={msgLoading}
         onSendMessage={handleSendMessage}
         onToggleAI={handleToggleAI}
+        pendingSuggestion={suggestion}
+        onSuggestionActioned={() => {
+          // After approve / edit / dismiss, refetch both the suggestion
+          // (to clear the banner) and the messages (so newly-sent
+          // approval shows up in the thread).
+          refetchSuggestion();
+          refetchMessages();
+          refetchList();
+        }}
       />
       {/* Right Sidebar — Summary / Score / Notes */}
       {activeApiConvo && (

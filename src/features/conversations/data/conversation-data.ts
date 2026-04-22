@@ -44,6 +44,8 @@ export interface Conversation {
   qualityScore?: number;
   /** ISO string of a scheduled call, null if none. Used for sidebar badges. */
   scheduledCallAt?: string | null;
+  /** True when the AI has a reply pending operator review (⚡ icon in list). */
+  hasPendingSuggestion?: boolean;
 }
 
 export const conversations: Conversation[] = [
