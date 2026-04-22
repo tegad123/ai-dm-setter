@@ -178,13 +178,22 @@ async function processFacebookEvents(payload: any): Promise<void> {
           platformMessageId: platformMessageId || undefined
         });
 
-        // Only schedule AI reply if AI is active on this conversation
-        const convo = await prisma.conversation.findUnique({
-          where: { id: result.conversationId },
-          select: { aiActive: true }
-        });
-        if (convo?.aiActive) {
+        const [convo, account] = await Promise.all([
+          prisma.conversation.findUnique({
+            where: { id: result.conversationId },
+            select: { aiActive: true }
+          }),
+          prisma.account.findUnique({
+            where: { id: accountId },
+            select: { awayMode: true }
+          })
+        ]);
+        if (convo?.aiActive || account?.awayMode) {
           await scheduleAIReply(result.conversationId, accountId);
+        } else {
+          console.log(
+            `[facebook-webhook] AI inactive and away mode off for conversation ${result.conversationId}, skipping auto-reply`
+          );
         }
       } catch (err) {
         console.error(
