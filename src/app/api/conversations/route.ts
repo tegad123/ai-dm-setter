@@ -58,6 +58,17 @@ export async function GET(request: NextRequest) {
     // Pending-suggestion cutoff — mirrors GET /api/conversations/[id]/suggestion.
     const pendingSuggestionCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
+    // Fetch account-level awayMode flags once; we gate the ⚡ indicator
+    // per-conversation using the same "would this conversation auto-
+    // send?" rule as the banner endpoint, so a graduated account never
+    // shows ⚡ on conversations that will auto-send new inbounds.
+    const account = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: { awayModeInstagram: true, awayModeFacebook: true }
+    });
+    const awayModeInstagram = account?.awayModeInstagram ?? false;
+    const awayModeFacebook = account?.awayModeFacebook ?? false;
+
     const rawConversations = await prisma.conversation.findMany({
       where,
       include: {
@@ -84,7 +95,8 @@ export async function GET(request: NextRequest) {
         },
         // Zero-or-one lookup of the most recent unactioned suggestion.
         // The frontend just needs a boolean ("show the ⚡ indicator");
-        // taking 1 row keeps the payload small.
+        // taking 1 row keeps the payload small. The per-conversation
+        // gate below then masks this to false for auto-sending convos.
         aiSuggestions: {
           where: {
             dismissed: false,
@@ -101,33 +113,45 @@ export async function GET(request: NextRequest) {
     });
 
     // Flatten the lead data for the frontend
-    const conversations = rawConversations.map((c) => ({
-      id: c.id,
-      leadId: c.lead.id,
-      leadName:
-        c.lead.name || c.lead.handle || c.lead.platformUserId || 'Unknown',
-      leadHandle: c.lead.handle || c.lead.platformUserId || '',
-      platform: c.lead.platform.toLowerCase(),
-      stage: c.lead.stage,
-      aiActive: c.aiActive,
-      lastMessage: c.messages[0]?.content ?? '',
-      lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
-      unreadCount: c.unreadCount,
-      priorityScore: c.priorityScore,
-      qualityScore: c.lead.qualityScore ?? 0,
-      tags: c.lead.tags.map((lt) => ({
-        id: lt.tag.id,
-        name: lt.tag.name,
-        color: lt.tag.color
-      })),
-      // Call badge in sidebar list: null if no call scheduled or >7 days out
-      scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
-      // Boolean hint for the ⚡ indicator on the list item — drives the
-      // "pending AI suggestion awaiting your review" marker when auto-
-      // send is off for this platform.
-      hasPendingSuggestion: c.aiSuggestions.length > 0,
-      createdAt: c.createdAt.toISOString()
-    }));
+    const conversations = rawConversations.map((c) => {
+      // Mirror webhook-processor.ts:988's shouldAutoSend rule so the
+      // ⚡ indicator only shows when this conversation is genuinely in
+      // review-banner mode (inbounds don't auto-ship).
+      const awayModeForPlatform =
+        c.lead.platform === 'INSTAGRAM'
+          ? awayModeInstagram
+          : c.lead.platform === 'FACEBOOK'
+            ? awayModeFacebook
+            : false;
+      const wouldAutoSend =
+        c.aiActive && (awayModeForPlatform || c.autoSendOverride);
+      return {
+        id: c.id,
+        leadId: c.lead.id,
+        leadName:
+          c.lead.name || c.lead.handle || c.lead.platformUserId || 'Unknown',
+        leadHandle: c.lead.handle || c.lead.platformUserId || '',
+        platform: c.lead.platform.toLowerCase(),
+        stage: c.lead.stage,
+        aiActive: c.aiActive,
+        lastMessage: c.messages[0]?.content ?? '',
+        lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+        unreadCount: c.unreadCount,
+        priorityScore: c.priorityScore,
+        qualityScore: c.lead.qualityScore ?? 0,
+        tags: c.lead.tags.map((lt) => ({
+          id: lt.tag.id,
+          name: lt.tag.name,
+          color: lt.tag.color
+        })),
+        // Call badge in sidebar list: null if no call scheduled or >7 days out
+        scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
+        // ⚡ indicator — suppressed when the conversation's own inbounds
+        // would auto-send (no review-banner UX).
+        hasPendingSuggestion: !wouldAutoSend && c.aiSuggestions.length > 0,
+        createdAt: c.createdAt.toISOString()
+      };
+    });
 
     return NextResponse.json({ conversations });
   } catch (error) {

@@ -29,16 +29,45 @@ export async function GET(
     const auth = await requireAuth(req);
     const { id: conversationId } = await params;
 
-    // Verify ownership of the conversation.
+    // Verify ownership + pull the auto-send inputs in one round-trip so
+    // we can short-circuit review-banner mode when this conversation is
+    // already auto-sending. Otherwise the banner flashes stale
+    // suggestions for an account that graduated to full autonomy
+    // (daetradez 2026-04-23 — 177 pre-graduation rows still sat in
+    // the DB after awayModeInstagram flipped on).
     const conversation = await prisma.conversation.findFirst({
       where: { id: conversationId, lead: { accountId: auth.accountId } },
-      select: { id: true }
+      select: {
+        id: true,
+        aiActive: true,
+        autoSendOverride: true,
+        lead: { select: { platform: true } }
+      }
     });
     if (!conversation) {
       return NextResponse.json(
         { error: 'Conversation not found' },
         { status: 404 }
       );
+    }
+
+    const account = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: { awayModeInstagram: true, awayModeFacebook: true }
+    });
+    const awayModeForPlatform =
+      conversation.lead.platform === 'INSTAGRAM'
+        ? (account?.awayModeInstagram ?? false)
+        : conversation.lead.platform === 'FACEBOOK'
+          ? (account?.awayModeFacebook ?? false)
+          : false;
+    const wouldAutoSend =
+      conversation.aiActive &&
+      (awayModeForPlatform || conversation.autoSendOverride);
+    if (wouldAutoSend) {
+      // Conversation's own inbounds will auto-ship — review banner has
+      // no job here. Never surfaces pre-graduation stale suggestions.
+      return NextResponse.json({ suggestion: null });
     }
 
     const cutoff = new Date(Date.now() - PENDING_WINDOW_MS);
