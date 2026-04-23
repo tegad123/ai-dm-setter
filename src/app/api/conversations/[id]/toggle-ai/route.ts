@@ -47,19 +47,34 @@ export async function POST(
     }
 
     if (aiActive && !conversation.aiActive) {
-      // Turning AI ON → trigger handoff flow
+      // Turning AI ON → the toggle is the operator's single control for
+      // "AI takes over this conversation." It must override the account-
+      // level platform awayMode so auto-send works even when awayMode
+      // is off. Set autoSendOverride=true in lock-step with aiActive=true
+      // so shouldAutoSend (= aiActive && (awayMode || override)) yields
+      // true for this convo regardless of platform config. Trigger the
+      // handoff flow which reads history + generates if the last msg is
+      // from the lead.
+      await prisma.conversation.update({
+        where: { id },
+        data: { autoSendOverride: true }
+      });
       await handleAIHandoff(id, auth.accountId);
 
       return NextResponse.json({
         conversationId: id,
         aiActive: true,
+        autoSendOverride: true,
         message: 'AI activated — reading history and generating reply if needed'
       });
     } else if (!aiActive && conversation.aiActive) {
-      // Turning AI OFF → human takeover
+      // Turning AI OFF → human takeover. Also drop the auto-send
+      // override so the operator's next "AI ON" interaction re-grants
+      // the override explicitly (no confusing residual state where
+      // aiActive=false but autoSendOverride=true).
       await prisma.conversation.update({
         where: { id },
-        data: { aiActive: false }
+        data: { aiActive: false, autoSendOverride: false }
       });
 
       // Cancel any pending scheduled replies
@@ -73,6 +88,7 @@ export async function POST(
       return NextResponse.json({
         conversationId: id,
         aiActive: false,
+        autoSendOverride: false,
         message: 'AI paused — human override active'
       });
     }
@@ -91,9 +107,6 @@ export async function POST(
       );
     }
     console.error('Toggle AI error:', error);
-    return NextResponse.json(
-      { error: 'Failed to toggle AI' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to toggle AI' }, { status: 500 });
   }
 }
