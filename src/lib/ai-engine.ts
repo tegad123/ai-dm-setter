@@ -534,7 +534,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             r24LastResult.parsedAmount !== null
               ? `$${r24LastResult.parsedAmount.toLocaleString('en-US')}`
               : 'an amount below the threshold';
-          r24Directive = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Do NOT route to booking. Your next reply MUST pivot to the script's downsell / funding-partner branch — acknowledge their capital situation empathetically (no judgment, no lecture), then present the alternative path their script provides (a lower-ticket course, a funding-partner option, or a free YouTube/resource redirect). Do NOT send booking-handoff messaging, do NOT suggest the Typeform / application form, do NOT say "the team will reach out". If your script doesn't have a downsell, send a soft-exit message that keeps the door open for when they're in a better financial position.`;
+          let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Do NOT route to booking. Your next reply MUST pivot to the script's downsell / funding-partner branch — acknowledge their capital situation empathetically (no judgment, no lecture), then present the alternative path their script provides (a lower-ticket course, a funding-partner option, or a free YouTube/resource redirect). Do NOT send booking-handoff messaging, do NOT suggest the Typeform / application form, do NOT say "the team will reach out". If your script doesn't have a downsell, send a soft-exit message that keeps the door open for when they're in a better financial position.`;
+
+          // GEOGRAPHY GATE — funding-partner programs only onboard
+          // US/CA leads. When the lead is elsewhere, strip the
+          // funding-partner option from the downsell menu so the AI
+          // doesn't pitch a path the lead can't actually take.
+          const recentLeadMessages = conversationHistory
+            .filter((m) => m.sender === 'LEAD')
+            .slice(-10)
+            .map((m) => m.content);
+          const geo = detectRestrictedGeography(
+            leadContext.geography,
+            recentLeadMessages
+          );
+          if (geo.restricted) {
+            baseDirective += `\n\nGEOGRAPHY GATE: The lead is based in ${geo.country}. Funding-partner programs (FTMO-style funded accounts, broker prop programs) are only available to leads in the US and Canada. DO NOT route this lead to the funding-partner branch under any circumstances. The only options you may offer here are: (1) the $497 course downsell, or (2) a free YouTube / resource redirect. Do not mention funded accounts, challenges, or third-party capital as an option.`;
+            console.warn(
+              `[ai-engine] R24 geography gate: restricted country "${geo.country}" detected for conv ${activeConversationId} — funding-partner path blocked`
+            );
+          }
+
+          r24Directive = baseDirective;
           break;
         }
         case 'answer_hedging':
@@ -1705,6 +1726,76 @@ const PERSONAL_CAPITAL_INDICATOR =
 const PLUS_PHRASE =
   /\b(plus|also|on\s+top\s+of|besides|separate\s+from|aside\s+from|in\s+addition\s+to|as\s+well\s+as)\b/i;
 
+// ─── Geography gate ────────────────────────────────────────────
+// Funding-partner (FTMO-style funded account) programs only accept
+// leads in the US and Canada. When the lead mentions living anywhere
+// else, the R24 downsell path must skip the funding-partner option
+// and go straight to the $497 course or YouTube redirect. The gate
+// has two sources of truth, in priority order:
+//   1. `leadContext.geography` — explicit enrichment (if populated)
+//   2. Message-text detection against the two regex below
+
+// US/CA positive signal — matches when lead states they're in a
+// compatible jurisdiction. Wins over a restricted-country match if
+// both appear (e.g., "I'm in the US now, originally from Lebanon").
+const US_CA_GEO_INDICATOR =
+  /\b(united\s+states|u\.s\.a?\.?|\busa\b|\bus\b(?!\s+(trading|strategy|prop|broker))|america|american|new\s+york|california|texas|florida|canada|canadian|toronto|vancouver|montreal|ontario|quebec|alberta)\b/i;
+
+// Restricted-country list. Not exhaustive — covers the common
+// jurisdictions US funding-partner programs won't onboard. When
+// matched (and US/CA is NOT), route to downsell/YouTube, NEVER
+// funding partner.
+const RESTRICTED_COUNTRY_PATTERN =
+  /\b(lebanon|lebanese|nigeria|nigerian|zimbabwe|philippines|filipino|pakistan|pakistani|\bindia\b|indian|bangladesh|bangladeshi|egypt|egyptian|kenya|kenyan|ghana|ghanaian|south\s+africa|south\s+african|zambia|uganda|tanzania|morocco|moroccan|iran|iranian|iraq|iraqi|syria|syrian|yemen|yemeni|sudan|sudanese|afghanistan|afghan|belarus|belarusian|russia|russian|venezuela|venezuelan|cuba|cuban|north\s+korea|myanmar|burmese|vietnam|vietnamese|cambodia|laos|mongolia|kazakhstan|uzbekistan|ethiopia|ethiopian|somalia|libya|algeria|algerian|tunisia|brazil|brazilian|argentina|argentine|colombia|colombian|peru|peruvian|chile|chilean|uruguay|ecuador|uk|britain|british|england|english|scotland|scottish|ireland|irish|germany|german|france|french|spain|spanish|italy|italian|portugal|portuguese|netherlands|dutch|belgium|belgian|sweden|swedish|norway|norwegian|finland|finnish|denmark|danish|poland|polish|czech|slovakia|hungary|hungarian|romania|romanian|bulgaria|bulgarian|greece|greek|turkey|turkish|ukraine|ukrainian|australia|australian|new\s+zealand|japan|japanese|south\s+korea|korean|china|chinese|hong\s+kong|taiwan|taiwanese|singapore|singaporean|malaysia|malaysian|indonesia|indonesian|thailand|thai)\b/i;
+
+/**
+ * Return whether the lead should be blocked from the funding-partner
+ * branch based on geography. Caller (R24 retry-loop) appends an
+ * addendum to the downsell directive when restricted.
+ *
+ *   restricted=true  → DO NOT offer funding partner, only $497 / YT
+ *   restricted=false → current behavior (eligible or unknown)
+ */
+export function detectRestrictedGeography(
+  leadCountry: string | null | undefined,
+  recentLeadMessages: string[]
+): { country: string | null; restricted: boolean } {
+  // Primary: explicit enrichment. US/USA/Canada/CA are the only
+  // allowed strings; any other value is treated as restricted.
+  const enriched = (leadCountry || '').trim();
+  if (enriched.length > 0) {
+    const lower = enriched.toLowerCase();
+    if (
+      /^(us|usa|u\.s\.a?\.?|united\s+states|america|canada|ca|canadian)$/i.test(
+        lower
+      )
+    ) {
+      return { country: enriched, restricted: false };
+    }
+    return { country: enriched, restricted: true };
+  }
+
+  // Secondary: message-text detection. US/CA mention wins if both
+  // appear. Only the lead's OWN messages are scanned (AI messages
+  // may mention countries in examples / follow-ups without being
+  // diagnostic of the lead's actual location).
+  const joined = recentLeadMessages.join('\n');
+  const usCaMatch = joined.match(US_CA_GEO_INDICATOR);
+  if (usCaMatch) {
+    return { country: usCaMatch[0], restricted: false };
+  }
+  const restrictedMatch = joined.match(RESTRICTED_COUNTRY_PATTERN);
+  if (restrictedMatch) {
+    return { country: restrictedMatch[0], restricted: true };
+  }
+
+  // Unknown → don't restrict. Keeps current behavior for leads
+  // whose location hasn't been stated in-chat or enriched. Safer
+  // than defaulting to "restricted" which would block US/CA leads
+  // who just haven't mentioned it yet.
+  return { country: null, restricted: false };
+}
+
 export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
 
@@ -1716,6 +1807,12 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   //      (c) "desperation / last hope" language — trader-of-last-resort
   //          framing is a strong R24 stop even without an explicit number
   //      (d) "can't pay basics" financial distress
+  //      (e) "capital access" issues — lead has money but can't route
+  //          it (business failing, sanctions, bank blocks, geopolitics).
+  //          Distinct from (a) because they might technically have the
+  //          amount but it's unreachable; treat as disqualifier anyway
+  //          because funding-partner + prop-firm paths all require the
+  //          capital to actually be usable.
   const noCapital =
     /\b(not\s+much|not\s+a\s+lot|nothing\s+really|^nothing\b|\bbroke\b|don'?t\s+have\s+(any\s+)?(money|capital|anything|much)|can'?t\s+afford|no\s+money|i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school)\b/i;
   const jobless =
@@ -1724,11 +1821,14 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     /\b(only hope|last hope|last chance|desperate|nothing left)\b/i;
   const cantAffordBasics =
     /\b(can'?t eat|can'?t pay rent|can'?t pay bills|struggling to survive)\b/i;
+  const capitalAccessIssue =
+    /\b(can'?t\s+fund\s+(my\s+|the\s+)?account|business\s+(is\s+)?(failing|failed|going\s+under|closing\s+down)|my\s+business\s+(is\s+)?(failing|failed|down|going\s+under|closing)|geopolitical\s+(restrictions?|issues?)|can'?t\s+transfer\s+(money|funds|anything)|under\s+sanctions?|sanctioned\s+(country|region)|economic\s+sanctions?|bank\s+(blocks?|blocked\s+me|won'?t\s+let\s+me)|my\s+country\s+(is\s+)?sanctioned|payment\s+(blocked|restricted|frozen))\b/i;
   if (
     noCapital.test(text) ||
     jobless.test(text) ||
     desperation.test(text) ||
-    cantAffordBasics.test(text)
+    cantAffordBasics.test(text) ||
+    capitalAccessIssue.test(text)
   ) {
     return { kind: 'disqualifier', amount: 0 };
   }
