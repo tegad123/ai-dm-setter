@@ -199,15 +199,21 @@ export async function getUserProfile(
           profilePicUrl: data.profile_pic
         };
       }
+      // 2xx with no `name` in payload — Meta returned data but without
+      // the field. Full body logged so we can tell whether it's an
+      // empty object, a partial profile, or data under a different key.
+      console.error(
+        `[FB_PROFILE_FETCH_FAILED] strategy=direct status=${response.status} error=${JSON.stringify(data)} userId=${userId}`
+      );
     } else {
       const errBody = await response.text().catch(() => '');
-      console.warn(
-        `[facebook] Direct profile lookup failed (${response.status}): ${errBody.slice(0, 200)}`
+      console.error(
+        `[FB_PROFILE_FETCH_FAILED] strategy=direct status=${response.status} error=${errBody} userId=${userId}`
       );
     }
   } catch (err: any) {
-    console.warn(
-      `[facebook] Direct profile lookup threw: ${err?.message || err}`
+    console.error(
+      `[FB_PROFILE_FETCH_FAILED] strategy=direct status=threw error=${err?.stack || err?.message || String(err)} userId=${userId}`
     );
   }
 
@@ -239,23 +245,27 @@ export async function getUserProfile(
             };
           }
         }
-        console.warn(
-          `[facebook] Conversations API returned no matching participant for ${userId}`
+        // Either zero conversations or no participant with a name —
+        // log the full response so we can distinguish "user has never
+        // messaged this page" vs "participants entry exists but has
+        // no `name` field" vs "response shape Meta changed on us".
+        console.error(
+          `[FB_PROFILE_FETCH_FAILED] strategy=conversations status=${convResponse.status} error=no-participant-match body=${JSON.stringify(convData)} userId=${userId}`
         );
       } else {
         const errBody = await convResponse.text().catch(() => '');
-        console.warn(
-          `[facebook] Conversations API failed (${convResponse.status}): ${errBody.slice(0, 200)}`
+        console.error(
+          `[FB_PROFILE_FETCH_FAILED] strategy=conversations status=${convResponse.status} error=${errBody} userId=${userId}`
         );
       }
     } else {
-      console.warn(
-        `[facebook] No pageId found — cannot use conversations API fallback`
+      console.error(
+        `[FB_PROFILE_FETCH_FAILED] strategy=conversations status=no-pageid error=no-pageid-available userId=${userId}`
       );
     }
   } catch (err: any) {
-    console.warn(
-      `[facebook] Conversations API strategy threw: ${err?.message || err}`
+    console.error(
+      `[FB_PROFILE_FETCH_FAILED] strategy=conversations status=threw error=${err?.stack || err?.message || String(err)} userId=${userId}`
     );
   }
 

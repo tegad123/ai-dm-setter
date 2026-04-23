@@ -233,8 +233,14 @@ async function processFacebookEvents(payload: any): Promise<void> {
           senderName = profile.name || senderId;
           console.log(`[facebook-webhook] Resolved profile: ${senderName}`);
         } catch (profileErr: any) {
-          console.warn(
-            `[facebook-webhook] Profile fetch failed for ${senderId}: ${profileErr?.message || profileErr}`
+          // Both Graph-API strategies inside getUserProfile already log
+          // [FB_PROFILE_FETCH_FAILED] with status + error body for each
+          // attempt. This is the outer rollup — captures the final
+          // throw + stack so the numeric-ID lead has a trailing log
+          // tying "lead created with numeric name" to the specific
+          // user whose lookup failed.
+          console.error(
+            `[FB_PROFILE_FETCH_FAILED] strategy=all-exhausted status=threw error=${profileErr?.stack || profileErr?.message || String(profileErr)} userId=${senderId}`
           );
         }
 
