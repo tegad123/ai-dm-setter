@@ -30,6 +30,144 @@ import { transitionLeadStage } from '@/lib/lead-stage';
 import type { LeadStage } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
+// Meta send helper — delivery with pmid capture + token-invalidation alert
+// ---------------------------------------------------------------------------
+//
+// Wraps sendInstagramDM / sendFacebookMessage and returns a structured
+// outcome the caller uses to decide whether to persist the Message row.
+// Prevents the "ghost send" class of bug where a Message row gets saved
+// before the platform ack, then the Meta send fails (dead token, rate
+// limit, etc.) and the dashboard shows "AI replied" while the lead
+// receives nothing.
+//
+// The "save AFTER ship" invariant: NEVER write a Message row for an AI
+// send until Meta has returned a messageId. Callers pass the captured
+// `messageId` as `platformMessageId` so the DB is always in sync with
+// what was actually delivered (enables echo dedup, too).
+
+interface ShipOutcome {
+  /** Meta's returned messageId on success. null when ship failed. */
+  messageId: string | null;
+  /** Populated when ship failed. */
+  error: Error | null;
+  /**
+   * True when the error indicates the Meta access token is invalidated
+   * (OAuthException code=190, session-invalidated, password-changed, etc.).
+   * Callers should trigger an operator-facing alert so the account owner
+   * knows to reconnect Meta — one bad token silences both outbound sends
+   * AND inbound webhook forwarding.
+   */
+  tokenInvalid: boolean;
+}
+
+/**
+ * Identify Meta Graph API errors that mean the stored access token is
+ * dead. Matches error code 190, subcode 460, and the "session
+ * invalidated" / "changed password" wording Meta returns.
+ */
+function isMetaTokenError(err: unknown): boolean {
+  const msg = (
+    err instanceof Error ? err.message : String(err ?? '')
+  ).toLowerCase();
+  return (
+    /\bcode[\s":]*190\b/.test(msg) ||
+    /oauthexception/.test(msg) ||
+    /session has been invalidated/.test(msg) ||
+    /subcode[\s":]*460/.test(msg) ||
+    /access token.*expired/.test(msg) ||
+    /access token.*invalid/.test(msg)
+  );
+}
+
+/**
+ * Ship a text message to Meta + classify any error. Does NOT save a
+ * Message row — that's the caller's responsibility, to ensure we only
+ * save when Meta confirms delivery.
+ */
+async function shipTextToMeta(
+  platform: string,
+  accountId: string,
+  platformUserId: string,
+  text: string
+): Promise<ShipOutcome> {
+  try {
+    if (platform === 'INSTAGRAM') {
+      const r = await sendInstagramDM(accountId, platformUserId, text);
+      return {
+        messageId: r?.messageId ?? null,
+        error: null,
+        tokenInvalid: false
+      };
+    }
+    if (platform === 'FACEBOOK') {
+      const r = await sendFacebookMessage(accountId, platformUserId, text);
+      return {
+        messageId: r?.messageId ?? null,
+        error: null,
+        tokenInvalid: false
+      };
+    }
+    throw new Error(`Unsupported platform for ship: ${platform}`);
+  } catch (err) {
+    return {
+      messageId: null,
+      error: err instanceof Error ? err : new Error(String(err)),
+      tokenInvalid: isMetaTokenError(err)
+    };
+  }
+}
+
+/**
+ * Fire a throttled operator notification when the Meta token is dead.
+ * Rate-limited to at most one notification per account per hour so a
+ * burst of failed sends doesn't spam the operator's inbox with N
+ * identical "Meta credential invalidated" messages.
+ */
+async function alertMetaTokenInvalidated(params: {
+  accountId: string;
+  leadId: string;
+  platform: string;
+  errorDetail: string;
+}): Promise<void> {
+  const { accountId, leadId, platform, errorDetail } = params;
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const existing = await prisma.notification
+    .findFirst({
+      where: {
+        accountId,
+        type: 'SYSTEM',
+        title: { contains: 'Meta credential invalidated' },
+        createdAt: { gte: oneHourAgo }
+      },
+      select: { id: true }
+    })
+    .catch(() => null);
+  if (existing) return;
+
+  try {
+    await prisma.notification.create({
+      data: {
+        accountId,
+        type: 'SYSTEM',
+        title: 'Meta credential invalidated — reconnect required',
+        body: `Your Meta access token is no longer valid. AI replies on ${platform} are NOT being delivered and new inbound DMs may not reach the app until you reconnect via Settings → Integrations. Graph error: ${errorDetail.slice(0, 300)}`,
+        leadId
+      }
+    });
+    broadcastNotification({
+      accountId,
+      type: 'SYSTEM',
+      title: 'Meta credential invalidated — reconnect required'
+    });
+  } catch (err) {
+    console.error(
+      '[webhook-processor] Failed to create token-invalidated notification:',
+      err
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // URL hallucination guard
 // ---------------------------------------------------------------------------
 
@@ -1937,49 +2075,74 @@ async function deliverBubbleGroup(params: {
     if (isFirst) firstMessageId = msg.id;
 
     // 3. Platform send. sendInstagramDM / sendFacebookMessage each
-    // internally retry 1s/2s/4s on transient errors — a throw here
-    // means all retries exhausted.
+    // internally retry 1s/2s/4s on transient errors — a throw from
+    // shipTextToMeta means all retries exhausted.
     if (lead.platformUserId) {
-      try {
-        if (lead.platform === 'INSTAGRAM') {
-          await sendInstagramDM(lead.accountId, lead.platformUserId, bubble);
-        } else if (lead.platform === 'FACEBOOK') {
-          await sendFacebookMessage(
-            lead.accountId,
-            lead.platformUserId,
-            bubble
-          );
-        }
+      const ship = await shipTextToMeta(
+        lead.platform,
+        lead.accountId,
+        lead.platformUserId,
+        bubble
+      );
+      if (ship.messageId) {
+        // Patch pmid onto the just-created bubble row so echo dedup
+        // can match this delivery. Non-fatal if the patch fails —
+        // the message did land, we just lose the dedup anchor.
+        await prisma.message
+          .update({
+            where: { id: msg.id },
+            data: { platformMessageId: ship.messageId }
+          })
+          .catch(() => {});
         console.log(
-          `[webhook-processor] bubble ${i}/${bubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id})`
+          `[webhook-processor] bubble ${i}/${bubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id}, mid=${ship.messageId})`
         );
-      } catch (err: unknown) {
+      } else {
+        // Ship FAILED — delete the ghost bubble row so the dashboard
+        // doesn't show a message the lead never got. Stop the loop;
+        // whatever already shipped (bubbles 0..i-1) stays on Meta.
         failedAt = new Date();
         console.error(
           `[webhook-processor] Multi-bubble delivery failed at bubble ${i}/${bubbles.length}:`,
-          err
+          ship.error
         );
-        // Notify operator — we stop the loop, whatever already shipped stays.
-        try {
-          await prisma.notification.create({
-            data: {
+        await prisma.message
+          .delete({ where: { id: msg.id } })
+          .catch((delErr) =>
+            console.error(
+              '[webhook-processor] Failed to delete ghost bubble row:',
+              delErr
+            )
+          );
+        if (ship.tokenInvalid) {
+          await alertMetaTokenInvalidated({
+            accountId: lead.accountId,
+            leadId: lead.id,
+            platform: lead.platform,
+            errorDetail: ship.error?.message || 'unknown'
+          });
+        } else {
+          try {
+            await prisma.notification.create({
+              data: {
+                accountId: lead.accountId,
+                type: 'SYSTEM',
+                title: 'Multi-bubble delivery failed',
+                body: `Bubble ${i + 1} of ${bubbles.length} failed to deliver to ${lead.platformUserId} on ${lead.platform}: ${(ship.error?.message || 'Unknown error').slice(0, 200)}. Earlier bubbles were delivered; no further bubbles will be sent.`,
+                leadId: lead.id
+              }
+            });
+            broadcastNotification({
               accountId: lead.accountId,
               type: 'SYSTEM',
-              title: 'Multi-bubble delivery failed',
-              body: `Bubble ${i + 1} of ${bubbles.length} failed to deliver to ${lead.platformUserId} on ${lead.platform}: ${((err as Error)?.message || 'Unknown error').slice(0, 200)}. Earlier bubbles were delivered; no further bubbles will be sent.`,
-              leadId: lead.id
-            }
-          });
-          broadcastNotification({
-            accountId: lead.accountId,
-            type: 'SYSTEM',
-            title: 'Multi-bubble delivery failed'
-          });
-        } catch (notifyErr) {
-          console.error(
-            '[webhook-processor] Failed to create mid-group failure notification:',
-            notifyErr
-          );
+              title: 'Multi-bubble delivery failed'
+            });
+          } catch (notifyErr) {
+            console.error(
+              '[webhook-processor] Failed to create mid-group failure notification:',
+              notifyErr
+            );
+          }
         }
         break;
       }
@@ -2833,51 +2996,92 @@ async function sendAIReply(
 
       // ── Text message send (default, or fallback if voice failed) ──
       if (!voiceNoteSent) {
-        try {
-          if (lead.platform === 'INSTAGRAM') {
-            await sendInstagramDM(
-              lead.accountId,
-              lead.platformUserId,
-              result.reply
-            );
-            console.log(
-              `[webhook-processor] IG DM sent to ${lead.platformUserId}`
-            );
-          } else if (lead.platform === 'FACEBOOK') {
-            await sendFacebookMessage(
-              lead.accountId,
-              lead.platformUserId,
-              result.reply
-            );
-            console.log(
-              `[webhook-processor] FB message sent to ${lead.platformUserId}`
-            );
+        const ship = await shipTextToMeta(
+          lead.platform,
+          lead.accountId,
+          lead.platformUserId,
+          result.reply
+        );
+        if (ship.messageId) {
+          // Success — patch the pmid onto the pre-created Message row
+          // so Meta-echo dedup works and historical audit has the
+          // delivery receipt.
+          if (aiMessageId) {
+            await prisma.message
+              .update({
+                where: { id: aiMessageId },
+                data: { platformMessageId: ship.messageId }
+              })
+              .catch((err) =>
+                console.error(
+                  '[webhook-processor] Failed to patch platformMessageId (non-fatal):',
+                  err
+                )
+              );
           }
-        } catch (err: any) {
+          console.log(
+            `[webhook-processor] ${lead.platform === 'INSTAGRAM' ? 'IG DM' : 'FB message'} sent to ${lead.platformUserId} (mid=${ship.messageId})`
+          );
+        } else {
+          // Ship FAILED — remove the ghost Message row so the dashboard
+          // doesn't show "AI replied" for a message the lead never got.
+          // Fires the token-invalidated alert when the error matches
+          // the dead-token signature, so the operator knows to reconnect.
           console.error(
             `[webhook-processor] Failed to deliver to ${lead.platform} after retries:`,
-            err
+            ship.error
           );
-          try {
-            await prisma.notification.create({
-              data: {
+          if (aiMessageId) {
+            await prisma.message
+              .delete({ where: { id: aiMessageId } })
+              .catch((err) =>
+                console.error(
+                  '[webhook-processor] Failed to delete ghost Message row:',
+                  err
+                )
+              );
+            // Also prevent downstream "AISuggestion.wasSelected=true" on
+            // an undelivered message.
+            if (result.suggestionId) {
+              await prisma.aISuggestion
+                .update({
+                  where: { id: result.suggestionId },
+                  data: { wasSelected: false, finalSentText: null }
+                })
+                .catch(() => {});
+            }
+          }
+          if (ship.tokenInvalid) {
+            await alertMetaTokenInvalidated({
+              accountId: lead.accountId,
+              leadId: lead.id,
+              platform: lead.platform,
+              errorDetail: ship.error?.message || 'unknown'
+            });
+          } else {
+            // Non-token error (rate limit, network glitch, etc.) —
+            // fire the existing generic delivery-failed notification.
+            try {
+              await prisma.notification.create({
+                data: {
+                  accountId: lead.accountId,
+                  type: 'SYSTEM',
+                  title: 'Message delivery failed',
+                  body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(ship.error?.message || 'Unknown error').slice(0, 200)}`,
+                  leadId: lead.id
+                }
+              });
+              broadcastNotification({
                 accountId: lead.accountId,
                 type: 'SYSTEM',
-                title: 'Message delivery failed',
-                body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(err?.message || 'Unknown error').slice(0, 200)}`,
-                leadId: lead.id
-              }
-            });
-            broadcastNotification({
-              accountId: lead.accountId,
-              type: 'SYSTEM',
-              title: 'Message delivery failed'
-            });
-          } catch (notifyErr) {
-            console.error(
-              '[webhook-processor] Failed to create failure notification:',
-              notifyErr
-            );
+                title: 'Message delivery failed'
+              });
+            } catch (notifyErr) {
+              console.error(
+                '[webhook-processor] Failed to create failure notification:',
+                notifyErr
+              );
+            }
           }
         }
       }
