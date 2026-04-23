@@ -195,6 +195,18 @@ model Account {
   awayModeInstagramEnabledAt  DateTime?
   awayModeFacebook            Boolean   @default(false)
   awayModeFacebookEnabledAt   DateTime?
+
+  // Master switch for the per-conversation suggestion-review banner.
+  // When false, the banner never renders for this account regardless
+  // of pending AISuggestion rows — the AI still generates suggestions
+  // in the background (saving AISuggestion + training signal), but
+  // the operator sees nothing until they graduate an individual
+  // conversation by flipping Conversation.autoSendOverride = true.
+  // Use case: accounts past onboarding that don't want the review
+  // UX friction but DO still benefit from the AI's background
+  // generation for quick manual-approve-per-convo workflows.
+  // Default true so existing accounts keep the pre-flag behaviour.
+  showSuggestionBanner        Boolean   @default(true)
   ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
 
   // ── Safety: distress / crisis detection ───────────────────────

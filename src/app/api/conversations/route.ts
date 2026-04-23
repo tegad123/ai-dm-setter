@@ -62,12 +62,19 @@ export async function GET(request: NextRequest) {
     // per-conversation using the same "would this conversation auto-
     // send?" rule as the banner endpoint, so a graduated account never
     // shows ⚡ on conversations that will auto-send new inbounds.
+    // showSuggestionBanner is the account-level master switch — when
+    // false, ⚡ never shows anywhere (matches the banner endpoint).
     const account = await prisma.account.findUnique({
       where: { id: auth.accountId },
-      select: { awayModeInstagram: true, awayModeFacebook: true }
+      select: {
+        awayModeInstagram: true,
+        awayModeFacebook: true,
+        showSuggestionBanner: true
+      }
     });
     const awayModeInstagram = account?.awayModeInstagram ?? false;
     const awayModeFacebook = account?.awayModeFacebook ?? false;
+    const showSuggestionBanner = account?.showSuggestionBanner ?? true;
 
     const rawConversations = await prisma.conversation.findMany({
       where,
@@ -146,9 +153,11 @@ export async function GET(request: NextRequest) {
         })),
         // Call badge in sidebar list: null if no call scheduled or >7 days out
         scheduledCallAt: c.scheduledCallAt?.toISOString() ?? null,
-        // ⚡ indicator — suppressed when the conversation's own inbounds
-        // would auto-send (no review-banner UX).
-        hasPendingSuggestion: !wouldAutoSend && c.aiSuggestions.length > 0,
+        // ⚡ indicator — suppressed when: (a) account-level banner is
+        // disabled, or (b) this conversation's own inbounds would auto-
+        // send (no review-banner UX).
+        hasPendingSuggestion:
+          showSuggestionBanner && !wouldAutoSend && c.aiSuggestions.length > 0,
         createdAt: c.createdAt.toISOString()
       };
     });

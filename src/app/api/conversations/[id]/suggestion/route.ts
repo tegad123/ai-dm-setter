@@ -53,8 +53,21 @@ export async function GET(
 
     const account = await prisma.account.findUnique({
       where: { id: auth.accountId },
-      select: { awayModeInstagram: true, awayModeFacebook: true }
+      select: {
+        awayModeInstagram: true,
+        awayModeFacebook: true,
+        showSuggestionBanner: true
+      }
     });
+
+    // Account-level master switch. When off, the banner never renders
+    // regardless of pending suggestions — the AI still generates in
+    // the background but the operator sees no review UX until they
+    // graduate a conversation via autoSendOverride.
+    if (account?.showSuggestionBanner === false) {
+      return NextResponse.json({ suggestion: null });
+    }
+
     const awayModeForPlatform =
       conversation.lead.platform === 'INSTAGRAM'
         ? (account?.awayModeInstagram ?? false)
