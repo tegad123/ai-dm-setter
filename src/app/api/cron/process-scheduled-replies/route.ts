@@ -4,6 +4,16 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60;
 
+// Rows stuck in PROCESSING for longer than this get bumped back to
+// PENDING. Happens when a prior invocation flipped the row to
+// PROCESSING but crashed or timed out before transitioning to SENT /
+// FAILED — without a reclaim, subsequent ticks never re-pick the row
+// and the lead's reply is orphaned. See Rj.__666 (@rj0__o.666) on
+// daetradez, 2026-04-23: ScheduledReply cmoaxfuma0002jr04i556r2b6
+// stuck PROCESSING; required a CLI reclaim. Same class of bug fixed
+// earlier for ScheduledMessage (commit 3039d97).
+const PROCESSING_STALE_MS = 5 * 60 * 1000;
+
 export async function GET(req: NextRequest) {
   try {
     // Validate bearer token against CRON_SECRET env var
@@ -15,6 +25,23 @@ export async function GET(req: NextRequest) {
 
     console.log('[cron] starting');
     const now = new Date();
+
+    // Reclaim rows stuck in PROCESSING from a crashed prior invocation.
+    // Flips them back to PENDING so the findMany below re-picks them
+    // in this same tick.
+    const staleCutoff = new Date(now.getTime() - PROCESSING_STALE_MS);
+    const reclaimed = await prisma.scheduledReply.updateMany({
+      where: {
+        status: 'PROCESSING',
+        scheduledFor: { lt: staleCutoff }
+      },
+      data: { status: 'PENDING' }
+    });
+    if (reclaimed.count > 0) {
+      console.warn(
+        `[cron] reclaimed ${reclaimed.count} stale PROCESSING rows (crashed prior invocations)`
+      );
+    }
 
     // Find pending replies that are due
     const dueReplies = await prisma.scheduledReply.findMany({
