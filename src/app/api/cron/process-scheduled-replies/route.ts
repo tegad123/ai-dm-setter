@@ -8,11 +8,24 @@ export const maxDuration = 60;
 // PENDING. Happens when a prior invocation flipped the row to
 // PROCESSING but crashed or timed out before transitioning to SENT /
 // FAILED — without a reclaim, subsequent ticks never re-pick the row
-// and the lead's reply is orphaned. See Rj.__666 (@rj0__o.666) on
-// daetradez, 2026-04-23: ScheduledReply cmoaxfuma0002jr04i556r2b6
-// stuck PROCESSING; required a CLI reclaim. Same class of bug fixed
-// earlier for ScheduledMessage (commit 3039d97).
-const PROCESSING_STALE_MS = 5 * 60 * 1000;
+// and the lead's reply is orphaned.
+//
+// 90s cutoff picked from two bounds:
+//   - Vercel cron runs once/min + `maxDuration: 60` on this route;
+//     a single AI generation + send takes ~30-60s. A legitimate
+//     in-flight row stays well under 90s from its scheduledFor.
+//   - Worst-case latency for a crashed row: scheduledFor + 90s
+//     reclaim cutoff + up to 60s for next cron tick = ~2.5 min.
+//
+// Safety: sendAIReply's double-fire guard blocks a second ship if
+// the first attempt already saved a Message row — so even if we
+// reclaim a row whose prior attempt is actually still in-flight, the
+// second attempt aborts cleanly.
+//
+// History: initially 5min (commit 4665b91) — too slow, Rj.__666's
+// 03:49:45 LEAD still had no response 4+ minutes later. Tightened
+// to 90s 2026-04-23.
+const PROCESSING_STALE_MS = 90 * 1000;
 
 export async function GET(req: NextRequest) {
   try {
