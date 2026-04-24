@@ -222,12 +222,20 @@ async function fireScheduledMessage(
   }
 
   // Guardrail for silent-lead cascade + booking-link follow-up.
-  // If the lead replied between row creation and this firing, the
-  // cancellation hook in processIncomingMessage SHOULD have flipped
-  // the row to CANCELLED before we got here — but there's a window
-  // where cron picks up + locks before the LEAD message hits DB.
-  // Double-check: if any LEAD message arrived after the row was
-  // created, the cascade is moot.
+  // If the lead replied OR a human operator sent a manual message
+  // between row creation and this firing, the cascade is moot. The
+  // cancellation hooks in processIncomingMessage + processAdminMessage
+  // + POST /conversations/:id/messages SHOULD have flipped the row to
+  // CANCELLED before we got here — but there's a window where the cron
+  // picks up + locks before the inbound/outbound message hits DB. This
+  // is the second line of defense.
+  //
+  // Human check specifically catches daetradez 2026-04-24: operator
+  // Daniel sent a manual "brother did you get a chance to book that
+  // call?" at 7:58 PM while a BOOKING_LINK_FOLLOWUP row was pending.
+  // The lead-only check (pre-this-fix) let the AI fire an identical
+  // "yo bro, just checking in — were you able to book that call?"
+  // follow-up a few seconds later, producing a duplicate.
   if (
     row.messageType === 'FOLLOW_UP_1' ||
     row.messageType === 'FOLLOW_UP_2' ||
@@ -235,23 +243,26 @@ async function fireScheduledMessage(
     row.messageType === 'FOLLOW_UP_SOFT_EXIT' ||
     row.messageType === 'BOOKING_LINK_FOLLOWUP'
   ) {
-    const freshLeadReply = await prisma.message.findFirst({
+    const freshReply = await prisma.message.findFirst({
       where: {
         conversationId: conversation.id,
-        sender: 'LEAD',
+        sender: { in: ['LEAD', 'HUMAN'] },
         timestamp: { gt: row.createdAt }
       },
-      select: { id: true }
+      select: { id: true, sender: true }
     });
-    if (freshLeadReply) {
+    if (freshReply) {
       console.log(
-        `[cron/scheduled-messages] ${row.id}: lead replied since row created — cancelling ${row.messageType}`
+        `[cron/scheduled-messages] ${row.id}: ${freshReply.sender} message since row created — cancelling ${row.messageType}`
       );
       await prisma.scheduledMessage.update({
         where: { id: row.id },
         data: {
           status: 'CANCELLED',
-          lastError: 'lead_replied_since_scheduling'
+          lastError:
+            freshReply.sender === 'HUMAN'
+              ? 'human_sent_since_scheduling'
+              : 'lead_replied_since_scheduling'
         }
       });
       return 'skipped_ai_inactive';

@@ -238,6 +238,25 @@ export async function POST(
             err
           );
         });
+      // ALSO cancel any pending BOOKING_LINK_FOLLOWUP / FOLLOW_UP_*
+      // cascade row. The scheduledReply table is the debounced reply
+      // queue; the scheduledMessage table holds the 30-min booking
+      // check-in + 12h follow-up cascade. Before this fix, a human
+      // manual send cancelled the former but left the latter PENDING,
+      // producing duplicate "did you book that call?" sends (daetradez
+      // 2026-04-24 — Daniel's 7:58 PM manual message followed by the
+      // AI's booking-cascade follow-up with identical content).
+      try {
+        const { cancelAllPendingFollowUps } = await import(
+          '@/lib/follow-up-sequence'
+        );
+        await cancelAllPendingFollowUps(id);
+      } catch (err) {
+        console.error(
+          '[messages] Failed to cancel pending follow-ups on human send (non-fatal):',
+          err
+        );
+      }
     }
 
     const updatedConvo = await prisma.conversation.update({

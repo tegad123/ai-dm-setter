@@ -3571,6 +3571,24 @@ export async function processAdminMessage(
     data: { status: 'CANCELLED' }
   });
 
+  // Cancel any pending follow-up cascade rows (BOOKING_LINK_FOLLOWUP /
+  // FOLLOW_UP_*). If a human operator has just sent a manual message,
+  // the AI follow-up queue is redundant — letting it fire produces
+  // duplicate "did you book that call?" messages (daetradez 2026-04-24
+  // incident). Mirrors the LEAD-reply cancellation in
+  // processIncomingMessage.
+  try {
+    const { cancelAllPendingFollowUps } = await import(
+      '@/lib/follow-up-sequence'
+    );
+    await cancelAllPendingFollowUps(conversationId);
+  } catch (err) {
+    console.error(
+      '[webhook-processor] cancelAllPendingFollowUps on HUMAN send failed (non-fatal):',
+      err
+    );
+  }
+
   // Broadcast real-time events
   broadcastNewMessage({
     id: message.id,
