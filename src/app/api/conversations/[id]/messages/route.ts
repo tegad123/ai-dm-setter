@@ -197,7 +197,12 @@ export async function POST(
         // WHICH operator sent it (Daniel vs another setter on the
         // team) instead of the generic "Human Setter" label. Prior to
         // this, every HUMAN message had sentByUserId: null.
-        ...(sender === 'HUMAN' ? { sentByUserId: auth.userId } : {}),
+        // humanSource='DASHBOARD' — this message was typed into the
+        // QualifyDMs UI rather than the native Meta app (the echo
+        // path sets 'PHONE').
+        ...(sender === 'HUMAN'
+          ? { sentByUserId: auth.userId, humanSource: 'DASHBOARD' }
+          : {}),
         ...overrideFields,
         // Self-optimizing layer tracking fields (only set for AI messages)
         ...(sender === 'AI'

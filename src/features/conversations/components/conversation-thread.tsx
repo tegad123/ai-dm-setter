@@ -468,6 +468,11 @@ export function ConversationThread({
                             {msg.sentByUser?.name
                               ? `${msg.sentByUser.name} · Human Setter`
                               : 'Human Setter'}
+                            {msg.humanSource === 'PHONE' ? (
+                              <span className='text-muted-foreground ml-1'>
+                                · from phone
+                              </span>
+                            ) : null}
                           </span>
                         )}
                         <div

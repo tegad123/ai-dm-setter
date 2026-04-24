@@ -934,6 +934,16 @@ model Message {
   humanOverrideNote          String?   @db.Text        // Optional 1-line reason from human
   loggedDuringTrainingPhase  Boolean   @default(false) // Snapshot: was account in ONBOARDING when saved?
 
+  // ── Source of HUMAN messages ──────────────────────────────
+  // Distinguishes where a HUMAN-sent message originated:
+  //   'DASHBOARD' — typed into QualifyDMs via POST /messages
+  //   'PHONE'     — sent via Meta's native app, captured as
+  //                 is_echo=true webhook echo in processAdminMessage
+  // Null for AI / LEAD senders. Used by the conversation thread UI
+  // to label phone-sent messages with a "from phone" badge so
+  // operators can tell at a glance where each HUMAN reply came from.
+  humanSource                String?
+
   // ── Multi-Bubble Delivery ──────────────────────────────────
   // Nullable so legacy single-message rows remain unchanged. When
   // the AI generates 2-4 bubbles per turn, each bubble becomes its

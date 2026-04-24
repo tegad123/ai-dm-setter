@@ -3544,7 +3544,11 @@ export async function processAdminMessage(
     );
   }
 
-  // Save as HUMAN message (genuinely sent by a human admin)
+  // Save as HUMAN message (genuinely sent by a human admin).
+  // humanSource='PHONE' — this message came via Meta's echo webhook,
+  // i.e. the operator typed it in the native Instagram / Messenger
+  // app on their phone rather than through QualifyDMs. The UI uses
+  // this to render a "from phone" badge.
   const message = await prisma.message.create({
     data: {
       conversationId,
@@ -3552,6 +3556,7 @@ export async function processAdminMessage(
       content: messageText,
       timestamp: new Date(),
       platformMessageId: platformMessageId || null,
+      humanSource: 'PHONE',
       isHumanOverride,
       rejectedAISuggestionId,
       editedFromSuggestion,
@@ -3559,10 +3564,17 @@ export async function processAdminMessage(
     }
   });
 
-  // Pause AI (human took over)
+  // Bump lastMessageAt but do NOT auto-pause the AI. Previous behavior
+  // flipped aiActive=false on every echo, which was too aggressive —
+  // an operator dropping one context message from their phone doesn't
+  // necessarily want to take over the whole conversation. If they DO
+  // want to pause, the dashboard toggle is one click. Pending queues
+  // (scheduledReply, scheduledMessage follow-ups) ARE still cancelled
+  // below because a human just spoke — a redundant AI queue would
+  // cause duplicate sends (daetradez 7:58 PM 2026-04-24 incident).
   await prisma.conversation.update({
     where: { id: conversationId },
-    data: { aiActive: false, lastMessageAt: new Date() }
+    data: { lastMessageAt: new Date() }
   });
 
   // Cancel any pending scheduled replies for this conversation
@@ -3589,7 +3601,8 @@ export async function processAdminMessage(
     );
   }
 
-  // Broadcast real-time events
+  // Broadcast real-time events. aiActive didn't change, so no
+  // AI-status broadcast — only the new message + conversation bump.
   broadcastNewMessage({
     id: message.id,
     conversationId,
@@ -3597,10 +3610,9 @@ export async function processAdminMessage(
     content: messageText,
     timestamp: new Date().toISOString()
   });
-  broadcastAIStatusChange({ conversationId, aiActive: false });
 
   console.log(
-    `[webhook-processor] Admin message saved for conversation ${conversationId}, AI paused`
+    `[webhook-processor] Admin message saved for conversation ${conversationId} (humanSource=PHONE, aiActive unchanged)`
   );
 }
 

@@ -13,6 +13,12 @@ export interface Message {
   // Inbox directly, so we don't have their userId). UI renders the name
   // in the "Human Setter" label when present.
   sentByUser?: { id: string; name: string; email?: string } | null;
+  // Where a HUMAN message originated:
+  //   'DASHBOARD' — typed into the QualifyDMs app (POST /messages)
+  //   'PHONE'     — sent from the native Instagram / Messenger app,
+  //                 captured via is_echo=true webhook
+  // Null on AI / LEAD senders and legacy rows.
+  humanSource?: 'DASHBOARD' | 'PHONE' | null;
   // Multi-bubble grouping. Null for legacy / single-message rows — the
   // renderer treats absence as an implicit 1-bubble group. Present
   // rows with the same messageGroupId render together with tight
