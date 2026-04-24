@@ -326,7 +326,7 @@ export function ActionRequired() {
         : 'border-l-emerald-500';
 
   return (
-    <Card className={cn('border-l-4', borderClass)}>
+    <Card className={cn('glass glass-sm border-l-4 py-4', borderClass)}>
       <CardHeader className='pb-2'>
         <CardTitle className='flex items-center gap-2 text-lg'>
           Action Required

@@ -472,10 +472,10 @@ export function ConversationThread({
                         )}
                         <div
                           className={cn(
-                            'rounded-2xl px-4 py-2.5',
-                            isLead && 'bg-muted text-foreground',
-                            isAI && 'bg-primary text-primary-foreground',
-                            isHuman && 'bg-emerald-600 text-white'
+                            'glass-bubble',
+                            isLead && 'theirs',
+                            isAI && 'mine',
+                            isHuman && 'mine-human'
                           )}
                         >
                           {msg.isVoiceNote && msg.voiceNoteUrl && (

@@ -53,119 +53,125 @@ export function KpiCards() {
     );
   }
 
+  // Shared glass card class lifts every KPI card into the glass-UI
+  // aesthetic without changing the Card primitive's default styling
+  // used elsewhere in the app.
+  const kpiCard = 'glass glass-sm @container/card border-0 py-4';
+  const kpiDeltaUp = 'kpi-delta up flex items-center gap-1';
+
   return (
     <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6'>
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconUsers className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconUsers className='h-4 w-4' />
             </div>
-            <CardDescription>Total Leads</CardDescription>
+            <CardDescription className='font-medium'>
+              Total Leads
+            </CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
+          <CardTitle className='num-big'>
             {stats.totalLeads.toLocaleString()}
           </CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
-          <span className='flex items-center gap-1 text-emerald-600'>
+          <span className={kpiDeltaUp}>
             <IconTrendingUp className='h-3 w-3' /> +18%
           </span>
           <span className='text-muted-foreground ml-1'>vs last month</span>
         </CardFooter>
       </Card>
 
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconMessage className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconMessage className='h-4 w-4' />
             </div>
-            <CardDescription>Leads Today</CardDescription>
+            <CardDescription className='font-medium'>
+              Leads Today
+            </CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
-            {stats.leadsToday}
-          </CardTitle>
+          <CardTitle className='num-big'>{stats.leadsToday}</CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
-          <span className='flex items-center gap-1 text-emerald-600'>
+          <span className={kpiDeltaUp}>
             <IconTrendingUp className='h-3 w-3' /> +3
           </span>
           <span className='text-muted-foreground ml-1'>from yesterday</span>
         </CardFooter>
       </Card>
 
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconCalendar className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconCalendar className='h-4 w-4' />
             </div>
-            <CardDescription>Calls Booked</CardDescription>
+            <CardDescription className='font-medium'>
+              Calls Booked
+            </CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
-            {stats.callsBooked}
-          </CardTitle>
+          <CardTitle className='num-big'>{stats.callsBooked}</CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
           <span className='text-muted-foreground'>This month</span>
         </CardFooter>
       </Card>
 
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconEye className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconEye className='h-4 w-4' />
             </div>
-            <CardDescription>Show Rate</CardDescription>
+            <CardDescription className='font-medium'>Show Rate</CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
-            {stats.showRate}%
-          </CardTitle>
+          <CardTitle className='num-big'>{stats.showRate}%</CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
-          <span className='flex items-center gap-1 text-emerald-600'>
+          <span className={kpiDeltaUp}>
             <IconTrendingUp className='h-3 w-3' /> +5%
           </span>
           <span className='text-muted-foreground ml-1'>vs avg</span>
         </CardFooter>
       </Card>
 
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconTargetArrow className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconTargetArrow className='h-4 w-4' />
             </div>
-            <CardDescription>Close Rate</CardDescription>
+            <CardDescription className='font-medium'>
+              Close Rate
+            </CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
-            {stats.closeRate}%
-          </CardTitle>
+          <CardTitle className='num-big'>{stats.closeRate}%</CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
-          <span className='flex items-center gap-1 text-emerald-600'>
+          <span className={kpiDeltaUp}>
             <IconTrendingUp className='h-3 w-3' /> +8%
           </span>
           <span className='text-muted-foreground ml-1'>vs last month</span>
         </CardFooter>
       </Card>
 
-      <Card className='@container/card'>
+      <Card className={kpiCard}>
         <CardHeader className='pb-2'>
-          <div className='flex items-center gap-2'>
-            <div className='bg-primary/10 rounded-md p-1.5'>
-              <IconCash className='text-primary h-4 w-4' />
+          <div className='kpi-head'>
+            <div className='kpi-icon'>
+              <IconCash className='h-4 w-4' />
             </div>
-            <CardDescription>Revenue</CardDescription>
+            <CardDescription className='font-medium'>Revenue</CardDescription>
           </div>
-          <CardTitle className='text-2xl font-bold tabular-nums'>
+          <CardTitle className='num-big'>
             ${stats.revenue.toLocaleString()}
           </CardTitle>
         </CardHeader>
         <CardFooter className='text-xs'>
-          <span className='flex items-center gap-1 text-emerald-600'>
+          <span className={kpiDeltaUp}>
             <IconTrendingUp className='h-3 w-3' /> +24%
           </span>
           <span className='text-muted-foreground ml-1'>this month</span>

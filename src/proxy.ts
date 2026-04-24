@@ -5,6 +5,7 @@ const isPublicRoute = createRouteMatcher([
   '/auth(.*)',
   '/privacy',
   '/terms',
+  '/glass-preview',
   '/api/webhooks(.*)',
   '/api/auth/meta(.*)',
   '/api/auth/instagram(.*)',

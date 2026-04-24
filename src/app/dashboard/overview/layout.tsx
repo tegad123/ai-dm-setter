@@ -16,33 +16,47 @@ export default function OverviewLayout({
   area_stats: React.ReactNode;
 }) {
   return (
-    <PageContainer>
-      <div className='flex flex-1 flex-col space-y-4'>
-        <div className='flex items-center justify-between'>
-          <h2 className='text-2xl font-bold tracking-tight'>
-            Dashboard Overview
-          </h2>
-          <Badge variant='outline' className='border-primary/30 text-primary'>
-            Live
-          </Badge>
-        </div>
-
-        {/* Action Required — operator command center, sits above
-            metrics so the FIRST thing the operator sees is what
-            needs their attention right now. */}
-        <ActionRequired />
-
-        {/* KPI Cards */}
-        <KpiCards />
-
-        {/* Charts Grid */}
-        <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-7'>
-          <div className='col-span-4'>{bar_stats}</div>
-          <div className='col-span-4 md:col-span-3'>{sales}</div>
-          <div className='col-span-4'>{area_stats}</div>
-          <div className='col-span-4 md:col-span-3'>{pie_stats}</div>
-        </div>
+    <>
+      {/* Fixed decorative backdrop — three blurred gradient orbs +
+          faint grid under the dashboard content. Pointer-events-none
+          so interactions pass through to the real UI above. */}
+      <div className='app-bg' aria-hidden>
+        <div className='glow-a' />
+        <div className='glow-b' />
+        <div className='glow-c' />
+        <div className='glow-grid' />
       </div>
-    </PageContainer>
+      <PageContainer>
+        <div className='glass-fadeup relative z-10 flex flex-1 flex-col space-y-4'>
+          <div className='flex items-center justify-between'>
+            <div>
+              <h2 className='num-big tracking-tight'>Dashboard Overview</h2>
+              <p className='text-muted-foreground mt-1 text-sm'>
+                Live operations at a glance
+              </p>
+            </div>
+            <Badge variant='outline' className='tag tag-engaged'>
+              <span className='tag-dot' /> Live
+            </Badge>
+          </div>
+
+          {/* Action Required — operator command center, sits above
+              metrics so the FIRST thing the operator sees is what
+              needs their attention right now. */}
+          <ActionRequired />
+
+          {/* KPI Cards */}
+          <KpiCards />
+
+          {/* Charts Grid */}
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-7'>
+            <div className='col-span-4'>{bar_stats}</div>
+            <div className='col-span-4 md:col-span-3'>{sales}</div>
+            <div className='col-span-4'>{area_stats}</div>
+            <div className='col-span-4 md:col-span-3'>{pie_stats}</div>
+          </div>
+        </div>
+      </PageContainer>
+    </>
   );
 }
