@@ -354,6 +354,271 @@
   animation: glass-fadeup 0.3s ease both;
 }
 
+/* Force glass backgrounds to win over shadcn's bg-card/bg-sidebar/bg-background
+ * utilities. Without !important the Card primitive's `bg-card` (oklch pure
+ * white) paints over the translucent glass layer even though specificity is
+ * equal — because both map to background-color, which ever rule is later in
+ * the cascade wins, and layer-ordering isn't reliable across PostCSS
+ * imports. Using !important here is the simplest, highest-leverage fix. */
+.glass,
+.glass-strong {
+  background: var(--glass-bg) !important;
+}
+.glass-strong {
+  background: var(--glass-bg-strong) !important;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #126bff 0%, #003fdb 100%);
+  color: white;
+  box-shadow:
+    0 10px 24px -6px rgba(18, 107, 255, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 32px -6px rgba(18, 107, 255, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--glass-text);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+.dark .btn-ghost {
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--glass-text);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+/* Form inputs */
+.glass-input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.75);
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--glass-text);
+  transition: all 0.15s;
+  outline: none;
+}
+.glass-input:focus {
+  border-color: rgba(18, 107, 255, 0.5);
+  box-shadow: 0 0 0 4px rgba(18, 107, 255, 0.12);
+  background: white;
+}
+.glass-input::placeholder {
+  color: #94a3b8;
+}
+.dark .glass-input {
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--glass-text);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+/* Segmented control */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  gap: 2px;
+}
+.segmented button {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--glass-text-2);
+  cursor: pointer;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+}
+.segmented button.active {
+  background: white;
+  color: var(--glass-text);
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+}
+
+/* Conversation list row */
+.conv-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid transparent;
+}
+.conv-item:hover {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(148, 163, 184, 0.15);
+}
+.conv-item.active {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(18, 107, 255, 0.3);
+  box-shadow: 0 8px 20px rgba(18, 107, 255, 0.08);
+}
+.dark .conv-item:hover {
+  background: rgba(148, 163, 184, 0.1);
+}
+.dark .conv-item.active {
+  background: rgba(148, 163, 184, 0.14);
+  border-color: rgba(18, 107, 255, 0.45);
+}
+.conv-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, #126bff, #7c5cff);
+}
+.conv-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.conv-time {
+  font-size: 10.5px;
+  color: var(--glass-text-muted);
+}
+.conv-preview {
+  font-size: 12px;
+  color: var(--glass-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+/* Progress */
+.glass-progress {
+  height: 8px;
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.glass-progress > div {
+  height: 100%;
+  background: linear-gradient(90deg, #126bff, #22d3ee);
+  border-radius: 999px;
+  box-shadow: 0 0 10px rgba(18, 107, 255, 0.4);
+  transition: width 0.4s ease;
+}
+
+/* Toggle */
+.glass-toggle {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.3);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  border: none;
+  padding: 0;
+}
+.glass-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s;
+}
+.glass-toggle.on {
+  background: linear-gradient(135deg, #126bff, #003fdb);
+}
+.glass-toggle.on::after {
+  left: 18px;
+}
+
+/* Sidebar glass overrides. Apply glass look to the shadcn Sidebar
+ * without rewriting the component tree. Targets the data-slot layer
+ * + active state of menu buttons. */
+[data-slot='sidebar-inner'] {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  margin: 10px 0 10px 10px;
+  box-shadow: var(--glass-shadow);
+}
+[data-slot='sidebar-menu-button'][data-active='true'] {
+  background: linear-gradient(135deg, #126bff 0%, #003fdb 100%) !important;
+  color: white !important;
+  box-shadow: 0 10px 24px -6px rgba(18, 107, 255, 0.5);
+}
+[data-slot='sidebar-menu-button'][data-active='true'] svg,
+[data-slot='sidebar-menu-button'][data-active='true'] span {
+  color: white !important;
+}
+
+/* Let the app-bg gradient show through the main content area. The
+ * SidebarInset paints bg-background across the viewport which would
+ * otherwise cover the decorative orbs. Keeping the inset transparent
+ * means the fixed .app-bg (z-index 0) stays visible. */
+[data-slot='sidebar-inset'] {
+  background: transparent !important;
+}
+
+/* Tailwind's `bg-background` utility paints html/body a solid colour
+ * which also covers the app-bg orbs unless the gradient is overlaid. Not
+ * forcing transparent on body — Tailwind v4 generates that rule in base
+ * layer and our gradient pale sky is already close enough that the orbs
+ * still show through on top. */
+
+/* Neutralise Card's default bg so .glass actually shows. Scoped to cards
+ * that ALSO have `.glass` so other cards stay white-opaque. */
+[data-slot='card'].glass,
+[data-slot='card'].glass-sm,
+[data-slot='card'].glass-strong {
+  background: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow-sm) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
 /* Script analysis progress bar */
 @keyframes progress {
   0% {

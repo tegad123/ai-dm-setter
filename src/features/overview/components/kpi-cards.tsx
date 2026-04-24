@@ -1,13 +1,6 @@
 'use client';
 
 import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardFooter
-} from '@/components/ui/card';
-import {
   IconTrendingUp,
   IconUsers,
   IconCalendar,
@@ -18,22 +11,79 @@ import {
 } from '@tabler/icons-react';
 import { useOverviewStats } from '@/hooks/use-api';
 
+// ---------------------------------------------------------------------------
+// KpiCards — pure-div glass cards (no shadcn Card wrapper) so the
+// translucent glass background can't be overridden by `bg-card`. Each
+// card is a `.glass.glass-sm` container with a gradient icon chip,
+// `.num-big` numeral, and `.kpi-delta.up` delta row.
+// ---------------------------------------------------------------------------
+
+const GRID =
+  'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6';
+
+type KpiIcon = typeof IconUsers;
+interface KpiProps {
+  icon: KpiIcon;
+  label: string;
+  value: string;
+  delta?: string;
+  deltaIcon?: KpiIcon;
+  footer?: string;
+}
+
+function Kpi({
+  icon: Icon,
+  label,
+  value,
+  delta,
+  deltaIcon: DeltaIcon,
+  footer
+}: KpiProps) {
+  return (
+    <div className='glass glass-sm flex flex-col gap-2 p-5'>
+      <div className='kpi-head'>
+        <div className='kpi-icon'>
+          <Icon className='h-4 w-4' />
+        </div>
+        <span className='font-medium'>{label}</span>
+      </div>
+      <div className='num-big'>{value}</div>
+      <div className='mt-1 flex items-center gap-1 text-xs'>
+        {delta ? (
+          <span className='kpi-delta up flex items-center gap-1'>
+            {DeltaIcon ? <DeltaIcon className='h-3 w-3' /> : null}
+            {delta}
+          </span>
+        ) : null}
+        {footer ? (
+          <span className='text-muted-foreground'>{footer}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function KpiSkeleton() {
+  return (
+    <div className='glass glass-sm flex animate-pulse flex-col gap-2 p-5'>
+      <div className='flex items-center gap-2'>
+        <div className='bg-muted/60 h-7 w-7 rounded-lg' />
+        <div className='bg-muted/60 h-4 w-24 rounded' />
+      </div>
+      <div className='bg-muted/60 mt-1 h-8 w-20 rounded' />
+      <div className='bg-muted/60 h-3 w-28 rounded' />
+    </div>
+  );
+}
+
 export function KpiCards() {
   const { stats, loading, error } = useOverviewStats();
 
   if (loading) {
     return (
-      <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6'>
+      <div className={GRID}>
         {Array.from({ length: 6 }).map((_, i) => (
-          <Card key={i} className='@container/card animate-pulse'>
-            <CardHeader className='pb-2'>
-              <div className='bg-muted h-4 w-24 rounded' />
-              <div className='bg-muted mt-2 h-8 w-16 rounded' />
-            </CardHeader>
-            <CardFooter className='text-xs'>
-              <div className='bg-muted h-3 w-20 rounded' />
-            </CardFooter>
-          </Card>
+          <KpiSkeleton key={i} />
         ))}
       </div>
     );
@@ -41,142 +91,62 @@ export function KpiCards() {
 
   if (error || !stats) {
     return (
-      <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6'>
-        <Card className='col-span-full'>
-          <CardHeader>
-            <CardDescription className='text-destructive'>
-              Failed to load stats. Using defaults.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+      <div className={GRID}>
+        <div className='glass glass-sm text-destructive col-span-full p-5 text-sm'>
+          Failed to load stats. Using defaults.
+        </div>
       </div>
     );
   }
 
-  // Shared glass card class lifts every KPI card into the glass-UI
-  // aesthetic without changing the Card primitive's default styling
-  // used elsewhere in the app.
-  const kpiCard = 'glass glass-sm @container/card border-0 py-4';
-  const kpiDeltaUp = 'kpi-delta up flex items-center gap-1';
-
   return (
-    <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6'>
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconUsers className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>
-              Total Leads
-            </CardDescription>
-          </div>
-          <CardTitle className='num-big'>
-            {stats.totalLeads.toLocaleString()}
-          </CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className={kpiDeltaUp}>
-            <IconTrendingUp className='h-3 w-3' /> +18%
-          </span>
-          <span className='text-muted-foreground ml-1'>vs last month</span>
-        </CardFooter>
-      </Card>
-
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconMessage className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>
-              Leads Today
-            </CardDescription>
-          </div>
-          <CardTitle className='num-big'>{stats.leadsToday}</CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className={kpiDeltaUp}>
-            <IconTrendingUp className='h-3 w-3' /> +3
-          </span>
-          <span className='text-muted-foreground ml-1'>from yesterday</span>
-        </CardFooter>
-      </Card>
-
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconCalendar className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>
-              Calls Booked
-            </CardDescription>
-          </div>
-          <CardTitle className='num-big'>{stats.callsBooked}</CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className='text-muted-foreground'>This month</span>
-        </CardFooter>
-      </Card>
-
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconEye className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>Show Rate</CardDescription>
-          </div>
-          <CardTitle className='num-big'>{stats.showRate}%</CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className={kpiDeltaUp}>
-            <IconTrendingUp className='h-3 w-3' /> +5%
-          </span>
-          <span className='text-muted-foreground ml-1'>vs avg</span>
-        </CardFooter>
-      </Card>
-
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconTargetArrow className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>
-              Close Rate
-            </CardDescription>
-          </div>
-          <CardTitle className='num-big'>{stats.closeRate}%</CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className={kpiDeltaUp}>
-            <IconTrendingUp className='h-3 w-3' /> +8%
-          </span>
-          <span className='text-muted-foreground ml-1'>vs last month</span>
-        </CardFooter>
-      </Card>
-
-      <Card className={kpiCard}>
-        <CardHeader className='pb-2'>
-          <div className='kpi-head'>
-            <div className='kpi-icon'>
-              <IconCash className='h-4 w-4' />
-            </div>
-            <CardDescription className='font-medium'>Revenue</CardDescription>
-          </div>
-          <CardTitle className='num-big'>
-            ${stats.revenue.toLocaleString()}
-          </CardTitle>
-        </CardHeader>
-        <CardFooter className='text-xs'>
-          <span className={kpiDeltaUp}>
-            <IconTrendingUp className='h-3 w-3' /> +24%
-          </span>
-          <span className='text-muted-foreground ml-1'>this month</span>
-        </CardFooter>
-      </Card>
+    <div className={GRID}>
+      <Kpi
+        icon={IconUsers}
+        label='Total Leads'
+        value={stats.totalLeads.toLocaleString()}
+        delta='+18%'
+        deltaIcon={IconTrendingUp}
+        footer='vs last month'
+      />
+      <Kpi
+        icon={IconMessage}
+        label='Leads Today'
+        value={String(stats.leadsToday)}
+        delta='+3'
+        deltaIcon={IconTrendingUp}
+        footer='from yesterday'
+      />
+      <Kpi
+        icon={IconCalendar}
+        label='Calls Booked'
+        value={String(stats.callsBooked)}
+        footer='This month'
+      />
+      <Kpi
+        icon={IconEye}
+        label='Show Rate'
+        value={`${stats.showRate}%`}
+        delta='+5%'
+        deltaIcon={IconTrendingUp}
+        footer='vs avg'
+      />
+      <Kpi
+        icon={IconTargetArrow}
+        label='Close Rate'
+        value={`${stats.closeRate}%`}
+        delta='+8%'
+        deltaIcon={IconTrendingUp}
+        footer='vs last month'
+      />
+      <Kpi
+        icon={IconCash}
+        label='Revenue'
+        value={`$${stats.revenue.toLocaleString()}`}
+        delta='+24%'
+        deltaIcon={IconTrendingUp}
+        footer='this month'
+      />
     </div>
   );
 }

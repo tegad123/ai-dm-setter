@@ -2,7 +2,6 @@
 
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { Conversation } from '@/features/conversations/data/conversation-data';
@@ -181,16 +180,12 @@ export function ConversationList({
                 key={convo.id}
                 onClick={() => onSelect(convo)}
                 className={cn(
-                  'hover:bg-accent flex w-full items-start gap-3 border-b p-4 text-left transition-colors',
-                  selected.id === convo.id && 'bg-accent'
+                  'conv-item w-full text-left',
+                  selected.id === convo.id && 'active'
                 )}
               >
                 <div className='relative'>
-                  <Avatar className='h-10 w-10'>
-                    <AvatarFallback className='bg-primary/10 text-primary text-xs'>
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
+                  <div className='conv-avatar'>{initials}</div>
                   <div
                     className={cn(
                       'border-background absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2',

@@ -56,6 +56,15 @@ export default async function RootLayout({
           fontVariables
         )}
       >
+        {/* Global decorative backdrop — the glass UI's gradient + three
+            blurred orbs + faint grid, fixed behind every page. Pointer-
+            events-none so it never steals interaction from real UI. */}
+        <div className='app-bg' aria-hidden>
+          <div className='glow-a' />
+          <div className='glow-b' />
+          <div className='glow-c' />
+          <div className='glow-grid' />
+        </div>
         <ClerkProvider>
           <NextTopLoader color='var(--primary)' showSpinner={false} />
           <NuqsAdapter>

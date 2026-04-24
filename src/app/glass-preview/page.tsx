@@ -28,12 +28,7 @@ import {
 export default function GlassPreviewPage() {
   return (
     <>
-      <div className='app-bg' aria-hidden>
-        <div className='glow-a' />
-        <div className='glow-b' />
-        <div className='glow-c' />
-        <div className='glow-grid' />
-      </div>
+      {/* app-bg renders from the root layout */}
       <main className='glass-fadeup relative z-10 mx-auto flex max-w-6xl flex-col gap-6 px-6 py-10'>
         {/* Header */}
         <div className='flex items-center justify-between'>
@@ -189,6 +184,91 @@ export default function GlassPreviewPage() {
                 <div style={{ width: '32%' }} />
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* Conversation list rows */}
+        <section className='glass glass-sm p-6'>
+          <h2 className='mb-3 text-sm font-semibold'>Conversation list</h2>
+          <div className='flex flex-col gap-1'>
+            {[
+              {
+                name: 'Jonathan Frimpong',
+                handle: 'jfrimpong',
+                initials: 'JF',
+                preview: "here's the link bro: https://form.typeform.com/to/…",
+                time: '2h',
+                active: true
+              },
+              {
+                name: 'Sean Ramirez',
+                handle: 'seanrmz',
+                initials: 'SR',
+                preview: 'been looking at it for a month honestly',
+                time: '4h',
+                active: false
+              },
+              {
+                name: 'Carlos Mendez',
+                handle: 'carlosmx',
+                initials: 'CM',
+                preview: 'yeah im interested whats the next step',
+                time: '1d',
+                active: false
+              }
+            ].map((c) => (
+              <button
+                key={c.name}
+                className={
+                  c.active
+                    ? 'conv-item active w-full text-left'
+                    : 'conv-item w-full text-left'
+                }
+                type='button'
+              >
+                <div className='conv-avatar'>{c.initials}</div>
+                <div className='flex-1 overflow-hidden'>
+                  <div className='flex items-center justify-between'>
+                    <span className='conv-name'>{c.name}</span>
+                    <span className='conv-time'>{c.time}</span>
+                  </div>
+                  <div className='conv-preview'>
+                    @{c.handle} · {c.preview}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Inputs + buttons */}
+        <section className='glass glass-sm flex flex-col gap-4 p-6'>
+          <h2 className='text-sm font-semibold'>Inputs + buttons</h2>
+          <input
+            type='text'
+            placeholder='Search leads, tags, scripts…'
+            className='glass-input'
+          />
+          <div className='flex flex-wrap gap-2'>
+            <button className='btn btn-primary'>Book call</button>
+            <button className='btn btn-ghost'>Dismiss</button>
+          </div>
+          <div className='segmented'>
+            <button className='active'>All</button>
+            <button>Priority</button>
+            <button>Qualified</button>
+            <button>Unread</button>
+          </div>
+          <div className='flex items-center gap-3'>
+            <button
+              type='button'
+              className='glass-toggle on'
+              aria-label='Enabled'
+            />
+            <span className='text-muted-foreground text-sm'>AI auto-send</span>
+          </div>
+          <div className='glass-progress'>
+            <div style={{ width: '58%' }} />
           </div>
         </section>
       </main>

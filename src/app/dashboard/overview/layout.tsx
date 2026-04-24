@@ -17,15 +17,7 @@ export default function OverviewLayout({
 }) {
   return (
     <>
-      {/* Fixed decorative backdrop — three blurred gradient orbs +
-          faint grid under the dashboard content. Pointer-events-none
-          so interactions pass through to the real UI above. */}
-      <div className='app-bg' aria-hidden>
-        <div className='glow-a' />
-        <div className='glow-b' />
-        <div className='glow-c' />
-        <div className='glow-grid' />
-      </div>
+      {/* (app-bg is mounted once at the root layout for every page) */}
       <PageContainer>
         <div className='glass-fadeup relative z-10 flex flex-1 flex-col space-y-4'>
           <div className='flex items-center justify-between'>
