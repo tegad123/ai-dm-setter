@@ -2651,6 +2651,58 @@ async function sendAIReply(
     return;
   }
 
+  // ── Ship-time markdown-formatting guard (P0) ──────────────────
+  // Parallel to the bracketed-placeholder + link-promise ship-time
+  // guards. voice-quality-gate's markdown_in_single_bubble hard fail
+  // + the ai-engine escalate_to_human on retry-exhaustion SHOULD
+  // catch this at generation time, but escalateToHuman is processed
+  // AFTER the ship. This guard blocks the send outright if the
+  // outgoing bubbles contain literal markdown the messaging app
+  // can't render. Drove daetradez 2026-04-24 incident — AI shipped
+  // "1. **FTMO**: https://..." verbatim including the asterisks.
+  const MARKDOWN_NUMBERED_BOLD = /^\s*\d+\.\s+\*\*/m;
+  const MARKDOWN_HEADER_LINE = /(^|\n)\s{0,3}#{1,6}\s/;
+  const markdownBubble = bubblesForEmptyCheck.find(
+    (b) =>
+      typeof b === 'string' &&
+      (MARKDOWN_NUMBERED_BOLD.test(b) || MARKDOWN_HEADER_LINE.test(b))
+  );
+  if (markdownBubble) {
+    console.error(
+      `[webhook-processor] markdown_in_single_bubble_at_ship for conv ${conversationId} — AI output contained markdown formatting (numbered list with **bold** or ## header) that messenger won't render. Pausing AI, notifying operator, no platform send.`
+    );
+    try {
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title: 'AI emitted markdown — human takeover required',
+          body: `${lead.name} (@${lead.handle}): the AI's last generation used markdown formatting (numbered list with **bold** headers or ## headings) that messaging apps render as literal asterisks/hashes. AI is paused on this conversation — please review and send a properly-formatted reply manually.`,
+          leadId: lead.id
+        }
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Markdown escalation bookkeeping failed (non-fatal):',
+        err
+      );
+    }
+    return;
+  }
+
   // ── Dedup safety net ──────────────────────────────────────────
   // Last-line defense against near-duplicate sends that slip through the
   // debounce + cancel-pending + 25s recency guard. Uses the shared

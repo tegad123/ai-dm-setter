@@ -391,6 +391,60 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9e-ii. R26 — third-party prop-firm / funded-account platform names.
+  // Soft signal, not hard-fail: a glancing mention in a decline line
+  // ("funding's a whole other convo") is fine, but detailed explanation
+  // of how these platforms work is out of scope + factually suspect.
+  // Production incident (daetradez 2026-04-24): AI emitted
+  //   "1. Choose a funding program like FTMO or My Forex Funds..."
+  //   "2. Pass the evaluation by hitting a profit target..."
+  // Speculative, third-party, and unauthorised. The soft-signal weight
+  // is aggressive enough to likely trigger a regen when combined with
+  // other minor signals. Prompt R26 covers the stricter declined-
+  // escalation behavior.
+  const PROP_FIRM_PATTERNS: RegExp[] = [
+    /\bFTMO\b/i,
+    /\bMy\s+Forex\s+Funds\b/i,
+    /\bTopStep\b/i,
+    /\bApex(\s+Trader\s+Funding)?\b/i,
+    /\b(The\s+)?Funded\s+Trader\b/i,
+    /\bE8\s+Funding\b/i,
+    /\bThe\s+5ers\b/i,
+    /\bprop\s+firm(s)?\b/i
+  ];
+  let propFirmMatch: string | null = null;
+  for (const pat of PROP_FIRM_PATTERNS) {
+    const m = reply.match(pat);
+    if (m) {
+      propFirmMatch = m[0];
+      break;
+    }
+  }
+  if (propFirmMatch) {
+    softSignals.r26_third_party_platform_mention = -0.4;
+  }
+
+  // 9e-iii. Markdown-formatted single message — the LLM emitted a
+  // numbered list with bold headings in ONE bubble instead of using
+  // the messages[] array to send each point as its own short bubble.
+  // Triggered when a numbered list starts with **bold** (/^\d+\.\s+\*\*/m)
+  // OR the reply has 2+ consecutive heading/double-star formatting
+  // markers. Fires hardFail so the retry loop regenerates with a
+  // directive ("no markdown, use messages[]"). Rare enough to regen
+  // from; common enough in GPT-5.x output to be worth catching.
+  const NUMBERED_BOLD_LIST_RE = /^\s*\d+\.\s+\*\*/m;
+  const MULTIPLE_BOLD_MARKERS_RE = /\*\*[^*]+\*\*[\s\S]*?\*\*[^*]+\*\*/;
+  const MARKDOWN_HEADER_RE = /(^|\n)\s{0,3}#{1,6}\s/;
+  const markdownMatch =
+    NUMBERED_BOLD_LIST_RE.test(reply) ||
+    MARKDOWN_HEADER_RE.test(reply) ||
+    MULTIPLE_BOLD_MARKERS_RE.test(reply);
+  if (markdownMatch) {
+    hardFails.push(
+      'markdown_in_single_bubble: AI emitted markdown formatting (numbered list with **bold**, ## headers, or multiple **bold** markers) in a single message. This content should be split into separate bubbles via the messages[] array with no markdown at all.'
+    );
+  }
+
   // 9f. CTA mechanism leak — the active_campaigns prompt block asks the
   // AI to RECOGNISE a lead coming from a campaign and respond naturally,
   // not announce the matching mechanism. A real production failure had

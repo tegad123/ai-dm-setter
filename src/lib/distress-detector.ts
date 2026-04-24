@@ -66,6 +66,41 @@ export const DISTRESS_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
     pattern:
       /\b(nothing\s+left\s+to\s+live\s+for|can'?t\s+go\s+on|done\s+with\s+life|no\s+point\s+(in\s+)?going\s+on)\b/i,
     label: 'giving_up'
+  },
+  // Desperation / crisis signals. Production incident (2026-04-24): a
+  // lead wrote "I'm really broken, and stressed up", "Help me bro I
+  // going through my darkest season", "Don't even know how to call on
+  // God now" — none of the ideation/self-harm patterns matched, so the
+  // AI replied with a capital-qualification question to a lead in
+  // crisis. These patterns catch the emotional-desperation register
+  // that precedes explicit ideation.
+  {
+    pattern: /\b(broken(\s+down)?|stressed\s+(up|out))\b/i,
+    label: 'emotional_breakdown'
+  },
+  {
+    pattern: /\bdarkest\s+(season|time|place|moment|period|hour|day|night)\b/i,
+    label: 'darkest_season'
+  },
+  {
+    pattern:
+      /\b(kindly\s+help\s+me|please\s+help\s+me|help\s+me\s+(bro|sir|please|man|pls))\b/i,
+    label: 'help_plea'
+  },
+  {
+    pattern:
+      /\b(can'?t\s+call\s+on\s+god|don'?t\s+know\s+how\s+to\s+(pray|call\s+on\s+god)|lost\s+my\s+faith|lost\s+all\s+faith)\b/i,
+    label: 'spiritual_crisis'
+  },
+  {
+    pattern:
+      /\bgoing\s+through\s+(a\s+lot|it|my\s+darkest|so\s+much|hell|the\s+worst)\b/i,
+    label: 'going_through'
+  },
+  {
+    pattern:
+      /\b(i\s+believe\s+you\s+(can|are)\s+(be\s+)?the\s+light|you\s+are\s+my\s+(only\s+)?hope|you('?re|\s+are)\s+my\s+last\s+(hope|chance))\b/i,
+    label: 'last_hope_appeal'
   }
 ];
 

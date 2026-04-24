@@ -720,6 +720,23 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] Link promise without URL detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
+
+      // Markdown-in-single-bubble directive (daetradez 2026-04-24).
+      // The LLM emitted a numbered list with **bold** headers in one
+      // big bubble instead of using the messages[] array to split
+      // each point into its own short bubble. Natural regen without
+      // this override tends to reproduce the same shape — the model
+      // defaults to markdown on "how does X work" questions.
+      const markdownFailed = quality.hardFails.some((f) =>
+        f.includes('markdown_in_single_bubble:')
+      );
+      if (markdownFailed) {
+        const markdownOverride = `\n\n===== NO MARKDOWN — USE MESSAGES ARRAY =====\nYour previous reply used markdown formatting (numbered list with **bold** headers, or multiple **bold** markers, or ## headers). Messaging apps do NOT render markdown — the lead literally sees "1. **Choose a program** — ..." with the asterisks. You MUST regenerate with NO markdown characters at all: no **, no ##, no numbered lists with bold headers, no bullet stars.\n\nInstead, split the content across separate bubbles via the messages[] array. Each bubble is its own short casual message — 1-2 sentences max, no markdown, no list formatting. Example:\n  messages: [\n    "funding convo's a whole other thing bro",\n    "not my lane to walk through prop firm rules — too much changes",\n    "the funded account flow we use gets broken down on the call with Anthony"\n  ]\nKeep each bubble punchy, casual, lowercase. Natural texting cadence — not a numbered how-to guide. If the answer genuinely needs structure, use 2-4 short bubbles, never a formatted list in one message.\n=====`;
+        systemPromptForLLM = systemPrompt + markdownOverride;
+        console.warn(
+          `[ai-engine] Markdown-in-single-bubble detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
     }
 
     if (attempt === MAX_RETRIES) {
@@ -799,7 +816,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         const hasUnshippableFailure = quality.hardFails.some(
           (f) =>
             f.includes('bracketed_placeholder_leaked:') ||
-            f.includes('link_promise_without_url:')
+            f.includes('link_promise_without_url:') ||
+            f.includes('markdown_in_single_bubble:')
         );
         if (allBubblesEmpty) {
           console.error(
