@@ -306,13 +306,21 @@ At minimum, your JSON must include these fields with valid values:
 If you catch yourself writing plain text, stop and rewrite as JSON. The entire pipeline breaks when stage is missing — downstream systems rely on it to track funnel progression.`;
 
   // 2. Resolve AI provider credentials (per-account BYOK → env fallback)
-  const { provider, apiKey, model } = await resolveAIProvider(accountId);
+  const { provider, apiKey, model, fallback } =
+    await resolveAIProvider(accountId);
 
   if (!apiKey) {
     throw new Error(
       'No AI provider configured. Please add your OpenAI or Anthropic API key in Settings → Integrations.'
     );
   }
+
+  // Accumulate usage + final modelUsed across voice-gate retries. The
+  // last successful callLLM sets modelUsed — which is the shipped model.
+  // usageTotal is the sum of input/output/cache tokens across EVERY
+  // attempt so cost tracking reflects the full generation cost.
+  let modelUsedFinal: string = model;
+  let usageTotal: LLMUsage = { ...EMPTY_USAGE };
 
   // 3. Format conversation history for the LLM
   const messages = formatConversationForLLM(conversationHistory);
@@ -387,15 +395,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
-    const rawResponse = await callLLM(
+    const callResult = await callLLM(
       provider,
       apiKey,
       model,
       systemPromptForLLM,
-      messages
+      messages,
+      fallback
     );
+    modelUsedFinal = callResult.modelUsed;
+    usageTotal = addUsage(usageTotal, callResult.usage);
 
-    parsed = parseAIResponse(rawResponse);
+    parsed = parseAIResponse(callResult.text);
 
     // 5. Voice quality gate — runs per-bubble via scoreVoiceQualityGroup.
     // For single-message responses (flag-off persona), parsed.messages is
@@ -915,7 +926,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           intentConfidence: null, // TODO: pipe from classifier in future
           leadStageSnapshot: leadContext.status || null,
           leadTypeSnapshot: leadContext.experience || null,
-          generatedDuringTrainingPhase: isOnboarding
+          generatedDuringTrainingPhase: isOnboarding,
+          modelUsed: modelUsedFinal,
+          inputTokens: usageTotal.inputTokens,
+          outputTokens: usageTotal.outputTokens,
+          cacheReadTokens: usageTotal.cacheReadTokens,
+          cacheCreationTokens: usageTotal.cacheCreationTokens
         }
       });
       suggestionId = suggestion.id;
@@ -998,13 +1014,48 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 // Provider Resolution (per-account BYOK with env fallback)
 // ---------------------------------------------------------------------------
 
+const SONNET_46_MODEL = 'claude-sonnet-4-6';
+
 async function resolveAIProvider(accountId: string): Promise<{
   provider: 'openai' | 'anthropic';
   apiKey: string | undefined;
   model: string;
+  /** OpenAI creds used by the Anthropic fallback path (and only then). */
+  fallback?: { apiKey: string; model: string };
 }> {
-  // Try per-account OpenAI
+  // Read the account-level routing flag. `aiProvider='anthropic'` flips
+  // main generation onto Claude Sonnet 4.6 without removing the OpenAI
+  // key — the key stays available as the fallback when Anthropic errors.
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { aiProvider: true }
+  });
+
   const openaiCreds = await getCredentials(accountId, 'OPENAI');
+  const openaiKey =
+    (openaiCreds?.apiKey as string | undefined) ?? process.env.OPENAI_API_KEY;
+  const openaiModel =
+    (openaiCreds?.model as string | undefined) || 'gpt-4o-mini';
+
+  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
+  const anthropicKey =
+    (anthropicCreds?.apiKey as string | undefined) ??
+    process.env.ANTHROPIC_API_KEY;
+
+  if (account?.aiProvider === 'anthropic') {
+    const fallback =
+      openaiKey !== undefined
+        ? { apiKey: openaiKey, model: openaiModel }
+        : undefined;
+    return {
+      provider: 'anthropic',
+      apiKey: anthropicKey,
+      model: (anthropicCreds?.model as string) || SONNET_46_MODEL,
+      fallback
+    };
+  }
+
+  // Default path: current credential-based resolution, unchanged.
   if (openaiCreds?.apiKey) {
     return {
       provider: 'openai',
@@ -1013,12 +1064,10 @@ async function resolveAIProvider(accountId: string): Promise<{
       // quality gate + heavy prompt scaffolding absorb the capability
       // delta well enough. Accounts that want gpt-4o can set it explicitly
       // in their credential record.
-      model: (openaiCreds.model as string) || 'gpt-4o-mini'
+      model: openaiModel
     };
   }
 
-  // Try per-account Anthropic
-  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
   if (anthropicCreds?.apiKey) {
     return {
       provider: 'anthropic',
@@ -1030,10 +1079,7 @@ async function resolveAIProvider(accountId: string): Promise<{
   // Fallback to env vars
   const envProvider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
   const provider = envProvider === 'anthropic' ? 'anthropic' : 'openai';
-  const apiKey =
-    provider === 'anthropic'
-      ? process.env.ANTHROPIC_API_KEY
-      : process.env.OPENAI_API_KEY;
+  const apiKey = provider === 'anthropic' ? anthropicKey : openaiKey;
   const model =
     process.env.AI_MODEL ||
     (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
@@ -1063,65 +1109,183 @@ function formatConversationForLLM(
 // LLM Call (OpenAI or Anthropic)
 // ---------------------------------------------------------------------------
 
+export interface LLMUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+export interface LLMCallResult {
+  text: string;
+  /** Final model that produced the text. On fallback, the fallback model. */
+  modelUsed: string;
+  usage: LLMUsage;
+}
+
+const EMPTY_USAGE: LLMUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0
+};
+
+const OPENAI_FALLBACK_MODEL = 'gpt-4o-mini';
+const OPENAI_FALLBACK_MARKER = 'gpt-4o-mini-fallback';
+
 async function callLLM(
   provider: 'openai' | 'anthropic',
   apiKey: string,
   model: string,
   systemPrompt: string,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
-): Promise<string> {
-  if (provider === 'openai') {
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey });
-
-    const response = await client.chat.completions.create({
-      model,
-      temperature: 0.85,
-      max_tokens: 1500,
-      // Force OpenAI to emit a valid JSON object. The system prompt already
-      // demands JSON, but stacked directive blocks sometimes steered the
-      // model into plain text — this guarantees the response parses.
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: systemPrompt }, ...messages]
-    });
-
-    return response.choices[0]?.message?.content?.trim() || '';
-  } else {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey });
-
-    // Anthropic requires messages to start with user role
-    // If first message is assistant, prepend a system-generated user message
-    let anthropicMessages = [...messages];
-    if (
-      anthropicMessages.length > 0 &&
-      anthropicMessages[0].role === 'assistant'
-    ) {
-      anthropicMessages = [
-        {
-          role: 'user' as const,
-          content: '[Conversation started by our team]'
-        },
-        ...anthropicMessages
-      ];
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  /** Fallback credentials used when the Anthropic path throws. */
+  fallback?: { apiKey: string; model: string }
+): Promise<LLMCallResult> {
+  if (provider === 'anthropic') {
+    try {
+      return await callAnthropic(apiKey, model, systemPrompt, messages);
+    } catch (err) {
+      // Fallback: swap to OpenAI so the conversation keeps moving. We
+      // mark modelUsed with a dedicated suffix so dashboard + analytics
+      // can flag accounts seeing high fallback rates without guessing.
+      console.error(
+        `[ai-engine] Anthropic call failed (${model}), falling back to ${OPENAI_FALLBACK_MODEL}:`,
+        err instanceof Error ? err.message : err
+      );
+      if (!fallback?.apiKey) {
+        // No OpenAI creds available — re-throw so the upstream retry
+        // loop can handle it. Better than silent empty-reply ship.
+        throw err;
+      }
+      const res = await callOpenAI(
+        fallback.apiKey,
+        fallback.model,
+        systemPrompt,
+        messages
+      );
+      return { ...res, modelUsed: OPENAI_FALLBACK_MARKER };
     }
-
-    // Anthropic also requires alternating roles — merge consecutive same-role messages
-    anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
-
-    const response = await client.messages.create({
-      model,
-      system: systemPrompt,
-      temperature: 0.85,
-      max_tokens: 1500,
-      messages: anthropicMessages
-    });
-
-    const textBlock = response.content.find(
-      (block: any) => block.type === 'text'
-    );
-    return (textBlock as any)?.text?.trim() || '';
   }
+  return callOpenAI(apiKey, model, systemPrompt, messages);
+}
+
+async function callOpenAI(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+): Promise<LLMCallResult> {
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey });
+
+  const response = await client.chat.completions.create({
+    model,
+    temperature: 0.85,
+    max_tokens: 1500,
+    // Force OpenAI to emit a valid JSON object. The system prompt already
+    // demands JSON, but stacked directive blocks sometimes steered the
+    // model into plain text — this guarantees the response parses.
+    response_format: { type: 'json_object' },
+    messages: [{ role: 'system', content: systemPrompt }, ...messages]
+  });
+
+  return {
+    text: response.choices[0]?.message?.content?.trim() || '',
+    modelUsed: model,
+    usage: {
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0
+    }
+  };
+}
+
+async function callAnthropic(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+): Promise<LLMCallResult> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey });
+
+  // Anthropic requires messages to start with user role
+  let anthropicMessages = [...messages];
+  if (
+    anthropicMessages.length > 0 &&
+    anthropicMessages[0].role === 'assistant'
+  ) {
+    anthropicMessages = [
+      {
+        role: 'user' as const,
+        content: '[Conversation started by our team]'
+      },
+      ...anthropicMessages
+    ];
+  }
+
+  // Anthropic also requires alternating roles — merge consecutive same-role messages
+  anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
+
+  // Prompt caching: the ~60K-token system prompt is stable across turns
+  // in a conversation (persona + script + rules only change on script
+  // edits). Marking it with ephemeral cache_control halves input cost
+  // on every turn after the first — cache TTL is 5min, which covers
+  // any normal multi-turn chat window.
+  const response = await client.messages.create({
+    model,
+    system: [
+      {
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' }
+      }
+    ],
+    temperature: 0.85,
+    max_tokens: 1500,
+    messages: anthropicMessages
+  });
+
+  const textBlock = response.content.find(
+    (block: { type: string }) => block.type === 'text'
+  );
+  const text = (
+    textBlock && 'text' in textBlock ? (textBlock.text as string) : ''
+  ).trim();
+
+  // Usage shape varies slightly across SDK versions — defensive reads.
+  const u = response.usage as {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  return {
+    text,
+    modelUsed: model,
+    usage: {
+      inputTokens: u?.input_tokens ?? 0,
+      outputTokens: u?.output_tokens ?? 0,
+      cacheReadTokens: u?.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: u?.cache_creation_input_tokens ?? 0
+    }
+  };
+}
+
+/**
+ * Accumulate per-call usage into a running total across voice-gate
+ * retries. The suggestion row stores the totals so cost tracking
+ * reflects every generation that went into producing the shipped text.
+ */
+function addUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens
+  };
 }
 
 /**

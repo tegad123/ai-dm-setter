@@ -210,6 +210,16 @@ model Account {
   showSuggestionBanner        Boolean   @default(true)
   ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
 
+  // ── Main-generation model routing ─────────────────────────────
+  // Per-account override for which provider serves the primary
+  // generateReply() calls. Bypasses the credential-based resolver so
+  // an account can roll onto Claude without removing its OpenAI key
+  // (other call sites — script-parser, voice-note-context-matcher —
+  // still read OpenAI). Values: 'openai' (gpt-4o-mini default) |
+  // 'anthropic' (claude-sonnet-4-6). Default 'openai' so no existing
+  // account changes provider without an explicit flip.
+  aiProvider                  String        @default("openai")
+
   // ── Safety: distress / crisis detection ───────────────────────
   // True by default. Cannot be toggled via the Persona Editor UI —
   // this is a safety feature, not a preference. Only an admin with
@@ -1648,6 +1658,19 @@ model AISuggestion {
 
   // Training phase context
   generatedDuringTrainingPhase Boolean @default(false)  // Snapshot: was account in ONBOARDING?
+
+  // Model + cost tracking (added 2026-04-24 with Sonnet-4.6 rollout)
+  // modelUsed is the final provider/model that produced the shipped
+  // text. On Anthropic fallback → OpenAI we set 'gpt-4o-mini-fallback'.
+  // Token counts are SUMMED across voice-gate retries — if the model
+  // was called 3 times before passing, these hold totals for all three.
+  // cache_* fields only populate on Anthropic paths with prompt
+  // caching active (always on for Sonnet 4.6 path).
+  modelUsed                    String?
+  inputTokens                  Int?
+  outputTokens                 Int?
+  cacheReadTokens              Int?
+  cacheCreationTokens          Int?
 
   // Multi-bubble delivery. When the LLM emitted messages[] the full
   // array lives here (ordered). bubbleCount mirrors length. Override
