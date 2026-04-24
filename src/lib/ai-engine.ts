@@ -2022,12 +2022,30 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     /\b(can'?t eat|can'?t pay rent|can'?t pay bills|struggling to survive)\b/i;
   const capitalAccessIssue =
     /\b(can'?t\s+fund\s+(my\s+|the\s+)?account|business\s+(is\s+)?(failing|failed|going\s+under|closing\s+down)|my\s+business\s+(is\s+)?(failing|failed|down|going\s+under|closing)|geopolitical\s+(restrictions?|issues?)|can'?t\s+transfer\s+(money|funds|anything)|under\s+sanctions?|sanctioned\s+(country|region)|economic\s+sanctions?|bank\s+(blocks?|blocked\s+me|won'?t\s+let\s+me)|my\s+country\s+(is\s+)?sanctioned|payment\s+(blocked|restricted|frozen))\b/i;
+  // (f) "Need time to raise / working on it" — explicit present-tense
+  // "I don't have it now, will need to build it up". Selorm Benjamin
+  // Workey 2026-04-24: "Honestly, I've lost so much in this few days
+  // and I will need sometime to raise that fund bro" — the old parser
+  // hit the default fallback and returned `ambiguous no_pattern_matched`,
+  // which kept the lead out of the disqualifier path. These phrases
+  // are unambiguously "not right now" — route to downsell, don't ask
+  // a clarifying question.
+  const needTimeToRaise =
+    /\b(need\s+(some\s+)?time\s+to\s+(raise|save|get|build(\s+up)?|come\s+up\s+with)|will\s+(need|have)\s+to\s+(raise|save|build(\s+up)?)|need\s+to\s+(raise|save|build(\s+up)?)\s+(that|the|some|enough|more|up\s+the)?\s*(fund(s)?|capital|money|amount|cash)|working\s+on\s+(raising|saving|getting|building(\s+up)?)\s+(it|the|that|the\s+capital|the\s+money|the\s+funds?)|don'?t\s+have\s+(it|that|the\s+money|the\s+capital)\s+(right\s+)?now\s+but|gotta\s+(save|raise|build)\s+(up\s+)?(first|the\s+(money|capital|funds?)))\b/i;
+  // (g) "Lost what I had" — trader just lost their capital in recent
+  // trading. Distinct from noCapital which covers "never had any" /
+  // current broke state. This catches "I've lost so much in this few
+  // days", "blew up my account", etc.
+  const lostCapital =
+    /\b(lost\s+(so\s+much|a\s+lot|everything|it\s+all|my\s+money|my\s+capital|all\s+my\s+(money|capital|funds|savings?))|blew\s+up\s+(my|the)\s+account|wiped\s+(out\s+)?(my|the)\s+account|account'?s?\s+(been\s+)?blown|drained\s+my\s+account)\b/i;
   if (
     noCapital.test(text) ||
     jobless.test(text) ||
     desperation.test(text) ||
     cantAffordBasics.test(text) ||
-    capitalAccessIssue.test(text)
+    capitalAccessIssue.test(text) ||
+    needTimeToRaise.test(text) ||
+    lostCapital.test(text)
   ) {
     return { kind: 'disqualifier', amount: 0 };
   }
