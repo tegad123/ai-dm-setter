@@ -1015,6 +1015,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 // ---------------------------------------------------------------------------
 
 const SONNET_46_MODEL = 'claude-sonnet-4-6';
+// Default main-generation model for all OpenAI-routed accounts. GPT-5.4
+// mini: accepts temp=0.85 + JSON response_format, requires
+// max_completion_tokens (handled in callOpenAI). Swapped from
+// gpt-4o-mini 2026-04-24 after the Sonnet 4.6 watch.
+const OPENAI_DEFAULT_MODEL = 'gpt-5.4-mini';
 
 async function resolveAIProvider(accountId: string): Promise<{
   provider: 'openai' | 'anthropic';
@@ -1035,7 +1040,7 @@ async function resolveAIProvider(accountId: string): Promise<{
   const openaiKey =
     (openaiCreds?.apiKey as string | undefined) ?? process.env.OPENAI_API_KEY;
   const openaiModel =
-    (openaiCreds?.model as string | undefined) || 'gpt-4o-mini';
+    (openaiCreds?.model as string | undefined) || OPENAI_DEFAULT_MODEL;
 
   const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
   const anthropicKey =
@@ -1055,15 +1060,11 @@ async function resolveAIProvider(accountId: string): Promise<{
     };
   }
 
-  // Default path: current credential-based resolution, unchanged.
+  // Default path: current credential-based resolution.
   if (openaiCreds?.apiKey) {
     return {
       provider: 'openai',
       apiKey: openaiCreds.apiKey as string,
-      // Default to gpt-4o-mini — ~16x cheaper than gpt-4o and the voice
-      // quality gate + heavy prompt scaffolding absorb the capability
-      // delta well enough. Accounts that want gpt-4o can set it explicitly
-      // in their credential record.
       model: openaiModel
     };
   }
@@ -1082,7 +1083,9 @@ async function resolveAIProvider(accountId: string): Promise<{
   const apiKey = provider === 'anthropic' ? anthropicKey : openaiKey;
   const model =
     process.env.AI_MODEL ||
-    (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
+    (provider === 'anthropic'
+      ? 'claude-sonnet-4-20250514'
+      : OPENAI_DEFAULT_MODEL);
 
   return { provider: provider as 'openai' | 'anthropic', apiKey, model };
 }
@@ -1179,10 +1182,14 @@ async function callOpenAI(
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey });
 
+  // GPT-5 family rejects `max_tokens` — must use `max_completion_tokens`.
+  // gpt-4o-mini (the fallback) also accepts `max_completion_tokens`, so
+  // we route via it universally to keep one call shape regardless of
+  // which OpenAI model ends up here.
   const response = await client.chat.completions.create({
     model,
     temperature: 0.85,
-    max_tokens: 1500,
+    max_completion_tokens: 1500,
     // Force OpenAI to emit a valid JSON object. The system prompt already
     // demands JSON, but stacked directive blocks sometimes steered the
     // model into plain text — this guarantees the response parses.
@@ -1190,13 +1197,23 @@ async function callOpenAI(
     messages: [{ role: 'system', content: systemPrompt }, ...messages]
   });
 
+  // OpenAI caches long prompts (>1024 tokens) automatically — no
+  // request-side cache_control needed. `prompt_tokens_details.cached_tokens`
+  // exposes the hit count when caching is active. We map it onto the
+  // Anthropic-shaped LLMUsage so AISuggestion's cost columns stay
+  // uniform across providers.
+  const details = response.usage as {
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
+  const cached = details?.prompt_tokens_details?.cached_tokens ?? 0;
+
   return {
     text: response.choices[0]?.message?.content?.trim() || '',
     modelUsed: model,
     usage: {
       inputTokens: response.usage?.prompt_tokens ?? 0,
       outputTokens: response.usage?.completion_tokens ?? 0,
-      cacheReadTokens: 0,
+      cacheReadTokens: cached,
       cacheCreationTokens: 0
     }
   };
