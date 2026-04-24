@@ -1454,7 +1454,38 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       typeof obj.message === 'string' && obj.message.trim().length > 0
         ? obj.message
         : raw;
-    const messages: string[] = fromArray ?? [fromString];
+
+    // Auto-split fallback (daetradez 2026-04-24): even with the
+    // strengthened multi-bubble prompt block, gpt-5.4-mini (and the
+    // other gpt-5.x minis in testing) frequently ignore the messages[]
+    // instruction and emit thoughts joined by \n\n in a single
+    // "message" field — e.g. "damn bro, that's a real grind\n\ngotchu
+    // though, if you got 2k set aside you're in a decent spot\n\nhow
+    // soon are you tryna make the jump?". Splitting on double-newline
+    // here guarantees the delivery pipeline ships each thought as its
+    // own bubble regardless of whether the LLM obeyed the schema.
+    // Cap at MAX_BUBBLES_PER_GROUP so a runaway output doesn't ship
+    // eight bubbles. Only activates when the LLM did NOT provide a
+    // messages[] array — when it did, we trust its boundaries.
+    let messages: string[];
+    if (fromArray !== null) {
+      messages = fromArray;
+    } else {
+      const split: string[] = fromString
+        .split(/\n{2,}/)
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length >= MIN_BUBBLE_CHARS);
+      if (split.length >= 2) {
+        messages = split.slice(0, MAX_BUBBLES_PER_GROUP);
+        if (split.length > MAX_BUBBLES_PER_GROUP) {
+          console.warn(
+            `[ai-engine] parseAIResponse auto-split produced ${split.length} bubbles; capping at ${MAX_BUBBLES_PER_GROUP}`
+          );
+        }
+      } else {
+        messages = [fromString];
+      }
+    }
     const message = messages[0] ?? fromString;
 
     // Observability for the 2026-04-19 empty-message incident: if the

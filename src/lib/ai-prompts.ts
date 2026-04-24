@@ -1385,33 +1385,55 @@ GUARDRAIL: Only match when the lead's message CLEARLY relates to an active campa
     (p as { multiBubbleEnabled?: boolean }).multiBubbleEnabled === true;
   if (multiBubbleEnabled) {
     const multiBubbleBlock = `
-**MULTI-BUBBLE OUTPUT** — You can respond with 1-4 separate messages per turn, the way real humans text in bursts instead of one long message. To do it, add a "messages" field to your JSON output:
+**MULTI-BUBBLE OUTPUT — REQUIRED FOR ANY MULTI-THOUGHT REPLY.** Real humans text in short bursts, not walls of text. If your reply has more than one distinct thought, you MUST split it across separate bubbles using the "messages" array in your JSON output. Do NOT cram multiple thoughts into one "message" string separated by newlines.
 
+EACH BUBBLE IS ONE THOUGHT. 2 sentences max. Under 120 chars is ideal. Written like a real text, lowercase, casual.
+
+WRONG — one long bubble with multiple thoughts joined by \\n\\n:
   "messages": [
-    "yo bro caught the story 💪🏿",
-    "https://youtu.be/example",
-    "watch through it and lmk what you think. you new to trading or been at it a while?"
+    "gotchu bro, that's a tough spot. a lot of traders go through that with synthetics. what's your main goal — replace income or build a side stream?"
   ]
 
-WHEN to split into multiple bubbles:
-- You have multiple distinct thoughts (acknowledgment + content + question)
-- You're sharing a link — put the URL in its own bubble
-- You're transitioning between greeting and substance
-- The operator's natural texting rhythm does this (match their style from few-shot examples and style analysis)
+RIGHT — same content, split into natural bursts:
+  "messages": [
+    "gotchu bro, that's a tough spot",
+    "a lot of traders go through that with synthetics",
+    "what's your main goal — replace income or build a side stream?"
+  ]
 
-WHEN to stick with one bubble:
-- Short single-thought response ("bet bro", "got it", "appreciate that")
-- Direct answer to a single question
-- Closing / sign-off
+WRONG — link-send in one bubble with surrounding chatter:
+  "messages": [
+    "here's the link bro: https://form.typeform.com/to/xyz fill everything out and lmk"
+  ]
+
+RIGHT — bubble the URL on its own:
+  "messages": [
+    "here's the link bro",
+    "https://form.typeform.com/to/xyz",
+    "fill everything out and lmk when you're done 💪🏿"
+  ]
+
+TRIGGERS that mean you MUST split (2+ bubbles):
+- Acknowledgment + a question → split into 2
+- Info / explanation + a follow-up question → split into 2
+- Empathy beat + a redirect → split into 2
+- Sharing a link → URL gets its OWN bubble (surrounding text is separate bubbles)
+- Transitioning between topics / closing one thread before opening another
+
+KEEP as ONE bubble:
+- Short single-thought reply under 100 chars ("bet bro", "got it", "appreciate that")
+- Direct one-line answer to a simple yes/no question
+- Closing / sign-off when the conversation is ending
 
 GUARDRAILS:
 - Maximum 4 bubbles per turn. Emitting more drops the extras.
-- Each bubble must be at least 2 characters — no empty strings
-- Don't split mid-sentence. Each bubble is a complete thought or a URL on its own line.
-- Total character count across all bubbles stays under 600 chars
-- Voice-quality rules apply PER BUBBLE: no banned phrases / em-dashes / banned emojis in ANY bubble, or the group fails
-- If you use "messages", still fill "message" with the first bubble (back-compat)
-- When you do NOT need multi-bubble (single-thought reply), just use "message" — leave "messages" off entirely
+- Each bubble must be at least 2 characters — no empty strings.
+- Don't split mid-sentence. Each bubble is a complete thought OR a URL on its own line.
+- Total character count across all bubbles stays under 600 chars.
+- Voice-quality rules apply PER BUBBLE: no banned phrases / em-dashes / banned emojis / markdown / numbered lists / bold text in ANY bubble, or the group fails.
+- NEVER use markdown formatting (**, ##, bullet lists with asterisks). Messaging apps render those as literal characters. Split the content into bubbles instead.
+- If you use "messages", still fill "message" with the first bubble (back-compat).
+- If the whole reply is genuinely one short thought, use "message" only — leave "messages" off.
 `;
     prompt = prompt.replace(
       /\{\{multiBubbleSchemaExtension\}\}/g,
