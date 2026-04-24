@@ -56,7 +56,20 @@ interface UrgentDeliveryFailure {
   conversationIds: string[];
   latestFailureAt: string | null;
 }
-type UrgentItem = UrgentDistress | UrgentStuck | UrgentDeliveryFailure;
+interface UrgentSchedulingConflict {
+  type: 'scheduling_conflict';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  preference: string | null;
+  detectedAt: string | null;
+}
+type UrgentItem =
+  | UrgentDistress
+  | UrgentStuck
+  | UrgentDeliveryFailure
+  | UrgentSchedulingConflict;
 
 interface AttentionPaused {
   type: 'ai_paused';
@@ -235,6 +248,7 @@ function SectionLabel({ label, count }: SectionLabelProps) {
 type DismissibleActionType =
   | 'distress'
   | 'stuck'
+  | 'scheduling_conflict'
   | 'ai_paused'
   | 'capital_verification'
   | 'upcoming_call'
@@ -480,6 +494,29 @@ function renderUrgent(
             </span>
           }
           meta={relativeTime(item.latestFailureAt, now)}
+        />
+      );
+    case 'scheduling_conflict':
+      return (
+        <ActionRow
+          key={`sched-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconPhoneCall}
+          iconClassName='text-red-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — needs manual scheduling
+                {item.preference ? `. Available: ${item.preference}` : ''}
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.detectedAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'scheduling_conflict')
+          }
         />
       );
   }

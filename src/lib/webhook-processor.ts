@@ -870,6 +870,70 @@ export async function processIncomingMessage(
     );
   }
 
+  // ── Step 3b: Scheduling-conflict detection ─────────────────────
+  // Only fires when the lead has ALREADY filled out the Typeform (i.e.
+  // stage=CALL_PROPOSED and no scheduledCallAt yet). Detects "can't
+  // make it", "available Sunday", "move to Monday" style messages the
+  // AI can't resolve — no calendar access, no ability to re-book.
+  // Flags the conversation + fires a CRITICAL escalation (in-app
+  // Notification + email to Account.notificationEmail if set) so a
+  // human can confirm the alternate slot within minutes, not hours.
+  // Idempotent: once schedulingConflict=true, we don't re-fire on
+  // subsequent lead messages — operator responds manually.
+  try {
+    if (
+      lead.stage === 'CALL_PROPOSED' &&
+      lead.conversation &&
+      !lead.conversation.scheduledCallAt &&
+      !lead.conversation.schedulingConflict
+    ) {
+      const { detectSchedulingConflict } = await import(
+        '@/lib/scheduling-conflict-detector'
+      );
+      const conflict = detectSchedulingConflict(messageText);
+      if (conflict.detected) {
+        console.warn(
+          `[webhook-processor] scheduling_conflict detected on ${conversationId} — label=${conflict.label} match="${conflict.match}" preference=${JSON.stringify(conflict.preference)}`
+        );
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            schedulingConflict: true,
+            schedulingConflictAt: now,
+            schedulingConflictMessageId: message.id,
+            schedulingConflictPreference: conflict.preference
+          }
+        });
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          : undefined;
+        const prefLine = conflict.preference
+          ? `They're available: ${conflict.preference}.\n`
+          : '';
+        const quote =
+          messageText.length > 220
+            ? messageText.slice(0, 220) + '…'
+            : messageText;
+        await escalate({
+          type: 'scheduling_conflict',
+          accountId,
+          leadId: lead.id,
+          conversationId,
+          title: `Lead needs manual scheduling — ${lead.name}`,
+          body: `${lead.name} (@${lead.handle}) filled out the application but can't make the available times.\n\n${prefLine}Their message: "${quote}"\n\nThis lead needs a human to reach out and confirm a time.`,
+          link
+        });
+      }
+    }
+  } catch (schedErr) {
+    console.error(
+      '[webhook-processor] scheduling-conflict detection threw (non-fatal):',
+      schedErr
+    );
+  }
+
   // ── Step 4: Back-fill effectiveness tracking on previous AI messages
   await backfillEffectivenessTracking(conversationId).catch((err) =>
     console.error('[webhook-processor] Effectiveness tracking error:', err)

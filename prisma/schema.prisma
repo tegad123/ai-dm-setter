@@ -220,6 +220,19 @@ model Account {
   // account changes provider without an explicit flip.
   aiProvider                  String        @default("openai")
 
+  // ── External escalation notifications ─────────────────────────
+  // Out-of-app notifications fired when the AI hits a wall only a
+  // human can resolve (scheduling conflict post-Typeform, distress
+  // signal, lead stuck 24h+, AI stuck/3-retry-exhausted). Dashboard
+  // Action Required is the primary surface; this email is the backup
+  // that reaches the operator outside the app.
+  notificationEmail                 String?
+  notifyOnSchedulingConflict        Boolean @default(true)
+  notifyOnDistress                  Boolean @default(true)
+  notifyOnStuckLead                 Boolean @default(true)
+  notifyOnAIStuck                   Boolean @default(true)
+  notifyOnAllAIPauses               Boolean @default(false)
+
   // ── Safety: distress / crisis detection ───────────────────────
   // True by default. Cannot be toggled via the Persona Editor UI —
   // this is a safety feature, not a preference. Only an admin with
@@ -805,6 +818,19 @@ model Conversation {
   distressDetected     Boolean   @default(false)
   distressDetectedAt   DateTime?
   distressMessageId    String?
+
+  // ── Scheduling conflict ───────────────────────────────────────
+  // Set when a lead with a filled Typeform (stage=CALL_PROPOSED)
+  // expresses a scheduling conflict the AI can't resolve — no
+  // calendar access, need human to book. Surfaced as URGENT on the
+  // Action Required dashboard + fires an external email to
+  // Account.notificationEmail. `schedulingConflictPreference` holds
+  // any parsed day/time signal the lead gave so the operator can
+  // confirm quickly.
+  schedulingConflict          Boolean   @default(false)
+  schedulingConflictAt        DateTime?
+  schedulingConflictMessageId String?
+  schedulingConflictPreference String?
 
   // ── Per-conversation auto-send override ───────────────────────
   // When true, this specific conversation auto-sends even if the

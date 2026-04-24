@@ -828,8 +828,54 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // PRIORITY 1.D — scheduling conflicts (lead filled Typeform, can't
+    // make available times). CRITICAL — operator needs to manually
+    // confirm an alternate slot. Shown above stuck-conversation items
+    // in the urgent bucket.
+    const schedulingConflictRows = await safe(
+      prisma.conversation.findMany({
+        where: {
+          ...accountConvFilter,
+          schedulingConflict: true,
+          scheduledCallAt: null,
+          schedulingConflictAt: {
+            gte: new Date(now.getTime() - RECENT_ACTIVITY_MS)
+          }
+        },
+        select: {
+          id: true,
+          schedulingConflictAt: true,
+          schedulingConflictPreference: true,
+          lead: { select: { id: true, name: true, handle: true } }
+        },
+        orderBy: { schedulingConflictAt: 'desc' }
+      }),
+      [] as Array<{
+        id: string;
+        schedulingConflictAt: Date | null;
+        schedulingConflictPreference: string | null;
+        lead: { id: string; name: string; handle: string };
+      }>
+    );
+    const urgentSchedulingConflicts = schedulingConflictRows
+      .filter((c) => !isDismissed(c.id, 'scheduling_conflict'))
+      .map((c) => ({
+        type: 'scheduling_conflict' as const,
+        conversationId: c.id,
+        leadId: c.lead.id,
+        leadName: c.lead.name,
+        leadHandle: c.lead.handle,
+        preference: c.schedulingConflictPreference,
+        detectedAt: c.schedulingConflictAt?.toISOString() ?? null
+      }));
+
     return NextResponse.json({
-      urgent: [...urgentDistress, ...urgentStuck, ...urgentDeliveryFailures],
+      urgent: [
+        ...urgentDistress,
+        ...urgentSchedulingConflicts,
+        ...urgentStuck,
+        ...urgentDeliveryFailures
+      ],
       attention: [
         ...attentionPaused,
         ...attentionCapital,
