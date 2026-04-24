@@ -877,13 +877,30 @@ export async function processIncomingMessage(
 
   // ── Step 5: Re-engage LEFT_ON_READ conversations ───────────────
   const currentOutcome = lead.conversation?.outcome;
-  if (currentOutcome === 'LEFT_ON_READ') {
+  if (currentOutcome === 'LEFT_ON_READ' || currentOutcome === 'DORMANT') {
     await prisma.conversation.update({
       where: { id: conversationId },
       data: { outcome: 'ONGOING' }
     });
     console.log(
-      `[webhook-processor] Re-engaged LEFT_ON_READ conversation: ${conversationId}`
+      `[webhook-processor] Re-engaged ${currentOutcome} conversation: ${conversationId}`
+    );
+  }
+
+  // ── Cancel pending silent-lead follow-ups ──────────────────────
+  // Lead just responded — any scheduled FOLLOW_UP_* or
+  // BOOKING_LINK_FOLLOWUP row is no longer needed. Cancelling here
+  // (rather than at cron fire-time) avoids the "cron picks up row,
+  // sees fresh lead reply, has to decide what to do" race.
+  try {
+    const { cancelAllPendingFollowUps } = await import(
+      '@/lib/follow-up-sequence'
+    );
+    await cancelAllPendingFollowUps(conversationId);
+  } catch (err) {
+    console.error(
+      '[webhook-processor] cancelAllPendingFollowUps failed (non-fatal):',
+      err
     );
   }
 
@@ -2567,6 +2584,73 @@ async function sendAIReply(
     return;
   }
 
+  // ── Ship-time link-promise-without-url guard (P0) ─────────────
+  // Parallel to the bracketed-placeholder guard. Voice-quality-gate
+  // and ai-engine's retry-exhaustion branch SHOULD catch this at
+  // generation time (escalateToHuman=true), but that flag is
+  // handled AFTER the platform send downstream — meaning an
+  // unshippable link-promise reply still ships. This is the
+  // Jonathan Frimpong 2026-04-23 incident: AI said "i'm gonna send
+  // you the link to apply for the call with Anthony" with no URL,
+  // gate flagged it, retries exhausted, escalateToHuman=true set,
+  // yet the message shipped anyway and the lead sat waiting.
+  //
+  // Uses the same regex family as voice-quality-gate.ts's
+  // LINK_PROMISE_PATTERNS + containsUrl check. If any bubble
+  // announces a link-send but no URL is anywhere in the joined
+  // group, block the send.
+  const LINK_PROMISE_AT_SHIP: RegExp[] = [
+    /\b(i'?ll|lemme|let\s+me|gonna|going\s+to|about\s+to|i'?m\s+(gonna|going\s+to|about\s+to))\s+(send|drop|shoot|share|grab|get)\s+(you\s+)?(the\s+|a\s+|this\s+|your\s+|my\s+)?(link|url|application|typeform|form|booking\s+link|booking\s+url)\b/i,
+    /\b(sending|dropping|shooting|sharing|grabbing)\s+(you\s+)?(the\s+|a\s+|this\s+|your\s+|my\s+)?(link|url|application|typeform|form|booking\s+link|booking\s+url)\b/i,
+    /\bhere'?s\s+(the\s+|a\s+|your\s+|my\s+)?(link|url|application|booking\s+link|typeform|form)\b/i,
+    /\b(send|drop|shoot)\s+you\s+the\s+link\b/i
+  ];
+  const joinedAtShip = bubblesForEmptyCheck
+    .filter((b): b is string => typeof b === 'string')
+    .join(' ');
+  const hasUrlAtShip = /\bhttps?:\/\/\S+|\bwww\.\S+\.\S+/i.test(joinedAtShip);
+  const linkPromiseMatch = !hasUrlAtShip
+    ? LINK_PROMISE_AT_SHIP.map((pat) => joinedAtShip.match(pat)).find(
+        (m) => m !== null
+      )
+    : null;
+  if (linkPromiseMatch) {
+    console.error(
+      `[webhook-processor] link_promise_without_url_at_ship for conv ${conversationId} — AI output announced "${linkPromiseMatch[0]}" but no URL is present. Pausing AI, notifying operator, no platform send.`
+    );
+    try {
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.notification.create({
+        data: {
+          accountId: lead.accountId,
+          type: 'SYSTEM',
+          title:
+            'AI promised a link without including URL — human takeover required',
+          body: `${lead.name} (@${lead.handle}): the AI's last generation announced sending a link ("${linkPromiseMatch[0]}") but did not include the actual URL. Lead would be left waiting. AI is now paused on this conversation. Please review and send the correct link manually.`,
+          leadId: lead.id
+        }
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Link-promise-without-url escalation bookkeeping failed (non-fatal):',
+        err
+      );
+    }
+    return;
+  }
+
   // ── Dedup safety net ──────────────────────────────────────────
   // Last-line defense against near-duplicate sends that slip through the
   // debounce + cancel-pending + 25s recency guard. Uses the shared
@@ -3091,6 +3175,49 @@ async function sendAIReply(
   console.log(
     `[webhook-processor] AI reply sent for conversation ${conversationId} | stage: ${result.stage}`
   );
+
+  // ── Silent-lead follow-up sequence + booking-link check-in ─────
+  // After a successful AI ship, we schedule two independent things:
+  //
+  //   1. FOLLOW_UP_1 in 12h. If the lead stays silent, the cron fires
+  //      FOLLOW_UP_1 and cascades FOLLOW_UP_2 / _3 / _SOFT_EXIT. Any
+  //      incoming LEAD message cancels the chain via
+  //      cancelAllPendingFollowUps (called in processIncomingMessage).
+  //   2. BOOKING_LINK_FOLLOWUP in 30min — only when the shipped text
+  //      contains the Typeform booking URL. "did you get a chance to
+  //      fill that out?"
+  //
+  // Gated on "shipped ok": we look at the conversation's latest message
+  // and only schedule if it's AI, recent, and matches the reply content.
+  // This avoids scheduling when every send path above bailed (token
+  // invalid, voice note blocked, etc.) — in those cases the Message row
+  // was either never created or already deleted.
+  try {
+    const latestAfterShip = await prisma.message.findFirst({
+      where: { conversationId, sender: 'AI' },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, content: true, timestamp: true }
+    });
+    const shippedRecently =
+      latestAfterShip &&
+      Date.now() - latestAfterShip.timestamp.getTime() < 60_000;
+    if (shippedRecently) {
+      const {
+        scheduleFollowUp1AfterAiMessage,
+        containsBookingLink,
+        scheduleBookingLinkFollowup
+      } = await import('@/lib/follow-up-sequence');
+      await scheduleFollowUp1AfterAiMessage(conversationId, lead.accountId);
+      if (containsBookingLink(latestAfterShip.content)) {
+        await scheduleBookingLinkFollowup(conversationId, lead.accountId);
+      }
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] follow-up scheduling failed (non-fatal):',
+      err
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

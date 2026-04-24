@@ -121,6 +121,7 @@ enum ConversationOutcome {
   SOFT_OBJECTION
   PRICE_QUESTION_DEFLECTED
   SOFT_EXIT
+  DORMANT
 }
 
 enum LeadIntentTag {
@@ -1242,6 +1243,11 @@ enum ScheduledMessageType {
   WINDOW_KEEPALIVE
   RE_ENGAGEMENT
   CUSTOM
+  FOLLOW_UP_1
+  FOLLOW_UP_2
+  FOLLOW_UP_3
+  FOLLOW_UP_SOFT_EXIT
+  BOOKING_LINK_FOLLOWUP
 }
 
 enum ScheduledMessageStatus {

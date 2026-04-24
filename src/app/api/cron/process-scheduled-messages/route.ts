@@ -8,6 +8,8 @@ import {
   broadcastConversationUpdate
 } from '@/lib/realtime';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
+import { scheduleNextInCascade } from '@/lib/follow-up-sequence';
+import { transitionLeadStage } from '@/lib/lead-stage';
 import { NextRequest, NextResponse } from 'next/server';
 import type { LeadContext } from '@/lib/ai-prompts';
 
@@ -219,6 +221,43 @@ async function fireScheduledMessage(
     return 'skipped_ai_inactive';
   }
 
+  // Guardrail for silent-lead cascade + booking-link follow-up.
+  // If the lead replied between row creation and this firing, the
+  // cancellation hook in processIncomingMessage SHOULD have flipped
+  // the row to CANCELLED before we got here — but there's a window
+  // where cron picks up + locks before the LEAD message hits DB.
+  // Double-check: if any LEAD message arrived after the row was
+  // created, the cascade is moot.
+  if (
+    row.messageType === 'FOLLOW_UP_1' ||
+    row.messageType === 'FOLLOW_UP_2' ||
+    row.messageType === 'FOLLOW_UP_3' ||
+    row.messageType === 'FOLLOW_UP_SOFT_EXIT' ||
+    row.messageType === 'BOOKING_LINK_FOLLOWUP'
+  ) {
+    const freshLeadReply = await prisma.message.findFirst({
+      where: {
+        conversationId: conversation.id,
+        sender: 'LEAD',
+        timestamp: { gt: row.createdAt }
+      },
+      select: { id: true }
+    });
+    if (freshLeadReply) {
+      console.log(
+        `[cron/scheduled-messages] ${row.id}: lead replied since row created — cancelling ${row.messageType}`
+      );
+      await prisma.scheduledMessage.update({
+        where: { id: row.id },
+        data: {
+          status: 'CANCELLED',
+          lastError: 'lead_replied_since_scheduling'
+        }
+      });
+      return 'skipped_ai_inactive';
+    }
+  }
+
   let messageBody = row.messageBody;
 
   // Generate fresh at fire time if requested
@@ -354,5 +393,49 @@ async function fireScheduledMessage(
   console.log(
     `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} (${lead.platform}/${lead.name})`
   );
+
+  // ── Silent-lead cascade bookkeeping ──────────────────────────────
+  // After FOLLOW_UP_1/2/3 fires, schedule the next step in the chain
+  // (12h out). After FOLLOW_UP_SOFT_EXIT fires, mark the conversation
+  // DORMANT and transition the lead to GHOSTED — the sequence is
+  // terminal, no more outbound touches on this convo until the lead
+  // re-engages (which cancels via cancelAllPendingFollowUps).
+  if (
+    row.messageType === 'FOLLOW_UP_1' ||
+    row.messageType === 'FOLLOW_UP_2' ||
+    row.messageType === 'FOLLOW_UP_3'
+  ) {
+    try {
+      await scheduleNextInCascade(
+        conversation.id,
+        lead.accountId,
+        row.messageType
+      );
+    } catch (err) {
+      console.error(
+        `[cron/scheduled-messages] cascade-next scheduling failed for ${row.id}:`,
+        err
+      );
+    }
+  } else if (row.messageType === 'FOLLOW_UP_SOFT_EXIT') {
+    try {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { outcome: 'DORMANT' }
+      });
+      await transitionLeadStage(
+        lead.id,
+        'GHOSTED',
+        'system',
+        'silent-lead cascade exhausted (FOLLOW_UP_SOFT_EXIT fired)'
+      );
+    } catch (err) {
+      console.error(
+        `[cron/scheduled-messages] DORMANT marking failed for ${row.id}:`,
+        err
+      );
+    }
+  }
+
   return 'sent';
 }
