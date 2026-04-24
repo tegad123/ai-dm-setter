@@ -382,7 +382,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let qualityGateAttempts = 0;
   let finalQualityScore: number | null = null;
   let qualityGatePassedFirstAttempt = false;
-  let systemPromptForLLM = systemPrompt;
+
+  // UNQUALIFIED post-exit guard (Kelvin Kelvot 2026-04-24 incident).
+  // When lead.stage is already UNQUALIFIED, the AI shouldn't continue
+  // qualifying — the conversation has concluded. Valid follow-ups are
+  // narrow: repeat the downsell pitch if the lead re-engaged, send the
+  // free-resource YouTube link, or soft-exit. Without this block the
+  // LLM drifts back into trading-strategy questions and keeps the
+  // conversation going like nothing happened.
+  const unqualifiedGuard =
+    leadContext.status === 'UNQUALIFIED'
+      ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been marked UNQUALIFIED (insufficient capital confirmed earlier in the thread). The sales conversation is effectively over. Your ONLY valid next actions are:\n  (a) Repeat the downsell pitch (lower-ticket course / funding partner) if the lead is re-engaging on that.\n  (b) Send the free-resource YouTube link per the script if they ask for help.\n  (c) Soft-exit with dignity — "when you're in a better spot hit me up" style.\nDo NOT ask trading strategy questions. Do NOT give market advice. Do NOT continue qualification (no Goal/Why, Urgency, Soft Pitch, Financial). Do NOT invite them to book a call. Do NOT send the Typeform / application link. The qualification flow is DONE. A short, warm, non-coaching reply is the correct output.\n=====`
+      : '';
+  // baseSystemPrompt always carries the unqualified guard when relevant.
+  // Retry-loop override assignments below use this as their base so the
+  // guard doesn't get stripped when a more-specific override (R24, Fix B,
+  // fabrication, ack-truncation, link-promise, markdown) fires.
+  const baseSystemPrompt = systemPrompt + unqualifiedGuard;
+  let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
     blocked: false,
@@ -545,7 +562,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             r24LastResult.parsedAmount !== null
               ? `$${r24LastResult.parsedAmount.toLocaleString('en-US')}`
               : 'an amount below the threshold';
-          let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Do NOT route to booking. Your next reply MUST pivot to the script's downsell / funding-partner branch — acknowledge their capital situation empathetically (no judgment, no lecture), then present the alternative path their script provides (a lower-ticket course, a funding-partner option, or a free YouTube/resource redirect). Do NOT send booking-handoff messaging, do NOT suggest the Typeform / application form, do NOT say "the team will reach out". If your script doesn't have a downsell, send a soft-exit message that keeps the door open for when they're in a better financial position.`;
+          let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Your ONLY valid next action is the DOWNSELL PITCH. Do NOT ask more trading questions. Do NOT ask what they're working on. Do NOT give market / strategy advice. Do NOT route to booking. Do NOT send the Typeform / application form. Do NOT say "the team will reach out". Do NOT re-ask the capital question.\n\nFire the script's Step 9 "Not Qualified" branch NOW: acknowledge their situation in one short line (no judgment, no lecture), then present the lower-ticket course / downsell from the script ("my $497 Session Liquidity Model course breaks it down — same strategy, you learn on your own pace while you build capital" style). Wait for their answer to the downsell before any further routing. If your script has no downsell, send a soft-exit message that keeps the door open. Continuing the qualification dialogue after a confirmed capital miss is the exact failure mode this rule exists to prevent.`;
 
           // GEOGRAPHY GATE — funding-partner programs only onboard
           // US/CA leads. When the lead is elsewhere, strip the
@@ -580,7 +597,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
-      systemPromptForLLM = systemPrompt + r24Override;
+      systemPromptForLLM = baseSystemPrompt + r24Override;
       console.warn(
         `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'}`
       );
@@ -616,7 +633,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
       const fixBDirective = `Your previous reply attempted to advance this conversation toward a call pitch, booking, or resource handoff — but the lead has NOT yet confirmed they have at least ${thresholdStr} in capital available to start. You MUST regenerate. Your next reply MUST ask the capital verification question before pitching the call, application, or any next step. Use the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") — whichever fits your voice. Do NOT pitch the call or drop any link until the lead confirms an amount. This was detected at LLM stage=${parsed.stage || 'unknown'}, sub_stage=${parsed.subStage ?? 'null'} — so your internal stage labeling is not enough: you must actually ask the question before any advancement language.`;
       const fixBOverride = `\n\n===== CRITICAL CAPITAL-VERIFICATION OVERRIDE (Fix B) =====\n${fixBDirective}\n=====`;
-      systemPromptForLLM = systemPrompt + fixBOverride;
+      systemPromptForLLM = baseSystemPrompt + fixBOverride;
       console.warn(
         `[ai-engine] Fix B gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${fixBResult.reason} stage=${parsed.stage} sub=${parsed.subStage ?? 'null'}`
       );
@@ -650,7 +667,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
       const fabricationDirective = `CRITICAL: You claimed a call or meeting is happening or about to happen, but NO call has been booked in the system. There is no zoom link being sent. No one is standing by on a call. The system does NOT auto-book calls.\n\nYour reply must ONLY instruct the lead to use the booking link to schedule a time themselves. Do NOT claim:\n- Anyone is about to join a call or is on the call\n- A zoom link is being sent or is on the way\n- A calendar invite is coming through or in their email\n- The lead is "all set" or "locked in"\n\nCorrect framing: "the team handles scheduling on their end, they'll reach out with the call details" OR "go ahead and grab a time that works for you with the link above, you'll get a confirmation when you book".`;
       const fabricationOverride = `\n\n===== CRITICAL BOOKING-FABRICATION OVERRIDE =====\n${fabricationDirective}\n=====`;
-      systemPromptForLLM = systemPrompt + fabricationOverride;
+      systemPromptForLLM = baseSystemPrompt + fabricationOverride;
       console.warn(
         `[ai-engine] Booking fabrication BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${fabricationResult.reason} content="${parsed.message.slice(0, 120)}"`
       );
@@ -698,7 +715,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
       if (ackTruncationFailed) {
         const ackOverride = `\n\n===== ACKNOWLEDGMENT-ONLY TRUNCATION OVERRIDE =====\nYour previous response was just an acknowledgment — it did not include a qualifying question, so the lead has nothing to respond to and the conversation stalls. You MUST regenerate. Your next "message" field MUST contain BOTH the acknowledgment AND a forward-moving qualifying question in the SAME single "message" string. Multi-line is fine — use line breaks between acknowledgment, any URL, and the question. Do NOT write "Message 1 / Message 2 / Message 3" — the schema is one "message" field; if you only put the acknowledgment there, that is literally all the lead sees.\n=====`;
-        systemPromptForLLM = systemPrompt + ackOverride;
+        systemPromptForLLM = baseSystemPrompt + ackOverride;
         console.warn(
           `[ai-engine] CTA acknowledgment-only truncation detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
@@ -715,7 +732,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
       if (linkPromiseFailed) {
         const linkOverride = `\n\n===== LINK-PROMISE-WITHOUT-URL OVERRIDE =====\nYour previous reply announced sending a link ("I'll send you the link" / "here's the link" / "sending you the link" / etc.) but did NOT include the actual URL. The lead is now waiting with nothing to click. You MUST regenerate. Your next reply MUST include the EXACT URL from the script's "Available Links & URLs" section inline with your message. Do NOT say you'll send a link and then fail to include it. The URL IS the delivery — the words around it are just framing. Put the URL on its own line or inline: "here's the link: <URL>" / "grab a time that works for you: <URL>" / "<URL> fill it out and lmk when done". The URL must be a real https:// link from the script, not a placeholder like [LINK] or [BOOKING LINK].\n=====`;
-        systemPromptForLLM = systemPrompt + linkOverride;
+        systemPromptForLLM = baseSystemPrompt + linkOverride;
         console.warn(
           `[ai-engine] Link promise without URL detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
@@ -732,7 +749,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
       if (markdownFailed) {
         const markdownOverride = `\n\n===== NO MARKDOWN — USE MESSAGES ARRAY =====\nYour previous reply used markdown formatting (numbered list with **bold** headers, or multiple **bold** markers, or ## headers). Messaging apps do NOT render markdown — the lead literally sees "1. **Choose a program** — ..." with the asterisks. You MUST regenerate with NO markdown characters at all: no **, no ##, no numbered lists with bold headers, no bullet stars.\n\nInstead, split the content across separate bubbles via the messages[] array. Each bubble is its own short casual message — 1-2 sentences max, no markdown, no list formatting. Example:\n  messages: [\n    "funding convo's a whole other thing bro",\n    "not my lane to walk through prop firm rules — too much changes",\n    "the funded account flow we use gets broken down on the call with Anthony"\n  ]\nKeep each bubble punchy, casual, lowercase. Natural texting cadence — not a numbered how-to guide. If the answer genuinely needs structure, use 2-4 short bubbles, never a formatted list in one message.\n=====`;
-        systemPromptForLLM = systemPrompt + markdownOverride;
+        systemPromptForLLM = baseSystemPrompt + markdownOverride;
         console.warn(
           `[ai-engine] Markdown-in-single-bubble detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
@@ -2278,19 +2295,23 @@ async function checkR24Verification(
     };
   }
   // Classify each candidate answer; prefer the STRONGEST signal.
-  // Strongest = amount (any number wins). Next = affirmative.
-  // Next = disqualifier. Fallback = hedging / ambiguous from the
-  // LATEST message (most recent intent).
+  // amount (concrete number) wins everything. When both an affirmative
+  // AND a disqualifier appear in the same burst — classic "Yes /
+  // actually No / I don't have it right now" pattern (Kelvin Kelvot
+  // 2026-04-24 incident) — the DISQUALIFIER wins. Leads reflex-type
+  // "yes" then correct themselves; the correction is the truth, and
+  // routing a lead with no money to the booking handoff is far costlier
+  // than asking a second clarifying question. If only one signal is
+  // present, its own priority governs as usual.
   const classifications = mergedAnswers.map((m) => ({
     msg: m,
     cls: parseLeadCapitalAnswer(m.content)
   }));
-  // Find the highest-priority classification across all messages.
-  // amount → affirmative → disqualifier → hedging → ambiguous.
+  // amount > disqualifier > affirmative > hedging > ambiguous.
   const priority: Record<string, number> = {
     amount: 5,
-    affirmative: 4,
-    disqualifier: 3,
+    disqualifier: 4,
+    affirmative: 3,
     hedging: 2,
     ambiguous: 1
   };

@@ -1581,7 +1581,7 @@ export async function scheduleAIReply(
       });
       const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
       const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
-      const debounceSec = Math.max(0, accountRow?.debounceWindowSeconds ?? 45);
+      let debounceSec = Math.max(0, accountRow?.debounceWindowSeconds ?? 45);
       const maxDebounceSec = Math.max(
         debounceSec,
         accountRow?.maxDebounceWindowSeconds ?? 120
@@ -1593,8 +1593,37 @@ export async function scheduleAIReply(
       const lastAiMsg = await prisma.message.findFirst({
         where: { conversationId, sender: 'AI' },
         orderBy: { timestamp: 'desc' },
-        select: { timestamp: true }
+        select: { timestamp: true, content: true }
       });
+
+      // Capital-question debounce floor (Kelvin Kelvot 2026-04-24 incident):
+      // if the previous AI message asked for capital, give the lead 10s
+      // minimum to send a burst like "Yes / actually No / I don't have
+      // it". Otherwise the debounce-by-message cancellation can still
+      // lose the correction if the account's default debounceWindow is
+      // short. Extending the floor (not the cap) so custom account
+      // settings still apply when they're longer.
+      const CAPITAL_Q_PATTERNS: RegExp[] = [
+        /\byou got at least \$\d/i,
+        /\byou have at least \$\d/i,
+        /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
+        /\bcapital ready\b/i,
+        /\bready to start with \$/i,
+        /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))/i,
+        /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))/i
+      ];
+      const lastAiIsCapitalQ =
+        lastAiMsg?.content &&
+        CAPITAL_Q_PATTERNS.some((re) => re.test(lastAiMsg.content));
+      if (lastAiIsCapitalQ) {
+        const CAPITAL_Q_MIN_DEBOUNCE_SEC = 10;
+        if (debounceSec < CAPITAL_Q_MIN_DEBOUNCE_SEC) {
+          console.log(
+            `[webhook-processor] capital-Q debounce floor applied: ${debounceSec}s → ${CAPITAL_Q_MIN_DEBOUNCE_SEC}s for conv ${conversationId}`
+          );
+          debounceSec = CAPITAL_Q_MIN_DEBOUNCE_SEC;
+        }
+      }
       const earliestLeadInBatch = await prisma.message.findFirst({
         where: {
           conversationId,
