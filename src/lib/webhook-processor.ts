@@ -2036,17 +2036,26 @@ export async function scheduleAIReply(
 // and any delivery notes (human-aborted, rate-limited, etc.).
 
 /**
- * Typing-time delay between bubbles. Roughly 30-50ms per character of
- * the NEXT bubble, plus a 200-800ms base "thinking" pause. Capped at
- * 4s so a 200-char bubble doesn't stall the conversation for 7s. The
- * per-character + random-base structure produces delays that feel like
- * someone typing, not a robot dumping messages on a fixed schedule.
+ * Inter-bubble delay. Simulates reading-then-typing cadence rather
+ * than a burst-send. Pre-2026-04-24 this returned 750-1500ms for a
+ * ~40-char bubble, which meant both bubbles landed with the same
+ * minute timestamp and read as "arrived together" to the lead.
+ *
+ * New math:
+ *   base reading delay: 8-15s (lead reads bubble N before N+1 shows up)
+ *   typing factor: 50-80ms per char of the NEXT bubble
+ * For a 40-char bubble: 8-15s + 2-3.2s = ~10-18s total.
+ * For an 80-char bubble: 8-15s + 4-6.4s = ~12-21s total.
+ *
+ * Capped at 25s — longer than that feels like the AI forgot what it
+ * was saying. These delays are ON TOP of the first-bubble
+ * humanResponseDelay that fires before bubble 1 leaves.
  */
 function calculateBubbleDelay(nextBubbleChars: number): number {
-  const baseTypingDelay = 200 + Math.random() * 600; // 200-800ms
-  const perCharFactor = 30 + Math.random() * 20; // 30-50ms per char
-  const charBasedDelay = nextBubbleChars * perCharFactor;
-  return Math.min(Math.round(baseTypingDelay + charBasedDelay), 4000);
+  const baseReadingDelay = 8000 + Math.random() * 7000; // 8-15s
+  const perCharFactor = 50 + Math.random() * 30; // 50-80ms per char
+  const typingDelay = nextBubbleChars * perCharFactor;
+  return Math.min(Math.round(baseReadingDelay + typingDelay), 25000);
 }
 
 function sleep(ms: number): Promise<void> {
