@@ -5,35 +5,55 @@ import { NextRequest, NextResponse } from 'next/server';
 // ---------------------------------------------------------------------------
 // GET / PATCH /api/settings/notification-prefs
 // ---------------------------------------------------------------------------
-// Out-of-app escalation preferences: where to email + which categories
-// opt into email. Per Account, account-scoped via requireAuth. Used by
-// the /dashboard/settings/notifications page.
+// Per-account notification preferences. Three groups:
+//   URGENT (in-app + email): distress, scheduling_conflict, ai_stuck
+//   ACTIVITY (in-app only): humanOverride, callBooked, hotLead,
+//                           bookingLimbo, noShow, closedDeal
+//   EMAIL REPORTS: dailySummary, weeklyReport
+//
+// GET also returns `accountEmail` — the read-only destination for email
+// notifications (the owner's registered Clerk/Account email, not a
+// separately-editable field). The page renders this under "Reports
+// sent to: ..." so the operator knows where alerts land.
 // ---------------------------------------------------------------------------
+
+const DEFAULTS = {
+  notifyOnDistress: true,
+  notifyOnSchedulingConflict: true,
+  notifyOnAIStuck: true,
+  notifyOnHumanOverride: true,
+  notifyOnCallBooked: true,
+  notifyOnHotLead: true,
+  notifyOnBookingLimbo: true,
+  notifyOnNoShow: true,
+  notifyOnClosedDeal: true,
+  emailDailySummary: true,
+  emailWeeklyReport: true
+} as const;
+
+type PrefKey = keyof typeof DEFAULTS;
+const PREF_KEYS = Object.keys(DEFAULTS) as PrefKey[];
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
-    const account = await prisma.account.findUnique({
-      where: { id: auth.accountId },
-      select: {
-        notificationEmail: true,
-        notifyOnSchedulingConflict: true,
-        notifyOnDistress: true,
-        notifyOnStuckLead: true,
-        notifyOnAIStuck: true,
-        notifyOnAllAIPauses: true
-      }
+    const [account] = await Promise.all([
+      prisma.account.findUnique({
+        where: { id: auth.accountId },
+        select: PREF_KEYS.reduce(
+          (acc, k) => {
+            (acc as Record<string, true>)[k] = true;
+            return acc;
+          },
+          {} as Record<PrefKey, true>
+        )
+      })
+    ]);
+    return NextResponse.json({
+      ...DEFAULTS,
+      ...(account ?? {}),
+      accountEmail: auth.email
     });
-    return NextResponse.json(
-      account ?? {
-        notificationEmail: null,
-        notifyOnSchedulingConflict: true,
-        notifyOnDistress: true,
-        notifyOnStuckLead: true,
-        notifyOnAIStuck: true,
-        notifyOnAllAIPauses: false
-      }
-    );
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
@@ -43,35 +63,13 @@ export async function GET(request: NextRequest) {
   }
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     const body = await request.json();
-    const data: Record<string, unknown> = {};
+    const data: Record<string, boolean> = {};
 
-    if ('notificationEmail' in body) {
-      const v = body.notificationEmail;
-      if (v === null || v === '') {
-        data.notificationEmail = null;
-      } else if (typeof v === 'string' && EMAIL_RE.test(v.trim())) {
-        data.notificationEmail = v.trim();
-      } else {
-        return NextResponse.json(
-          { error: 'Invalid notificationEmail' },
-          { status: 400 }
-        );
-      }
-    }
-    const BOOL_FIELDS = [
-      'notifyOnSchedulingConflict',
-      'notifyOnDistress',
-      'notifyOnStuckLead',
-      'notifyOnAIStuck',
-      'notifyOnAllAIPauses'
-    ] as const;
-    for (const k of BOOL_FIELDS) {
+    for (const k of PREF_KEYS) {
       if (k in body) {
         if (typeof body[k] !== 'boolean') {
           return NextResponse.json(
@@ -92,16 +90,15 @@ export async function PATCH(request: NextRequest) {
     const updated = await prisma.account.update({
       where: { id: auth.accountId },
       data,
-      select: {
-        notificationEmail: true,
-        notifyOnSchedulingConflict: true,
-        notifyOnDistress: true,
-        notifyOnStuckLead: true,
-        notifyOnAIStuck: true,
-        notifyOnAllAIPauses: true
-      }
+      select: PREF_KEYS.reduce(
+        (acc, k) => {
+          (acc as Record<string, true>)[k] = true;
+          return acc;
+        },
+        {} as Record<PrefKey, true>
+      )
     });
-    return NextResponse.json(updated);
+    return NextResponse.json({ ...updated, accountEmail: auth.email });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

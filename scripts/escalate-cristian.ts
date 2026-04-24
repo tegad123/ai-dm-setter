@@ -71,8 +71,11 @@ async function main() {
     accountId: lead.accountId,
     leadId: lead.id,
     conversationId: lead.conversation.id,
+    leadName: lead.name,
+    leadHandle: lead.handle,
     title: `Lead needs manual scheduling — ${lead.name}`,
     body: `${lead.name} (@${lead.handle}) filled out the application but can't make the offered times.\n\nThey're available: ${preference}.\n\nReach out to confirm a Sunday time that works for both sides.`,
+    details: `Available: ${preference}`,
     link
   });
   console.log(

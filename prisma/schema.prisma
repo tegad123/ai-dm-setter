@@ -220,18 +220,26 @@ model Account {
   // account changes provider without an explicit flip.
   aiProvider                  String        @default("openai")
 
-  // ── External escalation notifications ─────────────────────────
-  // Out-of-app notifications fired when the AI hits a wall only a
-  // human can resolve (scheduling conflict post-Typeform, distress
-  // signal, lead stuck 24h+, AI stuck/3-retry-exhausted). Dashboard
-  // Action Required is the primary surface; this email is the backup
-  // that reaches the operator outside the app.
-  notificationEmail                 String?
-  notifyOnSchedulingConflict        Boolean @default(true)
-  notifyOnDistress                  Boolean @default(true)
-  notifyOnStuckLead                 Boolean @default(true)
-  notifyOnAIStuck                   Boolean @default(true)
-  notifyOnAllAIPauses               Boolean @default(false)
+  // ── Notification preferences ──────────────────────────────────
+  // Three groups:
+  //   URGENT (email + in-app) — critical items reaching the operator
+  //   outside the app. Email goes to the account owner's registered
+  //   email (User.email), not a separate field.
+  //   ACTIVITY (in-app only) — routine events the operator may want
+  //   muted in high-volume workspaces.
+  //   EMAIL REPORTS — daily / weekly summaries (stub, not yet wired).
+  // All default on except the activity-report toggles.
+  notifyOnDistress            Boolean @default(true)  // URGENT
+  notifyOnSchedulingConflict  Boolean @default(true)  // URGENT
+  notifyOnAIStuck             Boolean @default(true)  // URGENT
+  notifyOnHumanOverride       Boolean @default(true)  // ACTIVITY
+  notifyOnCallBooked          Boolean @default(true)  // ACTIVITY
+  notifyOnHotLead             Boolean @default(true)  // ACTIVITY
+  notifyOnBookingLimbo        Boolean @default(true)  // ACTIVITY (24h no-confirm)
+  notifyOnNoShow              Boolean @default(true)  // ACTIVITY
+  notifyOnClosedDeal          Boolean @default(true)  // ACTIVITY
+  emailDailySummary           Boolean @default(true)  // EMAIL REPORTS
+  emailWeeklyReport           Boolean @default(true)  // EMAIL REPORTS
 
   // ── Safety: distress / crisis detection ───────────────────────
   // True by default. Cannot be toggled via the Persona Editor UI —

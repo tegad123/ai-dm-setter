@@ -909,20 +909,23 @@ export async function processIncomingMessage(
         const link = origin
           ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
           : undefined;
-        const prefLine = conflict.preference
-          ? `They're available: ${conflict.preference}.\n`
-          : '';
         const quote =
           messageText.length > 220
             ? messageText.slice(0, 220) + '…'
             : messageText;
+        const detailsLine = conflict.preference
+          ? `Available: ${conflict.preference}. Lead message: "${quote}"`
+          : `Lead message: "${quote}"`;
         await escalate({
           type: 'scheduling_conflict',
           accountId,
           leadId: lead.id,
           conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
           title: `Lead needs manual scheduling — ${lead.name}`,
-          body: `${lead.name} (@${lead.handle}) filled out the application but can't make the available times.\n\n${prefLine}Their message: "${quote}"\n\nThis lead needs a human to reach out and confirm a time.`,
+          body: `${lead.name} (@${lead.handle}) filled out the application but can't make the available times.${conflict.preference ? `\n\nThey're available: ${conflict.preference}.` : ''}\n\nTheir message: "${quote}"\n\nThis lead needs a human to reach out and confirm a time.`,
+          details: detailsLine,
           link
         });
       }
