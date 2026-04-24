@@ -887,19 +887,36 @@ export async function processIncomingMessage(
     );
   }
 
-  // ── Cancel pending silent-lead follow-ups ──────────────────────
-  // Lead just responded — any scheduled FOLLOW_UP_* or
-  // BOOKING_LINK_FOLLOWUP row is no longer needed. Cancelling here
-  // (rather than at cron fire-time) avoids the "cron picks up row,
-  // sees fresh lead reply, has to decide what to do" race.
+  // ── Snooze detection + cancel pending silent-lead follow-ups ───
+  // Lead just responded. Two paths:
+  //   (a) Snooze signal ("tomorrow", "few hours", "busy rn", "hit you
+  //       back later"). Cancel the pending cascade AND reschedule
+  //       FOLLOW_UP_1 for the parsed duration so the chain resumes
+  //       when the lead is actually available. Preserves booking
+  //       context if the prior cascade was booking-aware.
+  //   (b) Normal reply. Cancel the pending cascade; no reschedule.
   try {
-    const { cancelAllPendingFollowUps } = await import(
-      '@/lib/follow-up-sequence'
-    );
-    await cancelAllPendingFollowUps(conversationId);
+    const {
+      cancelAllPendingFollowUps,
+      detectSnooze,
+      rescheduleFollowUpAfterSnooze
+    } = await import('@/lib/follow-up-sequence');
+    const snooze = detectSnooze(messageText);
+    if (snooze.matched) {
+      const res = await rescheduleFollowUpAfterSnooze(
+        conversationId,
+        accountId,
+        snooze.delayMs
+      );
+      console.log(
+        `[webhook-processor] snooze detected ("${snooze.match}" / ${snooze.reason}) → cancelled ${res.cancelled}, rescheduled FOLLOW_UP_1 at ${res.scheduledFor.toISOString()} (${res.bookingContext ? 'booking' : 'generic'})`
+      );
+    } else {
+      await cancelAllPendingFollowUps(conversationId);
+    }
   } catch (err) {
     console.error(
-      '[webhook-processor] cancelAllPendingFollowUps failed (non-fatal):',
+      '[webhook-processor] snooze/cancel hook failed (non-fatal):',
       err
     );
   }

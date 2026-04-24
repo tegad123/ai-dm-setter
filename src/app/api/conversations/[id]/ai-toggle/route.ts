@@ -43,6 +43,24 @@ export async function PATCH(
       aiActive: conversation.aiActive
     });
 
+    // Booking-limbo re-engagement when flipping OFF→ON. Mirrors the
+    // logic in /toggle-ai — if the convo had a Typeform URL sent and
+    // is stuck at CALL_PROPOSED with no pending follow-up, schedule a
+    // booking-aware FOLLOW_UP_1 for +5min. Non-blocking.
+    if (aiActive && !existing.aiActive) {
+      try {
+        const { scheduleBookingFollowupOnAIReenable } = await import(
+          '@/lib/follow-up-sequence'
+        );
+        await scheduleBookingFollowupOnAIReenable(id, auth.accountId);
+      } catch (err) {
+        console.error(
+          '[ai-toggle] booking-limbo re-enable hook failed (non-fatal):',
+          err
+        );
+      }
+    }
+
     return NextResponse.json({ aiActive: conversation.aiActive });
   } catch (error) {
     if (error instanceof AuthError) {

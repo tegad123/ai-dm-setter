@@ -61,6 +61,32 @@ export async function POST(
       });
       await handleAIHandoff(id, auth.accountId);
 
+      // Booking-limbo re-engagement: if this convo had the Typeform URL
+      // sent earlier, no scheduledCallAt, stage=CALL_PROPOSED, and no
+      // pending follow-up, schedule a booking-aware FOLLOW_UP_1 for
+      // +5min so the lead isn't left hanging another 12h while the
+      // operator waits for a cascade to restart. Non-blocking — errors
+      // don't break the handoff response.
+      try {
+        const { scheduleBookingFollowupOnAIReenable } = await import(
+          '@/lib/follow-up-sequence'
+        );
+        const res = await scheduleBookingFollowupOnAIReenable(
+          id,
+          auth.accountId
+        );
+        if (res.scheduled) {
+          console.log(
+            `[toggle-ai] booking-limbo follow-up scheduled for ${id}`
+          );
+        }
+      } catch (err) {
+        console.error(
+          '[toggle-ai] booking-limbo re-enable hook failed (non-fatal):',
+          err
+        );
+      }
+
       return NextResponse.json({
         conversationId: id,
         aiActive: true,

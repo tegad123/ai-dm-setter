@@ -395,12 +395,16 @@ async function fireScheduledMessage(
   );
 
   // ── Silent-lead cascade bookkeeping ──────────────────────────────
-  // After FOLLOW_UP_1/2/3 fires, schedule the next step in the chain
-  // (12h out). After FOLLOW_UP_SOFT_EXIT fires, mark the conversation
-  // DORMANT and transition the lead to GHOSTED — the sequence is
-  // terminal, no more outbound touches on this convo until the lead
-  // re-engages (which cancels via cancelAllPendingFollowUps).
+  // After BOOKING_LINK_FOLLOWUP or FOLLOW_UP_1/2/3 fires, schedule the
+  // next step in the chain (12h out). BOOKING_LINK_FOLLOWUP cascades
+  // into a booking-aware FOLLOW_UP_1 body via isBookingCascadeBody()
+  // inside scheduleNextInCascade — no extra branching needed here.
+  // After FOLLOW_UP_SOFT_EXIT fires, mark the conversation DORMANT
+  // and transition the lead to GHOSTED — the sequence is terminal,
+  // no more outbound touches on this convo until the lead re-engages
+  // (which cancels via cancelAllPendingFollowUps).
   if (
+    row.messageType === 'BOOKING_LINK_FOLLOWUP' ||
     row.messageType === 'FOLLOW_UP_1' ||
     row.messageType === 'FOLLOW_UP_2' ||
     row.messageType === 'FOLLOW_UP_3'
@@ -409,7 +413,8 @@ async function fireScheduledMessage(
       await scheduleNextInCascade(
         conversation.id,
         lead.accountId,
-        row.messageType
+        row.messageType,
+        row.messageBody ?? messageBody
       );
     } catch (err) {
       console.error(
