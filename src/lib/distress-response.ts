@@ -35,18 +35,43 @@ WHAT TO DO:
 FORMAT:
 - Plain text. No JSON. No markdown. No emojis except one 🫂 or ❤️ if it feels right.
 - One message, not a list.
+- NEVER use em dashes (—) or en dashes (–). Use commas or periods instead. This is a hard constraint; any response containing a dash will be stripped.
 
 Example of the right tone:
-"bro I hear you and what you're feeling matters way more than any trading stuff right now. if you're really going through it please reach out to someone who can actually help — you can call or text 988 anytime, they're trained for exactly this. I'm here but they'll be able to actually be there for you right now."
+"bro I hear you and what you're feeling matters way more than any trading stuff right now. if you're really going through it please reach out to someone who can actually help, you can call or text 988 anytime, they're trained for exactly this. I'm here but they'll be able to actually be there for you right now."
 
 Respond now with ONE supportive message.`;
 
 /**
- * Hardcoded fallback — always includes the 988 reference. Used when the
+ * Hardcoded fallback. Always includes the 988 reference. Used when the
  * Haiku call fails for any reason (missing env key, API error, timeout).
  * Safety-first: we never want the distress path to silently drop.
+ *
+ * Note the prose uses commas where an em dash would feel natural. The
+ * voice-quality rule across the whole codebase forbids em/en dashes,
+ * and the distress path's sanitiseDashes step below would strip any
+ * anyway, so we write around them at source.
  */
-const HARDCODED_FALLBACK = `bro I hear you and what you're feeling matters way more than any trading stuff. if you're going through it right now please reach out to someone who can actually help — you can call or text 988 anytime (Suicide & Crisis Lifeline), they're trained for exactly this. 🫂`;
+const HARDCODED_FALLBACK = `bro I hear you and what you're feeling matters way more than any trading stuff. if you're going through it right now please reach out to someone who can actually help. you can call or text 988 anytime (Suicide & Crisis Lifeline), they're trained for exactly this. 🫂`;
+
+/**
+ * Strip em dashes + en dashes from generated distress text. The distress
+ * path bypasses the main voice-quality gate (scoreVoiceQualityGroup),
+ * which is where em/en dash enforcement normally lives. Without this,
+ * the Haiku-generated supportive reply can ship "— you can call 988"
+ * verbatim (Uzualu Francis 2026-04-24). Replacing with ", " preserves
+ * readability without the banned characters.
+ */
+function sanitiseDashes(text: string): string {
+  return (
+    text
+      .replace(/\s*—\s*/g, ', ')
+      .replace(/\s*–\s*/g, ', ')
+      // Collapse accidental ", , " runs if the original had spaced pairs.
+      .replace(/, ,/g, ',')
+      .trim()
+  );
+}
 
 /**
  * Generate a single supportive message in response to distress language.
@@ -109,7 +134,7 @@ export async function generateSupportiveResponse(
       );
       return HARDCODED_FALLBACK;
     }
-    return text;
+    return sanitiseDashes(text);
   } catch (err) {
     console.error(
       '[distress-response] Haiku call failed — using hardcoded fallback:',
