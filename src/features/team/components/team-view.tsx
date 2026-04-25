@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { IconPlus } from '@tabler/icons-react';
 import { useTeam } from '@/hooks/use-api';
+import { InviteMemberDialog } from './invite-member-dialog';
 
 const roleColors: Record<string, string> = {
   admin:
@@ -33,7 +34,7 @@ const roleLabels: Record<string, string> = {
 };
 
 export function TeamView() {
-  const { members, loading, error } = useTeam();
+  const { members, loading, error, refetch } = useTeam();
 
   if (loading) {
     return (
@@ -54,10 +55,15 @@ export function TeamView() {
   return (
     <div className='space-y-4'>
       <div className='flex justify-end'>
-        <Button>
-          <IconPlus className='mr-2 h-4 w-4' />
-          Invite Member
-        </Button>
+        <InviteMemberDialog
+          onInvited={refetch}
+          trigger={
+            <Button>
+              <IconPlus className='mr-2 h-4 w-4' />
+              Invite Member
+            </Button>
+          }
+        />
       </div>
       <div className='rounded-md border'>
         <Table>

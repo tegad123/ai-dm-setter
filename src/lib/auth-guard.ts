@@ -32,13 +32,39 @@ export async function requireAuth(_request?: any): Promise<AuthContext> {
   // Find existing user in our DB by email
   let dbUser = await prisma.user.findFirst({
     where: { email },
-    select: { id: true, name: true, email: true, role: true, accountId: true }
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      accountId: true,
+      isActive: true
+    }
   });
+
+  // Pending invite claim. If a user row exists but is inactive, an admin
+  // invited this email via POST /api/team/invite earlier. Flip the row
+  // to active + sync the name from Clerk so the invitee lands in their
+  // intended workspace instead of getting auto-provisioned a fresh
+  // empty account.
+  if (dbUser && dbUser.isActive === false) {
+    await prisma.user.update({
+      where: { id: dbUser.id },
+      data: { isActive: true, name }
+    });
+    dbUser = { ...dbUser, name, isActive: true };
+    console.log(
+      `[auth-guard] claimed pending invite for ${email} → account ${dbUser.accountId} (role=${dbUser.role})`
+    );
+  }
 
   // Auto-provision: if no user exists, create a fresh account + user
   if (!dbUser) {
     // Generate a unique slug from the email prefix
-    const baseSlug = email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    const baseSlug = email
+      .split('@')[0]
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-');
     let slug = baseSlug;
     let slugSuffix = 0;
 
@@ -78,13 +104,24 @@ export async function requireAuth(_request?: any): Promise<AuthContext> {
           role: 'ADMIN',
           accountId: account.id
         },
-        select: { id: true, name: true, email: true, role: true, accountId: true }
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          accountId: true,
+          isActive: true
+        }
       });
 
       return user;
     });
 
     dbUser = result;
+  }
+
+  if (!dbUser) {
+    throw new AuthError('User provisioning failed', 500);
   }
 
   return {
