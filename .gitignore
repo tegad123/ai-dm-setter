@@ -27,6 +27,8 @@ yarn-error.log*
 # local env files
 .env*
 .env*.local
+!.env.example
+!.env.test.example
 
 # vercel
 .vercel
@@ -48,3 +50,10 @@ next-env.d.ts
 .env.sentry-build-plugin
 
 /generated/prisma
+
+# Playwright e2e
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/tests/e2e/.auth/
