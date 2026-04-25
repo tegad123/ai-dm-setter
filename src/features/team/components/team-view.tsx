@@ -55,15 +55,7 @@ export function TeamView() {
   return (
     <div className='space-y-4'>
       <div className='flex justify-end'>
-        <InviteMemberDialog
-          onInvited={refetch}
-          trigger={
-            <Button>
-              <IconPlus className='mr-2 h-4 w-4' />
-              Invite Member
-            </Button>
-          }
-        />
+        <InviteMemberDialog onInvited={refetch} />
       </div>
       <div className='rounded-md border'>
         <Table>

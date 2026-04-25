@@ -7,8 +7,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
-  DialogTrigger
+  DialogTitle
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,6 +19,7 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
+import { IconPlus } from '@tabler/icons-react';
 import { toast } from 'sonner';
 
 interface InviteResponse {
@@ -37,13 +37,16 @@ const ROLE_OPTIONS = [
   { value: 'READ_ONLY', label: 'Read-only — view dashboards' }
 ];
 
-export function InviteMemberDialog({
-  trigger,
-  onInvited
-}: {
-  trigger: React.ReactNode;
-  onInvited?: () => void;
-}) {
+/**
+ * Self-contained invite-member control. Renders its own trigger button
+ * (no `asChild` cloning, no Radix Slot fragility) and an explicit
+ * onClick → setOpen(true). Previous version exposed a `trigger` prop
+ * that wrapped a child Button via DialogTrigger asChild — clicks didn't
+ * always propagate cleanly to the controlled-open state, so the dialog
+ * never appeared. This pattern is rock-solid: a plain button calling
+ * the same setter that the dialog reads.
+ */
+export function InviteMemberDialog({ onInvited }: { onInvited?: () => void }) {
   const [open, setOpen] = React.useState(false);
   const [email, setEmail] = React.useState('');
   const [name, setName] = React.useState('');
@@ -103,117 +106,122 @@ export function InviteMemberDialog({
   };
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) reset();
-      }}
-    >
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className='sm:max-w-md'>
-        <DialogHeader>
-          <DialogTitle>Invite a team member</DialogTitle>
-          <DialogDescription>
-            They&apos;ll get an email with a sign-up link. They must use the
-            same email address to claim the invite.
-          </DialogDescription>
-        </DialogHeader>
-        {!inviteUrl ? (
-          <form onSubmit={submit} className='space-y-4'>
-            <div className='space-y-1'>
-              <Label htmlFor='invite-email'>Email</Label>
-              <Input
-                id='invite-email'
-                type='email'
-                required
-                placeholder='teammate@example.com'
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={submitting}
-                autoFocus
-              />
+    <>
+      <Button type='button' onClick={() => setOpen(true)}>
+        <IconPlus className='mr-2 h-4 w-4' />
+        Invite Member
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (!o) reset();
+        }}
+      >
+        <DialogContent className='sm:max-w-md'>
+          <DialogHeader>
+            <DialogTitle>Invite a team member</DialogTitle>
+            <DialogDescription>
+              They&apos;ll get an email with a sign-up link. They must use the
+              same email address to claim the invite.
+            </DialogDescription>
+          </DialogHeader>
+          {!inviteUrl ? (
+            <form onSubmit={submit} className='space-y-4'>
+              <div className='space-y-1'>
+                <Label htmlFor='invite-email'>Email</Label>
+                <Input
+                  id='invite-email'
+                  type='email'
+                  required
+                  placeholder='teammate@example.com'
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={submitting}
+                  autoFocus
+                />
+              </div>
+              <div className='space-y-1'>
+                <Label htmlFor='invite-name'>Name (optional)</Label>
+                <Input
+                  id='invite-name'
+                  placeholder='Jane Doe'
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={submitting}
+                />
+              </div>
+              <div className='space-y-1'>
+                <Label htmlFor='invite-role'>Role</Label>
+                <Select
+                  value={role}
+                  onValueChange={setRole}
+                  disabled={submitting}
+                >
+                  <SelectTrigger id='invite-role'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLE_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <DialogFooter>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  onClick={() => setOpen(false)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </Button>
+                <Button type='submit' disabled={submitting || !email}>
+                  {submitting ? 'Sending…' : 'Send invite'}
+                </Button>
+              </DialogFooter>
+            </form>
+          ) : (
+            <div className='space-y-4'>
+              <div className='space-y-1'>
+                <p className='text-sm font-medium'>
+                  {emailSent
+                    ? 'Invite email sent.'
+                    : 'Email skipped (no email service configured).'}
+                </p>
+                <p className='text-muted-foreground text-xs'>
+                  {emailSent
+                    ? "Share the link below as a backup if they don't see the email."
+                    : 'Share this link with your teammate so they can sign up.'}
+                </p>
+              </div>
+              <div className='bg-muted flex items-center gap-2 rounded-md p-2'>
+                <code className='flex-1 truncate text-xs'>{inviteUrl}</code>
+                <Button type='button' size='sm' onClick={copyLink}>
+                  Copy
+                </Button>
+              </div>
+              <DialogFooter>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  onClick={() => {
+                    reset();
+                  }}
+                >
+                  Invite another
+                </Button>
+                <Button type='button' onClick={() => setOpen(false)}>
+                  Done
+                </Button>
+              </DialogFooter>
             </div>
-            <div className='space-y-1'>
-              <Label htmlFor='invite-name'>Name (optional)</Label>
-              <Input
-                id='invite-name'
-                placeholder='Jane Doe'
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={submitting}
-              />
-            </div>
-            <div className='space-y-1'>
-              <Label htmlFor='invite-role'>Role</Label>
-              <Select
-                value={role}
-                onValueChange={setRole}
-                disabled={submitting}
-              >
-                <SelectTrigger id='invite-role'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLE_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={() => setOpen(false)}
-                disabled={submitting}
-              >
-                Cancel
-              </Button>
-              <Button type='submit' disabled={submitting || !email}>
-                {submitting ? 'Sending…' : 'Send invite'}
-              </Button>
-            </DialogFooter>
-          </form>
-        ) : (
-          <div className='space-y-4'>
-            <div className='space-y-1'>
-              <p className='text-sm font-medium'>
-                {emailSent
-                  ? 'Invite email sent.'
-                  : 'Email skipped (no email service configured).'}
-              </p>
-              <p className='text-muted-foreground text-xs'>
-                {emailSent
-                  ? "Share the link below as a backup if they don't see the email."
-                  : 'Share this link with your teammate so they can sign up.'}
-              </p>
-            </div>
-            <div className='bg-muted flex items-center gap-2 rounded-md p-2'>
-              <code className='flex-1 truncate text-xs'>{inviteUrl}</code>
-              <Button type='button' size='sm' onClick={copyLink}>
-                Copy
-              </Button>
-            </div>
-            <DialogFooter>
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={() => {
-                  reset();
-                }}
-              >
-                Invite another
-              </Button>
-              <Button type='button' onClick={() => setOpen(false)}>
-                Done
-              </Button>
-            </DialogFooter>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
