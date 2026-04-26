@@ -485,3 +485,4 @@ See "Theming System" section above or `docs/themes.md`.
 5. **Follow existing patterns** - look at similar components before creating new ones
 6. **Environment variables** - prefix with `NEXT_PUBLIC_` for client-side access
 7. **shadcn components** - don't modify files in `src/components/ui/` directly; extend them instead
+8. **Deploy flow** - after completing codebase fixes, commit and push the finished changes to `main` so Vercel deploys

@@ -772,6 +772,7 @@ model Lead {
   revenue                Float?
   platformUserId         String?              // Meta user ID for API calls
   contentAttributionId   String?              // Which content generated this lead
+  email                  String?              // Email captured directly from lead messages
   timezone               String?              // IANA timezone e.g. "America/New_York"
   experience             String?              // "beginner" | "intermediate" | "experienced"
   incomeLevel            String?              // "low" | "mid" | "high"
@@ -794,6 +795,7 @@ model Lead {
 
   @@index([accountId, stage])
   @@index([accountId, platform])
+  @@index([accountId, email])
   @@index([accountId, createdAt])
   @@index([contentAttributionId])
 }

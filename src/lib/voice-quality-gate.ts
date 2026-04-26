@@ -228,6 +228,8 @@ export interface VoiceQualityOptions {
   previousAIQuestions?: string[];
   /** True when the most recent lead message included an image attachment. */
   previousLeadHadImage?: boolean;
+  /** Email already captured for this lead. Used to prevent repeat asks. */
+  leadEmail?: string | null;
 }
 
 export function scoreVoiceQuality(
@@ -454,6 +456,23 @@ export function scoreVoiceQuality(
   }
   if (propFirmMatch) {
     softSignals.r26_third_party_platform_mention = -0.4;
+  }
+
+  // 9e-ii-b. Repeated email request. Once we have the lead's email on
+  // record, asking for it again makes the AI look stateless and breaks
+  // booking flow trust. Soft penalty: usually enough to force regen when
+  // combined with normal short-text scoring, while still allowing unusual
+  // "is this the right email?" support cases to pass if phrased clearly.
+  if (options?.leadEmail) {
+    const EMAIL_REQUEST_PATTERNS: RegExp[] = [
+      /\b(what'?s|what is|send|drop|shoot|share|give|can i get|lemme get|let me get)\s+(me\s+)?(your\s+)?(best\s+|preferred\s+|current\s+)?e-?mail\b/i,
+      /\b(can|could|would)\s+you\s+(send|drop|shoot|share|give)\s+(me\s+)?(your\s+)?(best\s+|preferred\s+|current\s+)?e-?mail\b/i,
+      /\b(best\s+|preferred\s+|current\s+)?e-?mail\s+(address\s+)?(to\s+send|for|so\s+i|so\s+we|where)\b/i,
+      /\bwhere\s+should\s+i\s+(send|email)\b/i
+    ];
+    if (EMAIL_REQUEST_PATTERNS.some((pat) => pat.test(reply))) {
+      softSignals.repeated_email_request = -0.5;
+    }
   }
 
   // 9e-iii. IMAGE MESSAGES persona rule. The AI must not expose the

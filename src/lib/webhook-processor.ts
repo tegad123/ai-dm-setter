@@ -349,6 +349,13 @@ function extractFirstImageUrl(
   return null;
 }
 
+const LEAD_EMAIL_PATTERN = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
+
+function extractLeadEmail(text: string): string | null {
+  const match = text.match(LEAD_EMAIL_PATTERN);
+  return match ? match[0].toLowerCase() : null;
+}
+
 function extensionFromContentType(contentType: string): string {
   const normalized = contentType.toLowerCase().split(';')[0]?.trim();
   if (normalized === 'image/png') return 'png';
@@ -542,6 +549,7 @@ export async function processIncomingMessage(
   const inboundImageUrl = extractFirstImageUrl(attachments);
   const messageText =
     rawMessageText?.trim() || (inboundImageUrl ? '[Image]' : '');
+  const detectedEmail = extractLeadEmail(messageText);
 
   console.log(
     `[webhook-processor] Processing ${platform} ${triggerType} from ${senderHandle}: "${messageText.slice(0, 80)}"`
@@ -591,11 +599,13 @@ export async function processIncomingMessage(
         platformUserId,
         triggerType,
         triggerSource: triggerSource || null,
+        email: detectedEmail,
         stage: 'NEW_LEAD',
         conversation: {
           create: {
             aiActive: shouldEnableAI,
-            unreadCount: 1
+            unreadCount: 1,
+            leadEmail: detectedEmail
           }
         }
       },
@@ -727,7 +737,8 @@ export async function processIncomingMessage(
         revenue: null,
         experience: null,
         incomeLevel: null,
-        geography: null
+        geography: null,
+        email: null
       }
     });
     console.log(
@@ -785,11 +796,19 @@ export async function processIncomingMessage(
   }
 
   // ── Step 3: Update conversation metadata ───────────────────────
+  if (detectedEmail && lead.email !== detectedEmail) {
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { email: detectedEmail }
+    });
+  }
+
   await prisma.conversation.update({
     where: { id: conversationId },
     data: {
       lastMessageAt: now,
-      unreadCount: { increment: 1 }
+      unreadCount: { increment: 1 },
+      ...(detectedEmail ? { leadEmail: detectedEmail } : {})
     }
   });
 
@@ -2112,7 +2131,7 @@ export async function scheduleAIReply(
 
     leadContext.booking = {
       leadTimezone: conversation.leadTimezone,
-      leadEmail: conversation.leadEmail,
+      leadEmail: conversation.leadEmail ?? lead.email,
       leadPhone: conversation.leadPhone,
       availableSlots,
       hasCalendarIntegration
@@ -3266,6 +3285,12 @@ async function sendAIReply(
     await prisma.conversation.update({
       where: { id: conversationId },
       data: bookingUpdates
+    });
+  }
+  if (result.leadEmail) {
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { email: result.leadEmail.toLowerCase() }
     });
   }
 

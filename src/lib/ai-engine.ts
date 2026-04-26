@@ -516,7 +516,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       incomeGoalAsked,
       capitalQuestionAsked,
       previousAIQuestions: priorAIQuestions,
-      previousLeadHadImage: lastLeadHadImage
+      previousLeadHadImage: lastLeadHadImage,
+      leadEmail: leadContext.booking?.leadEmail ?? null
     });
     finalQualityScore = quality.score;
 
@@ -585,6 +586,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       fixBBlocked = fixBResult.blocked;
     }
 
+    // 5c-ii. FUNDING-PARTNER GEOGRAPHY GATE. R24 blocks booking
+    // attempts, but a model can still pitch "funding partner" as a
+    // downsell/alternative without using booking-handoff language.
+    // For non-US/CA leads, that option is invalid, so block any generated
+    // funding-partner pitch before it reaches the lead.
+    let restrictedFundingBlocked = false;
+    let restrictedFundingCountry: string | null = null;
+    if (!r24Blocked && !fixBBlocked && mentionsFundingPartnerRoute(parsed)) {
+      const recentLeadMessages = conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .slice(-10)
+        .map((m) => m.content);
+      const geo = detectRestrictedGeography(
+        leadContext.geography,
+        recentLeadMessages
+      );
+      if (geo.restricted) {
+        restrictedFundingBlocked = true;
+        restrictedFundingCountry = geo.country;
+      }
+    }
+
     // 5d. BOOKING FABRICATION GATE (Rufaro 2026-04-18 fix).
     //     Independent of R24/Fix B. Fires whenever the AI's reply
     //     claims real-time booking state (anthony-is-ready, zoom-link-
@@ -595,7 +618,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     //     runs even when R24/Fix B didn't block.
     let fabricationBlocked = false;
     let fabricationResult: BookingFabricationBlockResult | null = null;
-    if (activeConversationId && !r24Blocked && !fixBBlocked) {
+    if (
+      activeConversationId &&
+      !r24Blocked &&
+      !fixBBlocked &&
+      !restrictedFundingBlocked
+    ) {
       fabricationResult = await shouldBlockForBookingFabrication({
         parsed,
         conversationId: activeConversationId,
@@ -604,7 +632,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       fabricationBlocked = fabricationResult.blocked;
     }
 
-    if (quality.passed && !r24Blocked && !fixBBlocked && !fabricationBlocked) {
+    if (
+      quality.passed &&
+      !r24Blocked &&
+      !fixBBlocked &&
+      !restrictedFundingBlocked &&
+      !fabricationBlocked
+    ) {
       if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
         console.log(
@@ -651,7 +685,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             recentLeadMessages
           );
           if (geo.restricted) {
-            baseDirective += `\n\nGEOGRAPHY GATE: The lead is based in ${geo.country}. Funding-partner programs (FTMO-style funded accounts, broker prop programs) are only available to leads in the US and Canada. DO NOT route this lead to the funding-partner branch under any circumstances. The only options you may offer here are: (1) the $497 course downsell, or (2) a free YouTube / resource redirect. Do not mention funded accounts, challenges, or third-party capital as an option.`;
+            baseDirective += `\n\nGEOGRAPHY GATE: The lead is based in ${geo.country}. Funding-partner programs (FTMO-style funded accounts, broker prop programs) are only available to leads in the US and Canada. DO NOT route this lead to the funding-partner branch under any circumstances. The only options you may offer here are: (1) the $497 course downsell, or (2) a free YouTube / resource redirect. Do not explain how prop firms work. Do not mention funded accounts, challenges, or third-party capital as an option.`;
             console.warn(
               `[ai-engine] R24 geography gate: restricted country "${geo.country}" detected for conv ${activeConversationId} — funding-partner path blocked`
             );
@@ -710,6 +744,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       systemPromptForLLM = baseSystemPrompt + fixBOverride;
       console.warn(
         `[ai-engine] Fix B gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${fixBResult.reason} stage=${parsed.stage} sub=${parsed.subStage ?? 'null'}`
+      );
+    }
+
+    if (restrictedFundingBlocked) {
+      const geoLabel = restrictedFundingCountry || 'a non-US/Canada country';
+      const restrictedFundingDirective = `The lead is based in ${geoLabel}. Funding-partner / funded-account routes are only available to leads in the US and Canada. Your previous reply mentioned a funding partner, funded account, prop firm, challenge, or third-party capital option. You MUST regenerate without that route.\n\nCorrect path: if the lead is below the capital threshold, route directly to the downsell. If they decline the downsell, send the free resource if one is available. Do NOT explain how prop firms work. Do NOT mention funded accounts, challenges, funding partner, or third-party capital as an option.`;
+      const restrictedFundingOverride = `\n\n===== FUNDING-PARTNER GEOGRAPHY OVERRIDE =====\n${restrictedFundingDirective}\n=====`;
+      systemPromptForLLM = baseSystemPrompt + restrictedFundingOverride;
+      console.warn(
+        `[ai-engine] Funding-partner geography gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — country=${geoLabel}`
       );
     }
 
@@ -892,6 +936,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const repeatedEmailFailed =
+        quality.softSignals.repeated_email_request !== undefined;
+      if (repeatedEmailFailed) {
+        const repeatedEmailOverride = `\n\n===== REPEATED EMAIL REQUEST OVERRIDE =====\nLead email is already collected: ${leadContext.booking?.leadEmail}. Do not ask for their email again. Continue the booking/script step using the email already in context.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + repeatedEmailOverride;
+        console.warn(
+          `[ai-engine] Repeated email request detected — forcing regen without asking email again (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const fabricatedImageObservationFailed = quality.hardFails.some((f) =>
         f.includes('fabricated_image_observation:')
       );
@@ -912,6 +966,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // Final attempt still blocked. Don't ship a bad booking routing.
         // Flip escalate_to_human so a human teammate picks it up; the
         // webhook-processor will pause aiActive + create a notification.
+        parsed.escalateToHuman = true;
+      } else if (restrictedFundingBlocked) {
+        console.error(
+          `[ai-engine] Funding-partner geography gate EXHAUSTED ${MAX_RETRIES + 1} attempts — replacing unsafe funding pitch with human handoff for convo ${activeConversationId}`
+        );
+        parsed.message =
+          "i don't wanna point you into the wrong route here bro. lemme have the team double-check the right next step for where you're based.";
+        parsed.messages = [parsed.message];
+        parsed.stage = 'SOFT_EXIT';
+        parsed.softExit = false;
         parsed.escalateToHuman = true;
       } else if (fixBBlocked || fabricationBlocked) {
         // Fix B / booking-fabrication exhaustion — soft-fail policy
@@ -2255,7 +2319,18 @@ const US_CA_GEO_INDICATOR =
 // matched (and US/CA is NOT), route to downsell/YouTube, NEVER
 // funding partner.
 const RESTRICTED_COUNTRY_PATTERN =
-  /\b(lebanon|lebanese|nigeria|nigerian|zimbabwe|philippines|filipino|pakistan|pakistani|\bindia\b|indian|bangladesh|bangladeshi|egypt|egyptian|kenya|kenyan|ghana|ghanaian|south\s+africa|south\s+african|zambia|uganda|tanzania|morocco|moroccan|iran|iranian|iraq|iraqi|syria|syrian|yemen|yemeni|sudan|sudanese|afghanistan|afghan|belarus|belarusian|russia|russian|venezuela|venezuelan|cuba|cuban|north\s+korea|myanmar|burmese|vietnam|vietnamese|cambodia|laos|mongolia|kazakhstan|uzbekistan|ethiopia|ethiopian|somalia|libya|algeria|algerian|tunisia|brazil|brazilian|argentina|argentine|colombia|colombian|peru|peruvian|chile|chilean|uruguay|ecuador|uk|britain|british|england|english|scotland|scottish|ireland|irish|germany|german|france|french|spain|spanish|italy|italian|portugal|portuguese|netherlands|dutch|belgium|belgian|sweden|swedish|norway|norwegian|finland|finnish|denmark|danish|poland|polish|czech|slovakia|hungary|hungarian|romania|romanian|bulgaria|bulgarian|greece|greek|turkey|turkish|ukraine|ukrainian|australia|australian|new\s+zealand|japan|japanese|south\s+korea|korean|china|chinese|hong\s+kong|taiwan|taiwanese|singapore|singaporean|malaysia|malaysian|indonesia|indonesian|thailand|thai)\b/i;
+  /\b(lebanon|lebanese|nigeria|nigerian|zimbabwe|philippines|filipino|pilipinas|manila|cebu|davao|luzon|mindanao|pakistan|pakistani|\bindia\b|indian|bangladesh|bangladeshi|egypt|egyptian|kenya|kenyan|ghana|ghanaian|cameroon|cameroonian|south\s+africa|south\s+african|zambia|uganda|tanzania|morocco|moroccan|iran|iranian|iraq|iraqi|syria|syrian|yemen|yemeni|sudan|sudanese|afghanistan|afghan|belarus|belarusian|russia|russian|venezuela|venezuelan|cuba|cuban|north\s+korea|myanmar|burmese|vietnam|vietnamese|cambodia|laos|mongolia|kazakhstan|uzbekistan|ethiopia|ethiopian|somalia|libya|algeria|algerian|tunisia|brazil|brazilian|argentina|argentine|colombia|colombian|peru|peruvian|chile|chilean|uruguay|ecuador|uk|britain|british|england|english|scotland|scottish|ireland|irish|germany|german|france|french|spain|spanish|italy|italian|portugal|portuguese|netherlands|dutch|belgium|belgian|sweden|swedish|norway|norwegian|finland|finnish|denmark|danish|poland|polish|czech|slovakia|hungary|hungarian|romania|romanian|bulgaria|bulgarian|greece|greek|turkey|turkish|ukraine|ukrainian|australia|australian|new\s+zealand|japan|japanese|south\s+korea|korean|china|chinese|hong\s+kong|taiwan|taiwanese|singapore|singaporean|malaysia|malaysian|indonesia|indonesian|thailand|thai)\b/i;
+
+const FUNDING_PARTNER_ROUTE_PATTERN =
+  /\b(funding\s+partner|funded[-\s]+account|funded[-\s]+trader|funding\s+(route|option|program|path)|prop\s+firm|prop[-\s]+firm|prop\s+challenge|challenge\s+account|funded\s+challenge|third[-\s]+party\s+capital|firm\s+capital|ftmo|apex|topstep|the\s*5ers|my\s+forex\s+funds)\b/i;
+
+function mentionsFundingPartnerRoute(parsed: ParsedAIResponse): boolean {
+  const joined =
+    Array.isArray(parsed.messages) && parsed.messages.length > 0
+      ? parsed.messages.join(' ')
+      : parsed.message;
+  return FUNDING_PARTNER_ROUTE_PATTERN.test(joined);
+}
 
 /**
  * Return whether the lead should be blocked from the funding-partner
@@ -2342,6 +2417,17 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   // a clarifying question.
   const needTimeToRaise =
     /\b(need\s+(some\s+)?time\s+to\s+(raise|save|get|build(\s+up)?|come\s+up\s+with)|will\s+(need|have)\s+to\s+(raise|save|build(\s+up)?)|need\s+to\s+(raise|save|build(\s+up)?)\s+(that|the|some|enough|more|up\s+the)?\s*(fund(s)?|capital|money|amount|cash)|working\s+on\s+(raising|saving|getting|building(\s+up)?)\s+(it|the|that|the\s+capital|the\s+money|the\s+funds?)|don'?t\s+have\s+(it|that|the\s+money|the\s+capital)\s+(right\s+)?now\s+but|gotta\s+(save|raise|build)\s+(up\s+)?(first|the\s+(money|capital|funds?)))\b/i;
+  // (f2) "I don't have it" and "1000usd is huge money here" forms.
+  // Ptr Alvin 2026-04-26: "here 1000usd it's a huge money" after
+  // saying he did not have it got amount-parsed as 1000 and incorrectly
+  // passed. A threshold number framed as huge/unreachable is a capital
+  // miss unless the same message clearly says they have it ready.
+  const lacksReferencedAmount =
+    /\b(i\s+)?(don'?t|do\s+not|doesn'?t|can'?t|cannot)\s+(have|afford|get|do|manage)\s+(it|that|this|the\s+(money|capital|funds?|amount)|\$?\d)\b/i;
+  const amountIsHugeHere =
+    /\b\d{3,6}\s*(usd|dollars?|\$)?\s*(is|it'?s|is\s+a|it'?s\s+a)?\s*(huge|big|large|a\s+lot\s+of)\s+money\b/i;
+  const clearlyHasCapitalReady =
+    /\b(i\s+(have|got|saved|have\s+saved)|i'?ve\s+(got|saved)|ready\s+with|set\s+aside)\b/i;
   // (g) "Lost what I had" — trader just lost their capital in recent
   // trading. Distinct from noCapital which covers "never had any" /
   // current broke state. This catches "I've lost so much in this few
@@ -2355,6 +2441,8 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     cantAffordBasics.test(text) ||
     capitalAccessIssue.test(text) ||
     needTimeToRaise.test(text) ||
+    lacksReferencedAmount.test(text) ||
+    (amountIsHugeHere.test(text) && !clearlyHasCapitalReady.test(text)) ||
     lostCapital.test(text)
   ) {
     return { kind: 'disqualifier', amount: 0 };
