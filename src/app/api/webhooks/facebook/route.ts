@@ -77,6 +77,35 @@ export async function POST(request: NextRequest) {
 
   // Return 200 immediately — Meta requires a fast response.
   const payload = JSON.parse(rawBody);
+  for (const entry of payload.entry ?? []) {
+    const debugEvents = [
+      ...(entry.messaging ?? []).map((event: any) => ({
+        event,
+        bucket: 'messaging' as const
+      })),
+      ...(entry.standby ?? []).map((event: any) => ({
+        event,
+        bucket: 'standby' as const
+      }))
+    ];
+    for (const { event, bucket } of debugEvents) {
+      console.log(
+        'FB WEBHOOK:',
+        JSON.stringify({
+          type: event.type ?? bucket,
+          bucket,
+          isEcho: event.message?.is_echo,
+          senderId: event.sender?.id,
+          recipientId: event.recipient?.id,
+          text:
+            typeof event.message?.text === 'string'
+              ? event.message.text.substring(0, 50)
+              : undefined,
+          timestamp: new Date().toISOString()
+        })
+      );
+    }
+  }
   console.log(
     '[facebook-webhook] Received payload:',
     JSON.stringify(payload).slice(0, 500)
