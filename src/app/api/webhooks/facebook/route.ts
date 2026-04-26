@@ -203,6 +203,22 @@ async function processFacebookEvents(payload: any): Promise<void> {
     ];
 
     for (const { event, bucket } of events) {
+      console.log(
+        'FB WEBHOOK:',
+        JSON.stringify({
+          type: event.type ?? bucket,
+          bucket,
+          isEcho: event.message?.is_echo,
+          senderId: event.sender?.id,
+          recipientId: event.recipient?.id,
+          text:
+            typeof event.message?.text === 'string'
+              ? event.message.text.substring(0, 50)
+              : undefined,
+          timestamp: new Date().toISOString()
+        })
+      );
+
       if (!event.message) continue;
 
       const senderId: string = event.sender?.id ?? '';

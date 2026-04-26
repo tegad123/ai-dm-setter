@@ -3792,6 +3792,7 @@ export async function processAdminMessage(
   const leadIdCandidates = Array.from(
     new Set([platformUserId, ...candidatePlatformUserIds].filter(Boolean))
   );
+  console.log('processAdminMessage candidates:', leadIdCandidates);
 
   // Find existing lead by any plausible platformUserId. Facebook echo
   // payloads are documented as sender=PAGE_ID / recipient=LEAD_PSID, but
@@ -3805,6 +3806,7 @@ export async function processAdminMessage(
     },
     include: { conversation: true }
   });
+  console.log('conversation found:', lead?.conversation?.id ?? null);
 
   if (!lead?.conversation) {
     console.log(
@@ -3980,6 +3982,7 @@ export async function processAdminMessage(
       loggedDuringTrainingPhase
     }
   });
+  console.log('message saved:', message.id);
 
   // Bump lastMessageAt but do NOT auto-pause the AI on a single echo.
   // Previous behavior flipped aiActive=false on every echo, which was
@@ -4070,6 +4073,12 @@ export async function processAdminMessage(
     humanSource: 'PHONE',
     platformMessageId: platformMessageId || null,
     timestamp: message.timestamp.toISOString()
+  });
+  console.log('SSE broadcast message:new:', {
+    conversationId,
+    messageId: message.id,
+    sender: 'HUMAN',
+    humanSource: 'PHONE'
   });
   if (autoPausedFromConsecutivePhone) {
     broadcastAIStatusChange({ conversationId, aiActive: false });
