@@ -443,9 +443,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const incomeGoalAsked = priorAIMessagesForPacing.some((m) =>
     containsIncomeGoalQuestion(m.content)
   );
-  const capitalQuestionAsked = priorAIMessagesForPacing.some((m) =>
-    containsCapitalQuestion(m.content)
+  const capitalQuestionAsked = conversationHistory.some(
+    (m) =>
+      (m.sender === 'AI' || m.sender === 'HUMAN') &&
+      containsCapitalQuestion(m.content)
   );
+  const capitalVerificationSatisfied =
+    hasCapitalVerificationQuestionAndAnswer(conversationHistory);
   const botDetectionCount = conversationHistory.filter(
     (m) => m.sender === 'LEAD' && isBotDetectionQuestion(m.content)
   ).length;
@@ -515,7 +519,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       currentStage: parsed.stage || null,
       incomeGoalAsked,
       capitalQuestionAsked,
+      capitalVerificationRequired:
+        typeof capitalThreshold === 'number' && capitalThreshold > 0,
+      capitalVerificationSatisfied,
       previousAIQuestions: priorAIQuestions,
+      previousLeadMessage: lastLeadMsg?.content ?? null,
       previousLeadHadImage: lastLeadHadImage,
       leadEmail: leadContext.booking?.leadEmail ?? null
     });
@@ -632,8 +640,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       fabricationBlocked = fabricationResult.blocked;
     }
 
+    const unnecessarySchedulingQuestionFailed =
+      quality.softSignals.unnecessary_scheduling_question !== undefined;
+
     if (
       quality.passed &&
+      !unnecessarySchedulingQuestionFailed &&
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
@@ -791,6 +803,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
     }
 
+    if (unnecessarySchedulingQuestionFailed) {
+      const schedulingOverride = `\n\n===== CALL ACCEPTANCE TYPEFORM OVERRIDE =====\nLead agreed to the call. Send the Typeform / booking link now, do not ask about scheduling. The Typeform handles scheduling. Use the real Typeform or booking URL from the script's Available Links & URLs section; do not invent a URL or use a placeholder.\n=====`;
+      systemPromptForLLM = baseSystemPrompt + schedulingOverride;
+      console.warn(
+        `[ai-engine] Unnecessary scheduling question detected after call acceptance — forcing Typeform link drop (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
     // Log voice-quality failures (existing behaviour, unchanged).
     if (!quality.passed) {
       console.warn(
@@ -926,6 +946,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const callPitchBeforeCapitalFailed = quality.hardFails.some((f) =>
+        f.includes('call_pitch_before_capital_verification:')
+      );
+      if (callPitchBeforeCapitalFailed) {
+        const callBeforeCapitalOverride = `\n\n===== CALL PITCH BEFORE CAPITAL OVERRIDE =====\nYou have not asked the capital question yet. Ask it BEFORE proposing the call: "real quick bro, how much do you have set aside for the markets and your education?" Do NOT pitch the call or mention scheduling on this turn.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + callBeforeCapitalOverride;
+        console.warn(
+          `[ai-engine] Call pitch before capital verification detected — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const repetitiveQuestionFailed =
         quality.softSignals.repetitive_question_pattern !== undefined;
       if (repetitiveQuestionFailed) {
@@ -1018,6 +1049,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             auditErr
           );
         }
+      } else if (unnecessarySchedulingQuestionFailed) {
+        console.error(
+          `[ai-engine] Unnecessary scheduling question gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
+        parsed.escalateToHuman = true;
       } else if (!quality.passed) {
         // Voice quality gate exhausted. Most voice-quality failures are
         // "soft" — low score from missing emoji, one long sentence,
@@ -1046,7 +1082,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           (f) =>
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
-            f.includes('markdown_in_single_bubble:')
+            f.includes('markdown_in_single_bubble:') ||
+            f.includes('call_pitch_before_capital_verification:')
         );
         if (allBubblesEmpty) {
           console.error(
@@ -1371,6 +1408,32 @@ function isBotDetectionQuestion(text: string): boolean {
   return /\b(are\s+you\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+this\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+(this|that)\s+(automated|programmed|a\s+bot|a\s+robot|ai)|auto[-\s]?reply|programmed\s+(response|reply)|am\s+i\s+talking\s+to\s+(a\s+)?(bot|robot|ai)|real\s+person)\b/i.test(
     text
   );
+}
+
+function hasCapitalVerificationQuestionAndAnswer(
+  history: ConversationMessage[]
+): boolean {
+  let capitalQuestionSeen = false;
+
+  for (const msg of history) {
+    if (
+      (msg.sender === 'AI' || msg.sender === 'HUMAN') &&
+      containsCapitalQuestion(msg.content)
+    ) {
+      capitalQuestionSeen = true;
+      continue;
+    }
+
+    if (
+      capitalQuestionSeen &&
+      msg.sender === 'LEAD' &&
+      msg.content.trim().length > 0
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function formatConversationForLLM(

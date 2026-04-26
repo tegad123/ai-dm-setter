@@ -104,6 +104,34 @@ export const PROMISE_PATTERNS: RegExp[] = [
   /\blemme break (it|this) down\b/i
 ];
 
+const CALL_PITCH_RE =
+  /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
+
+const SCHEDULING_QUESTION_RE =
+  /\b(what|which)\s+(day|time)\s+works|\bwhen\s+(are\s+you\s+free|works|can\s+you\s+hop\s+on)|\bwhat\s+(day|time)\s+are\s+you\s+free|\bwhat'?s\s+(a\s+good\s+time|your\s+schedule)|\bwhat\s+does\s+your\s+schedule\s+look\s+like/i;
+
+const CALL_ACCEPTANCE_RE =
+  /\b(yes|yeah|yep|yup|sure|sounds\s+good|let'?s\s+do\s+it|lets\s+do\s+it|i'?m\s+down|im\s+down|that\s+works|works\s+for\s+me|any\s+day|asap|send\s+(it|the\s+link)|drop\s+(it|the\s+link)|go\s+ahead|perfect|okay|ok)\b/i;
+
+export function containsCallPitch(text: string): boolean {
+  return CALL_PITCH_RE.test(text);
+}
+
+export function containsSchedulingQuestion(text: string): boolean {
+  return SCHEDULING_QUESTION_RE.test(text);
+}
+
+export function isCallAcceptance(text: string): boolean {
+  if (
+    /\b(not\s+sure|maybe|i'?ll\s+think|let\s+me\s+think|not\s+now)\b/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+  return CALL_ACCEPTANCE_RE.test(text);
+}
+
 /**
  * Check whether a message looks like an UNKEPT promise — a short cliffhanger
  * that promises content without delivering it. Used by ai-engine to detect
@@ -224,8 +252,14 @@ export interface VoiceQualityOptions {
   incomeGoalAsked?: boolean;
   /** Whether any prior AI turn already asked the capital verification question. */
   capitalQuestionAsked?: boolean;
+  /** Whether this account requires capital verification before booking/call pitch. */
+  capitalVerificationRequired?: boolean;
+  /** True only after a capital question was asked and a lead answer was received. */
+  capitalVerificationSatisfied?: boolean;
   /** Last three AI questions before the current generated turn. */
   previousAIQuestions?: string[];
+  /** Most recent lead message before this generated reply. */
+  previousLeadMessage?: string | null;
   /** True when the most recent lead message included an image attachment. */
   previousLeadHadImage?: boolean;
   /** Email already captured for this lead. Used to prevent repeat asks. */
@@ -632,8 +666,6 @@ export function scoreVoiceQuality(
   // two turns reads as desperate and trains the lead to ghost.
   // Pattern is intentionally narrow so a legit "you ready to hop on?"
   // immediately after a clear yes/no doesn't false-fire.
-  const CALL_PITCH_RE =
-    /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
   if (options?.previousAIMessage) {
     const prevHasPitch = CALL_PITCH_RE.test(options.previousAIMessage);
     const currHasPitch = CALL_PITCH_RE.test(reply);
@@ -642,6 +674,16 @@ export function scoreVoiceQuality(
         "repeated_call_pitch: previous AI turn already pitched the call AND this turn pitches again. Acknowledge the lead's interim response before pitching twice in a row."
       );
     }
+  }
+
+  if (
+    options?.capitalVerificationRequired === true &&
+    options.capitalVerificationSatisfied !== true &&
+    containsCallPitch(reply)
+  ) {
+    hardFails.push(
+      'call_pitch_before_capital_verification: call pitch detected before the capital question has been asked and answered'
+    );
   }
 
   // 10. Title-case opener — Daniel's voice starts messages in lowercase.
@@ -959,6 +1001,14 @@ export function scoreVoiceQuality(
     if (conversationShort && capitalNotFailed && leadNotUnqualified) {
       softSignals.premature_soft_exit_warm_lead = -0.4;
     }
+  }
+
+  if (
+    options?.previousLeadMessage &&
+    isCallAcceptance(options.previousLeadMessage) &&
+    containsSchedulingQuestion(reply)
+  ) {
+    softSignals.unnecessary_scheduling_question = -0.4;
   }
 
   // ── Calculate final score ───────────────────────────────────────
