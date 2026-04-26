@@ -186,6 +186,7 @@ export async function POST(
             ...(isEdited
               ? {
                   sentByUserId: auth.userId,
+                  humanSource: 'DASHBOARD',
                   isHumanOverride: true,
                   rejectedAISuggestionId: suggestion.id,
                   editedFromSuggestion: true
@@ -197,11 +198,21 @@ export async function POST(
         });
         messageIds.push(msg.id);
 
+        const humanSource =
+          msg.humanSource === 'DASHBOARD' || msg.humanSource === 'PHONE'
+            ? msg.humanSource
+            : null;
+
         broadcastNewMessage({
           id: msg.id,
           conversationId,
           sender: msg.sender,
           content: bubble,
+          humanSource,
+          sentByUser: isEdited
+            ? { id: auth.userId, name: auth.name, email: auth.email }
+            : null,
+          platformMessageId: msg.platformMessageId,
           timestamp: msg.timestamp.toISOString()
         });
 

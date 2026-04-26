@@ -295,7 +295,12 @@ export async function getConversations(
     throw new Error('No Meta access token configured');
   }
 
-  const pageId = process.env.FACEBOOK_PAGE_ID;
+  const { getMetaPageId } = await import('@/lib/credential-store');
+  const pageId =
+    (await getMetaPageId(accountId)) || process.env.FACEBOOK_PAGE_ID;
+  if (!pageId) {
+    throw new Error('No Facebook Page ID configured for this account');
+  }
   const url = `${GRAPH_API_BASE}/${pageId}/conversations?fields=participants,updated_time&limit=${limit}&access_token=${accessToken}`;
 
   const response = await fetch(url);

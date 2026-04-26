@@ -168,6 +168,18 @@ export function ConversationsView() {
     }
   });
 
+  // Phone-origin Meta echoes are saved server-side as HUMAN/PHONE rows.
+  // Refresh immediately when the webhook broadcasts one so Daniel's
+  // native Facebook/Instagram replies appear without waiting for polling.
+  useRealtime('message:new', (data) => {
+    const payload = data as { conversationId?: string } | null;
+    refetchList();
+    if (payload?.conversationId && payload.conversationId === activeId) {
+      refetchMessages();
+      refetchSuggestion();
+    }
+  });
+
   // Auto-refresh conversations every 8s for tags, scores, messages,
   // and anything the SSE path might miss (cold-start, missed events,
   // etc.). The suggestion banner also piggybacks on this poll so it

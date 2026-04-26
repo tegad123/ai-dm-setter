@@ -51,6 +51,9 @@ export function broadcastNewMessage(data: {
   content: string;
   imageUrl?: string | null;
   hasImage?: boolean;
+  humanSource?: 'DASHBOARD' | 'PHONE' | null;
+  sentByUser?: { id: string; name: string; email?: string | null } | null;
+  platformMessageId?: string | null;
   timestamp: string;
   // Multi-bubble fields. Null/undefined for legacy single-message sends
   // (the UI treats absence as an implicit 1-bubble group). When present,

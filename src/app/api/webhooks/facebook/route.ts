@@ -188,7 +188,21 @@ async function processFacebookEvents(payload: any): Promise<void> {
     );
 
     // ── Handle messaging events (new Messenger DM received) ────────────
-    for (const event of entry.messaging ?? []) {
+    // Facebook Page Inbox / handover events can arrive under `standby`
+    // instead of `messaging`. Treat both arrays as first-class events so
+    // native Messenger replies still hit the admin echo capture path.
+    const events = [
+      ...(entry.messaging ?? []).map((event: any) => ({
+        event,
+        bucket: 'messaging' as const
+      })),
+      ...(entry.standby ?? []).map((event: any) => ({
+        event,
+        bucket: 'standby' as const
+      }))
+    ];
+
+    for (const { event, bucket } of events) {
       if (!event.message) continue;
 
       const senderId: string = event.sender?.id ?? '';
@@ -208,16 +222,21 @@ async function processFacebookEvents(payload: any): Promise<void> {
       console.log(
         `[facebook-webhook] Message: sender=${senderId}, recipient=${recipientId}, ` +
           `isEcho=${isEcho}, isAdmin=${isAdminMessage}, pageOwnIds=[${Array.from(pageOwnIds).join(',')}], ` +
-          `text="${messageText?.slice(0, 50)}" attachments=${attachments.length}`
+          `bucket=${bucket}, text="${messageText?.slice(0, 50)}" attachments=${attachments.length}`
       );
 
       if (isAdminMessage) {
         if (!messageText) continue;
-        const leadPlatformUserId = isEcho
-          ? recipientId
-          : recipientId || senderId;
+        const candidateLeadIds = Array.from(
+          new Set(
+            [recipientId, senderId].filter((id) => id && !pageOwnIds.has(id))
+          )
+        );
+        const leadPlatformUserId =
+          candidateLeadIds[0] ||
+          (isEcho ? recipientId : recipientId || senderId);
         console.log(
-          `[facebook-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}`
+          `[facebook-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}, candidates=[${candidateLeadIds.join(',')}]`
         );
         try {
           const { processAdminMessage } = await import(
@@ -228,7 +247,8 @@ async function processFacebookEvents(payload: any): Promise<void> {
             platformUserId: leadPlatformUserId,
             platform: 'FACEBOOK',
             messageText,
-            platformMessageId: platformMessageId || undefined
+            platformMessageId: platformMessageId || undefined,
+            candidatePlatformUserIds: candidateLeadIds
           });
         } catch (adminErr) {
           console.error(

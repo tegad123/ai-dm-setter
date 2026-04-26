@@ -93,6 +93,12 @@ export interface Message {
   systemPromptVersion?: string | null;
   isHumanOverride?: boolean;
   humanOverrideNote?: string | null;
+  humanSource?: 'DASHBOARD' | 'PHONE' | null;
+  sentByUser?: { id: string; name: string; email?: string | null } | null;
+  platformMessageId?: string | null;
+  messageGroupId?: string | null;
+  bubbleIndex?: number | null;
+  bubbleTotalCount?: number | null;
 }
 
 export interface OverviewStats {

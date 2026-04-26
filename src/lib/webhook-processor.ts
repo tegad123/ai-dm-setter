@@ -3767,6 +3767,7 @@ async function sendAIReply(
 export interface AdminMessageParams {
   accountId: string;
   platformUserId: string; // The lead's platform user ID (recipient of admin message)
+  candidatePlatformUserIds?: string[]; // Defensive FB echo sender/recipient variants
   platform: 'INSTAGRAM' | 'FACEBOOK';
   messageText: string;
   platformMessageId?: string;
@@ -3782,20 +3783,32 @@ export async function processAdminMessage(
   const {
     accountId,
     platformUserId,
+    candidatePlatformUserIds = [],
     platform,
     messageText,
     platformMessageId
   } = params;
 
-  // Find existing lead by platformUserId
+  const leadIdCandidates = Array.from(
+    new Set([platformUserId, ...candidatePlatformUserIds].filter(Boolean))
+  );
+
+  // Find existing lead by any plausible platformUserId. Facebook echo
+  // payloads are documented as sender=PAGE_ID / recipient=LEAD_PSID, but
+  // standby/handover deliveries can vary. Trying both non-page IDs prevents
+  // a native Page Inbox reply from being dropped before it reaches history.
   const lead = await prisma.lead.findFirst({
-    where: { accountId, platformUserId, platform: platform as any },
+    where: {
+      accountId,
+      platformUserId: { in: leadIdCandidates },
+      platform: platform as any
+    },
     include: { conversation: true }
   });
 
   if (!lead?.conversation) {
     console.log(
-      `[webhook-processor] Admin message for unknown lead ${platformUserId} — skipping`
+      `[webhook-processor] Admin message for unknown lead candidates=[${leadIdCandidates.join(',')}] platform=${platform} — skipping`
     );
     return;
   }
@@ -4054,7 +4067,9 @@ export async function processAdminMessage(
     conversationId,
     sender: 'HUMAN',
     content: messageText,
-    timestamp: new Date().toISOString()
+    humanSource: 'PHONE',
+    platformMessageId: platformMessageId || null,
+    timestamp: message.timestamp.toISOString()
   });
   if (autoPausedFromConsecutivePhone) {
     broadcastAIStatusChange({ conversationId, aiActive: false });

@@ -277,11 +277,21 @@ export async function POST(
     });
 
     // Broadcast real-time events
+    const humanSource =
+      message.humanSource === 'DASHBOARD' || message.humanSource === 'PHONE'
+        ? message.humanSource
+        : null;
     broadcastNewMessage({
       id: message.id,
       conversationId: id,
       sender: message.sender,
       content: message.content,
+      humanSource,
+      sentByUser:
+        sender === 'HUMAN'
+          ? { id: auth.userId, name: auth.name, email: auth.email }
+          : null,
+      platformMessageId: message.platformMessageId,
       timestamp: message.timestamp.toISOString()
     });
 
