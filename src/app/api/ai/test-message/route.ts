@@ -13,16 +13,17 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
     const body = await req.json();
-    const { leadMessage, leadName, platform, triggerType } = body as {
+    const { leadMessage, imageUrl, leadName, platform, triggerType } = body as {
       leadMessage?: string;
+      imageUrl?: string;
       leadName?: string;
       platform?: string;
       triggerType?: string;
     };
 
-    if (!leadMessage) {
+    if (!leadMessage && !imageUrl) {
       return NextResponse.json(
-        { error: 'leadMessage is required' },
+        { error: 'leadMessage or imageUrl is required' },
         { status: 400 }
       );
     }
@@ -77,8 +78,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Make the AI call
-    const messages = [{ role: 'user' as const, content: leadMessage }];
+    // Make the AI call. When imageUrl is present, use the same low-detail
+    // vision shape as the production DM pipeline.
+    const leadText =
+      leadMessage || 'The lead sent this image without any text message.';
+    const openAIMessages = imageUrl
+      ? [
+          {
+            role: 'user' as const,
+            content: [
+              {
+                type: 'image_url' as const,
+                image_url: { url: imageUrl, detail: 'low' as const }
+              },
+              { type: 'text' as const, text: leadText }
+            ]
+          }
+        ]
+      : [{ role: 'user' as const, content: leadText }];
+    const anthropicMessages = imageUrl
+      ? [
+          {
+            role: 'user' as const,
+            content: [
+              {
+                type: 'image' as const,
+                source: { type: 'url' as const, url: imageUrl }
+              },
+              { type: 'text' as const, text: leadText }
+            ]
+          }
+        ]
+      : [{ role: 'user' as const, content: leadText }];
 
     let rawResponse: string;
 
@@ -88,8 +119,11 @@ export async function POST(req: NextRequest) {
       const response = await client.chat.completions.create({
         model: model || 'gpt-4o',
         temperature: 0.85,
-        max_tokens: 500,
-        messages: [{ role: 'system', content: systemPrompt }, ...messages]
+        max_completion_tokens: 500,
+        messages: [
+          { role: 'system' as const, content: systemPrompt },
+          ...openAIMessages
+        ] as any
       });
       rawResponse = response.choices[0]?.message?.content?.trim() || '';
     } else {
@@ -100,7 +134,7 @@ export async function POST(req: NextRequest) {
         system: systemPrompt,
         temperature: 0.85,
         max_tokens: 500,
-        messages
+        messages: anthropicMessages as any
       });
       const textBlock = response.content.find((block) => block.type === 'text');
       rawResponse = textBlock?.text?.trim() || '';

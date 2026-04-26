@@ -163,6 +163,34 @@ export async function transitionLeadStage(
         err
       );
     }
+
+    // 3c. Cancel pending follow-ups (Kelvin Kelvot 2026-04-25). Once a
+    //     lead is marked UNQUALIFIED, any 12h chain row still PENDING
+    //     would fire on a soft-exited conversation. Tear down the
+    //     cascade so no "yo bro you still there?" lands hours later.
+    //     We need the conversationId — fetched off the updated lead.
+    try {
+      const convo = await prisma.conversation.findFirst({
+        where: { leadId },
+        select: { id: true }
+      });
+      if (convo) {
+        const { cancelAllPendingFollowUps } = await import(
+          '@/lib/follow-up-sequence'
+        );
+        const cancelled = await cancelAllPendingFollowUps(convo.id);
+        if (cancelled > 0) {
+          console.log(
+            `[lead-stage] cancelled ${cancelled} pending follow-up(s) on UNQUALIFIED transition for lead ${leadId} (convo ${convo.id})`
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[lead-stage] cancelAllPendingFollowUps on UNQUALIFIED transition failed (non-fatal):',
+        err
+      );
+    }
   }
 
   // 4. Broadcast update (dynamic import to avoid circular dependencies)

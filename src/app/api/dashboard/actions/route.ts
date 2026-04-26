@@ -41,7 +41,19 @@ export async function GET(request: NextRequest) {
     // ── Helper: shared accountId-scoped lead filter ──────────────────
     // Conversation doesn't carry accountId directly — must filter via
     // lead. Reused across most queries below.
-    const accountConvFilter = { lead: { is: { accountId } } } as const;
+    //
+    // Cold-pitch / SPAM exclusion: Action Required is the operator's
+    // attention queue, not the spam bucket. Filter out leads tagged
+    // 'cold-pitch' so an Omar-style agency pitch doesn't surface as
+    // a "stuck conversation" 24h later just because no human replied.
+    const accountConvFilter = {
+      lead: {
+        is: {
+          accountId,
+          tags: { none: { tag: { name: 'cold-pitch' } } }
+        }
+      }
+    } as const;
 
     // ── Run all queries in parallel ──────────────────────────────────
     // Each query is independent. Promise.all lets the endpoint stay

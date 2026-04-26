@@ -5,6 +5,8 @@ export interface Message {
   timestamp: string;
   isVoiceNote?: boolean;
   voiceNoteUrl?: string;
+  imageUrl?: string | null;
+  hasImage?: boolean;
   isHumanOverride?: boolean;
   humanOverrideNote?: string | null;
   // Operator identity for HUMAN messages. Populated from Message.sentByUser

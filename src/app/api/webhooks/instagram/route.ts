@@ -14,6 +14,22 @@ import prisma from '@/lib/prisma';
 // doesn't have to stay alive for minutes. 90s leaves headroom for AI gen.
 const INLINE_DELAY_THRESHOLD_SECONDS = 90;
 
+function hasImageAttachment(attachments: unknown): boolean {
+  return (
+    Array.isArray(attachments) &&
+    attachments.some((attachment) => {
+      const candidate = attachment as {
+        type?: unknown;
+        payload?: { url?: unknown } | null;
+      };
+      return (
+        candidate?.type === 'image' &&
+        typeof candidate.payload?.url === 'string'
+      );
+    })
+  );
+}
+
 // Vercel Hobby defaults to 10s — AI generation + send needs more time.
 // Bumped to 120s to accommodate the inline-delay-then-reply path (after()
 // callback): up to 90s delay + ~25s for AI generation + Instagram send.
@@ -234,10 +250,13 @@ async function processInstagramEvents(payload: any): Promise<void> {
       const senderId: string = event.sender?.id ?? '';
       const recipientId: string = event.recipient?.id ?? '';
       const messageText: string = event.message?.text ?? '';
+      const attachments = Array.isArray(event.message?.attachments)
+        ? event.message.attachments
+        : [];
       const platformMessageId: string = event.message?.mid ?? '';
       const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!messageText) continue;
+      if (!messageText && !hasImageAttachment(attachments)) continue;
 
       // ── Admin/page message detection ────────────────────────────────
       // Meta sends message echoes when the page sends a message (is_echo=true)
@@ -247,10 +266,11 @@ async function processInstagramEvents(payload: any): Promise<void> {
       console.log(
         `[instagram-webhook] Message: sender=${senderId}, recipient=${recipientId}, ` +
           `isEcho=${isEcho}, isAdmin=${isAdminMessage}, pageOwnIds=[${Array.from(pageOwnIds).join(',')}], ` +
-          `text="${messageText?.slice(0, 50)}"`
+          `text="${messageText?.slice(0, 50)}" attachments=${attachments.length}`
       );
 
       if (isAdminMessage) {
+        if (!messageText) continue;
         // This message was sent by the business/admin, not the lead
         const leadPlatformUserId = isEcho
           ? recipientId
@@ -310,6 +330,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
           senderName,
           senderHandle,
           messageText,
+          attachments,
           triggerType: 'DM',
           platformMessageId: platformMessageId || undefined
         });

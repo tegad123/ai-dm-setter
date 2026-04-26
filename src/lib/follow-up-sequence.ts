@@ -92,15 +92,105 @@ export function containsBookingLink(text: string): boolean {
   return text.includes(TYPEFORM_BOOKING_URL);
 }
 
+// ---------------------------------------------------------------------------
+// Soft-exit / unqualified gate
+// ---------------------------------------------------------------------------
+// Kelvin Kelvot 2026-04-25: lead said "no capital", AI routed to downsell,
+// downsell declined, AI sent the YouTube free-resource link, lead replied
+// "okay" — and 12h later the cascade fired "yo bro you still there?".
+// That's an UNQUALIFIED soft-exited lead being chased like an active one.
+// Solution: gate both schedule helpers on a structured set of "this convo
+// is over" signals. When ANY signal fires, do NOT schedule a follow-up.
+
+/**
+ * URL patterns that mark an AI message as a "soft-exit / free-resource"
+ * drop. When one of these appears in the AI's just-shipped text, the
+ * cascade should not start. Daniel's primary YouTube redirect is
+ * youtube.com/watch?v=e7Ujmb019gE; broaden to any youtube.com/watch /
+ * youtu.be link to be safe (free-resource routing always points to a
+ * YouTube video).
+ */
+const FREE_RESOURCE_URL_PATTERNS: RegExp[] = [
+  /https?:\/\/(?:www\.)?youtube\.com\/watch/i,
+  /https?:\/\/youtu\.be\//i
+];
+
+/** True if `text` contains a free-resource (YouTube) URL. */
+export function containsFreeResourceLink(text: string): boolean {
+  if (!text) return false;
+  return FREE_RESOURCE_URL_PATTERNS.some((re) => re.test(text));
+}
+
+export interface FollowUpGateInput {
+  /** Lead.stage at the moment the AI shipped — UNQUALIFIED skips. */
+  leadStage?: string | null;
+  /** parsed.softExit from the LLM response — true skips. */
+  softExit?: boolean;
+  /** Conversation.outcome at ship time — DORMANT / SOFT_EXIT skip. */
+  conversationOutcome?: string | null;
+  /** The shipped reply text — YouTube URL skips. */
+  replyText?: string | null;
+}
+
+export interface FollowUpGateResult {
+  skip: boolean;
+  reason: string | null;
+}
+
+/**
+ * Pure-logic gate. Returns `{ skip: true, reason }` when the just-shipped
+ * AI message looks like a soft-exit / unqualified-redirect, in which case
+ * the caller must NOT schedule a follow-up cascade.
+ */
+export function shouldSkipFollowUp(
+  input: FollowUpGateInput
+): FollowUpGateResult {
+  if (input.leadStage === 'UNQUALIFIED') {
+    return { skip: true, reason: 'lead_unqualified' };
+  }
+  if (input.softExit === true) {
+    return { skip: true, reason: 'soft_exit_flag' };
+  }
+  if (
+    input.conversationOutcome === 'DORMANT' ||
+    input.conversationOutcome === 'SOFT_EXIT'
+  ) {
+    return {
+      skip: true,
+      reason: `conversation_outcome_${input.conversationOutcome.toLowerCase()}`
+    };
+  }
+  if (input.replyText && containsFreeResourceLink(input.replyText)) {
+    return { skip: true, reason: 'free_resource_url_sent' };
+  }
+  return { skip: false, reason: null };
+}
+
 /**
  * Schedule the 30-minute BOOKING_LINK_FOLLOWUP check-in after the AI ships
  * a Typeform URL. Idempotent: if a PENDING row already exists for this
  * conversation, we don't stack a second one.
+ *
+ * `gate` is the optional Kelvin Kelvot guard — when the same turn that
+ * shipped the Typeform URL ALSO read as a soft-exit (very unlikely in
+ * practice, but defensive), skip rather than start a 30-min check-in
+ * for a conversation that's already winding down.
  */
 export async function scheduleBookingLinkFollowup(
   conversationId: string,
-  accountId: string
+  accountId: string,
+  gate?: FollowUpGateInput
 ): Promise<void> {
+  if (gate) {
+    const verdict = shouldSkipFollowUp(gate);
+    if (verdict.skip) {
+      console.log(
+        `[follow-up-sequence] skipped BOOKING_LINK_FOLLOWUP for ${conversationId} — ${verdict.reason}`
+      );
+      return;
+    }
+  }
+
   const existing = await prisma.scheduledMessage.findFirst({
     where: {
       conversationId,
@@ -133,13 +223,23 @@ export async function scheduleBookingLinkFollowup(
  * 12h if the lead stays silent. Idempotent per conversation: any existing
  * PENDING FOLLOW_UP_* row is cancelled first so we don't stack two chains
  * running side-by-side from two back-to-back AI messages.
+ *
+ * `gate` (optional) is the Kelvin Kelvot soft-exit guard. When the just-
+ * shipped AI message looks like a soft-exit / free-resource drop /
+ * unqualified-redirect, no chain is started. Any pre-existing PENDING
+ * chain rows are STILL cancelled in that case — the new AI message
+ * supersedes them, and we don't want a stale 12h chain firing on a
+ * conversation that's just been wound down.
  */
 export async function scheduleFollowUp1AfterAiMessage(
   conversationId: string,
-  accountId: string
+  accountId: string,
+  gate?: FollowUpGateInput
 ): Promise<void> {
   // Cancel any leftover PENDING chain rows — the newer AI message resets
   // the clock. Only cancels FOLLOW_UP_* chain rows, not BOOKING_LINK_FOLLOWUP.
+  // Runs BEFORE the gate check so a stale 12h chain doesn't survive a
+  // soft-exit ship.
   await prisma.scheduledMessage.updateMany({
     where: {
       conversationId,
@@ -150,6 +250,16 @@ export async function scheduleFollowUp1AfterAiMessage(
     },
     data: { status: 'CANCELLED' }
   });
+
+  if (gate) {
+    const verdict = shouldSkipFollowUp(gate);
+    if (verdict.skip) {
+      console.log(
+        `[follow-up-sequence] skipped FOLLOW_UP_1 for ${conversationId} — ${verdict.reason}`
+      );
+      return;
+    }
+  }
 
   const scheduledFor = new Date(Date.now() + FOLLOW_UP_INTERVAL_MS);
   await prisma.scheduledMessage.create({

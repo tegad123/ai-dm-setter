@@ -20,7 +20,9 @@ import {
   getTeamAnalytics,
   getLeadStageHistory,
   getPendingSuggestion,
-  type PendingSuggestion
+  getLeadDistribution,
+  type PendingSuggestion,
+  type LeadDistributionRow
 } from '@/lib/api';
 import type {
   Lead,
@@ -309,6 +311,16 @@ export function useFunnel() {
     loading,
     error
   };
+}
+
+export function useLeadDistribution() {
+  const { data, loading, error, refetch } = useApiFetch(
+    () => getLeadDistribution(),
+    []
+  );
+  const stages: LeadDistributionRow[] = (data as any)?.stages ?? [];
+  const total: number = (data as any)?.total ?? 0;
+  return { stages, total, loading, error, refetch };
 }
 
 export function useTriggerPerformance() {

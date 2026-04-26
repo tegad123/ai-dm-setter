@@ -62,6 +62,30 @@ async function getTrainingPhase(): Promise<string> {
   return trainingPhaseInFlight;
 }
 
+function MessageImage({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return <p className='text-sm'>[Image]</p>;
+  }
+
+  return (
+    <a
+      href={src}
+      target='_blank'
+      rel='noreferrer'
+      className='block max-w-[240px]'
+    >
+      <img
+        src={src}
+        alt='Lead shared image'
+        className='max-h-80 w-full max-w-[240px] rounded-[12px] object-cover'
+        onError={() => setFailed(true)}
+      />
+    </a>
+  );
+}
+
 // Placeholder examples rotate every 2s to seed the user with the kind
 // of feedback we want ("too formal", "wrong tone", etc.) without
 // locking them into any one framing.
@@ -442,6 +466,10 @@ export function ConversationThread({
                     inGroup && nextMsg?.messageGroupId === groupId;
                   const isFirstInGroup = !sameGroupAsPrev;
                   const isLastInGroup = !sameGroupAsNext;
+                  const displayContent =
+                    msg.hasImage && msg.content === '[Image]'
+                      ? ''
+                      : msg.content;
                   return (
                     <div
                       key={msg.id}
@@ -502,7 +530,19 @@ export function ConversationThread({
                               <IconMicrophone className='h-3 w-3' /> Voice Note
                             </div>
                           )}
-                          <p className='text-sm'>{msg.content}</p>
+                          {msg.imageUrl && (
+                            <div className={displayContent ? 'mb-2' : ''}>
+                              <MessageImage src={msg.imageUrl} />
+                            </div>
+                          )}
+                          {msg.hasImage && !msg.imageUrl && (
+                            <p className='text-sm'>[Image]</p>
+                          )}
+                          {displayContent && (
+                            <p className='text-sm whitespace-pre-wrap'>
+                              {displayContent}
+                            </p>
+                          )}
                           {/* Timestamp + icon row shown only on the last bubble of a group */}
                           {isLastInGroup && (
                             <div className='mt-1 flex items-center gap-1'>

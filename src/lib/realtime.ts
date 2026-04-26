@@ -49,6 +49,8 @@ export function broadcastNewMessage(data: {
   conversationId: string;
   sender: string;
   content: string;
+  imageUrl?: string | null;
+  hasImage?: boolean;
   timestamp: string;
   // Multi-bubble fields. Null/undefined for legacy single-message sends
   // (the UI treats absence as an implicit 1-bubble group). When present,

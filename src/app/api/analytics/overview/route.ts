@@ -9,27 +9,53 @@ export async function GET(request: NextRequest) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const [totalLeads, leadsToday, stageCounts, revenueResult] =
-      await Promise.all([
-        prisma.lead.count({ where: { accountId: auth.accountId } }),
-        prisma.lead.count({
-          where: { accountId: auth.accountId, createdAt: { gte: todayStart } }
-        }),
-        prisma.lead.groupBy({
-          by: ['stage'],
-          _count: { id: true },
-          where: {
-            accountId: auth.accountId,
-            stage: {
-              in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON']
-            }
+    // Cold-pitch / SPAM exclusion: Omar-style agency pitches that hit
+    // the cold-pitch detector are tagged 'cold-pitch' and outcome=SPAM.
+    // They count as their own bucket — not part of the regular Leads
+    // Today / Total Leads numbers. Filter at the query level so every
+    // KPI built off these counts inherits the exclusion.
+    const excludeColdPitchTag = {
+      tags: { none: { tag: { name: 'cold-pitch' } } }
+    };
+    const [
+      totalLeads,
+      leadsToday,
+      leadsTodayFiltered,
+      stageCounts,
+      revenueResult
+    ] = await Promise.all([
+      prisma.lead.count({
+        where: { accountId: auth.accountId, ...excludeColdPitchTag }
+      }),
+      prisma.lead.count({
+        where: {
+          accountId: auth.accountId,
+          createdAt: { gte: todayStart },
+          ...excludeColdPitchTag
+        }
+      }),
+      prisma.lead.count({
+        where: {
+          accountId: auth.accountId,
+          createdAt: { gte: todayStart },
+          tags: { some: { tag: { name: 'cold-pitch' } } }
+        }
+      }),
+      prisma.lead.groupBy({
+        by: ['stage'],
+        _count: { id: true },
+        where: {
+          accountId: auth.accountId,
+          stage: {
+            in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON']
           }
-        }),
-        prisma.lead.aggregate({
-          where: { accountId: auth.accountId },
-          _sum: { revenue: true }
-        })
-      ]);
+        }
+      }),
+      prisma.lead.aggregate({
+        where: { accountId: auth.accountId },
+        _sum: { revenue: true }
+      })
+    ]);
 
     const counts: Record<string, number> = {};
     for (const row of stageCounts) {
@@ -53,6 +79,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       totalLeads,
       leadsToday,
+      // Separate count of cold-pitch / SPAM leads created today. Lets the
+      // dashboard show "12 leads today (+3 filtered)" instead of hiding
+      // the bucket entirely. Frontend optional — safe to ignore.
+      leadsTodayFiltered,
       callsBooked,
       showRate: Math.round(showRate * 100) / 100,
       closeRate: Math.round(closeRate * 100) / 100,

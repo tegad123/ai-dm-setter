@@ -82,6 +82,8 @@ export interface Message {
   content: string;
   isVoiceNote?: boolean;
   voiceNoteUrl?: string | null;
+  imageUrl?: string | null;
+  hasImage?: boolean;
   timestamp?: string;
   sentAt?: string;
   stage?: string | null;
@@ -343,6 +345,21 @@ export async function getLeadVolume(
 export async function getFunnel(): Promise<FunnelStep[]> {
   const data = await apiFetch('/api/analytics/funnel');
   return data.steps || data;
+}
+
+export interface LeadDistributionRow {
+  stage: string;
+  count: number;
+}
+export async function getLeadDistribution(): Promise<{
+  stages: LeadDistributionRow[];
+  total: number;
+}> {
+  const data = await apiFetch('/api/analytics/lead-distribution');
+  return {
+    stages: (data?.stages ?? []) as LeadDistributionRow[],
+    total: typeof data?.total === 'number' ? data.total : 0
+  };
 }
 
 export async function getTriggerPerformance(): Promise<

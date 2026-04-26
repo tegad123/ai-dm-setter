@@ -122,6 +122,7 @@ enum ConversationOutcome {
   PRICE_QUESTION_DEFLECTED
   SOFT_EXIT
   DORMANT
+  SPAM
 }
 
 enum LeadIntentTag {
@@ -908,6 +909,8 @@ model Message {
   content        String
   isVoiceNote    Boolean       @default(false)
   voiceNoteUrl   String?
+  imageUrl       String?       // Permanent URL of image sent by lead; Meta CDN fallback may expire
+  hasImage       Boolean       @default(false)
   sentByUserId      String?                // Only for HUMAN sender
   platformMessageId String?                // Meta's message ID (event.message.mid) for dedup
   timestamp         DateTime   @default(now())

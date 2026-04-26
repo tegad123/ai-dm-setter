@@ -28,6 +28,7 @@ import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { transitionLeadStage } from '@/lib/lead-stage';
 import type { LeadStage } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Meta send helper — delivery with pmid capture + token-invalidation alert
@@ -303,9 +304,17 @@ export interface IncomingMessageParams {
   senderName: string;
   senderHandle: string;
   messageText: string;
+  attachments?: IncomingMessageAttachment[];
   triggerType: 'DM' | 'COMMENT';
   triggerSource?: string;
   platformMessageId?: string; // Meta's event.message.mid for dedup
+}
+
+export interface IncomingMessageAttachment {
+  type?: string | null;
+  payload?: {
+    url?: string | null;
+  } | null;
 }
 
 export interface ProcessResult {
@@ -324,6 +333,72 @@ export interface ProcessResult {
    * to tegaumukoro_'s "Hey" on 2026-04-08.
    */
   skipReply?: boolean;
+}
+
+function extractFirstImageUrl(
+  attachments?: IncomingMessageAttachment[]
+): string | null {
+  if (!Array.isArray(attachments)) return null;
+  for (const attachment of attachments) {
+    if (attachment?.type !== 'image') continue;
+    const url = attachment.payload?.url;
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      return url;
+    }
+  }
+  return null;
+}
+
+function extensionFromContentType(contentType: string): string {
+  const normalized = contentType.toLowerCase().split(';')[0]?.trim();
+  if (normalized === 'image/png') return 'png';
+  if (normalized === 'image/webp') return 'webp';
+  if (normalized === 'image/gif') return 'gif';
+  return 'jpg';
+}
+
+async function persistInboundImageUrl(params: {
+  accountId: string;
+  imageUrl: string;
+  platformMessageId?: string;
+}): Promise<string> {
+  const { accountId, imageUrl, platformMessageId } = params;
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(
+        `Meta image download failed: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const extension = extensionFromContentType(contentType);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const { put } = await import('@vercel/blob');
+    const safeObjectName = (platformMessageId || randomUUID()).replace(
+      /[^a-zA-Z0-9._-]/g,
+      '-'
+    );
+    const blob = await put(
+      `lead-images/${accountId}/${safeObjectName}.${extension}`,
+      buffer,
+      {
+        access: 'public',
+        contentType
+      }
+    );
+    return blob.url;
+  } catch (err) {
+    // Sprint 7: make permanent storage mandatory for all inbound images.
+    // Meta CDN attachment URLs typically expire after about an hour; this
+    // fallback keeps the turn processable even when Blob/network access is
+    // unavailable, but old conversation images may stop rendering.
+    console.warn(
+      '[webhook-processor] Failed to persist inbound image; falling back to expiring Meta CDN URL:',
+      err
+    );
+    return imageUrl;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,10 +534,14 @@ export async function processIncomingMessage(
     platform,
     senderName,
     senderHandle,
-    messageText,
+    messageText: rawMessageText,
+    attachments = [],
     triggerType,
     triggerSource
   } = params;
+  const inboundImageUrl = extractFirstImageUrl(attachments);
+  const messageText =
+    rawMessageText?.trim() || (inboundImageUrl ? '[Image]' : '');
 
   console.log(
     `[webhook-processor] Processing ${platform} ${triggerType} from ${senderHandle}: "${messageText.slice(0, 80)}"`
@@ -665,6 +744,13 @@ export async function processIncomingMessage(
 
   // ── Step 2: Save the incoming message ──────────────────────────
   const now = new Date();
+  const persistedImageUrl = inboundImageUrl
+    ? await persistInboundImageUrl({
+        accountId,
+        imageUrl: inboundImageUrl,
+        platformMessageId: params.platformMessageId
+      })
+    : null;
   let message;
   try {
     message = await prisma.message.create({
@@ -672,6 +758,8 @@ export async function processIncomingMessage(
         conversationId,
         sender: 'LEAD',
         content: messageText,
+        imageUrl: persistedImageUrl,
+        hasImage: Boolean(persistedImageUrl),
         timestamp: now,
         platformMessageId: params.platformMessageId || null
       }
@@ -780,6 +868,8 @@ export async function processIncomingMessage(
           conversationId,
           sender: 'LEAD',
           content: messageText,
+          imageUrl: message.imageUrl,
+          hasImage: message.hasImage,
           timestamp: now.toISOString()
         });
         broadcastConversationUpdate({
@@ -870,6 +960,88 @@ export async function processIncomingMessage(
     );
   }
 
+  // ── Step 3c: Cold-pitch / agency-spam detection ────────────────
+  // Omar 2026-04-25: textbook SMMA cold pitch ("helped a coach go from
+  // 800 to 55K followers ... want me to send it over?") landed on a
+  // brand-new lead row and the AI engaged with it. Detect the most
+  // common pitch shapes BEFORE any AI generation fires. Only checks
+  // first-contact messages — once the conversation has any prior
+  // history, a casual "I run an agency too" is fine and shouldn't
+  // be silenced.
+  //
+  // When matched:
+  //   • outcome → SPAM (the conversation is closed in a dedicated
+  //     bucket; SPAM is excluded from leads-today + the default
+  //     conversations list)
+  //   • apply 'cold-pitch' tag so ops can review the bucket if they
+  //     want to find a missed real lead
+  //   • DO NOT set aiActive=false — per spec, just skip this turn.
+  //     If the operator wants to manually engage, the dashboard
+  //     toggle is one click.
+  //   • return early with skipReply=true so no AI scheduling runs.
+  try {
+    const [aiMsgCount, leadMsgCount] = await Promise.all([
+      prisma.message.count({
+        where: { conversationId, sender: 'AI' }
+      }),
+      prisma.message.count({
+        where: { conversationId, sender: 'LEAD' }
+      })
+    ]);
+    if (aiMsgCount === 0 && leadMsgCount === 1) {
+      const { detectColdPitch, COLD_PITCH_TAG_NAME } = await import(
+        '@/lib/cold-pitch-detector'
+      );
+      const pitch = detectColdPitch(messageText);
+      if (pitch.detected) {
+        console.warn(
+          `[webhook-processor] COLD PITCH DETECTED on conv ${conversationId} — patternIndex=${pitch.patternIndex} match="${pitch.match}" lead=@${senderHandle}`
+        );
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: { outcome: 'SPAM' }
+        });
+        try {
+          await applyAutoTags(accountId, lead.id, [COLD_PITCH_TAG_NAME], 1.0);
+        } catch (tagErr) {
+          console.error(
+            '[webhook-processor] cold-pitch tag application failed (non-fatal):',
+            tagErr
+          );
+        }
+        broadcastNewMessage({
+          id: message.id,
+          conversationId,
+          sender: 'LEAD',
+          content: messageText,
+          imageUrl: message.imageUrl,
+          hasImage: message.hasImage,
+          timestamp: now.toISOString()
+        });
+        broadcastConversationUpdate({
+          id: conversationId,
+          leadId: lead.id,
+          aiActive: lead.conversation!.aiActive,
+          unreadCount: (lead.conversation!.unreadCount || 0) + 1,
+          lastMessageAt: now.toISOString()
+        });
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: message.id,
+          isNewLead,
+          skipReply: true
+        };
+      }
+    }
+  } catch (pitchErr) {
+    // Non-fatal — fall through to normal processing on any error.
+    console.error(
+      '[webhook-processor] cold-pitch detection threw (non-fatal):',
+      pitchErr
+    );
+  }
+
   // ── Step 3b: Scheduling-conflict detection ─────────────────────
   // Only fires when the lead has ALREADY filled out the Typeform (i.e.
   // stage=CALL_PROPOSED and no scheduledCallAt yet). Detects "can't
@@ -887,9 +1059,153 @@ export async function processIncomingMessage(
       !lead.conversation.scheduledCallAt &&
       !lead.conversation.schedulingConflict
     ) {
-      const { detectSchedulingConflict } = await import(
-        '@/lib/scheduling-conflict-detector'
-      );
+      const {
+        detectSchedulingConflict,
+        detectHardSchedulingConflict,
+        HARD_SCHEDULING_HANDOFF_MESSAGE
+      } = await import('@/lib/scheduling-conflict-detector');
+
+      // ── HARD path — strict patterns short-circuit with a fixed
+      // handoff. Mirrors the distress-detection contract: pause AI,
+      // cancel pending replies, ship the exact handoff line, escalate
+      // to operator (in-app + email), and return skipReply so no LLM
+      // call runs for this turn. The fixed copy means the AI can't
+      // contradict itself ("got it bro, Saturday works!" right after
+      // the lead said "I can't do this weekend").
+      const hard = detectHardSchedulingConflict(messageText);
+      if (hard.detected) {
+        console.warn(
+          `[webhook-processor] HARD scheduling_conflict detected on ${conversationId} — match="${hard.match}" lead=@${senderHandle}`
+        );
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            aiActive: false,
+            schedulingConflict: true,
+            schedulingConflictAt: now,
+            schedulingConflictMessageId: message.id,
+            schedulingConflictPreference: null
+          }
+        });
+        // Cancel anything pending so the next cron tick can't fire an
+        // AI follow-up after the handoff has shipped.
+        await prisma.scheduledReply.updateMany({
+          where: { conversationId, status: 'PENDING' },
+          data: { status: 'CANCELLED' }
+        });
+        try {
+          const { cancelAllPendingFollowUps } = await import(
+            '@/lib/follow-up-sequence'
+          );
+          await cancelAllPendingFollowUps(conversationId);
+        } catch (cancelErr) {
+          console.error(
+            '[webhook-processor] cancelAllPendingFollowUps after hard scheduling conflict failed (non-fatal):',
+            cancelErr
+          );
+        }
+
+        // Save the AI handoff message row + ship via the platform
+        // helper. Mirrors the distress block (save-then-ship): the
+        // text is fixed, so there's no fabrication risk, and ops can
+        // retry the platform send manually if it fails.
+        const handoffMsg = await prisma.message.create({
+          data: {
+            conversationId,
+            sender: 'AI',
+            content: HARD_SCHEDULING_HANDOFF_MESSAGE,
+            timestamp: new Date(),
+            stage: null,
+            subStage: null
+          }
+        });
+        if (lead.platformUserId) {
+          try {
+            if (lead.platform === 'INSTAGRAM') {
+              await sendInstagramDM(
+                accountId,
+                lead.platformUserId,
+                HARD_SCHEDULING_HANDOFF_MESSAGE
+              );
+            } else if (lead.platform === 'FACEBOOK') {
+              await sendFacebookMessage(
+                accountId,
+                lead.platformUserId,
+                HARD_SCHEDULING_HANDOFF_MESSAGE
+              );
+            }
+          } catch (sendErr) {
+            console.error(
+              '[webhook-processor] Hard scheduling handoff platform send failed (non-fatal):',
+              sendErr
+            );
+          }
+        }
+        // Broadcast the inbound + outbound + status flip so the
+        // dashboard updates immediately.
+        broadcastNewMessage({
+          id: message.id,
+          conversationId,
+          sender: 'LEAD',
+          content: messageText,
+          imageUrl: message.imageUrl,
+          hasImage: message.hasImage,
+          timestamp: now.toISOString()
+        });
+        broadcastNewMessage({
+          id: handoffMsg.id,
+          conversationId,
+          sender: 'AI',
+          content: HARD_SCHEDULING_HANDOFF_MESSAGE,
+          timestamp: handoffMsg.timestamp.toISOString()
+        });
+        broadcastConversationUpdate({
+          id: conversationId,
+          leadId: lead.id,
+          aiActive: false,
+          unreadCount: (lead.conversation!.unreadCount || 0) + 1,
+          lastMessageAt: now.toISOString()
+        });
+        broadcastAIStatusChange({ conversationId, aiActive: false });
+
+        // Escalate to operator: in-app URGENT row + email (gated by
+        // notifyOnSchedulingConflict). Same code path the soft
+        // detector uses; we just supply a stronger details string.
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          : undefined;
+        const quote =
+          messageText.length > 220
+            ? messageText.slice(0, 220) + '…'
+            : messageText;
+        await escalate({
+          type: 'scheduling_conflict',
+          accountId,
+          leadId: lead.id,
+          conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          title: `URGENT — ${lead.name} can't make available booking times. Flagged for manual scheduling.`,
+          body: `${lead.name} (@${lead.handle}) — can't make available booking times. Flagged for manual scheduling. AI has been paused and the team needs to reach out manually to sort a time.\n\nLead's message: "${quote}"`,
+          details: `Match: "${hard.match}". Lead message: "${quote}"`,
+          link
+        });
+
+        // Skip rest of normal processing — no scoring, no AI reply.
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: message.id,
+          isNewLead,
+          skipReply: true
+        };
+      }
+
+      // ── SOFT path — weaker signals trigger an escalation but the
+      // AI continues to generate. Behaviour unchanged from the
+      // pre-hard-path implementation.
       const conflict = detectSchedulingConflict(messageText);
       if (conflict.detected) {
         console.warn(
@@ -994,6 +1310,8 @@ export async function processIncomingMessage(
     conversationId,
     sender: 'LEAD',
     content: messageText,
+    imageUrl: message.imageUrl,
+    hasImage: message.hasImage,
     timestamp: now.toISOString()
   });
 
@@ -1839,7 +2157,9 @@ export async function scheduleAIReply(
     sender: m.sender,
     content: m.content,
     timestamp: m.timestamp,
-    isVoiceNote: m.isVoiceNote
+    isVoiceNote: m.isVoiceNote,
+    imageUrl: m.imageUrl,
+    hasImage: m.hasImage
   }));
 
   let result;
@@ -3381,9 +3701,30 @@ async function sendAIReply(
         containsBookingLink,
         scheduleBookingLinkFollowup
       } = await import('@/lib/follow-up-sequence');
-      await scheduleFollowUp1AfterAiMessage(conversationId, lead.accountId);
+
+      // Re-fetch the lead's CURRENT stage + conversation outcome so the
+      // gate sees the post-ship state (result.softExit just flipped
+      // outcome=SOFT_EXIT a few lines above; UNQUALIFIED may have been
+      // set during this same turn by transitionLeadStage). Avoids
+      // racing the in-memory `lead.stage` snapshot taken pre-generation.
+      const stateAfterShip = await prisma.lead.findUnique({
+        where: { id: lead.id },
+        select: { stage: true, conversation: { select: { outcome: true } } }
+      });
+      const gate = {
+        leadStage: stateAfterShip?.stage ?? lead.stage,
+        softExit: result.softExit === true,
+        conversationOutcome: stateAfterShip?.conversation?.outcome ?? null,
+        replyText: latestAfterShip.content
+      };
+
+      await scheduleFollowUp1AfterAiMessage(
+        conversationId,
+        lead.accountId,
+        gate
+      );
       if (containsBookingLink(latestAfterShip.content)) {
-        await scheduleBookingLinkFollowup(conversationId, lead.accountId);
+        await scheduleBookingLinkFollowup(conversationId, lead.accountId, gate);
       }
     }
   } catch (err) {
@@ -3602,18 +3943,58 @@ export async function processAdminMessage(
     }
   });
 
-  // Bump lastMessageAt but do NOT auto-pause the AI. Previous behavior
-  // flipped aiActive=false on every echo, which was too aggressive —
-  // an operator dropping one context message from their phone doesn't
-  // necessarily want to take over the whole conversation. If they DO
-  // want to pause, the dashboard toggle is one click. Pending queues
-  // (scheduledReply, scheduledMessage follow-ups) ARE still cancelled
-  // below because a human just spoke — a redundant AI queue would
-  // cause duplicate sends (daetradez 7:58 PM 2026-04-24 incident).
+  // Bump lastMessageAt but do NOT auto-pause the AI on a single echo.
+  // Previous behavior flipped aiActive=false on every echo, which was
+  // too aggressive — an operator dropping one context message from
+  // their phone doesn't necessarily want to take over the whole
+  // conversation. If they DO want to pause, the dashboard toggle is
+  // one click. Pending queues (scheduledReply, scheduledMessage
+  // follow-ups) ARE still cancelled below because a human just spoke
+  // — a redundant AI queue would cause duplicate sends (daetradez
+  // 7:58 PM 2026-04-24 incident).
+  //
+  // Heuristic addition (2026-04-25): if 2+ HUMAN/PHONE messages land
+  // back-to-back with no LEAD reply between them, the operator HAS
+  // clearly taken over (they aren't dropping single context lines —
+  // they're driving the conversation). At that point we auto-pause
+  // aiActive so the next inbound LEAD reply doesn't trigger an AI
+  // turn that would cross-talk over the human. Single PHONE message
+  // = context only; consecutive PHONE messages = takeover.
   await prisma.conversation.update({
     where: { id: conversationId },
     data: { lastMessageAt: new Date() }
   });
+
+  let autoPausedFromConsecutivePhone = false;
+  try {
+    const previousMessage = await prisma.message.findFirst({
+      where: { conversationId, id: { not: message.id } },
+      orderBy: { timestamp: 'desc' },
+      select: { sender: true, humanSource: true }
+    });
+    const isConsecutivePhone =
+      previousMessage?.sender === 'HUMAN' &&
+      previousMessage.humanSource === 'PHONE';
+    if (isConsecutivePhone) {
+      // Re-fetch the conversation aiActive in a single update (avoid a
+      // wasted update if it's already false from another path — e.g.
+      // distress, scheduling-conflict, manual operator pause).
+      const updated = await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false },
+        select: { aiActive: true }
+      });
+      autoPausedFromConsecutivePhone = true;
+      console.log(
+        `[webhook-processor] 2+ consecutive HUMAN/PHONE messages on ${conversationId} — auto-paused AI (human takeover detected, aiActive=${updated.aiActive})`
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] consecutive-PHONE auto-pause check failed (non-fatal):',
+      err
+    );
+  }
 
   // Cancel any pending scheduled replies for this conversation
   await prisma.scheduledReply.updateMany({
@@ -3639,8 +4020,10 @@ export async function processAdminMessage(
     );
   }
 
-  // Broadcast real-time events. aiActive didn't change, so no
-  // AI-status broadcast — only the new message + conversation bump.
+  // Broadcast real-time events. broadcastNewMessage always; the
+  // AI-status-change broadcast is conditional on the consecutive-
+  // PHONE auto-pause having flipped the flag (otherwise nothing
+  // changed).
   broadcastNewMessage({
     id: message.id,
     conversationId,
@@ -3648,9 +4031,12 @@ export async function processAdminMessage(
     content: messageText,
     timestamp: new Date().toISOString()
   });
+  if (autoPausedFromConsecutivePhone) {
+    broadcastAIStatusChange({ conversationId, aiActive: false });
+  }
 
   console.log(
-    `[webhook-processor] Admin message saved for conversation ${conversationId} (humanSource=PHONE, aiActive unchanged)`
+    `[webhook-processor] Admin message saved for conversation ${conversationId} (humanSource=PHONE, autoPaused=${autoPausedFromConsecutivePhone})`
   );
 }
 

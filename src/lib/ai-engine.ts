@@ -5,6 +5,8 @@ import type { LeadContext } from '@/lib/ai-prompts';
 import { getCredentials } from '@/lib/credential-store';
 import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
 import {
+  containsCapitalQuestion,
+  containsIncomeGoalQuestion,
   scoreVoiceQualityGroup,
   isUnkeptPromise
 } from '@/lib/voice-quality-gate';
@@ -19,7 +21,29 @@ export interface ConversationMessage {
   content: string;
   timestamp: Date | string;
   isVoiceNote?: boolean;
+  imageUrl?: string | null;
+  hasImage?: boolean;
 }
+
+type LLMTextContentPart = {
+  type: 'text';
+  text: string;
+};
+
+type LLMImageContentPart = {
+  type: 'image_url';
+  image_url: {
+    url: string;
+    detail: 'low';
+  };
+};
+
+type LLMContentPart = LLMTextContentPart | LLMImageContentPart;
+type LLMMessageContent = string | LLMContentPart[];
+type LLMMessage = {
+  role: 'user' | 'assistant';
+  content: LLMMessageContent;
+};
 
 /**
  * R24 capital-verification outcome for the current turn — exposed so
@@ -235,11 +259,22 @@ export async function generateReply(
   const priorAIMessages = conversationHistory
     .filter((m) => m.sender === 'AI')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  // Souljah J 2026-04-25 — Fix 3 + Fix 4 inputs.
+  const priorHumanMessages = conversationHistory
+    .filter((m) => m.sender === 'HUMAN')
+    .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  const conversationCurrency: 'GBP' | 'USD' = conversationHistory.some(
+    (m) => m.sender === 'LEAD' && m.content.includes('£')
+  )
+    ? 'GBP'
+    : 'USD';
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     leadContext,
     fewShotBlock || undefined,
-    priorAIMessages
+    priorAIMessages,
+    priorHumanMessages,
+    conversationCurrency
   );
 
   // 1b. Append scoring intelligence if available
@@ -398,7 +433,31 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // Retry-loop override assignments below use this as their base so the
   // guard doesn't get stripped when a more-specific override (R24, Fix B,
   // fabrication, ack-truncation, link-promise, markdown) fires.
-  const baseSystemPrompt = systemPrompt + unqualifiedGuard;
+  const priorAIMessagesForPacing = conversationHistory.filter(
+    (m) => m.sender === 'AI'
+  );
+  const priorAIQuestions = extractLastAIQuestions(
+    priorAIMessagesForPacing.map((m) => m.content),
+    3
+  );
+  const incomeGoalAsked = priorAIMessagesForPacing.some((m) =>
+    containsIncomeGoalQuestion(m.content)
+  );
+  const capitalQuestionAsked = priorAIMessagesForPacing.some((m) =>
+    containsCapitalQuestion(m.content)
+  );
+  const botDetectionCount = conversationHistory.filter(
+    (m) => m.sender === 'LEAD' && isBotDetectionQuestion(m.content)
+  ).length;
+  const botDetectionDirective =
+    botDetectionCount >= 2
+      ? `\n\n===== BOT-DETECTION PATTERN BREAK =====\nThe lead has asked if you are automated twice. Your response pattern has become detectable. Change your approach immediately — respond with something unexpected and personal, then advance to the call pitch. Do not ask another discovery question. If the capital gate is still unmet, the only acceptable advancement question is the capital question; do not ask another trading / setup / strategy question first.\n=====`
+      : '';
+  const lastLeadHadImage = Boolean(
+    lastLeadMsg?.hasImage || lastLeadMsg?.imageUrl
+  );
+  const baseSystemPrompt =
+    systemPrompt + unqualifiedGuard + botDetectionDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -442,7 +501,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       conversationMessageCount: conversationHistory.length,
       leadStage: leadContext.status || undefined,
       capitalOutcome:
-        r24LastResult.reason === 'answer_below_threshold' ? 'failed' : undefined
+        r24LastResult.reason === 'answer_below_threshold'
+          ? 'failed'
+          : undefined,
+      // Souljah J 2026-04-25 — feed the previous AI bubble in so the
+      // gate can fire repeated_question (soft -0.4) and
+      // repeated_call_pitch (hardFail) when the LLM forgets the lead's
+      // interjection between turns. Falls back to null when this is
+      // the first AI turn.
+      previousAIMessage: lastAiMsg?.content ?? null,
+      aiMessageCount:
+        priorAIMessagesForPacing.length + (parsed.messages?.length || 1),
+      currentStage: parsed.stage || null,
+      incomeGoalAsked,
+      capitalQuestionAsked,
+      previousAIQuestions: priorAIQuestions,
+      previousLeadHadImage: lastLeadHadImage
     });
     finalQualityScore = quality.score;
 
@@ -738,6 +812,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      // Repeated-call-pitch directive (Souljah J 2026-04-25). Fires
+      // when the previous AI bubble AND this one BOTH contain a call-
+      // pitch phrase. Natural regen tends to repeat the same pitch
+      // — model momentum from the script. Override forces it to
+      // acknowledge the lead's interim response BEFORE pitching.
+      const repeatedCallPitchFailed = quality.hardFails.some((f) =>
+        f.includes('repeated_call_pitch:')
+      );
+      if (repeatedCallPitchFailed) {
+        const repeatedPitchOverride = `\n\n===== REPEATED CALL PITCH OVERRIDE =====\nYou already pitched the call on the previous turn. The lead responded — but they did not give a clear yes or no. Pitching the call again on this turn reads as desperate and trains the lead to ghost. You MUST regenerate WITHOUT pitching the call again. Instead:\n  1. Acknowledge SPECIFICALLY what the lead just said in their last message — answer their question if they asked one, address their stall if they stalled, react to their content if they shared something.\n  2. THEN move the conversation forward with a relevant follow-up question OR a brief value drop. Do NOT immediately pitch the call again.\n  3. Only re-pitch the call once the lead has given a clear yes/no on the prior pitch — not on this turn.\nForbidden phrases on this regen: "hop on a call", "hop on a chat", "call with [name]", "quick call", "quick chat", "jump on a call", "get on a call", "15-min call". Save the call-pitch language for a turn AFTER the lead has clearly responded.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + repeatedPitchOverride;
+        console.warn(
+          `[ai-engine] Repeated call pitch detected — forcing regen without pitch (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Image-limitation persona leak directive. If the model says
+      // "can't see images" it breaks the human setter illusion. Force
+      // the next attempt to answer like a normal person whose image
+      // failed to load on their phone.
+      const imageLimitationFailed = quality.hardFails.some((f) =>
+        f.includes('image_limitation_exposed:')
+      );
+      if (imageLimitationFailed) {
+        const imageLimitationOverride = `\n\n===== IMAGE PERSONA OVERRIDE =====\nDo not mention any inability to see images. Respond as a human whose image didn't load on their phone. Use natural wording like "yo the image isn't loading on my end, can you describe what you're seeing?" or "something's not coming through on my end bro, what was it?" Keep the human persona intact and keep the conversation moving.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + imageLimitationOverride;
+        console.warn(
+          `[ai-engine] Image limitation phrase detected — forcing regen with human image-load framing (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       // Markdown-in-single-bubble directive (daetradez 2026-04-24).
       // The LLM emitted a numbered list with **bold** headers in one
       // big bubble instead of using the messages[] array to split
@@ -752,6 +857,49 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + markdownOverride;
         console.warn(
           `[ai-engine] Markdown-in-single-bubble detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const incomeGoalOverdueFailed = quality.hardFails.some((f) =>
+        f.includes('income_goal_overdue:')
+      );
+      if (incomeGoalOverdueFailed) {
+        const incomeGoalOverride = `\n\n===== QUALIFICATION PACE OVERRIDE — INCOME GOAL =====\nYou have reached the income-goal deadline. Ask about the lead's income goal NOW. Do not ask another trading setup, chart, strategy, or "what's the main thing" discovery question first. Keep it natural and short, but the next reply must ask what they want to be making.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + incomeGoalOverride;
+        console.warn(
+          `[ai-engine] Income goal overdue — forcing regen with income-goal question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const qualificationStalledFailed = quality.hardFails.some((f) =>
+        f.includes('qualification_stalled:')
+      );
+      if (qualificationStalledFailed) {
+        const stalledOverride = `\n\n===== QUALIFICATION STALLED OVERRIDE =====\nYou have been in discovery for too long. Ask the capital question NOW. Do not ask any more trading questions first.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + stalledOverride;
+        console.warn(
+          `[ai-engine] Qualification stalled — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const repetitiveQuestionFailed =
+        quality.softSignals.repetitive_question_pattern !== undefined;
+      if (repetitiveQuestionFailed) {
+        const repetitiveQuestionOverride = `\n\n===== REPETITIVE QUESTION PATTERN OVERRIDE =====\nYour last 3 questions were too similar. Ask something genuinely different or advance to the next script step instead of asking another variation of the same question.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + repetitiveQuestionOverride;
+        console.warn(
+          `[ai-engine] Repetitive question pattern detected — forcing regen with script advancement (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const fabricatedImageObservationFailed = quality.hardFails.some((f) =>
+        f.includes('fabricated_image_observation:')
+      );
+      if (fabricatedImageObservationFailed) {
+        const imageObservationOverride = `\n\n===== IMAGE OBSERVATION FABRICATION OVERRIDE =====\nDo not claim you saw, noticed, checked, or looked at stats, flow, numbers, or chart details from the image. Respond as a human whose image didn't load clearly on their phone, then ask the lead to describe what they sent or what they want you to look at.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + imageObservationOverride;
+        console.warn(
+          `[ai-engine] Fabricated image observation detected — forcing regen with image-not-loading framing (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
     }
@@ -1129,12 +1277,66 @@ async function resolveAIProvider(accountId: string): Promise<{
 // Format Conversation History for LLM
 // ---------------------------------------------------------------------------
 
+function extractQuestionsFromText(text: string): string[] {
+  if (!text) return [];
+  const questions: string[] = [];
+  const matches = text.match(/[^?!.\n]*\?/g) || [];
+  for (const match of matches) {
+    const question = match.trim().replace(/\?+$/, '').trim();
+    if (question.length > 0) questions.push(question);
+  }
+  return questions;
+}
+
+function extractLastAIQuestions(aiMessages: string[], limit: number): string[] {
+  const questions: string[] = [];
+  for (let i = aiMessages.length - 1; i >= 0 && questions.length < limit; i--) {
+    const messageQuestions = extractQuestionsFromText(aiMessages[i]);
+    for (
+      let j = messageQuestions.length - 1;
+      j >= 0 && questions.length < limit;
+      j--
+    ) {
+      questions.unshift(messageQuestions[j]);
+    }
+  }
+  return questions;
+}
+
+function isBotDetectionQuestion(text: string): boolean {
+  return /\b(are\s+you\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+this\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+(this|that)\s+(automated|programmed|a\s+bot|a\s+robot|ai)|auto[-\s]?reply|programmed\s+(response|reply)|am\s+i\s+talking\s+to\s+(a\s+)?(bot|robot|ai)|real\s+person)\b/i.test(
+    text
+  );
+}
+
 function formatConversationForLLM(
   history: ConversationMessage[]
-): Array<{ role: 'user' | 'assistant'; content: string }> {
+): LLMMessage[] {
   return history.map((msg) => {
     // LEAD messages → user role, AI/HUMAN messages → assistant role
     if (msg.sender === 'LEAD') {
+      if (msg.imageUrl) {
+        const text =
+          msg.content && !['[Image]', '[Chart shared]'].includes(msg.content)
+            ? msg.content
+            : 'The lead sent this image without any text message.';
+        return {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'image_url' as const,
+              image_url: {
+                url: msg.imageUrl,
+                detail: 'low' as const
+              }
+            },
+            {
+              type: 'text' as const,
+              text
+            }
+          ]
+        };
+      }
       return { role: 'user' as const, content: msg.content };
     }
     // Both AI and HUMAN messages are "our side" of the conversation
@@ -1176,7 +1378,7 @@ async function callLLM(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  messages: LLMMessage[],
   /** Fallback credentials used when the Anthropic path throws. */
   fallback?: { apiKey: string; model: string }
 ): Promise<LLMCallResult> {
@@ -1212,7 +1414,7 @@ async function callOpenAI(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  messages: LLMMessage[]
 ): Promise<LLMCallResult> {
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey });
@@ -1229,7 +1431,10 @@ async function callOpenAI(
     // demands JSON, but stacked directive blocks sometimes steered the
     // model into plain text — this guarantees the response parses.
     response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: systemPrompt }, ...messages]
+    messages: [
+      { role: 'system' as const, content: systemPrompt },
+      ...messages
+    ] as any
   });
 
   // OpenAI caches long prompts (>1024 tokens) automatically — no
@@ -1258,13 +1463,13 @@ async function callAnthropic(
   apiKey: string,
   model: string,
   systemPrompt: string,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  messages: LLMMessage[]
 ): Promise<LLMCallResult> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
 
   // Anthropic requires messages to start with user role
-  let anthropicMessages = [...messages];
+  let anthropicMessages: LLMMessage[] = [...messages];
   if (
     anthropicMessages.length > 0 &&
     anthropicMessages[0].role === 'assistant'
@@ -1280,6 +1485,10 @@ async function callAnthropic(
 
   // Anthropic also requires alternating roles — merge consecutive same-role messages
   anthropicMessages = mergeConsecutiveRoles(anthropicMessages);
+  const anthropicPayloadMessages = anthropicMessages.map((message) => ({
+    role: message.role,
+    content: toAnthropicContent(message.content)
+  }));
 
   // Prompt caching: the ~60K-token system prompt is stable across turns
   // in a conversation (persona + script + rules only change on script
@@ -1297,7 +1506,7 @@ async function callAnthropic(
     ],
     temperature: 0.85,
     max_tokens: 1500,
-    messages: anthropicMessages
+    messages: anthropicPayloadMessages as any
   });
 
   const textBlock = response.content.find(
@@ -1340,20 +1549,70 @@ function addUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
   };
 }
 
+type AnthropicContentBlock =
+  | {
+      type: 'text';
+      text: string;
+    }
+  | {
+      type: 'image';
+      source: {
+        type: 'url';
+        url: string;
+      };
+    };
+
+function contentToParts(content: LLMMessageContent): LLMContentPart[] {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+  return content;
+}
+
+function mergeMessageContent(
+  first: LLMMessageContent,
+  second: LLMMessageContent
+): LLMMessageContent {
+  if (typeof first === 'string' && typeof second === 'string') {
+    return `${first}\n${second}`;
+  }
+  return [
+    ...contentToParts(first),
+    { type: 'text', text: '\n' },
+    ...contentToParts(second)
+  ];
+}
+
+function toAnthropicContent(
+  content: LLMMessageContent
+): string | AnthropicContentBlock[] {
+  if (typeof content === 'string') return content;
+  return content.map((part) => {
+    if (part.type === 'text') {
+      return { type: 'text', text: part.text };
+    }
+    return {
+      type: 'image',
+      source: {
+        type: 'url',
+        url: part.image_url.url
+      }
+    };
+  });
+}
+
 /**
  * Merge consecutive messages with the same role (required by Anthropic).
  */
-function mergeConsecutiveRoles(
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
-): Array<{ role: 'user' | 'assistant'; content: string }> {
+function mergeConsecutiveRoles(messages: LLMMessage[]): LLMMessage[] {
   if (messages.length === 0) return messages;
 
-  const merged: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const merged: LLMMessage[] = [];
 
   for (const msg of messages) {
     const last = merged[merged.length - 1];
     if (last && last.role === msg.role) {
-      last.content += '\n' + msg.content;
+      last.content = mergeMessageContent(last.content, msg.content);
     } else {
       merged.push({ ...msg });
     }
@@ -1916,10 +2175,13 @@ async function shouldBlockForBookingFabrication(params: {
  * suffix produces 2500. All existing test cases still pass.
  */
 function parseLeadAmountFromReply(text: string): number | null {
-  // Match optional $, integer portion (thousands-commas OR plain
+  // Match optional $/£, integer portion (thousands-commas OR plain
   // digits), optional decimal portion, optional k/K suffix. Decimal
   // capture is necessary so "2.5k" → 2500 rather than 2000.
-  const m = text.match(/\$?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/);
+  // £ is matched here (not just $) so "£1,000" / "£800" amounts also
+  // parse — Fix 3 (Souljah J 2026-04-25). Currency conversion is
+  // applied at the threshold-comparison layer, not here.
+  const m = text.match(/[$£]?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/);
   if (!m) return null;
   const intPart = m[1].replace(/,/g, '');
   const decPart = m[2] ?? '';
@@ -2165,6 +2427,34 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
 }
 
 /**
+ * Returns 'GBP' if any lead message in the conversation contains the
+ * £ symbol (the lead has been talking in pounds), else 'USD'. Used by
+ * the R24 gate to convert £ amounts to a USD-equivalent comparison
+ * against the persona's USD-stored threshold.
+ *
+ * Source priority: explicit candidate texts (mergedAnswers) first, then
+ * a DB scan of LEAD messages on this conversation. Defaults to USD when
+ * no £ is found anywhere — matches the historical behaviour for every
+ * non-GBP account.
+ */
+export async function detectConversationCurrency(
+  conversationId: string,
+  candidateTexts: string[] = []
+): Promise<'GBP' | 'USD'> {
+  for (const t of candidateTexts) {
+    if (t && t.includes('£')) return 'GBP';
+  }
+  const leadMsgs = await prisma.message.findMany({
+    where: { conversationId, sender: 'LEAD' },
+    select: { content: true }
+  });
+  for (const m of leadMsgs) {
+    if (m.content.includes('£')) return 'GBP';
+  }
+  return 'USD';
+}
+
+/**
  * Look through the conversation's AI messages for a prior capital
  * verification question (threshold-confirming OR open-ended), then
  * check the next LEAD reply. Return a structured reason so the caller
@@ -2331,10 +2621,30 @@ async function checkR24Verification(
   const nextLead = { id: best.msg.id, content: best.msg.content };
   const askedId = verificationAskedAt.id;
 
+  // ── Currency detection (Souljah J 2026-04-25) ──────────────────
+  // Threshold is stored in USD on the persona row. When the lead has
+  // been speaking in GBP throughout the conversation, comparing a £
+  // amount directly against the USD threshold mis-classifies real
+  // qualifiers — "I have £1,000" is ~$1,250, which clears a $1,000
+  // gate, but a literal `1000 >= 1000` USD compare without unit
+  // awareness happens to also pass at the threshold-equal edge and
+  // FAILS for amounts like "£800" (~$1,000) that should pass. Detect
+  // £ in the lead's actual answer + any earlier LEAD message in this
+  // convo. If GBP, compare `amt * 1.25 >= threshold` (1.25 USD per
+  // GBP, conservative round number — the gate is meant to catch
+  // clear under-funders, not split hairs at the boundary). USD or
+  // unknown → unchanged behaviour.
+  const conversationCurrency = await detectConversationCurrency(
+    conversationId,
+    mergedAnswers.map((m) => m.content)
+  );
+  const usdEquivalent = (gbp: number) => gbp * 1.25;
   switch (classification.kind) {
     case 'amount': {
       const amt = classification.amount!;
-      if (amt >= threshold) {
+      const compareAmt =
+        conversationCurrency === 'GBP' ? usdEquivalent(amt) : amt;
+      if (compareAmt >= threshold) {
         return {
           blocked: false,
           reason: 'confirmed_amount',

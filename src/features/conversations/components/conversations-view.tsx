@@ -108,9 +108,17 @@ export function ConversationsView() {
       sender: m.sender as 'ai' | 'lead' | 'human',
       content: m.content,
       timestamp: m.sentAt || m.timestamp || '',
+      isVoiceNote: m.isVoiceNote,
+      voiceNoteUrl: m.voiceNoteUrl ?? undefined,
+      imageUrl: m.imageUrl ?? null,
+      hasImage: m.hasImage ?? Boolean(m.imageUrl),
       isHumanOverride: m.isHumanOverride,
       humanOverrideNote: m.humanOverrideNote,
-      sentByUser: extra.sentByUser ?? null
+      sentByUser: extra.sentByUser ?? null,
+      humanSource: extra.humanSource ?? null,
+      messageGroupId: extra.messageGroupId ?? null,
+      bubbleIndex: extra.bubbleIndex ?? null,
+      bubbleTotalCount: extra.bubbleTotalCount ?? null
     };
   });
 

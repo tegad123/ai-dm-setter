@@ -196,6 +196,38 @@ export interface VoiceQualityOptions {
     | 'ambiguous'
     | 'not_asked'
     | 'not_evaluated';
+  /**
+   * The most-recent AI bubble or joined message from the previous turn.
+   * Used by two checks:
+   *   • repeated_question (soft -0.4): the AI asked a question, the lead
+   *     responded with their own question / off-topic msg, and the AI
+   *     re-asked the same question this turn without acknowledging the
+   *     interjection. Detected via Jaccard similarity of question
+   *     sentences ≥ 0.7. Souljah J 2026-04-25.
+   *   • repeated_call_pitch (hardFail): the previous AI message and the
+   *     current one BOTH match a call-pitch pattern. Forces regen with
+   *     the directive that the lead's interim response must be addressed
+   *     before pitching again.
+   * Pass null/undefined when there is no prior AI turn (e.g. the AI is
+   * sending the first message); the checks no-op in that case.
+   */
+  previousAIMessage?: string | null;
+  /**
+   * Count of AI Message rows after including the current generated turn.
+   * Used for qualification pacing so the AI doesn't spend dozens of
+   * messages in free trading consultation without moving the script.
+   */
+  aiMessageCount?: number;
+  /** Current LLM-reported stage for this generated turn. */
+  currentStage?: string | null;
+  /** Whether any prior AI turn already asked about the lead's income goal. */
+  incomeGoalAsked?: boolean;
+  /** Whether any prior AI turn already asked the capital verification question. */
+  capitalQuestionAsked?: boolean;
+  /** Last three AI questions before the current generated turn. */
+  previousAIQuestions?: string[];
+  /** True when the most recent lead message included an image attachment. */
+  previousLeadHadImage?: boolean;
 }
 
 export function scoreVoiceQuality(
@@ -424,7 +456,64 @@ export function scoreVoiceQuality(
     softSignals.r26_third_party_platform_mention = -0.4;
   }
 
-  // 9e-iii. Markdown-formatted single message — the LLM emitted a
+  // 9e-iii. IMAGE MESSAGES persona rule. The AI must not expose the
+  // underlying technical limitation when an image is unavailable. A
+  // human setter would say the image didn't load / isn't coming
+  // through and ask what the lead sent.
+  const IMAGE_LIMITATION_PATTERNS: RegExp[] = [
+    /\b(can['’]?t see (images?|that|it)|images? (don['’]?t|doesn['’]?t|won['’]?t) (work|load|come through)|can['’]?t process images?|not able to (see|view|open) images?|no image (support|capability))\b/i
+  ];
+  for (const pat of IMAGE_LIMITATION_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `image_limitation_exposed: matched "${pat.source}" — do not reveal image-processing limitations; respond like a human whose image did not load`
+      );
+      break;
+    }
+  }
+
+  // 9e-iv. IMAGE ANALYSIS / R25-R26 scope: chart screenshots are
+  // conversation context, not a free signal service. The prompt tells
+  // the AI to acknowledge the image and pivot to qualification; this
+  // code gate catches concrete trade advice that would turn a DM into
+  // specific entries, exits, targets, or setup validation.
+  const CHART_ADVICE_PATTERNS: RegExp[] = [
+    /\b(?:enter|buy|sell|short|long)\s+(?:now|here|at\s+\d|on\s+the\s+(?:break|retest|close))\b/i,
+    /\b(?:entry|entries)\s+(?:is|are|at|around|near)\s+\d/i,
+    /\b(?:stop\s*loss|take\s*profit|sl|tp)\s+(?:at|around|near|to|should\s+be)\s+\d/i,
+    /\bset\s+(?:your\s+)?(?:stop|stop\s*loss|sl|tp|take\s*profit)\b/i,
+    /\b(?:i'?d|i would)\s+(?:buy|sell|short|long|enter)\b/i,
+    /\btargets?\s+(?:is|are|at|around|near)\s+\d/i,
+    /\b(?:risk[-\s]?reward|r:r)\s+(?:looks|is|should\s+be|at)\b/i,
+    /\bthis\s+(?:setup|trade)\s+(?:is|looks)\s+(?:valid|clean|good|solid)\b/i
+  ];
+  for (const pat of CHART_ADVICE_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `r_image_chart_advice: matched "${pat.source}" — image replies can acknowledge context, but must not give entries, exits, targets, or detailed chart analysis`
+      );
+      break;
+    }
+  }
+
+  // 9e-v. Image-observation fabrication. When the lead's previous
+  // message was an image, the AI must not claim it "saw the flow",
+  // "checked the stats", or "noticed the chart" unless the vision
+  // pipeline truly supplied that information. This catches the
+  // persona-breaking middle ground between "I can't see images" and
+  // pretending to see details that may not be available.
+  if (options?.previousLeadHadImage) {
+    const FABRICATED_IMAGE_OBSERVATION_RE =
+      /\b(i\s+(saw|seen|noticed|looked at|checked).{0,30}(flow|stats|chart|numbers|that|it))\b/i;
+    if (FABRICATED_IMAGE_OBSERVATION_RE.test(reply)) {
+      hardFails.push(
+        `fabricated_image_observation: matched "${FABRICATED_IMAGE_OBSERVATION_RE.source}" — do not claim to have seen image details; use human image-not-loading framing instead`
+      );
+      softSignals.fabricated_image_observation = -0.5;
+    }
+  }
+
+  // 9e-vi. Markdown-formatted single message — the LLM emitted a
   // numbered list with bold headings in ONE bubble instead of using
   // the messages[] array to send each point as its own short bubble.
   // Triggered when a numbered list starts with **bold** (/^\d+\.\s+\*\*/m)
@@ -514,6 +603,25 @@ export function scoreVoiceQuality(
         `fabricated_time_slot: matched "${pat.source}" — booking is script-driven, don't propose specific times`
       );
       break;
+    }
+  }
+
+  // 9h. Repeated call pitch (Souljah J 2026-04-25). Hard-fail when the
+  // previous AI bubble AND the current one BOTH contain a call-pitch
+  // phrase. The lead's interim response — whatever it was — should
+  // have been acknowledged before pitching again. Pitching twice in
+  // two turns reads as desperate and trains the lead to ghost.
+  // Pattern is intentionally narrow so a legit "you ready to hop on?"
+  // immediately after a clear yes/no doesn't false-fire.
+  const CALL_PITCH_RE =
+    /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
+  if (options?.previousAIMessage) {
+    const prevHasPitch = CALL_PITCH_RE.test(options.previousAIMessage);
+    const currHasPitch = CALL_PITCH_RE.test(reply);
+    if (prevHasPitch && currHasPitch) {
+      hardFails.push(
+        "repeated_call_pitch: previous AI turn already pitched the call AND this turn pitches again. Acknowledge the lead's interim response before pitching twice in a row."
+      );
     }
   }
 
@@ -707,6 +815,90 @@ export function scoreVoiceQuality(
     softSignals.r28_free_resources_no_link = -0.3;
   }
 
+  // ── QUALIFICATION PACE GATES ───────────────────────────────────
+  // Message-count guardrails prevent the AI from giving free trading
+  // consultation forever. By the fourth AI message the income-goal
+  // question should be asked; deep discovery without capital after
+  // 10+ AI messages is a hard stop.
+  const aiMsgCount = options?.aiMessageCount;
+  const currentStage = (options?.currentStage || '').toUpperCase();
+  const stageStillDiscovery =
+    currentStage === 'OPENING' ||
+    currentStage === 'DISCOVERY' ||
+    currentStage === 'SITUATION_DISCOVERY';
+  const incomeGoalAskedThisTurn = containsIncomeGoalQuestion(reply);
+  const capitalAskedThisTurn = containsCapitalQuestion(reply);
+
+  if (
+    typeof aiMsgCount === 'number' &&
+    aiMsgCount >= 4 &&
+    !options?.incomeGoalAsked &&
+    !incomeGoalAskedThisTurn
+  ) {
+    hardFails.push(
+      "income_goal_overdue: by the 4th AI message, the reply must ask about the lead's income goal instead of continuing trading discussion"
+    );
+  }
+
+  if (typeof aiMsgCount === 'number' && aiMsgCount > 6 && stageStillDiscovery) {
+    softSignals.qualification_pace_too_slow = -0.3 * (aiMsgCount - 6);
+  }
+
+  if (
+    typeof aiMsgCount === 'number' &&
+    aiMsgCount > 10 &&
+    !options?.capitalQuestionAsked &&
+    !capitalAskedThisTurn
+  ) {
+    hardFails.push(
+      'qualification_stalled: AI has been in discovery too long without asking the capital question'
+    );
+  }
+
+  // ── REPEATED QUESTION SIGNAL (soft penalty -0.4) ────────────────
+  // Souljah J 2026-04-25: AI asked the capital question, the lead
+  // responded with their OWN question (about strategy), and the AI
+  // re-asked the capital question on the very next turn without
+  // ever addressing the lead's interjection. Detect via per-question
+  // Jaccard similarity: extract sentences ending with `?` from the
+  // previous AI bubble + the current reply, compute pairwise word-
+  // set Jaccard, fire when any pair scores ≥ 0.7. Soft-only — the
+  // gate doesn't hard-fail on this because legit re-asking after a
+  // clarifying digression is sometimes acceptable; combined with any
+  // other soft loss it pushes the reply under 0.7 and forces regen.
+  if (options?.previousAIMessage) {
+    const prevQs = extractQuestions(options.previousAIMessage);
+    const currQs = extractQuestions(reply);
+    let bestSim = 0;
+    for (const p of prevQs) {
+      for (const c of currQs) {
+        const sim = jaccardSimilarity(p, c);
+        if (sim > bestSim) bestSim = sim;
+      }
+    }
+    if (bestSim >= 0.7) {
+      softSignals.repeated_question = -0.4;
+    }
+  }
+
+  // ── REPETITIVE QUESTION PATTERN SIGNAL (soft penalty -0.4) ─────
+  // Looks beyond exact re-asks and catches the generic pivot template:
+  // "what's the main thing...", "what's the biggest issue...",
+  // "what's the hardest part..." repeated across turns.
+  if (options?.previousAIQuestions?.length) {
+    const currQs = extractQuestions(reply);
+    let bestStructuralSim = 0;
+    for (const prev of options.previousAIQuestions.slice(-3)) {
+      for (const curr of currQs) {
+        const sim = structuralQuestionSimilarity(prev, curr);
+        if (sim > bestStructuralSim) bestStructuralSim = sim;
+      }
+    }
+    if (bestStructuralSim > 0.6) {
+      softSignals.repetitive_question_pattern = -0.4;
+    }
+  }
+
   // ── PREMATURE SOFT EXIT SIGNAL (soft penalty -0.4) ──────────────
   // Mbaabu Denis / Badchild Meshach / Jeffrey Barrios / Shishir Ibna
   // Moin / Nez Futurez (2026-04-20/21) all got soft-exited to YouTube
@@ -765,6 +957,204 @@ export function scoreVoiceQuality(
     hardFails,
     softSignals
   };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — repeated-question detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract every sentence ending in `?` from a free-form message,
+ * lowercased + whitespace-collapsed. Used by the repeated_question
+ * soft signal so we compare question content, not the surrounding
+ * acknowledgment ("yo bro that's wild — what's holding you back?").
+ */
+function extractQuestions(text: string): string[] {
+  if (!text) return [];
+  // Split on sentence-final ? . ! and keep only the segments that
+  // ended in `?` in the original. We track that by re-scanning the
+  // text and pairing each split chunk with the punctuation that
+  // followed it.
+  const out: string[] = [];
+  let buf = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '?' || ch === '.' || ch === '!' || ch === '\n') {
+      if (ch === '?') {
+        const trimmed = buf.trim().toLowerCase().replace(/\s+/g, ' ');
+        if (trimmed.length > 0) out.push(trimmed);
+      }
+      buf = '';
+    } else {
+      buf += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Token-overlap coefficient: |A ∩ B| / min(|A|, |B|). Captures
+ * "the same question, possibly padded with extra context words" —
+ * which is exactly the failure mode (LLM rephrases the capital ask
+ * with a leading acknowledgment, but the question keywords are
+ * identical). Jaccard would underweight this case because the
+ * acknowledgment words inflate the union; overlap-coefficient ignores
+ * them. Stop-word filtering still applied so two questions that
+ * share only "the / you / what" don't false-fire.
+ */
+function jaccardSimilarity(a: string, b: string): number {
+  const STOP = new Set([
+    'the',
+    'a',
+    'an',
+    'is',
+    'are',
+    'was',
+    'were',
+    'be',
+    'been',
+    'being',
+    'do',
+    'does',
+    'did',
+    'have',
+    'has',
+    'had',
+    'i',
+    'you',
+    'we',
+    'they',
+    'it',
+    'this',
+    'that',
+    'these',
+    'those',
+    'and',
+    'or',
+    'but',
+    'if',
+    'so',
+    'on',
+    'in',
+    'at',
+    'to',
+    'for',
+    'of',
+    'with',
+    'by',
+    'as'
+  ]);
+  const tokenize = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .replace(/[^a-z0-9'\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 1 && !STOP.has(w))
+    );
+  const sa = tokenize(a);
+  const sb = tokenize(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersect = 0;
+  Array.from(sa).forEach((w) => {
+    if (sb.has(w)) intersect++;
+  });
+  const minSize = Math.min(sa.size, sb.size);
+  return minSize === 0 ? 0 : intersect / minSize;
+}
+
+export function containsCapitalQuestion(text: string): boolean {
+  const patterns: RegExp[] = [
+    /\byou got at least \$?\d/i,
+    /\byou have at least \$?\d/i,
+    /\bat least \$?\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
+    /\bcapital ready\b/i,
+    /\bready to start with \$?\d/i,
+    /\bjust to confirm.*\b(capital|\$|£)\b/i,
+    /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
+    /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
+    /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
+    /\bwhat are you working with\b/i,
+    /\bon the (capital|money|budget) side\b/i
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+export function containsIncomeGoalQuestion(text: string): boolean {
+  const patterns: RegExp[] = [
+    /\b(income|money|earnings?|revenue)\s+goal\b/i,
+    /\bgoal\b.{0,40}\b(make|earn|income|month|monthly|week|weekly)\b/i,
+    /\bhow much (do you|are you trying to|would you like to|you wanna|you want to)\s+(make|earn)\b/i,
+    /\bwhat('s| is)\s+(your\s+)?(income|earning|monthly|weekly|money)\s+goal\b/i,
+    /\bwhat('s| is)\s+the\s+number\s+you('re| are)?\s+(trying|looking|wanting)\s+to\s+(hit|make|earn)\b/i,
+    /\bhow much (per|a)\s+(month|week)\b/i,
+    /\btarget\s+(income|number|amount)\b/i
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function normalizeQuestionStructure(question: string): string {
+  return question
+    .toLowerCase()
+    .replace(/\bwhat's\b/g, 'what is')
+    .replace(/\bwanna\b/g, 'want to')
+    .replace(
+      /\b(main|biggest|hardest|toughest|primary|number one|#1)\b/g,
+      'core'
+    )
+    .replace(
+      /\b(thing|issue|problem|challenge|part|bottleneck|struggle)\b/g,
+      'problem'
+    )
+    .replace(
+      /\b(holding you back|stopping you|blocking you|keeping you stuck|getting in the way)\b/g,
+      'obstacle'
+    )
+    .replace(/\b(fix|solve|change|improve|work on)\b/g, 'fix')
+    .replace(/\b(right now|currently|at the moment|rn)\b/g, 'now')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function questionStructureFeatures(question: string): Set<string> {
+  const normalized = normalizeQuestionStructure(question);
+  const features = new Set<string>();
+  if (/\bwhat\b/.test(normalized)) features.add('what');
+  if (/\bcore\b/.test(normalized)) features.add('core');
+  if (/\bproblem\b/.test(normalized)) features.add('problem');
+  if (/\bobstacle\b/.test(normalized)) features.add('obstacle');
+  if (/\bfix\b/.test(normalized)) features.add('fix');
+  if (/\bnow\b/.test(normalized)) features.add('now');
+  if (/\byou\b/.test(normalized)) features.add('you');
+  if (/\bwant to\b|\btrying to\b|\blooking to\b/.test(normalized)) {
+    features.add('goal-seeking');
+  }
+  if (/\bcapital\b|\bbudget\b|\bmoney\b/.test(normalized)) {
+    features.add('capital');
+  }
+  if (/\bincome\b|\bearn\b|\bmake\b/.test(normalized)) {
+    features.add('income');
+  }
+  return features;
+}
+
+function structuralQuestionSimilarity(a: string, b: string): number {
+  const normalizedA = normalizeQuestionStructure(a);
+  const normalizedB = normalizeQuestionStructure(b);
+  const lexical = jaccardSimilarity(normalizedA, normalizedB);
+  const featuresA = questionStructureFeatures(normalizedA);
+  const featuresB = questionStructureFeatures(normalizedB);
+  if (featuresA.size === 0 || featuresB.size === 0) return lexical;
+  let intersect = 0;
+  for (const feature of Array.from(featuresA)) {
+    if (featuresB.has(feature)) intersect++;
+  }
+  const union = new Set([...Array.from(featuresA), ...Array.from(featuresB)])
+    .size;
+  const featureScore = union === 0 ? 0 : intersect / union;
+  return Math.max(lexical, featureScore);
 }
 
 // ---------------------------------------------------------------------------

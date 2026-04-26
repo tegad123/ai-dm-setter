@@ -16,6 +16,22 @@ export const maxDuration = 120;
 // Short delays bypass the per-minute cron and run inline via after().
 const INLINE_DELAY_THRESHOLD_SECONDS = 90;
 
+function hasImageAttachment(attachments: unknown): boolean {
+  return (
+    Array.isArray(attachments) &&
+    attachments.some((attachment) => {
+      const candidate = attachment as {
+        type?: unknown;
+        payload?: { url?: unknown } | null;
+      };
+      return (
+        candidate?.type === 'image' &&
+        typeof candidate.payload?.url === 'string'
+      );
+    })
+  );
+}
+
 // ---------------------------------------------------------------------------
 // GET — Webhook verification (Meta sends hub.mode, hub.verify_token, hub.challenge)
 // ---------------------------------------------------------------------------
@@ -178,10 +194,13 @@ async function processFacebookEvents(payload: any): Promise<void> {
       const senderId: string = event.sender?.id ?? '';
       const recipientId: string = event.recipient?.id ?? '';
       const messageText: string = event.message?.text ?? '';
+      const attachments = Array.isArray(event.message?.attachments)
+        ? event.message.attachments
+        : [];
       const platformMessageId: string = event.message?.mid ?? '';
       const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!messageText) continue;
+      if (!messageText && !hasImageAttachment(attachments)) continue;
 
       // ── Admin/page message detection ────────────────────────────────
       const isAdminMessage = isEcho || pageOwnIds.has(senderId);
@@ -189,10 +208,11 @@ async function processFacebookEvents(payload: any): Promise<void> {
       console.log(
         `[facebook-webhook] Message: sender=${senderId}, recipient=${recipientId}, ` +
           `isEcho=${isEcho}, isAdmin=${isAdminMessage}, pageOwnIds=[${Array.from(pageOwnIds).join(',')}], ` +
-          `text="${messageText?.slice(0, 50)}"`
+          `text="${messageText?.slice(0, 50)}" attachments=${attachments.length}`
       );
 
       if (isAdminMessage) {
+        if (!messageText) continue;
         const leadPlatformUserId = isEcho
           ? recipientId
           : recipientId || senderId;
@@ -251,6 +271,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
           senderName,
           senderHandle: senderName, // Facebook doesn't have separate handles
           messageText,
+          attachments,
           triggerType: 'DM',
           platformMessageId: platformMessageId || undefined
         });

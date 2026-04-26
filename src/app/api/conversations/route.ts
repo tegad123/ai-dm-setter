@@ -12,7 +12,13 @@ export async function GET(request: NextRequest) {
     const unreadOnly = searchParams.get('unread'); // "true" to filter unread only
     const platform = searchParams.get('platform'); // "INSTAGRAM" | "FACEBOOK"
     const qualification = searchParams.get('qualification'); // "qualified" | "unqualified"
+    const tagFilter = searchParams.get('tag'); // "cold-pitch" to surface SPAM bucket; omit = exclude
 
+    // Cold-pitch / SPAM gating. By default (no `tag` param) the
+    // conversations list excludes spam-bucket rows so Omar-style
+    // pitches don't clutter the operator's main view. When ops
+    // explicitly passes `?tag=cold-pitch`, we INVERT the filter and
+    // show only those rows.
     const leadFilter: Record<string, unknown> = {
       accountId: auth.accountId,
       ...(search
@@ -24,6 +30,12 @@ export async function GET(request: NextRequest) {
           }
         : {})
     };
+    if (tagFilter === 'cold-pitch') {
+      leadFilter.tags = { some: { tag: { name: 'cold-pitch' } } };
+    } else {
+      // Default: hide cold-pitch tagged leads from the main feed.
+      leadFilter.tags = { none: { tag: { name: 'cold-pitch' } } };
+    }
     if (platform === 'INSTAGRAM' || platform === 'FACEBOOK') {
       leadFilter.platform = platform;
     }
