@@ -78,7 +78,9 @@ export async function GET(request: NextRequest) {
       capitalRoutingRows,
       upcomingCallRows,
       unreviewedCount,
-      keepaliveRows
+      keepaliveRows,
+      callUnconfirmedRows,
+      callOutcomeNeededRows
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
       // Conversations flagged distressDetected=true within the last
@@ -247,6 +249,13 @@ export async function GET(request: NextRequest) {
         prisma.conversation.findMany({
           where: {
             ...accountConvFilter,
+            lead: {
+              is: {
+                accountId,
+                stage: { in: ['QUALIFIED', 'CALL_PROPOSED', 'BOOKED'] },
+                tags: { none: { tag: { name: 'cold-pitch' } } }
+              }
+            },
             scheduledCallAt: {
               gte: now,
               lte: new Date(now.getTime() + UPCOMING_CALL_WINDOW_MS)
@@ -256,6 +265,7 @@ export async function GET(request: NextRequest) {
             id: true,
             scheduledCallAt: true,
             scheduledCallTimezone: true,
+            callConfirmed: true,
             lead: { select: { id: true, name: true, handle: true } }
           },
           orderBy: { scheduledCallAt: 'asc' }
@@ -309,6 +319,52 @@ export async function GET(request: NextRequest) {
           orderBy: { firedAt: 'desc' }
         }),
         []
+      ),
+
+      // ── PRIORITY 2.F: Call confirmation gaps ─────────────────────
+      safe(
+        prisma.conversation.findMany({
+          where: {
+            ...accountConvFilter,
+            scheduledCallAt: {
+              gte: new Date(now.getTime() - RECENT_ACTIVITY_MS),
+              lte: new Date(now.getTime() - 30 * 60 * 1000)
+            },
+            callConfirmed: false,
+            callOutcome: null
+          },
+          select: {
+            id: true,
+            scheduledCallAt: true,
+            scheduledCallTimezone: true,
+            lead: { select: { id: true, name: true, handle: true } }
+          },
+          orderBy: { scheduledCallAt: 'desc' },
+          take: 50
+        }),
+        []
+      ),
+      safe(
+        prisma.conversation.findMany({
+          where: {
+            ...accountConvFilter,
+            scheduledCallAt: {
+              gte: new Date(now.getTime() - RECENT_ACTIVITY_MS),
+              lte: new Date(now.getTime() - 2 * 60 * 60 * 1000)
+            },
+            callConfirmed: true,
+            callOutcome: null
+          },
+          select: {
+            id: true,
+            scheduledCallAt: true,
+            scheduledCallTimezone: true,
+            lead: { select: { id: true, name: true, handle: true } }
+          },
+          orderBy: { scheduledCallAt: 'desc' },
+          take: 50
+        }),
+        []
       )
     ]);
 
@@ -323,6 +379,8 @@ export async function GET(request: NextRequest) {
     pausedSystemRows.forEach((c) => referencedConvIds.add(c.id));
     capitalRoutingRows.forEach((r) => referencedConvIds.add(r.conversationId));
     upcomingCallRows.forEach((c) => referencedConvIds.add(c.id));
+    callUnconfirmedRows.forEach((c) => referencedConvIds.add(c.id));
+    callOutcomeNeededRows.forEach((c) => referencedConvIds.add(c.id));
     const referencedConvIdList = Array.from(referencedConvIds);
     const [dismissedRows, latestLeadMsgs] = await Promise.all([
       referencedConvIdList.length > 0
@@ -667,6 +725,31 @@ export async function GET(request: NextRequest) {
         leadName: c.lead.name,
         leadHandle: c.lead.handle,
         callAt: c.scheduledCallAt!.toISOString(),
+        callTimezone: c.scheduledCallTimezone ?? null,
+        callConfirmed: c.callConfirmed
+      }));
+
+    const attentionCallUnconfirmed = callUnconfirmedRows
+      .filter((c) => !isDismissed(c.id, 'call_unconfirmed_past_due'))
+      .map((c) => ({
+        type: 'call_unconfirmed_past_due' as const,
+        conversationId: c.id,
+        leadId: c.lead.id,
+        leadName: c.lead.name,
+        leadHandle: c.lead.handle,
+        callAt: c.scheduledCallAt!.toISOString(),
+        callTimezone: c.scheduledCallTimezone ?? null
+      }));
+
+    const attentionCallOutcomeNeeded = callOutcomeNeededRows
+      .filter((c) => !isDismissed(c.id, 'call_outcome_needed'))
+      .map((c) => ({
+        type: 'call_outcome_needed' as const,
+        conversationId: c.id,
+        leadId: c.lead.id,
+        leadName: c.lead.name,
+        leadHandle: c.lead.handle,
+        callAt: c.scheduledCallAt!.toISOString(),
         callTimezone: c.scheduledCallTimezone ?? null
       }));
 
@@ -894,6 +977,8 @@ export async function GET(request: NextRequest) {
         ...attentionUnverifiedSent,
         ...attentionKeepaliveExhausted,
         ...attentionKeepaliveNoResponse,
+        ...attentionCallUnconfirmed,
+        ...attentionCallOutcomeNeeded,
         ...attentionUpcomingCalls,
         ...attentionUnreviewed
       ],

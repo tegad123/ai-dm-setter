@@ -63,8 +63,7 @@ export const BOOKING_FOLLOW_UP_BODIES: Record<string, string> = {
   FOLLOW_UP_1: 'yo bro, just checking in — were you able to book that call? 💪🏿',
   FOLLOW_UP_2:
     'hey bro, still here if you need anything. did you get a chance to book?',
-  FOLLOW_UP_3:
-    'yo bro, last check-in — you still interested in hopping on that call with Anthony?',
+  FOLLOW_UP_3: 'yo bro, last check-in — you still interested in that call?',
   FOLLOW_UP_SOFT_EXIT:
     "no worries bro, I'll leave it here. when you're ready hit me up — the offer still stands 💪🏿"
 };

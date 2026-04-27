@@ -31,6 +31,10 @@ interface CallDetailsState {
   scheduledCallTimezone: string | null;
   scheduledCallSource: string | null;
   scheduledCallConfirmed: boolean;
+  callConfirmed: boolean;
+  callConfirmedAt: string | null;
+  callOutcome: string | null;
+  homeworkSentAt: string | null;
   scheduledCallNote: string | null;
   scheduledCallUpdatedAt: string | null;
   scheduledCallUpdatedBy: string | null;
@@ -39,6 +43,7 @@ interface CallDetailsState {
     id: string;
     messageType: string;
     scheduledFor: string;
+    firedAt?: string | null;
   }>;
 }
 
@@ -159,6 +164,46 @@ function localDateTimeToUtcIso(local: string, tz: string): string | null {
   return guess.toISOString();
 }
 
+function reminderLabel(messageType: string): string {
+  switch (messageType) {
+    case 'PRE_CALL_HOMEWORK':
+      return 'Homework';
+    case 'CALL_DAY_CONFIRMATION':
+      return 'Morning confirmation';
+    case 'CALL_DAY_REMINDER':
+      return '2-hour nudge';
+    case 'DAY_BEFORE_REMINDER':
+      return 'Day before';
+    case 'MORNING_OF_REMINDER':
+      return 'Morning of';
+    default:
+      return messageType.replace(/_/g, ' ').toLowerCase();
+  }
+}
+
+function StatusLine({
+  label,
+  active,
+  detail
+}: {
+  label: string;
+  active: boolean;
+  detail: string;
+}) {
+  return (
+    <div className='flex items-center justify-between gap-2 text-[10px]'>
+      <span className='text-muted-foreground'>{label}</span>
+      <span
+        className={
+          active ? 'font-medium text-emerald-600' : 'text-muted-foreground'
+        }
+      >
+        {detail}
+      </span>
+    </div>
+  );
+}
+
 interface Props {
   conversationId: string;
 }
@@ -256,6 +301,27 @@ export function CallDetailsPanel({ conversationId }: Props) {
     }
   };
 
+  const handleOutcomeChange = async (value: string) => {
+    const callOutcome = value === 'blank' ? null : value;
+    try {
+      const updated = await apiFetch<CallDetailsState>(
+        `/conversations/${conversationId}/call`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ callOutcome })
+        }
+      );
+      setState((prev) => ({
+        ...(prev || updated),
+        ...updated,
+        reminders: prev?.reminders || updated.reminders || []
+      }));
+      toast.success('Call outcome updated');
+    } catch {
+      toast.error('Failed to update call outcome');
+    }
+  };
+
   if (loading) return null;
 
   const hasCall = !!state?.scheduledCallAt;
@@ -304,6 +370,45 @@ export function CallDetailsPanel({ conversationId }: Props) {
               {state.scheduledCallSource.replace(/_/g, ' ').toLowerCase()}
             </div>
           )}
+          <div className='space-y-1 border-t pt-2'>
+            <StatusLine
+              label='Homework sent'
+              active={!!state.homeworkSentAt}
+              detail={
+                state.homeworkSentAt
+                  ? formatInTz(state.homeworkSentAt, displayTz)
+                  : 'No'
+              }
+            />
+            <StatusLine
+              label='Confirmed'
+              active={state.callConfirmed}
+              detail={
+                state.callConfirmedAt
+                  ? formatInTz(state.callConfirmedAt, displayTz)
+                  : 'No'
+              }
+            />
+            <div className='space-y-1'>
+              <Label htmlFor='call-outcome' className='text-[10px]'>
+                Outcome
+              </Label>
+              <Select
+                value={state.callOutcome || 'blank'}
+                onValueChange={handleOutcomeChange}
+              >
+                <SelectTrigger id='call-outcome' className='h-8 text-xs'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='blank'>Not marked</SelectItem>
+                  <SelectItem value='SHOWED'>SHOWED</SelectItem>
+                  <SelectItem value='NO_SHOWED'>NO-SHOWED</SelectItem>
+                  <SelectItem value='RESCHEDULED'>RESCHEDULED</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           {(state.reminders?.length ?? 0) > 0 && (
             <div className='space-y-1 border-t pt-2'>
               <div className='text-muted-foreground flex items-center gap-1 text-[10px] font-medium'>
@@ -316,10 +421,8 @@ export function CallDetailsPanel({ conversationId }: Props) {
                   className='text-muted-foreground flex items-center gap-1 text-[10px]'
                 >
                   <IconCheck className='h-3 w-3 text-emerald-600' />
-                  {r.messageType === 'DAY_BEFORE_REMINDER'
-                    ? 'Day before'
-                    : 'Morning of'}
-                  : {formatInTz(r.scheduledFor, displayTz)}
+                  {reminderLabel(r.messageType)}:{' '}
+                  {formatInTz(r.scheduledFor, displayTz)}
                 </div>
               ))}
             </div>

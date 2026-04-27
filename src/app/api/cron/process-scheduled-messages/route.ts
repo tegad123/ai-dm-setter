@@ -1,6 +1,11 @@
 import prisma from '@/lib/prisma';
 import { generateReply } from '@/lib/ai-engine';
 import { buildReminderPromptAppendix } from '@/lib/reminder-generator';
+import {
+  CALL_CONFIRMATION_TYPES,
+  decodeScheduledBubbles,
+  sendScheduledCallSequenceMessage
+} from '@/lib/call-confirmation-sequence';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import {
@@ -221,6 +226,20 @@ async function fireScheduledMessage(
     return 'skipped_ai_inactive';
   }
 
+  if (
+    row.messageType === 'CALL_DAY_REMINDER' &&
+    conversation.callConfirmed === true
+  ) {
+    await prisma.scheduledMessage.update({
+      where: { id: row.id },
+      data: {
+        status: 'CANCELLED',
+        lastError: 'call_already_confirmed'
+      }
+    });
+    return 'skipped_ai_inactive';
+  }
+
   // Guardrail for silent-lead cascade + booking-link follow-up.
   // If the lead replied OR a human operator sent a manual message
   // between row creation and this firing, the cascade is moot. The
@@ -270,6 +289,26 @@ async function fireScheduledMessage(
   }
 
   let messageBody = row.messageBody;
+
+  if (CALL_CONFIRMATION_TYPES.includes(row.messageType)) {
+    if (!messageBody || !messageBody.trim()) {
+      throw new Error(`${row.messageType} missing messageBody`);
+    }
+    await sendScheduledCallSequenceMessage({
+      conversationId: conversation.id,
+      bubbles: decodeScheduledBubbles(messageBody)
+    });
+    console.log(
+      `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} (${lead.platform}/${lead.name})`
+    );
+    await scheduleNextInCascade(
+      conversation.id,
+      lead.accountId,
+      row.messageType,
+      row.messageBody ?? messageBody
+    );
+    return 'sent';
+  }
 
   // Generate fresh at fire time if requested
   if (row.generateAtSendTime) {
@@ -406,34 +445,28 @@ async function fireScheduledMessage(
   );
 
   // ── Silent-lead cascade bookkeeping ──────────────────────────────
-  // After BOOKING_LINK_FOLLOWUP or FOLLOW_UP_1/2/3 fires, schedule the
-  // next step in the chain (12h out). BOOKING_LINK_FOLLOWUP cascades
-  // into a booking-aware FOLLOW_UP_1 body via isBookingCascadeBody()
-  // inside scheduleNextInCascade — no extra branching needed here.
+  // Every ScheduledMessage send calls scheduleNextInCascade after a
+  // successful fire. For non-cascade types this returns null; for
+  // BOOKING_LINK_FOLLOWUP / FOLLOW_UP_1/2/3 it schedules the next row.
   // After FOLLOW_UP_SOFT_EXIT fires, mark the conversation DORMANT
   // and transition the lead to GHOSTED — the sequence is terminal,
   // no more outbound touches on this convo until the lead re-engages
   // (which cancels via cancelAllPendingFollowUps).
-  if (
-    row.messageType === 'BOOKING_LINK_FOLLOWUP' ||
-    row.messageType === 'FOLLOW_UP_1' ||
-    row.messageType === 'FOLLOW_UP_2' ||
-    row.messageType === 'FOLLOW_UP_3'
-  ) {
-    try {
-      await scheduleNextInCascade(
-        conversation.id,
-        lead.accountId,
-        row.messageType,
-        row.messageBody ?? messageBody
-      );
-    } catch (err) {
-      console.error(
-        `[cron/scheduled-messages] cascade-next scheduling failed for ${row.id}:`,
-        err
-      );
-    }
-  } else if (row.messageType === 'FOLLOW_UP_SOFT_EXIT') {
+  try {
+    await scheduleNextInCascade(
+      conversation.id,
+      lead.accountId,
+      row.messageType,
+      row.messageBody ?? messageBody
+    );
+  } catch (err) {
+    console.error(
+      `[cron/scheduled-messages] cascade-next scheduling failed for ${row.id}:`,
+      err
+    );
+  }
+
+  if (row.messageType === 'FOLLOW_UP_SOFT_EXIT') {
     try {
       await prisma.conversation.update({
         where: { id: conversation.id },

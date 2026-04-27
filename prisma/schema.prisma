@@ -323,7 +323,7 @@ model AIPersona {
   proofPoints              Json?                     // [{name, result, deployContext}]
   noShowProtocol           Json?                     // {firstNoShow, secondNoShow, maxReschedules}
   preCallSequence          Json?                     // [{timing, message}]
-  closerName               String?                   // Name of closer on calls (e.g. "Anthony")
+  closerName               String?                   // Name of closer on calls
   // Day-to-day operator-edited context. activeCampaignsContext is free-
   // form text listing the account's current CTAs, content drops, and
   // promotions; the prompt injects it as an <active_campaigns> block so
@@ -889,6 +889,9 @@ model Conversation {
   scheduledCallNote        String?
   scheduledCallUpdatedAt   DateTime?
   scheduledCallUpdatedBy   String?   // User.id — for audit trail
+  callConfirmed            Boolean   @default(false)
+  callConfirmedAt          DateTime?
+  callOutcome              String?   // SHOWED, NO_SHOWED, RESCHEDULED
 
   // Relations
   lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -1299,6 +1302,9 @@ model ScheduledReply {
 enum ScheduledMessageType {
   DAY_BEFORE_REMINDER
   MORNING_OF_REMINDER
+  PRE_CALL_HOMEWORK
+  CALL_DAY_CONFIRMATION
+  CALL_DAY_REMINDER
   WINDOW_KEEPALIVE
   RE_ENGAGEMENT
   CUSTOM

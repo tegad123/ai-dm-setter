@@ -27,7 +27,10 @@ const ALLOWED_ACTION_TYPES = new Set([
   'upcoming_call',
   'unverified_sent',
   'keepalive_no_response',
-  'keepalive_exhausted'
+  'keepalive_exhausted',
+  'call_unconfirmed_past_due',
+  'call_outcome_needed',
+  'scheduling_conflict'
 ]);
 
 export async function POST(request: NextRequest) {

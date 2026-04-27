@@ -97,6 +97,25 @@ interface AttentionUpcomingCall {
   leadHandle: string;
   callAt: string;
   callTimezone: string | null;
+  callConfirmed: boolean;
+}
+interface AttentionCallUnconfirmed {
+  type: 'call_unconfirmed_past_due';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  callAt: string;
+  callTimezone: string | null;
+}
+interface AttentionCallOutcomeNeeded {
+  type: 'call_outcome_needed';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  callAt: string;
+  callTimezone: string | null;
 }
 interface AttentionUnreviewed {
   type: 'unreviewed';
@@ -142,6 +161,8 @@ type AttentionItem =
   | AttentionUnverifiedSent
   | AttentionKeepaliveNoResponse
   | AttentionKeepaliveExhausted
+  | AttentionCallUnconfirmed
+  | AttentionCallOutcomeNeeded
   | AttentionUpcomingCall
   | AttentionUnreviewed;
 
@@ -254,7 +275,9 @@ type DismissibleActionType =
   | 'upcoming_call'
   | 'unverified_sent'
   | 'keepalive_no_response'
-  | 'keepalive_exhausted';
+  | 'keepalive_exhausted'
+  | 'call_unconfirmed_past_due'
+  | 'call_outcome_needed';
 
 export function ActionRequired() {
   const [data, setData] = React.useState<ActionsResponse | null>(null);
@@ -645,13 +668,59 @@ function renderAttention(
           }
         />
       );
+    case 'call_unconfirmed_past_due':
+      return (
+        <ActionRow
+          key={`call-unconfirmed-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconAlertTriangle}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — call time passed, no confirmation received
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.callAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'call_unconfirmed_past_due')
+          }
+        />
+      );
+    case 'call_outcome_needed':
+      return (
+        <ActionRow
+          key={`call-outcome-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconChecklist}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — call was today, update outcome
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.callAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'call_outcome_needed')
+          }
+        />
+      );
     case 'upcoming_call':
       return (
         <ActionRow
           key={`call-${item.conversationId}`}
           href={`/dashboard/conversations?conversationId=${item.conversationId}`}
           icon={IconPhoneCall}
-          iconClassName='text-amber-500'
+          iconClassName={
+            item.callConfirmed ? 'text-emerald-600' : 'text-amber-500'
+          }
           primary={
             <span>
               <span className='font-medium'>{item.leadName}</span>
@@ -659,6 +728,7 @@ function renderAttention(
                 {' '}
                 — call {relativeTime(item.callAt, now)}
                 {item.callTimezone ? ` (${item.callTimezone})` : ''}
+                {item.callConfirmed ? ' confirmed' : ' unconfirmed'}
               </span>
             </span>
           }

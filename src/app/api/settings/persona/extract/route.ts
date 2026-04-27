@@ -22,7 +22,7 @@ The target system is a 7-stage DM setter AI that runs conversations through:
 1. **Extract ACTUAL scripts and messages VERBATIM** — do not summarize. If the document says "send this message: 'Hey bro...'" then put the exact message in the field.
 2. **Extract ALL content for each field** — if there are multiple scripts for one scenario (e.g. 3 follow-up attempts for no-shows), combine them all into that field.
 3. **First-person rewrite** — the document may refer to the persona owner by name (e.g. "Daniel should say..."). In extracted scripts, convert these to first-person ("I", "me", "my") because the AI IS the persona owner talking directly to the lead.
-4. **Setter vs closer handoff** — If the document says the SETTER (the DM persona) is different from the CLOSER (who takes the actual sales call), capture BOTH names and the handoff instruction. Example: "Daniel sets in DMs, Anthony closes on the call" → closerName: "Anthony", callHandoff populated.
+4. **Setter vs closer handoff** — If the document says the SETTER (the DM persona) is different from the CLOSER (who takes the actual sales call), capture BOTH names and the handoff instruction. Example: "Daniel sets in DMs, Jordan closes on the call" → closerName: "Jordan", callHandoff populated.
 5. **Path A vs Path B** — Many SOPs classify leads as BEGINNER vs EXPERIENCED and route to different scripts. Extract the keywords used to classify + the separate script paths.
 6. **Emotional pause rule** — If the document has instructions about how to respond to emotional disclosures (absent parent, financial stress, family struggles), extract as emotionalDisclosurePatterns.
 7. **Income empathy anchor** — If the document says to attach a specific empathy line when asking about income (e.g. "asking since I used to work similar jobs"), extract as incomeFramingRule.
@@ -63,7 +63,7 @@ Return a JSON object with EXACTLY this structure. Include BOTH legacy and new fi
   "fullName": "The person's full name or brand owner name found in the document",
   "companyName": "Brand or company name",
   "freeValueLink": "Any free resource/video URL mentioned (may be a placeholder like [FREE VALUE VIDEO LINK])",
-  "closerName": "Name of the person who handles sales calls if different from the DM setter — e.g. 'Anthony'. Empty string if the setter also takes the call.",
+  "closerName": "Name of the person who handles sales calls if different from the DM setter — e.g. 'Jordan'. Empty string if the setter also takes the call.",
   "objectionHandling": {
     "trust": "FULL trust/skepticism objection handling script — include the complete response with all paragraphs",
     "priorFailure": "FULL 'been burned before' / 'tried this before' objection script",
@@ -98,7 +98,7 @@ Return a JSON object with EXACTLY this structure. Include BOTH legacy and new fi
     // ── NEW SOP FIELDS (read by the 7-stage runtime) ──
 
     "callHandoff": {
-      "closerName": "Name of the person taking the actual sales call (e.g. 'Anthony'). Empty string or omit if the DM setter is also the closer.",
+      "closerName": "Name of the person taking the actual sales call (e.g. 'Jordan'). Empty string or omit if the DM setter is also the closer.",
       "closerRelation": "Relationship phrasing — 'my partner', 'my co-founder', 'the closer on our team', 'my business partner', etc.",
       "closerRole": "What they do — 'runs all our strategy calls', 'handles onboarding', 'closes deals'. Used to introduce them naturally."
     },

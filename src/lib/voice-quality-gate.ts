@@ -937,7 +937,7 @@ export function scoreVoiceQuality(
   // R27 — third-party capability claim detection (soft signal, NOT a
   // hard fail). Unlike R19 fabrications which have tight surface
   // patterns, R27 violations are open-ended factual assertions
-  // ("Anthony speaks German", "we have 24/7 support", "the course
+  // ("the closer speaks German", "we have 24/7 support", "the course
   // covers options"). Regex can't reliably catch every variant —
   // primary enforcement is at the prompt level (R27). These patterns
   // just flag the message for prioritised operator review so Daniel
@@ -1755,7 +1755,7 @@ export function scoreVoiceQualityGroup(
   }
 
   // Multi-bubble safety: call-pitch language can be split across bubbles
-  // ("Anthony" in one, "quick call" in the next). The per-bubble pass
+  // (closer name in one, "quick call" in the next). The per-bubble pass
   // catches most cases; the joined turn catches cross-bubble phrasing.
   if (
     options?.capitalVerificationRequired === true &&

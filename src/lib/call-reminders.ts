@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
+import { CALL_CONFIRMATION_TYPES } from '@/lib/call-confirmation-sequence';
 
 export interface ReminderTimes {
   /** When the day-before reminder should fire (UTC Date). */
@@ -180,7 +181,11 @@ export async function cancelCallReminders(
       conversationId,
       status: 'PENDING',
       messageType: {
-        in: ['DAY_BEFORE_REMINDER', 'MORNING_OF_REMINDER']
+        in: [
+          'DAY_BEFORE_REMINDER',
+          'MORNING_OF_REMINDER',
+          ...CALL_CONFIRMATION_TYPES
+        ]
       }
     },
     data: { status: 'CANCELLED' }

@@ -1345,6 +1345,55 @@ export async function processIncomingMessage(
     );
   }
 
+  // ── Step 5b: Call-day confirmation replies ─────────────────────
+  // If the lead is responding to the morning-of confirmation or
+  // two-hour reminder, handle that deterministic branch here instead
+  // of sending the turn through the general LLM. Distress detection
+  // has already run above, so safety still wins.
+  try {
+    const { handleCallConfirmationLeadReply } = await import(
+      '@/lib/call-confirmation-sequence'
+    );
+    const confirmation = await handleCallConfirmationLeadReply({
+      conversationId,
+      messageId: message.id,
+      messageText
+    });
+    if (confirmation.handled) {
+      broadcastNewMessage({
+        id: message.id,
+        conversationId,
+        sender: 'LEAD',
+        content: messageText,
+        imageUrl: message.imageUrl,
+        hasImage: message.hasImage,
+        timestamp: now.toISOString()
+      });
+      broadcastConversationUpdate({
+        id: conversationId,
+        leadId: lead.id,
+        aiActive:
+          confirmation.kind === 'reschedule'
+            ? false
+            : lead.conversation!.aiActive,
+        unreadCount: (lead.conversation!.unreadCount || 0) + 1,
+        lastMessageAt: now.toISOString()
+      });
+      return {
+        leadId: lead.id,
+        conversationId,
+        messageId: message.id,
+        isNewLead,
+        skipReply: true
+      };
+    }
+  } catch (err) {
+    console.error(
+      '[webhook-processor] call-confirmation reply handling failed (non-fatal):',
+      err
+    );
+  }
+
   // ── Step 6: Broadcast real-time events ─────────────────────────
   broadcastNewMessage({
     id: message.id,
@@ -3123,7 +3172,7 @@ async function sendAIReply(
   // handled AFTER the platform send downstream — meaning an
   // unshippable link-promise reply still ships. This is the
   // Jonathan Frimpong 2026-04-23 incident: AI said "i'm gonna send
-  // you the link to apply for the call with Anthony" with no URL,
+  // you the link to apply for the call with the closer" with no URL,
   // gate flagged it, retries exhausted, escalateToHuman=true set,
   // yet the message shipped anyway and the lead sat waiting.
   //

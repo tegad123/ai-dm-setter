@@ -138,6 +138,7 @@ export default function PersonaEditorPage() {
   const [closerName, setCloserName] = useState('');
   const [closerRelation, setCloserRelation] = useState('');
   const [closerRole, setCloserRole] = useState('');
+  const [homeworkUrl, setHomeworkUrl] = useState('');
   // Script-restructuring flags live under the Call Handoff card alongside
   // closer fields — they shape how the AI routes the lead into booking,
   // which conceptually belongs with handoff mechanics.
@@ -201,9 +202,12 @@ export default function PersonaEditorPage() {
 
         const handoffCfg = (config.callHandoff as CallHandoffConfig) || {};
         const cName = handoffCfg.closerName || data.persona.closerName || '';
+        const homework =
+          typeof config.homeworkUrl === 'string' ? config.homeworkUrl : '';
         setCloserName(cName);
         setCloserRelation(handoffCfg.closerRelation || '');
         setCloserRole(handoffCfg.closerRole || '');
+        setHomeworkUrl(homework);
         const skipInject = data.persona.skipR24ScriptInject === true;
         const earlyFinancial =
           data.persona.allowEarlyFinancialScreening === true;
@@ -217,6 +221,7 @@ export default function PersonaEditorPage() {
           closerName: cName,
           closerRelation: handoffCfg.closerRelation || '',
           closerRole: handoffCfg.closerRole || '',
+          homeworkUrl: homework,
           description: '',
           skipInject,
           earlyFinancial,
@@ -400,7 +405,11 @@ export default function PersonaEditorPage() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ((newHandoff as any)[k] === undefined) delete (newHandoff as any)[k];
       });
-      const newConfig = { ...currentConfig, callHandoff: newHandoff };
+      const newConfig = {
+        ...currentConfig,
+        callHandoff: newHandoff,
+        homeworkUrl: homeworkUrl.trim() || undefined
+      };
       await persistAndRefresh(
         {
           promptConfig: newConfig,
@@ -415,6 +424,7 @@ export default function PersonaEditorPage() {
         closerName,
         closerRelation,
         closerRole,
+        homeworkUrl,
         description: handoffDescription,
         skipInject: skipR24ScriptInject,
         earlyFinancial: allowEarlyFinancial,
@@ -494,6 +504,7 @@ export default function PersonaEditorPage() {
     closerName,
     closerRelation,
     closerRole,
+    homeworkUrl,
     description: handoffDescription,
     skipInject: skipR24ScriptInject,
     earlyFinancial: allowEarlyFinancial,
@@ -730,6 +741,19 @@ export default function PersonaEditorPage() {
               placeholder='[What they do on the call, in one line]'
               maxLength={MAX_CALL_HANDOFF}
             />
+          </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor='homeworkUrl'>Pre-call homework URL</Label>
+            <Input
+              id='homeworkUrl'
+              type='url'
+              value={homeworkUrl}
+              onChange={(e) => setHomeworkUrl(e.target.value)}
+              placeholder='https://example.com/call-prep'
+            />
+            <p className='text-muted-foreground text-[11px]'>
+              Leave blank to skip the homework message for this account.
+            </p>
           </div>
 
           {/* ── Script-flow toggles ─────────────────────────────── */}

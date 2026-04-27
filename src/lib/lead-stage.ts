@@ -191,6 +191,43 @@ export async function transitionLeadStage(
         err
       );
     }
+
+    try {
+      const convo = await prisma.conversation.findFirst({
+        where: { leadId },
+        select: { id: true }
+      });
+      if (convo) {
+        const { cancelCallConfirmationSequence } = await import(
+          '@/lib/call-confirmation-sequence'
+        );
+        const cancelled = await cancelCallConfirmationSequence(convo.id);
+        if (cancelled > 0) {
+          console.log(
+            `[lead-stage] cancelled ${cancelled} pending call-confirmation message(s) on UNQUALIFIED transition for lead ${leadId} (convo ${convo.id})`
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[lead-stage] cancelCallConfirmationSequence on UNQUALIFIED transition failed (non-fatal):',
+        err
+      );
+    }
+  }
+
+  if (toStage === 'QUALIFIED') {
+    try {
+      const { handleQualifiedCallConfirmationTrigger } = await import(
+        '@/lib/call-confirmation-sequence'
+      );
+      await handleQualifiedCallConfirmationTrigger(leadId);
+    } catch (err) {
+      console.error(
+        '[lead-stage] call-confirmation trigger on QUALIFIED transition failed (non-fatal):',
+        err
+      );
+    }
   }
 
   // 4. Broadcast update (dynamic import to avoid circular dependencies)

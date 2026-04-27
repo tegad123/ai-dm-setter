@@ -415,7 +415,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       minimumCapitalRequired: true,
       capitalVerificationPrompt: true,
       closerName: true,
-      // Fix B uses closer names to catch "call with Anthony" / "chat
+      // Fix B uses closer names to catch "call with {closerName}" / "chat
       // with {closerName}" phrases at any stage.
       promptConfig: true
     }
@@ -673,7 +673,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     //     that attempts to advance the lead (by stage OR content) when
     //     the capital question hasn't been verified yet. Catches LLM
     //     outputs that mislabel their stage (e.g., reported OPENING
-    //     with "hop on a quick chat with Anthony" in the message),
+    //     with "hop on a quick chat with the closer" in the message),
     //     which is the Nez Futurez 2026-04-20 failure mode. Creates a
     //     BookingRoutingAudit row on every block so ops has a 48h
     //     diagnostic log. Skipped if R24 already blocked this turn —
@@ -1191,7 +1191,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         f.includes('markdown_in_single_bubble:')
       );
       if (markdownFailed) {
-        const markdownOverride = `\n\n===== NO MARKDOWN — USE MESSAGES ARRAY =====\nYour previous reply used markdown formatting (numbered list with **bold** headers, or multiple **bold** markers, or ## headers). Messaging apps do NOT render markdown — the lead literally sees "1. **Choose a program** — ..." with the asterisks. You MUST regenerate with NO markdown characters at all: no **, no ##, no numbered lists with bold headers, no bullet stars.\n\nInstead, split the content across separate bubbles via the messages[] array. Each bubble is its own short casual message — 1-2 sentences max, no markdown, no list formatting. Example:\n  messages: [\n    "funding convo's a whole other thing bro",\n    "not my lane to walk through prop firm rules — too much changes",\n    "the funded account flow we use gets broken down on the call with Anthony"\n  ]\nKeep each bubble punchy, casual, lowercase. Natural texting cadence — not a numbered how-to guide. If the answer genuinely needs structure, use 2-4 short bubbles, never a formatted list in one message.\n=====`;
+        const markdownOverride = `\n\n===== NO MARKDOWN — USE MESSAGES ARRAY =====\nYour previous reply used markdown formatting (numbered list with **bold** headers, or multiple **bold** markers, or ## headers). Messaging apps do NOT render markdown — the lead literally sees "1. **Choose a program** — ..." with the asterisks. You MUST regenerate with NO markdown characters at all: no **, no ##, no numbered lists with bold headers, no bullet stars.\n\nInstead, split the content across separate bubbles via the messages[] array. Each bubble is its own short casual message — 1-2 sentences max, no markdown, no list formatting. Example:\n  messages: [\n    "funding convo's a whole other thing bro",\n    "not my lane to walk through prop firm rules — too much changes",\n    "the funded account flow we use gets broken down on the call with the closer"\n  ]\nKeep each bubble punchy, casual, lowercase. Natural texting cadence — not a numbered how-to guide. If the answer genuinely needs structure, use 2-4 short bubbles, never a formatted list in one message.\n=====`;
         systemPromptForLLM = baseSystemPrompt + markdownOverride;
         console.warn(
           `[ai-engine] Markdown-in-single-bubble detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -2289,7 +2289,7 @@ interface R24GateResult {
  *      A URL drop at soft-pitch stage IS a booking attempt even when the
  *      LLM didn't promote itself to BOOKING.
  *   3. Reply content matches any handoff / call-pitch phrase — catches
- *      "hop on a quick chat with Anthony" at ANY stage including the
+ *      "hop on a quick chat with the closer" at ANY stage including the
  *      early-qualification ones the LLM sometimes mislabels. A
  *      verification question ("you got at least $X ready?") does NOT
  *      match these patterns so it correctly falls through the gate.
@@ -2313,7 +2313,7 @@ export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
   // Rule 3: phrase-match handoff / call-pitch language regardless of
   // reported stage. Widened phrase list — catches Nez's "send you the
   // link to apply" at 01:48 plus the soft-pitch "hop on a quick chat
-  // with Anthony" pattern that doesn't name-check the closer in the
+  // with the closer" pattern that doesn't name-check the closer in the
   // existing patterns.
   const handoffPhrases =
     /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+for|call\s+confirmation|send(ing)?\s+you\s+(the|a)\s+link\s+(to|for)\s+(apply|book|grab|schedule)|here'?s\s+the\s+link|hop\s+on\s+a\s+(quick\s+)?(call|chat)|get\s+you\s+(all\s+)?set\s+up|link\s+to\s+(book|apply|grab|schedule)|gonna\s+send\s+you\s+the\s+link|fill\s+(it\s+|everything\s+)?out\s+and\s+(lmk|let\s+me\s+know)|ready\s+to\s+scale\s+up.*call|break\s+everything\s+down\s+for\s+you)\b/i;
@@ -2323,7 +2323,7 @@ export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
 /**
  * Fix B — content-level advancement detection, independent of what the
  * LLM self-reports for `stage`. An implicit "let me get you on a call
- * with Anthony" pitched at stage=SITUATION_DISCOVERY is still an
+ * with the closer" pitched at stage=SITUATION_DISCOVERY is still an
  * advancement attempt and must hit the capital gate. Wider net than
  * `isRoutingToBookingHandoff` so it catches LLM outputs that mislabel
  * their stage.
@@ -2372,7 +2372,7 @@ export function detectBookingAdvancement(
   if (advancementPhrases.some((p) => p.test(joined))) return true;
   // Closer-name mentions combined with call-arrangement language.
   // Fires when the LLM says "chat with {closerName}" or similar at
-  // ANY stage — Daniel's AI has pitched "Anthony" at OPENING before.
+  // ANY stage — Daniel's AI has pitched closer-name calls at OPENING before.
   for (const name of closerNames) {
     if (!name || name.trim().length < 2) continue;
     const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -25,7 +25,7 @@ export const teamMembers: TeamMember[] = [
   },
   {
     id: '2',
-    name: 'Anthony Parker',
+    name: 'Alex Parker',
     email: 'anthony@example.com',
     role: 'closer',
     isActive: true,
