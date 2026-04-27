@@ -70,7 +70,11 @@ const BANNED_PHRASES = [
   'i can certainly',
   'i completely understand',
   'that must be really',
-  'that sounds really difficult'
+  'that sounds really difficult',
+  // 2026-04-26 — Rodrigo Moran: "real quick tho" had become a bot
+  // tell. Used as a transition before nearly every qualifying
+  // question. Hard-banned so the LLM has to find natural transitions.
+  'real quick tho'
 ];
 
 const BANNED_WORDS = [
@@ -264,6 +268,62 @@ export interface VoiceQualityOptions {
   previousLeadHadImage?: boolean;
   /** Email already captured for this lead. Used to prevent repeat asks. */
   leadEmail?: string | null;
+  /**
+   * Count of prior AI messages that contained a capital-verification
+   * question (Rodrigo Moran 2026-04-26 fix). When >= 1 and the current
+   * reply ALSO contains the capital question shape, the gate hard-fails
+   * with `repeated_capital_question`. Capital is asked ONCE in a
+   * conversation. If the lead's answer was ambiguous or unanswered,
+   * the AI should advance the conversation differently — repeated
+   * threshold asks make the bot feel stuck (which Rodrigo literally
+   * called out: "I think your bot is stuck doing a loop").
+   *
+   * Distinct from `capitalQuestionAsked` (boolean used by the
+   * qualification_stalled signal): that gates "must ask by message 10";
+   * this gates "must NOT ask twice".
+   */
+  priorCapitalQuestionAskCount?: number;
+  /**
+   * Count of prior AI messages containing the phrase "real quick"
+   * (Rodrigo Moran 2026-04-26 fix). Used by the
+   * `overused_transition_phrase` soft signal to penalise the LLM
+   * latching onto "real quick tho" as a default transition. > 2
+   * priors + a fresh use in this turn fires the soft signal at -0.3
+   * per occurrence above 2. "real quick tho" itself is also in
+   * BANNED_PHRASES (hard-fail) — this signal catches softer variants
+   * like "real quick" / "real quick g".
+   */
+  priorRealQuickPhraseCount?: number;
+  /**
+   * True when any LEAD message in conversation history reads as an
+   * implicit-no for capital — student / no money / unemployed /
+   * "broke" / "I got nothing" — even though no AI capital question
+   * has been asked yet. When true, the gate hard-fails any current-
+   * turn capital question because the lead has already self-declared
+   * below threshold. Rodrigo Moran 2026-04-26 spec rule 3.
+   */
+  leadImplicitlySignaledNoCapital?: boolean;
+  /**
+   * Omar Moore 2026-04-27 — count of consecutive AI messages
+   * IMMEDIATELY before this turn that were "pure questions" (ended
+   * in `?` AND didn't acknowledge any specific detail from recent
+   * LEAD messages). When this is ≥ 2 and the current reply is also
+   * a pure question, the `scripted_question_sequence` soft signal
+   * fires at -0.3 per question over 2.
+   *
+   * Computed in ai-engine.ts via
+   *   countConsecutivePureQuestions(priorAIMessages, recentLeadDetails)
+   */
+  priorConsecutivePureQuestionCount?: number;
+  /**
+   * Omar Moore 2026-04-27 — specific details (prop firm names,
+   * instruments, strategies, personal experiences, faith / family
+   * context) extracted from the lead's most recent 1-2 messages.
+   * The current reply MUST reference at least one when it would
+   * otherwise be the 3rd+ consecutive pure question. Pass the raw
+   * matched tokens (case as written by the lead).
+   */
+  recentLeadDetails?: Array<{ category: string; token: string }>;
 }
 
 export function scoreVoiceQuality(
@@ -357,18 +417,46 @@ export function scoreVoiceQuality(
 
   // 9b. Bracketed placeholder leak — e.g. "[BOOKING LINK]", "[CALENDAR LINK]",
   // "[APPLICATION LINK]", "[HOMEWORK LINK]", "[LINK]", "[URL]", "[RESULTS
-  // VIDEO]". These are LITERAL placeholder tokens the LLM learned from
-  // training examples (persona breakdowns, script fragments). If one of them
-  // reaches the lead, they see raw brackets in the message instead of a real
-  // URL — a critical failure. Match any token of the form [A-Z][A-Z0-9 _]{2+}
-  // enclosed in square brackets. We do NOT match single-char or lowercase
-  // bracketed content (that can be legitimate formatting like [a] or [1]).
+  // VIDEO]", "[COURSE PAYMENT LINK]", "[WHOP LINK]". These are LITERAL
+  // placeholder tokens the LLM learned from training examples (persona
+  // breakdowns, script fragments). If one of them reaches the lead, they
+  // see raw brackets in the message instead of a real URL — a critical
+  // failure. The generic regex matches any bracketed ALL-CAPS token.
+  // The explicit pattern set adds a belt-and-suspenders guard for the
+  // course-payment / Whop / checkout variants that were specifically
+  // surfaced by the George 2026-04-08 incident, and lets the retry
+  // directive provide the EXACT replacement URL on regen.
   const BRACKETED_PLACEHOLDER_REGEX = /\[[A-Z][A-Z0-9 _]{2,}\]/;
-  const placeholderMatch = reply.match(BRACKETED_PLACEHOLDER_REGEX);
-  if (placeholderMatch) {
+  // Course-payment / Whop / checkout variants — case-insensitive so a
+  // lowercase variant like "[course payment link]" doesn't slip past
+  // the all-caps generic regex. Each is its own pattern so the failure
+  // message names the specific token the operator can grep for.
+  const COURSE_LINK_PLACEHOLDER_PATTERNS: RegExp[] = [
+    /\[COURSE\s*(PAYMENT\s*)?LINK\]/i,
+    /\[PAYMENT\s+LINK\]/i,
+    /\[WHOP\s+LINK\]/i,
+    /\[CHECKOUT\s+LINK\]/i,
+    /\[COURSE\s+URL\]/i
+  ];
+  let courseLinkLeak: string | null = null;
+  for (const pat of COURSE_LINK_PLACEHOLDER_PATTERNS) {
+    const m = reply.match(pat);
+    if (m) {
+      courseLinkLeak = m[0];
+      break;
+    }
+  }
+  if (courseLinkLeak) {
     hardFails.push(
-      `bracketed_placeholder_leaked: "${placeholderMatch[0]}" — LITERAL placeholder token in outgoing message, not a URL. If the script has no matching URL, use the script-driven handoff flow instead of a placeholder.`
+      `course_link_placeholder_leaked: "${courseLinkLeak}" — LITERAL placeholder where the actual course / payment URL belongs. The retry directive injects the real URL; do NOT ship a placeholder to a lead about to pay.`
     );
+  } else {
+    const placeholderMatch = reply.match(BRACKETED_PLACEHOLDER_REGEX);
+    if (placeholderMatch) {
+      hardFails.push(
+        `bracketed_placeholder_leaked: "${placeholderMatch[0]}" — LITERAL placeholder token in outgoing message, not a URL. If the script has no matching URL, use the script-driven handoff flow instead of a placeholder.`
+      );
+    }
   }
 
   // 9c. R19 — fabricated action claims. The AI must NEVER claim to have taken
@@ -676,6 +764,87 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9i. Repeated capital question (Rodrigo Moran 2026-04-26). When the
+  // AI history already has 1+ capital-verification questions AND this
+  // reply contains another, hard-fail. Rodrigo's bot asked at 3:47
+  // ("do you already have at least $1k set aside") and again at 3:58
+  // ("just to confirm, you got at least $1k in capital ready"). The
+  // lead had answered the first ask. Re-asking 11 minutes later made
+  // the bot feel stuck in a loop, which the lead called out verbatim.
+  // Cap is 1 — once asked, never re-ask. The retry directive in
+  // ai-engine.ts tells the LLM to advance the conversation without
+  // re-asking.
+  if (
+    typeof options?.priorCapitalQuestionAskCount === 'number' &&
+    options.priorCapitalQuestionAskCount >= 1
+  ) {
+    // Use a local pattern set instead of importing from
+    // conversation-facts to avoid a circular dependency (ai-engine →
+    // voice-quality-gate → conversation-facts → ai-engine).
+    const CAPITAL_Q_RE_LOCAL: RegExp[] = [
+      /\byou got at least \$\d/i,
+      /\byou have at least \$\d/i,
+      /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
+      /\bcapital ready\b/i,
+      /\bready to start with \$/i,
+      /\bjust to confirm.*\$\d/i,
+      /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
+      /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
+      /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
+      /\bwhat are you working with\b/i,
+      /\bon the (capital|money|budget) side\b/i
+    ];
+    const currHasCapitalQ = CAPITAL_Q_RE_LOCAL.some((p) => p.test(reply));
+    if (currHasCapitalQ) {
+      hardFails.push(
+        `repeated_capital_question: capital threshold has already been asked ${options.priorCapitalQuestionAskCount} time(s) earlier in this conversation. Do NOT ask it again — either the lead already answered (reference their answer instead) or they declined / changed topic, in which case advance the conversation differently.`
+      );
+    }
+  }
+
+  // 9i-2. Implicit-no capital signal (Rodrigo Moran 2026-04-26 spec
+  // rule 3). When the lead has already self-declared below the
+  // capital threshold (student, broke, no job, "I got nothing"), the
+  // AI should treat that as a capital answer — NOT ask the threshold
+  // question on top of it. Asking "do you have at least $1k" right
+  // after a lead said "I'm a student, no money right now" reads as
+  // the bot ignoring them entirely. Routes to the downsell branch
+  // instead via the regen directive.
+  if (options?.leadImplicitlySignaledNoCapital === true) {
+    // Pattern set is the union of:
+    //   • shapes the R24 gate considers an "ask"
+    //   • the new open-ended phrasing ("what's your capital situation")
+    //   • set-aside / saved variants ("at least $1k set aside")
+    // Kept aligned with CAPITAL_Q_RE_LOCAL (the repeat-check set) plus
+    // the spec's open-ended additions so any shape that COUNTS as a
+    // capital question is blocked once implicit-no has been signaled.
+    const CAPITAL_Q_RE_LOCAL_2: RegExp[] = [
+      /\byou got at least \$\d/i,
+      /\byou have at least \$\d/i,
+      /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start|set\s+aside|saved)/i,
+      /\bcapital ready\b/i,
+      /\bjust to confirm.*\$\d/i,
+      /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
+      /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat are you working with\b/i,
+      /\bon the (capital|money|budget) side\b/i,
+      // Open-ended phrasings introduced by Rodrigo Moran 2026-04-26
+      /\bwhat'?s your capital situation\b/i,
+      /\bcapital situation\s+like\b/i,
+      /\banything set aside for (this|trading|the markets?)\b/i,
+      /\bstill building toward it\b/i,
+      // Generic threshold-confirming variations the LLM may produce
+      /\bdo you (already )?have (at least )?\$\d/i,
+      /\b\$\d+[,\d]*k?\s+(in\s+capital|capital|set\s+aside|saved|ready)\b/i
+    ];
+    if (CAPITAL_Q_RE_LOCAL_2.some((p) => p.test(reply))) {
+      hardFails.push(
+        'capital_q_after_implicit_no: the lead has already signaled they have no capital (student / no money / unemployed / broke). Asking the capital threshold question now ignores what they said — treat the prior signal as the answer and route to the downsell / free-resource branch instead.'
+      );
+    }
+  }
+
   if (
     options?.capitalVerificationRequired === true &&
     options.capitalVerificationSatisfied !== true &&
@@ -684,6 +853,33 @@ export function scoreVoiceQuality(
     hardFails.push(
       'call_pitch_before_capital_verification: call pitch detected before the capital question has been asked and answered'
     );
+  }
+
+  // 9j. "or nah" question tail (Rodrigo Moran 2026-04-26). Daniel's
+  // voice does NOT use "or nah" as a yes/no question prompt — that
+  // construction reads as scripted ("do you have at least $1k or
+  // nah?"). Banned only at the question tail (end of a question),
+  // not mid-sentence — "or nah" is fine when it's a casual aside.
+  if (/\bor nah\?(\s|$)/i.test(reply) || /\bor nah\?+$/i.test(reply.trim())) {
+    hardFails.push(
+      'or_nah_question_tail: avoid "or nah?" as a yes/no question construction — it reads as scripted. Use open-ended phrasing instead.'
+    );
+  }
+
+  // 9k. Overused "real quick" / "real quick tho" transition (Rodrigo
+  // Moran 2026-04-26). The LLM had latched onto "real quick tho" as
+  // a transition phrase before nearly every qualifying question,
+  // making it a detectable bot tell. Soft-counts the prior usage in
+  // the AI history; -0.3 per occurrence over 2. Combined with any
+  // other soft loss this pushes a borderline reply under 0.7 and
+  // forces regen.
+  if (
+    typeof options?.priorRealQuickPhraseCount === 'number' &&
+    options.priorRealQuickPhraseCount > 2 &&
+    /\breal\s+quick\b/i.test(reply)
+  ) {
+    const overuse = options.priorRealQuickPhraseCount - 2;
+    softSignals.overused_transition_phrase = -0.3 * overuse;
   }
 
   // 10. Title-case opener — Daniel's voice starts messages in lowercase.
@@ -916,6 +1112,67 @@ export function scoreVoiceQuality(
     );
   }
 
+  // ── INCOMPLETE RESPONSE SIGNAL (soft penalty -0.4) ──────────────
+  // Brian Dycey 2026-04-27. AI shipped a single short acknowledgment
+  // ("gotchu bro, and that makes sense") with no question, no URL,
+  // no next-step CTA. The conversation stalled. Root cause was a
+  // multi-bubble dying mid-group, but as a defense-in-depth we also
+  // soft-penalise generations that ship a stage-advancing turn with
+  // no advancement language. Combined with any other soft loss this
+  // pushes a borderline reply under 0.7 and forces regen.
+  //
+  // Gates:
+  //   • reply is short (≤ 15 words on the joined turn)
+  //   • reply has NO question mark
+  //   • reply has NO URL (a link drop is forward motion even without
+  //     a question)
+  //   • leadStage / currentStage indicates we're past the opener — no
+  //     point firing on stage 1 where a short ack is normal
+  // The check runs against the JOINED reply (multi-bubble safe).
+  const replyTrimmed = reply.trim();
+  const wordCount = replyTrimmed
+    .split(/\s+/)
+    .filter((w) => w.length > 0).length;
+  const hasQuestion = /\?/.test(replyTrimmed);
+  const hasUrlInReply = /\bhttps?:\/\/\S+|\bwww\.\S+/i.test(replyTrimmed);
+  const stageForCheck = (
+    options?.currentStage ||
+    options?.leadStage ||
+    ''
+  ).toUpperCase();
+  const stageNeedsAdvancement =
+    stageForCheck === 'QUALIFYING' ||
+    stageForCheck === 'CALL_PROPOSED' ||
+    stageForCheck === 'CALL_PENDING_VERIFICATION' ||
+    stageForCheck === 'BOOKED' ||
+    stageForCheck === 'SITUATION_DISCOVERY' ||
+    stageForCheck === 'GOAL_EMOTIONAL_WHY' ||
+    stageForCheck === 'URGENCY' ||
+    stageForCheck === 'SOFT_PITCH_COMMITMENT' ||
+    stageForCheck === 'FINANCIAL_SCREENING' ||
+    stageForCheck === 'BOOKING';
+  if (
+    stageNeedsAdvancement &&
+    wordCount > 0 &&
+    wordCount < 15 &&
+    !hasQuestion &&
+    !hasUrlInReply
+  ) {
+    softSignals.incomplete_response_no_followup = -0.4;
+    // Defense-in-depth: -0.4 alone may not fail the gate when the
+    // ack-only reply also scores high on the standard positives
+    // (lowercase opener, daniel vocab, short, etc.). For the
+    // EGREGIOUS case — very short ack (≤ 8 words) on a stage that
+    // genuinely needs advancement — escalate to a hard fail. The
+    // gray-zone case (9-14 words, soft signal only) gives the LLM
+    // room to retry without forcing.
+    if (wordCount <= 8) {
+      hardFails.push(
+        `incomplete_response_acknowledgment_only: short acknowledgment (${wordCount} words) with no question or URL on a ${stageForCheck}-stage turn — the conversation stalls because the lead has nothing to respond to. Append a forward-moving question or a link drop on the same turn.`
+      );
+    }
+  }
+
   // ── REPEATED QUESTION SIGNAL (soft penalty -0.4) ────────────────
   // Souljah J 2026-04-25: AI asked the capital question, the lead
   // responded with their OWN question (about strategy), and the AI
@@ -940,6 +1197,74 @@ export function scoreVoiceQuality(
     if (bestSim >= 0.7) {
       softSignals.repeated_question = -0.4;
     }
+  }
+
+  // ── IGNORED PERSONAL QUESTION (soft penalty -0.5) ───────────────
+  // Omar Moore 2026-04-27. Lead said "Hbu" and "what's your favorite
+  // prop" — twice the AI ignored or deflected. A human never ignores
+  // "how about you". Two dodges in one conversation = guaranteed bot
+  // detection. Detector: previous LEAD message matches a personal-
+  // question pattern AND current AI reply has no first-person
+  // language. Weighted -0.5 — strong enough to fail the gate on its
+  // own when stacked with even one minor positive miss.
+  if (
+    options?.previousLeadMessage &&
+    typeof options.previousLeadMessage === 'string'
+  ) {
+    const prev = options.previousLeadMessage.trim();
+    if (prev.length > 0) {
+      // Defer to the canonical detector + first-person check —
+      // local copies kept in conversation-detail-extractor to avoid
+      // a circular import (the gate is consumed by ai-engine, the
+      // detector is consumed by ai-engine; importing the detector
+      // here is one-way and safe).
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+      const det =
+        require('./conversation-detail-extractor') as typeof import('./conversation-detail-extractor');
+      const isPersonal = det.detectPersonalQuestion(prev).detected;
+      if (isPersonal && !det.replyContainsFirstPerson(reply)) {
+        softSignals.ignored_personal_question = -0.5;
+      }
+    }
+  }
+
+  // ── SCRIPTED QUESTION SEQUENCE (soft penalty -0.3 per >2) ───────
+  // Omar Moore 2026-04-27. AI ran 6 qualification questions in a row
+  // with no specific acknowledgment of what the lead shared (named
+  // prop firms, instruments, strategies). After 3-4 the pattern is
+  // detectable. Caller passes `priorConsecutivePureQuestionCount` —
+  // the count of trailing pure-question AI messages already in the
+  // history. If >= 2 AND current reply is ALSO a pure question, fire
+  // the soft signal weighted by how far over 2 we are.
+  if (
+    typeof options?.priorConsecutivePureQuestionCount === 'number' &&
+    options.priorConsecutivePureQuestionCount >= 2
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+    const det =
+      require('./conversation-detail-extractor') as typeof import('./conversation-detail-extractor');
+    const recentDetails = options.recentLeadDetails ?? [];
+    const currIsPureQ = det.isPureQuestion(reply, recentDetails);
+    if (currIsPureQ) {
+      // Total pure-question run including this turn = prior + 1.
+      // Penalty fires for runs >= 3 total; -0.3 per question over 2.
+      const totalRun = options.priorConsecutivePureQuestionCount + 1;
+      const overage = Math.max(0, totalRun - 2);
+      softSignals.scripted_question_sequence = -0.3 * overage;
+    }
+  }
+
+  // ── GENERIC ACKNOWLEDGMENT (soft penalty -0.2) ──────────────────
+  // Omar Moore 2026-04-27. "love that bro" / "love that bro big moves"
+  // by themselves are empty acknowledgments. Combined with a question
+  // they're fine, but as the ENTIRE reply they read as a stalled,
+  // template-y filler. Light penalty (-0.2) — combined with any other
+  // soft loss it nudges the reply under the pass threshold.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+  const detForGeneric =
+    require('./conversation-detail-extractor') as typeof import('./conversation-detail-extractor');
+  if (detForGeneric.isGenericAcknowledgmentOnly(reply)) {
+    softSignals.generic_acknowledgment = -0.2;
   }
 
   // ── REPETITIVE QUESTION PATTERN SIGNAL (soft penalty -0.4) ─────
@@ -1375,6 +1700,17 @@ export function scoreVoiceQualityGroup(
     for (const failure of r.hardFails) {
       if (i !== lastIndex && failure.startsWith('cliffhanger_preamble:')) {
         continue; // follow-on bubble fulfills this — legit split
+      }
+      // Brian Dycey 2026-04-27 — same suppression pattern for the
+      // incomplete-response hard fail. A short ack-only bubble is
+      // fine when a follow-on bubble carries the forward-moving
+      // question. The JOINED group check below catches the case
+      // where the ENTIRE turn lacks a question.
+      if (
+        i !== lastIndex &&
+        failure.startsWith('incomplete_response_acknowledgment_only:')
+      ) {
+        continue;
       }
       hardFails.push(`[bubble=${i}] ${failure}`);
     }

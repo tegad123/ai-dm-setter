@@ -2641,6 +2641,55 @@ async function deliverBubbleGroup(params: {
 
     delivered++;
 
+    // 4b. Brian Dycey 2026-04-27 fix — schedule the silent-lead
+    // follow-up cascade RIGHT HERE on bubble 0, NOT after the loop.
+    // If the function dies mid-sleep before bubble N+1 ships, the
+    // post-ship hook in sendAIReply never runs and FOLLOW_UP_1
+    // never gets queued. Scheduling on bubble 0 means: even if the
+    // multi-bubble group is incomplete, the lead still gets chased
+    // 12h later. Best-effort — wrapped so a follow-up scheduling
+    // failure never breaks the bubble loop.
+    if (i === 0 && !failedAt) {
+      try {
+        const {
+          scheduleFollowUp1AfterAiMessage,
+          containsBookingLink,
+          scheduleBookingLinkFollowup
+        } = await import('@/lib/follow-up-sequence');
+        const joinedReply = bubbles.join(' ');
+        const convLookup = await prisma.conversation.findUnique({
+          where: { id: conversationId },
+          select: {
+            outcome: true,
+            lead: { select: { stage: true } }
+          }
+        });
+        const gate = {
+          leadStage: convLookup?.lead.stage ?? null,
+          softExit: false,
+          conversationOutcome: convLookup?.outcome ?? null,
+          replyText: joinedReply
+        };
+        await scheduleFollowUp1AfterAiMessage(
+          conversationId,
+          lead.accountId,
+          gate
+        );
+        if (containsBookingLink(joinedReply)) {
+          await scheduleBookingLinkFollowup(
+            conversationId,
+            lead.accountId,
+            gate
+          );
+        }
+      } catch (followUpErr) {
+        console.error(
+          '[webhook-processor] follow-up scheduling on bubble-0 ship failed (non-fatal):',
+          followUpErr
+        );
+      }
+    }
+
     // 5. Typing-delay sleep before next bubble. Skip after the last one.
     if (i < bubbles.length - 1) {
       const nextChars = bubbles[i + 1].length;
@@ -3846,7 +3895,17 @@ export async function processAdminMessage(
   // Compare on TRIMMED content — Meta strips trailing whitespace from
   // echoes, so a 1-char trailing-space difference was enough to bust
   // the exact-match dedup (daetradez @l.galeza 2026-04-18 16:44).
-  const echoSearchWindow = new Date(Date.now() - 60000);
+  //
+  // Widened from 60s → 10min on 2026-04-26 (daetradez Facebook echo
+  // diagnostic). Empirical: FB AI rows have platformMessageId
+  // backfilled 47% of the time vs IG's 96%. The bulk of the missing
+  // 53% are echoes arriving outside the 60s window — Meta's FB
+  // Messenger routing through standby/handover adds latency that
+  // exceeded the original 1-minute cap. 10 minutes is generous
+  // enough to cover any plausible Meta delivery delay, and the
+  // false-positive risk (two byte-identical AI sends within 10min
+  // colliding) is vanishingly small in practice.
+  const echoSearchWindow = new Date(Date.now() - 10 * 60 * 1000);
   const trimmedIncoming = (messageText ?? '').trim();
   const recentOwnMessages = await prisma.message.findMany({
     where: {

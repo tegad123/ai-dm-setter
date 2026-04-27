@@ -268,13 +268,42 @@ export async function generateReply(
   )
     ? 'GBP'
     : 'USD';
+  // Rodrigo Moran 2026-04-26 — when conversation has gotten long enough
+  // for the LLM to start losing facts buried in the middle, extract a
+  // tight bullet block of established facts from LEAD-side messages and
+  // prepend it to the prompt. Threshold of 20 total messages is empirical
+  // — short conversations don't need it (the chat history is already
+  // small enough for the model to track), and long ones empirically
+  // exhibit re-asks past that mark.
+  const ESTABLISHED_FACTS_MIN_MESSAGES = 20;
+  let establishedFactsBlock: string | null = null;
+  if (conversationHistory.length >= ESTABLISHED_FACTS_MIN_MESSAGES) {
+    try {
+      const { extractEstablishedFacts, buildEstablishedFactsBlock } =
+        await import('@/lib/conversation-facts');
+      const leadMessagesContent = conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .map((m) => ({ content: m.content }));
+      const facts = extractEstablishedFacts(leadMessagesContent);
+      establishedFactsBlock = buildEstablishedFactsBlock(
+        facts,
+        leadContext.leadName ?? null
+      );
+    } catch (err) {
+      console.error(
+        '[ai-engine] established-facts extraction failed (non-fatal):',
+        err
+      );
+    }
+  }
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     leadContext,
     fewShotBlock || undefined,
     priorAIMessages,
     priorHumanMessages,
-    conversationCurrency
+    conversationCurrency,
+    establishedFactsBlock
   );
 
   // 1b. Append scoring intelligence if available
@@ -525,7 +554,83 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       previousAIQuestions: priorAIQuestions,
       previousLeadMessage: lastLeadMsg?.content ?? null,
       previousLeadHadImage: lastLeadHadImage,
-      leadEmail: leadContext.booking?.leadEmail ?? null
+      leadEmail: leadContext.booking?.leadEmail ?? null,
+      // Rodrigo Moran 2026-04-26 — count prior capital-verification
+      // questions in the AI history so the gate hard-fails a repeat
+      // ask. Local pattern set kept inside conversation-facts to
+      // avoid duplicating the regexes here.
+      priorCapitalQuestionAskCount: priorAIMessages.filter((m) => {
+        const t = m.content || '';
+        return (
+          /\byou got at least \$\d/i.test(t) ||
+          /\byou have at least \$\d/i.test(t) ||
+          /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i.test(
+            t
+          ) ||
+          /\bcapital ready\b/i.test(t) ||
+          /\bjust to confirm.*\$\d/i.test(t) ||
+          /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i.test(
+            t
+          ) ||
+          /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i.test(
+            t
+          ) ||
+          /\bwhat are you working with\b/i.test(t) ||
+          /\bon the (capital|money|budget) side\b/i.test(t)
+        );
+      }).length,
+      // Rodrigo Moran 2026-04-26 — count prior "real quick" usage so
+      // overuse triggers the soft penalty when the LLM keeps
+      // reaching for the same transition phrase.
+      priorRealQuickPhraseCount: priorAIMessages.filter((m) =>
+        /\breal\s+quick\b/i.test(m.content || '')
+      ).length,
+      // Rodrigo Moran 2026-04-26 spec rule 3 — if the lead has
+      // already signaled they have no capital (student / broke /
+      // unemployed / "I got nothing"), the AI must NOT ask the
+      // threshold question on top of it.
+      leadImplicitlySignaledNoCapital: conversationHistory.some((m) => {
+        if (m.sender !== 'LEAD') return false;
+        const t = m.content || '';
+        return (
+          /\b(broke|nothing\s+(really|man|bro)?|no\s+money|don'?t\s+have\s+(any\s+)?(money|capital|anything|much))\b/i.test(
+            t
+          ) ||
+          /\b(i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school|in\s+(college|university|highschool|high\s+school))\b/i.test(
+            t
+          ) ||
+          /\b(jobless|unemployed|no\s+job|lost\s+my\s+job|between\s+jobs|laid\s+off|no\s+income|no\s+work|out\s+of\s+work)\b/i.test(
+            t
+          ) ||
+          /\b(can'?t\s+(eat|pay\s+rent|pay\s+bills|afford))\b/i.test(t) ||
+          /\b(i\s+(have|got)\s+nothing|got\s+nothing\s+(right\s+now|rn|atm|man|bro))\b/i.test(
+            t
+          )
+        );
+      }),
+      // Omar Moore 2026-04-27 — count of trailing pure-question AI
+      // turns (ends in `?` AND doesn't acknowledge any specific
+      // lead-side detail) PLUS the extracted recent lead details
+      // for the gate to test the current reply against. The
+      // detector module is the single source of truth for both
+      // the detail patterns and the pure-question definition.
+      ...(() => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+        const det =
+          require('@/lib/conversation-detail-extractor') as typeof import('@/lib/conversation-detail-extractor');
+        const recentLead = conversationHistory
+          .filter((m) => m.sender === 'LEAD')
+          .slice(-2)
+          .map((m) => ({ content: m.content }));
+        const recentLeadDetails = det.extractRecentLeadDetails(recentLead);
+        const recentAi = priorAIMessages.slice(-6);
+        const priorConsecutivePureQuestionCount =
+          det.countConsecutivePureQuestions(recentAi, recentLeadDetails);
+        return {
+          priorConsecutivePureQuestionCount,
+          recentLeadDetails
+        };
+      })()
     });
     finalQualityScore = quality.score;
 
@@ -865,6 +970,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       // tends to reproduce the same mistake. Inject an explicit
       // override telling the model to INCLUDE the URL from the
       // script's Available Links section.
+      // Course-payment placeholder leak directive (George 2026-04-08
+      // incident). When the LLM emits "[COURSE PAYMENT LINK]" /
+      // "[WHOP LINK]" / "[CHECKOUT LINK]" / similar, the gate
+      // hard-fails. Generic regen tends to either re-emit the
+      // placeholder OR generate a fake-looking URL. Override gives
+      // the LLM the EXACT Whop checkout URL to paste verbatim.
+      //
+      // URL pulled from the persona's freeValueLink config when
+      // present (operator-controlled), falls back to the daetradez
+      // production URL surfaced in the spec. We don't want to
+      // hardcode account-specific URLs in the engine, so the lookup
+      // happens above in the persona-load path; here we just inject
+      // whichever resolved.
+      const courseLinkLeaked = quality.hardFails.some((f) =>
+        f.includes('course_link_placeholder_leaked:')
+      );
+      if (courseLinkLeaked) {
+        // Pull the persona-configured course / payment URL. Schema
+        // doesn't have a dedicated field yet — for now, we use the
+        // operator-provided fallback baked into the directive. The
+        // operator can override via the script's Available Links
+        // section, which is already in the prompt above.
+        const COURSE_URL_FALLBACK =
+          'https://whop.com/checkout/17xvsu5mtr2luz7SrD-UXYx-Rx1U-Q8lg-IBn57oRarBX6/';
+        const courseLinkOverride = `\n\n===== COURSE / PAYMENT LINK PLACEHOLDER LEAK =====\nYour previous reply contained a literal placeholder like "[COURSE PAYMENT LINK]" / "[WHOP LINK]" / "[CHECKOUT LINK]" / "[PAYMENT LINK]" instead of the actual URL. The lead would have seen the raw brackets in their messaging app, not a clickable link.\n\nOn this regen:\n  1. Use the EXACT course / payment URL from the script's "Available Links & URLs" section above. If the script lists one, paste it verbatim.\n  2. If no course URL is listed in the script, the production fallback for this account is:\n       ${COURSE_URL_FALLBACK}\n     Use that exact URL — do not modify it.\n  3. NEVER ship square-bracketed placeholders like [LINK], [URL], [COURSE LINK], [PAYMENT LINK], [WHOP LINK], [CHECKOUT LINK], [BOOKING LINK]. They render literally to the lead.\n  4. The URL is the delivery; the framing words around it are optional. Drop the URL inline or on its own line.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + courseLinkOverride;
+        console.warn(
+          `[ai-engine] Course/payment link placeholder leak detected — forcing regen with real URL (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const linkPromiseFailed = quality.hardFails.some((f) =>
         f.includes('link_promise_without_url:')
       );
@@ -889,6 +1025,133 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + repeatedPitchOverride;
         console.warn(
           `[ai-engine] Repeated call pitch detected — forcing regen without pitch (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Repeated-capital-question directive (Rodrigo Moran 2026-04-26).
+      // The LLM tried to ask the capital threshold question a second
+      // time, having already asked once earlier in the conversation.
+      // Natural regen tends to reproduce the same shape — model
+      // momentum from the script's qualification flow. Override forces
+      // it to advance the conversation differently.
+      const repeatedCapitalQFailed = quality.hardFails.some((f) =>
+        f.includes('repeated_capital_question:')
+      );
+      if (repeatedCapitalQFailed) {
+        const repeatedCapitalOverride = `\n\n===== REPEATED CAPITAL QUESTION OVERRIDE =====\nYou ALREADY asked the lead about capital earlier in this conversation. The lead either answered or sidestepped it. Asking AGAIN makes the bot read as stuck in a loop (a real lead literally said "I think your bot is stuck doing a loop" on this exact failure). You MUST regenerate WITHOUT asking the capital question again.\n\nWhat to do instead:\n  1. If the lead's prior answer was a clear amount (≥ threshold), reference it: "since you got [amount] ready, let's get you locked in with [closer]…"\n  2. If the prior answer was a clear DECLINE / "not yet" / "after my [event]", route to the timing-aware branch: acknowledge the constraint and pivot to either a downsell, the YouTube channel, or scheduling the call after the stated event.\n  3. If the prior answer was AMBIGUOUS, do not re-ask the same threshold question. Instead, shift to a different qualifying question (urgency, timeline, motivation) or move toward booking with the closer.\n\nForbidden patterns on this regen: any "do you have at least \\$X", "you got \\$X ready", "how much do you have / set aside / saved", "what are you working with", "capital ready", "just to confirm…\\$".\n=====`;
+        systemPromptForLLM = baseSystemPrompt + repeatedCapitalOverride;
+        console.warn(
+          `[ai-engine] Repeated capital question detected — forcing regen with no-re-ask directive (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Capital-after-implicit-no directive (Rodrigo Moran 2026-04-26).
+      // Lead has already signaled "no money" without a number. The
+      // LLM tried to ask the threshold question anyway. Override
+      // tells it to treat that signal as the answer and route to
+      // the downsell branch.
+      const capitalAfterImplicitNoFailed = quality.hardFails.some((f) =>
+        f.includes('capital_q_after_implicit_no:')
+      );
+      if (capitalAfterImplicitNoFailed) {
+        const directive = `\n\n===== CAPITAL Q AFTER IMPLICIT NO =====\nThe lead has ALREADY told you they have no money in this conversation — "I'm a student", "no job", "broke", "I got nothing", or similar. That IS their capital answer. Asking the threshold question on top of it ignores them and reads as the bot not paying attention.\n\nWhat to do instead on this regen:\n  • Acknowledge what they said briefly + with empathy ("damn ok bro, gotchu" / "ah I hear you fr").\n  • Pivot to the script's downsell / lower-tier option (the $497 course / funding-partner option / YouTube channel as appropriate).\n  • Do NOT ask "do you have at least $X" or "what's your capital situation" or "how much you working with" or any variant. Capital was answered.\nForbidden phrases on this regen: "do you have at least", "you got at least", "at least \\$1k", "capital ready", "what's your capital situation", "how much you working with", "set aside for".\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Capital question after implicit-no detected — forcing regen to downsell branch (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // "or nah?" question tail directive — the LLM keeps using
+      // "or nah?" as a yes/no question construction. Override tells
+      // it to phrase open-ended.
+      const orNahFailed = quality.hardFails.some((f) =>
+        f.includes('or_nah_question_tail:')
+      );
+      if (orNahFailed) {
+        const directive = `\n\n===== "OR NAH?" QUESTION TAIL OVERRIDE =====\nDo not end questions with "or nah?". That construction primes a yes/no answer and reads as scripted. Use OPEN-ENDED phrasing on the regen — let the lead disclose freely instead of forcing them to pick yes/no. Examples:\n  WRONG: "do you have at least \\$1k or nah?"\n  RIGHT: "what's your capital situation like right now?"\n  WRONG: "you serious about this or nah?"\n  RIGHT: "how serious are you about getting this dialed in?"\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] "or nah?" question tail detected — forcing regen with open-ended phrasing (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Incomplete response directive (Brian Dycey 2026-04-27). The
+      // gate fired the soft signal incomplete_response_no_followup
+      // (no question, no URL, < 15 words, on a stage that needs
+      // advancement). Score-only — pushes the reply under 0.7 — but
+      // we layer a directive on the regen telling the LLM that an
+      // acknowledgment alone stalls the conversation.
+      const incompleteResponseFlagged =
+        typeof quality.softSignals?.incomplete_response_no_followup ===
+        'number';
+      if (incompleteResponseFlagged) {
+        const stageForDirective =
+          parsed.stage || (leadContext.status as string | undefined) || 'this';
+        const directive = `\n\n===== INCOMPLETE RESPONSE — NO FOLLOW-UP =====\nYour previous reply acknowledged the lead but didn't advance the conversation — no question, no URL drop, no next step. On a ${stageForDirective}-stage turn that stalls the conversation. The lead has nothing to respond to and is now waiting.\n\nOn this regen, your reply MUST include EXACTLY ONE of:\n  1. A specific qualifying question that moves to the next stage of the script (urgency, capital, timeline, motivation — whichever fits the stage).\n  2. A direct call-pitch / link drop (only if the script has reached that step).\nAcknowledgment phrases ("gotchu bro", "that makes sense", "bet bro", "love that") are FINE as the OPENER of the reply, but the reply cannot END on one. Append a forward-moving question on the same turn.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Incomplete response (no follow-up) detected — forcing regen with question requirement (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Ignored personal question directive (Omar Moore 2026-04-27).
+      // Lead asked a personal question ("hbu", "what about you",
+      // "what's your favorite prop") and the AI's reply has no
+      // first-person content — clearest bot tell there is. Override
+      // forces the LLM to answer first.
+      const ignoredPersonalQ =
+        typeof quality.softSignals?.ignored_personal_question === 'number';
+      if (ignoredPersonalQ) {
+        const leadMsg = lastLeadMsg?.content?.slice(0, 200) ?? '';
+        const directive = `\n\n===== IGNORED PERSONAL QUESTION =====\nThe lead just asked YOU a personal question: "${leadMsg}". You ignored it and pivoted to your next script question — that's the clearest bot signal possible. A real human never does this.\n\nOn this regen, your reply MUST:\n  1. Answer the lead's personal question in 1-2 short sentences from Daniel's perspective. Use first-person language ("I've", "my", "I"). Be specific and real, not vague.\n  2. THEN ask your next question naturally.\nDo NOT open with the next script question. Do NOT deflect with phrases like "I stay away from the prop-firm weeds tbh" or "I don't really get into that" — those read as dodges. Give a real, brief answer.\n\nExamples:\n  Lead: "Hbu" → AI: "been at it for a few years bro, lost a lot before it actually clicked fr. what do you do for work rn?"\n  Lead: "what's your favorite prop firm?" → AI: "i go for the ones with clean rules and no surprise scaling — consistency over hype. you been happy with alpha so far?"\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Ignored personal question detected — forcing regen with first-person answer (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Scripted question sequence directive (Omar Moore 2026-04-27).
+      // Three+ pure-question turns in a row with no specific
+      // acknowledgment. Override tells the LLM to reference a
+      // specific detail the lead shared before asking the next thing.
+      const scriptedSequence =
+        typeof quality.softSignals?.scripted_question_sequence === 'number';
+      if (scriptedSequence) {
+        const leadMsg = lastLeadMsg?.content?.slice(0, 300) ?? '';
+        const directive = `\n\n===== SCRIPTED QUESTION SEQUENCE =====\nYou have asked multiple qualification questions in a row without acknowledging any of the specific details the lead shared. After 3 in a row this pattern becomes detectable as a script.\n\nOn this regen, your reply MUST reference at least ONE specific detail from the lead's last message: "${leadMsg}". That means:\n  • If they named a prop firm (Alpha, TopStep, Lucid, FTMO, Apex, etc.), use the name.\n  • If they named an instrument (ES, NQ, gold, EURUSD, etc.), reference it.\n  • If they named a strategy (AMD, ORB, ICT, SMC, FVG, supply/demand, etc.), reference it.\n  • If they shared a personal experience (blew an account, getting married, day job, faith, family), reference it.\n\nOnly THEN ask your next question. "love that bro" / "big moves" / "that's solid" alone DO NOT count — the gate also flags those as generic acknowledgments. The acknowledgment must include a specific token from what they said.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Scripted question sequence detected — forcing regen with specific-detail acknowledgment (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Generic acknowledgment directive (Omar Moore 2026-04-27).
+      // The reply was JUST "love that bro" or similar with no follow-
+      // up content. Tell the LLM the acknowledgment-only path is
+      // banned and to either acknowledge specifically + ask, or skip
+      // the empty filler and go straight to the next question.
+      const genericAck =
+        typeof quality.softSignals?.generic_acknowledgment === 'number';
+      if (genericAck) {
+        const directive = `\n\n===== GENERIC ACKNOWLEDGMENT ONLY =====\nYour reply is just an empty acknowledgment ("love that bro", "big moves", "that's solid", "bet bro") with no content after it. The lead has nothing to respond to.\n\nOn this regen, either:\n  • DROP the generic phrase and open with something specific to what they shared, OR\n  • Keep the acknowledgment but append a forward-moving question or a value drop on the same turn.\nGeneric praise alone never ships. A reply that's pure filler is a stall.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Generic acknowledgment-only detected — forcing regen with content (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // "real quick tho" banned-phrase directive. Hard-fail from the
+      // BANNED_PHRASES list — the LLM keeps reaching for this as a
+      // transition. Override tells it to find another bridge or just
+      // ask the question without a transition phrase.
+      const realQuickThoFailed = quality.hardFails.some((f) =>
+        f.includes('"real quick tho"')
+      );
+      if (realQuickThoFailed) {
+        const directive = `\n\n===== "REAL QUICK THO" BANNED =====\n"real quick tho" has become a bot tell — used before nearly every qualifying question. Banned. Find a different transition, or just ask the question directly.\nWRONG: "real quick tho, what's your capital situation?"\nRIGHT: "what's your capital situation like right now?"\nRIGHT: "yo bro one thing — what's your capital situation right now?"\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Banned "real quick tho" detected — forcing regen with different transition (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 

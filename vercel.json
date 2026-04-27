@@ -9,6 +9,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/recover-stale-bubbles",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/daily-analysis",
       "schedule": "0 6 * * *"
     },
