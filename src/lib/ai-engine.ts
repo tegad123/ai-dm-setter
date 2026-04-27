@@ -747,10 +747,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
     const unnecessarySchedulingQuestionFailed =
       quality.softSignals.unnecessary_scheduling_question !== undefined;
+    const logisticsBeforeQualificationFailed =
+      quality.softSignals.logistics_before_qualification !== undefined;
 
     if (
       quality.passed &&
       !unnecessarySchedulingQuestionFailed &&
+      !logisticsBeforeQualificationFailed &&
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
@@ -913,6 +916,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       systemPromptForLLM = baseSystemPrompt + schedulingOverride;
       console.warn(
         `[ai-engine] Unnecessary scheduling question detected after call acceptance — forcing Typeform link drop (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
+    if (logisticsBeforeQualificationFailed) {
+      const logisticsOverride = `\n\n===== LOGISTICS BEFORE QUALIFICATION OVERRIDE =====\nDo not collect scheduling details before capital is verified. Ask the capital question first: "real quick, what's your capital situation like for the markets right now?" Do NOT ask for timezone, location, day, or time on this turn.\n=====`;
+      systemPromptForLLM = baseSystemPrompt + logisticsOverride;
+      console.warn(
+        `[ai-engine] Logistics question before capital verification detected — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
       );
     }
 
@@ -1213,7 +1224,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         f.includes('call_pitch_before_capital_verification:')
       );
       if (callPitchBeforeCapitalFailed) {
-        const callBeforeCapitalOverride = `\n\n===== CALL PITCH BEFORE CAPITAL OVERRIDE =====\nYou have not asked the capital question yet. Ask it BEFORE proposing the call: "real quick bro, how much do you have set aside for the markets and your education?" Do NOT pitch the call or mention scheduling on this turn.\n=====`;
+        const callBeforeCapitalOverride = `\n\n===== CALL PITCH BEFORE CAPITAL OVERRIDE =====\nYou have not asked the capital question yet. Do NOT propose the call. Ask first: "real quick, what's your capital situation like for the markets right now?" Do NOT pitch the call or mention scheduling on this turn.\n=====`;
         systemPromptForLLM = baseSystemPrompt + callBeforeCapitalOverride;
         console.warn(
           `[ai-engine] Call pitch before capital verification detected — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -1315,6 +1326,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       } else if (unnecessarySchedulingQuestionFailed) {
         console.error(
           `[ai-engine] Unnecessary scheduling question gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
+        parsed.escalateToHuman = true;
+      } else if (logisticsBeforeQualificationFailed) {
+        console.error(
+          `[ai-engine] Logistics-before-qualification gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
         );
         parsed.escalateToHuman = true;
       } else if (!quality.passed) {
@@ -2645,7 +2661,9 @@ const US_CA_GEO_INDICATOR =
 // matched (and US/CA is NOT), route to downsell/YouTube, NEVER
 // funding partner.
 const RESTRICTED_COUNTRY_PATTERN =
-  /\b(lebanon|lebanese|nigeria|nigerian|zimbabwe|philippines|filipino|pilipinas|manila|cebu|davao|luzon|mindanao|pakistan|pakistani|\bindia\b|indian|bangladesh|bangladeshi|egypt|egyptian|kenya|kenyan|ghana|ghanaian|cameroon|cameroonian|south\s+africa|south\s+african|zambia|uganda|tanzania|morocco|moroccan|iran|iranian|iraq|iraqi|syria|syrian|yemen|yemeni|sudan|sudanese|afghanistan|afghan|belarus|belarusian|russia|russian|venezuela|venezuelan|cuba|cuban|north\s+korea|myanmar|burmese|vietnam|vietnamese|cambodia|laos|mongolia|kazakhstan|uzbekistan|ethiopia|ethiopian|somalia|libya|algeria|algerian|tunisia|brazil|brazilian|argentina|argentine|colombia|colombian|peru|peruvian|chile|chilean|uruguay|ecuador|uk|britain|british|england|english|scotland|scottish|ireland|irish|germany|german|france|french|spain|spanish|italy|italian|portugal|portuguese|netherlands|dutch|belgium|belgian|sweden|swedish|norway|norwegian|finland|finnish|denmark|danish|poland|polish|czech|slovakia|hungary|hungarian|romania|romanian|bulgaria|bulgarian|greece|greek|turkey|turkish|ukraine|ukrainian|australia|australian|new\s+zealand|japan|japanese|south\s+korea|korean|china|chinese|hong\s+kong|taiwan|taiwanese|singapore|singaporean|malaysia|malaysian|indonesia|indonesian|thailand|thai)\b/i;
+  /\b(lebanon|lebanese|nigeria|nigerian|zimbabwe|philippines|filipino|pilipinas|manila|cebu|davao|luzon|mindanao|pakistan|pakistani|\bindia\b|indian|bangladesh|bangladeshi|egypt|egyptian|kenya|kenyan|ghana|ghanaian|cameroon|cameroonian|south\s+africa|south\s+african|zambia|uganda|tanzania|morocco|moroccan|iran|iranian|iraq|iraqi|syria|syrian|yemen|yemeni|sudan|sudanese|afghanistan|afghan|belarus|belarusian|russia|russian|venezuela|venezuelan|cuba|cuban|north\s+korea|myanmar|burmese|vietnam|vietnamese|cambodia|laos|mongolia|kazakhstan|uzbekistan|ethiopia|ethiopian|somalia|libya|algeria|algerian|tunisia|brazil|brazilian|argentina|argentine|colombia|colombian|peru|peruvian|chile|chilean|uruguay|ecuador|uk|britain|british|england|english|scotland|scottish|ireland|irish|germany|german|france|french|spain|spanish|italy|italian|portugal|portuguese|netherlands|dutch|belgium|belgian|sweden|swedish|norway|norwegian|finland|finnish|denmark|danish|poland|polish|czech|slovakia|hungary|hungarian|romania|romanian|bulgaria|bulgarian|greece|greek|turkey|turkish|ukraine|ukrainian|australia|australian|new\s+zealand|japan|japanese|south\s+korea|korean|china|chinese|hong\s+kong|taiwan|taiwanese|singapore|singaporean|malaysia|malaysian|indonesia|indonesian|thailand|thai|east\s+african\s+time|nairobi|kampala|dar\s+es\s+salaam|addis\s+ababa)\b/i;
+
+const EAST_AFRICA_TIME_ABBR_PATTERN = /\bEAT\b/;
 
 const FUNDING_PARTNER_ROUTE_PATTERN =
   /\b(funding\s+partner|funded[-\s]+account|funded[-\s]+trader|funding\s+(route|option|program|path)|prop\s+firm|prop[-\s]+firm|prop\s+challenge|challenge\s+account|funded\s+challenge|third[-\s]+party\s+capital|firm\s+capital|ftmo|apex|topstep|the\s*5ers|my\s+forex\s+funds)\b/i;
@@ -2697,6 +2715,10 @@ export function detectRestrictedGeography(
   const restrictedMatch = joined.match(RESTRICTED_COUNTRY_PATTERN);
   if (restrictedMatch) {
     return { country: restrictedMatch[0], restricted: true };
+  }
+  const eastAfricaTimeMatch = joined.match(EAST_AFRICA_TIME_ABBR_PATTERN);
+  if (eastAfricaTimeMatch) {
+    return { country: eastAfricaTimeMatch[0], restricted: true };
   }
 
   // Unknown → don't restrict. Keeps current behavior for leads

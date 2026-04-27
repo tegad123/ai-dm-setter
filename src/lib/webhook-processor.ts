@@ -1,6 +1,6 @@
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { generateReply } from '@/lib/ai-engine';
+import { detectRestrictedGeography, generateReply } from '@/lib/ai-engine';
 import type { LeadContext, BookingSlot } from '@/lib/ai-prompts';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
@@ -801,6 +801,28 @@ export async function processIncomingMessage(
       where: { id: lead.id },
       data: { email: detectedEmail }
     });
+  }
+
+  // Persist geography restrictions when the lead states a location or
+  // timezone that makes funding-partner routes unavailable. There is no
+  // dedicated fundingPartnerEligible column today; downstream eligibility
+  // is derived from Lead.geography via detectRestrictedGeography().
+  const inboundGeo = detectRestrictedGeography(lead.geography, [messageText]);
+  if (inboundGeo.restricted && inboundGeo.country) {
+    const normalizedGeo = inboundGeo.country;
+    if (lead.geography !== normalizedGeo) {
+      await prisma.lead.update({
+        where: { id: lead.id },
+        data: { geography: normalizedGeo }
+      });
+      lead = {
+        ...lead,
+        geography: normalizedGeo
+      };
+      console.log(
+        `[webhook-processor] Restricted geography detected for lead ${lead.id}: ${normalizedGeo} — funding partner branch disabled`
+      );
+    }
   }
 
   await prisma.conversation.update({

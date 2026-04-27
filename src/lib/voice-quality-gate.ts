@@ -112,7 +112,10 @@ const CALL_PITCH_RE =
   /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
 
 const SCHEDULING_QUESTION_RE =
-  /\b(what|which)\s+(day|time)\s+works|\bwhen\s+(are\s+you\s+free|works|can\s+you\s+hop\s+on)|\bwhat\s+(day|time)\s+are\s+you\s+free|\bwhat'?s\s+(a\s+good\s+time|your\s+schedule)|\bwhat\s+does\s+your\s+schedule\s+look\s+like/i;
+  /\b(what|which)\s+(day|time)\s+works|\bwhen\s+(are\s+you\s+free|works|can\s+you\s+hop\s+on)|\bwhen('?s| is)\s+(better|best|good)\s+for\s+you|\bwhat\s+(day|time)\s+are\s+you\s+free|\bwhat'?s\s+(a\s+good\s+time|your\s+schedule)|\bwhat\s+does\s+your\s+schedule\s+look\s+like/i;
+
+const TIMEZONE_QUESTION_RE =
+  /\b(what|which)\s+time\s*zone\b|\bwhat('?s| is)\s+your\s+time\s*zone\b|\bwhere\s+are\s+you\s+based\b|\bwhat\s+timezone\s+(are\s+you\s+in|you\s+in)\b/i;
 
 const CALL_ACCEPTANCE_RE =
   /\b(yes|yeah|yep|yup|sure|sounds\s+good|let'?s\s+do\s+it|lets\s+do\s+it|i'?m\s+down|im\s+down|that\s+works|works\s+for\s+me|any\s+day|asap|send\s+(it|the\s+link)|drop\s+(it|the\s+link)|go\s+ahead|perfect|okay|ok)\b/i;
@@ -123,6 +126,10 @@ export function containsCallPitch(text: string): boolean {
 
 export function containsSchedulingQuestion(text: string): boolean {
   return SCHEDULING_QUESTION_RE.test(text);
+}
+
+export function containsLogisticsQuestion(text: string): boolean {
+  return SCHEDULING_QUESTION_RE.test(text) || TIMEZONE_QUESTION_RE.test(text);
 }
 
 export function isCallAcceptance(text: string): boolean {
@@ -855,6 +862,14 @@ export function scoreVoiceQuality(
     );
   }
 
+  if (
+    options?.capitalVerificationRequired === true &&
+    options.capitalVerificationSatisfied !== true &&
+    containsLogisticsQuestion(reply)
+  ) {
+    softSignals.logistics_before_qualification = -0.4;
+  }
+
   // 9j. "or nah" question tail (Rodrigo Moran 2026-04-26). Daniel's
   // voice does NOT use "or nah" as a yes/no question prompt — that
   // construction reads as scripted ("do you have at least $1k or
@@ -1459,6 +1474,12 @@ function jaccardSimilarity(a: string, b: string): number {
 
 export function containsCapitalQuestion(text: string): boolean {
   const patterns: RegExp[] = [
+    /\bhow much.{0,40}(capital|set aside|ready|saved|available)\b/i,
+    /\b(capital|money).{0,30}(situation|set aside|ready|available|working with)\b/i,
+    /\b(capital|money).{0,30}ready to (invest|start)\b/i,
+    /\bdo you have.{0,20}\$?(1[,.]?000|1k)\b/i,
+    /\bgot.{0,15}\$?(1[,.]?000|1k)\b/i,
+    /\bgot.{0,10}\$?(1[,.]?000|1k).{0,20}(ready|set aside|available)\b/i,
     /\byou got at least \$?\d/i,
     /\byou have at least \$?\d/i,
     /\bat least \$?\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
@@ -1731,6 +1752,22 @@ export function scoreVoiceQualityGroup(
   const linkPromiseFailure = checkLinkPromiseWithoutUrl(joined);
   if (linkPromiseFailure) {
     hardFails.push(`[group] ${linkPromiseFailure}`);
+  }
+
+  // Multi-bubble safety: call-pitch language can be split across bubbles
+  // ("Anthony" in one, "quick call" in the next). The per-bubble pass
+  // catches most cases; the joined turn catches cross-bubble phrasing.
+  if (
+    options?.capitalVerificationRequired === true &&
+    options.capitalVerificationSatisfied !== true &&
+    containsCallPitch(joined) &&
+    !hardFails.some((f) =>
+      f.includes('call_pitch_before_capital_verification:')
+    )
+  ) {
+    hardFails.push(
+      '[group] call_pitch_before_capital_verification: call pitch detected before the capital question has been asked and answered'
+    );
   }
 
   // Voice quality score: evaluate the JOINED turn, NOT per-bubble.
