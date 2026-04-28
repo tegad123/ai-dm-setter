@@ -71,6 +71,42 @@ export type CapitalOutcome =
   | 'not_asked'
   | 'not_evaluated';
 
+export type ConversationCurrency =
+  | 'USD'
+  | 'GBP'
+  | 'ZAR'
+  | 'NGN'
+  | 'GHS'
+  | 'KES'
+  | 'PHP'
+  | 'UGX'
+  | 'EUR'
+  | 'CAD';
+
+// Approximate USD conversion rates for capital-gate sanity checks.
+// Update quarterly, or replace with an FX API in Sprint 7. Exactness
+// matters less than catching obvious misses like R2000 ≈ $108.
+const CAPITAL_CURRENCY_TO_USD: Record<ConversationCurrency, number> = {
+  USD: 1,
+  GBP: 1.25,
+  ZAR: 1 / 18.5,
+  NGN: 1 / 1600,
+  GHS: 1 / 15,
+  KES: 1 / 130,
+  PHP: 1 / 58,
+  UGX: 1 / 3700,
+  EUR: 1.08,
+  CAD: 0.74
+};
+
+export function convertCapitalAmountToUsd(
+  amount: number,
+  currency: ConversationCurrency | null | undefined
+): number {
+  const rate = CAPITAL_CURRENCY_TO_USD[currency ?? 'USD'] ?? 1;
+  return amount * rate;
+}
+
 export interface GenerateReplyResult {
   reply: string;
   /**
@@ -265,11 +301,12 @@ export async function generateReply(
   const priorHumanMessages = conversationHistory
     .filter((m) => m.sender === 'HUMAN')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
-  const conversationCurrency: 'GBP' | 'USD' = conversationHistory.some(
-    (m) => m.sender === 'LEAD' && m.content.includes('£')
-  )
-    ? 'GBP'
-    : 'USD';
+  const conversationCurrency =
+    detectCurrencyFromTexts(
+      conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .map((m) => m.content)
+    ) ?? 'USD';
   // Rodrigo Moran 2026-04-26 — when conversation has gotten long enough
   // for the LLM to start losing facts buried in the middle, extract a
   // tight bullet block of established facts from LEAD-side messages and
@@ -790,10 +827,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           r24Directive = `You already asked the capital verification question, but the lead hasn't answered yet. Do NOT route to booking-handoff. Wait for their answer, or send a short nudge to re-ask. Do NOT advance until they state an amount.`;
           break;
         case 'answer_below_threshold': {
-          const stated =
-            r24LastResult.parsedAmount !== null
-              ? `$${r24LastResult.parsedAmount.toLocaleString('en-US')}`
-              : 'an amount below the threshold';
+          const stated = formatCapitalAmountForDirective(r24LastResult);
           let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Your ONLY valid next action is the DOWNSELL PITCH. Do NOT ask more trading questions. Do NOT ask what they're working on. Do NOT give market / strategy advice. Do NOT route to booking. Do NOT send the Typeform / application form. Do NOT say "the team will reach out". Do NOT re-ask the capital question.\n\nFire the script's Step 9 "Not Qualified" branch NOW: acknowledge their situation in one short line (no judgment, no lecture), then present the lower-ticket course / downsell from the script ("my $497 Session Liquidity Model course breaks it down — same strategy, you learn on your own pace while you build capital" style). Wait for their answer to the downsell before any further routing. If your script has no downsell, send a soft-exit message that keeps the door open. Continuing the qualification dialogue after a confirmed capital miss is the exact failure mode this rule exists to prevent.`;
 
           // GEOGRAPHY GATE — funding-partner programs only onboard
@@ -834,7 +868,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
       systemPromptForLLM = baseSystemPrompt + r24Override;
       console.warn(
-        `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'}`
+        `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'} currency=${r24LastResult.parsedCurrency ?? 'null'} usd=${r24LastResult.parsedAmountUsd !== undefined && r24LastResult.parsedAmountUsd !== null ? Math.round(r24LastResult.parsedAmountUsd) : 'null'}`
       );
     }
 
@@ -1289,12 +1323,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     if (attempt === MAX_RETRIES) {
       if (r24Blocked) {
         console.error(
-          `[ai-engine] R24 gate EXHAUSTED ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+          `[ai-engine] R24 gate EXHAUSTED ${MAX_RETRIES + 1} attempts — replacing unsafe final reply with deterministic R24-safe fallback on convo ${activeConversationId}`
         );
-        // Final attempt still blocked. Don't ship a bad booking routing.
-        // Flip escalate_to_human so a human teammate picks it up; the
-        // webhook-processor will pause aiActive + create a notification.
-        parsed.escalateToHuman = true;
+        // Final attempt still blocked. Never ship the unsafe booking
+        // pitch the LLM produced. Replace it with a deterministic safe
+        // capital/downsell/clarifier message so the lead never sees
+        // "hop on a call" after failing R24.
+        const fallback = buildR24BlockedFallbackMessage(
+          r24LastResult.reason,
+          capitalThreshold!,
+          r24LastResult
+        );
+        parsed.message = fallback.message;
+        parsed.messages = [fallback.message];
+        parsed.stage = fallback.stage;
+        parsed.subStage = fallback.subStage;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
       } else if (restrictedFundingBlocked) {
         console.error(
           `[ai-engine] Funding-partner geography gate EXHAUSTED ${MAX_RETRIES + 1} attempts — replacing unsafe funding pitch with human handoff for convo ${activeConversationId}`
@@ -2293,7 +2339,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
  * vs "ask clarifying question". `confirmed_*` reasons mean the gate
  * passed; everything else means blocked.
  */
-type R24Reason =
+export type R24Reason =
   | 'confirmed_amount' // Lead stated a concrete amount >= threshold
   | 'confirmed_affirmative' // Lead said "yeah" to a threshold-confirming Q (legacy path)
   | 'never_asked' // No verification Q found in conversation history
@@ -2309,12 +2355,109 @@ interface R24GateResult {
   blocked: boolean;
   /** Fine-grained reason — drives which override directive the caller injects. */
   reason: R24Reason;
-  /** Concrete amount parsed from the lead's reply (if any). */
+  /** Concrete amount parsed from the lead's reply, in the lead's native currency if known. */
   parsedAmount: number | null;
+  /** Currency detected on the parsed amount, or null when the amount is USD/default. */
+  parsedCurrency?: ConversationCurrency | null;
+  /** USD-equivalent amount used for threshold comparison. */
+  parsedAmountUsd?: number | null;
   /** Message.id of the AI message that asked the verification question. */
   verificationAskedAt: string | null;
   /** Message.id of the LEAD message that confirmed. */
   verificationConfirmedAt: string | null;
+}
+
+function formatCapitalAmountForDirective(result: R24GateResult): string {
+  if (result.parsedAmount === null) return 'an amount below the threshold';
+
+  const nativeCurrency = result.parsedCurrency ?? 'USD';
+  const native =
+    nativeCurrency === 'USD'
+      ? `$${result.parsedAmount.toLocaleString('en-US')}`
+      : `${nativeCurrency} ${result.parsedAmount.toLocaleString('en-US')}`;
+
+  if (
+    nativeCurrency === 'USD' ||
+    result.parsedAmountUsd === null ||
+    result.parsedAmountUsd === undefined
+  ) {
+    return native;
+  }
+
+  return `${native} (~$${Math.round(result.parsedAmountUsd).toLocaleString('en-US')} USD)`;
+}
+
+export function buildR24BlockedFallbackMessage(
+  reason: R24Reason,
+  threshold: number,
+  result?: Pick<
+    R24GateResult,
+    'parsedAmount' | 'parsedCurrency' | 'parsedAmountUsd'
+  >
+): { message: string; stage: string; subStage: string | null } {
+  const thresholdStr = `$${threshold.toLocaleString('en-US')}`;
+  const stated = result
+    ? formatCapitalAmountForDirective({
+        blocked: true,
+        reason,
+        parsedAmount: result.parsedAmount ?? null,
+        parsedCurrency: result.parsedCurrency ?? null,
+        parsedAmountUsd: result.parsedAmountUsd ?? null,
+        verificationAskedAt: null,
+        verificationConfirmedAt: null
+      })
+    : 'that amount';
+
+  switch (reason) {
+    case 'answer_below_threshold':
+      return {
+        message: `gotchu bro, with ${stated} i wouldn't force the main call yet. better move is the lower-ticket/free route while you build closer to ${thresholdStr}, then we can revisit the full program.`,
+        stage: 'FINANCIAL_SCREENING',
+        subStage: 'LOW_TICKET'
+      };
+    case 'answer_total_savings_needs_clarification':
+      return {
+        message:
+          'got it bro, of that amount, how much would you actually be comfortable putting toward your trading education right now?',
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'answer_prop_firm_only':
+      return {
+        message: `respect bro, prop firms are solid. what i'm asking though is what you personally have set aside on your end, you got ${thresholdStr} ready?`,
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'answer_hedging':
+      return {
+        message:
+          "no stress bro, what's the actual number you're working with right now?",
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'answer_ambiguous':
+      return {
+        message:
+          "gotchu, just so i don't point you wrong, what number are you actually working with for this?",
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'asked_but_no_answer':
+      return {
+        message:
+          'just need that capital piece first bro, what are you working with right now?',
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'never_asked':
+    default:
+      return {
+        message:
+          "real quick, what's your capital situation like for the markets right now?",
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+  }
 }
 
 /**
@@ -2608,35 +2751,115 @@ async function shouldBlockForBookingFabrication(params: {
   return { blocked: true, reason: 'no_real_booking' };
 }
 
+interface ParsedCapitalAmount {
+  amount: number;
+  currency: ConversationCurrency | null;
+}
+
+const CURRENCY_DETECTORS: Array<{
+  currency: ConversationCurrency;
+  patterns: RegExp[];
+}> = [
+  {
+    currency: 'ZAR',
+    patterns: [/\bR\s*\d/, /\b(rand|zar|south african)\b/i, /\d\s*ZAR\b/i]
+  },
+  {
+    currency: 'NGN',
+    patterns: [/₦/, /\b(naira|ngn)\b/i, /\bN\s*\d{4,}/, /\d\s*NGN\b/i]
+  },
+  {
+    currency: 'GHS',
+    patterns: [/₵/, /\b(cedi|ghs)\b/i, /\d\s*GHS\b/i]
+  },
+  {
+    currency: 'KES',
+    patterns: [/\b(ksh|kes|kenyan shilling)\b/i, /\d\s*KES\b/i]
+  },
+  {
+    currency: 'PHP',
+    patterns: [/₱/, /\b(php|peso)\b/i, /\d\s*PHP\b/i]
+  },
+  {
+    currency: 'UGX',
+    patterns: [/\b(ugx|ugandan shilling)\b/i, /\d\s*UGX\b/i]
+  },
+  {
+    currency: 'EUR',
+    patterns: [/€/, /\b(eur|euro)\b/i, /\d\s*EUR\b/i]
+  },
+  {
+    currency: 'CAD',
+    patterns: [/\bCAD\b/i, /\bC\$\s*\d/i, /\d\s*CAD\b/i]
+  },
+  {
+    currency: 'GBP',
+    patterns: [/£/, /\b(gbp|pounds?|quid)\b/i, /\d\s*GBP\b/i]
+  },
+  {
+    currency: 'USD',
+    patterns: [/\$\s*\d/, /\b(usd|us dollars?|dollars?)\b/i, /\d\s*USD\b/i]
+  }
+];
+
+export function detectCurrencyFromText(
+  text: string | null | undefined
+): ConversationCurrency | null {
+  if (!text) return null;
+  for (const detector of CURRENCY_DETECTORS) {
+    if (detector.patterns.some((pattern) => pattern.test(text))) {
+      return detector.currency;
+    }
+  }
+  return null;
+}
+
+function detectCurrencyFromTexts(
+  texts: Array<string | null | undefined>
+): ConversationCurrency | null {
+  for (const text of texts) {
+    const currency = detectCurrencyFromText(text);
+    if (currency) return currency;
+  }
+  return null;
+}
+
 /**
- * Extract a dollar amount from a free-form lead reply. Handles
- * "$5k", "5,000", "$3,000.00", "around 500", "about $2000", "3500
- * give or take", bare-number strings, and the "5k"/"2.5k" shorthand.
- * Returns null when no number is present.
+ * Extract a capital amount from a free-form lead reply. Handles
+ * "$5k", "£1,000", "R2000", "₦200,000", "5,000", "around 500",
+ * bare-number strings, and the "5k"/"2.5k" shorthand. Returns null
+ * when no number is present.
  *
  * Bug fix (Tahir Khan false-positive, 2026-04-20): the previous regex
  * non-captured the decimal part, so "2.5k" parsed as 2000 instead of
  * 2500 (the `.5` was dropped before the k-multiplier). Now we capture
- * the decimal and use parseFloat → multiplying by 1000 for the k
- * suffix produces 2500. All existing test cases still pass.
+ * the decimal and use parseFloat, multiplying by 1000 for the k suffix.
  */
-function parseLeadAmountFromReply(text: string): number | null {
-  // Match optional $/£, integer portion (thousands-commas OR plain
-  // digits), optional decimal portion, optional k/K suffix. Decimal
-  // capture is necessary so "2.5k" → 2500 rather than 2000.
-  // £ is matched here (not just $) so "£1,000" / "£800" amounts also
-  // parse — Fix 3 (Souljah J 2026-04-25). Currency conversion is
-  // applied at the threshold-comparison layer, not here.
-  const m = text.match(/[$£]?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/);
+function parseLeadAmountDetailsFromReply(
+  text: string
+): ParsedCapitalAmount | null {
+  const currency = detectCurrencyFromText(text);
+  // Match optional currency symbol/letter prefix, integer portion
+  // (thousands-commas OR plain digits), optional decimal portion,
+  // optional k/K suffix. Currency conversion is applied at the
+  // threshold-comparison layer, not here.
+  const m = text.match(
+    /(?:[$£€₦₵₱]|C\$|R|N)?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/
+  );
   if (!m) return null;
   const intPart = m[1].replace(/,/g, '');
   const decPart = m[2] ?? '';
   let amount = parseFloat(intPart + decPart);
   if (!Number.isFinite(amount)) return null;
   if (m[3]) amount *= 1000; // "5k" → 5000, "2.5k" → 2500
-  // Round to nearest whole dollar — we compare against integer
-  // thresholds, and the lead means "about $2,500" either way.
-  return Math.round(amount);
+  return {
+    amount: Math.round(amount),
+    currency
+  };
+}
+
+function parseLeadAmountFromReply(text: string): number | null {
+  return parseLeadAmountDetailsFromReply(text)?.amount ?? null;
 }
 
 /**
@@ -2651,6 +2874,8 @@ function parseLeadAmountFromReply(text: string): number | null {
 interface ParsedLeadAnswer {
   kind: 'amount' | 'disqualifier' | 'hedging' | 'affirmative' | 'ambiguous';
   amount: number | null;
+  /** Currency explicitly detected in this answer. Undefined/null means USD/default. */
+  currency?: ConversationCurrency | null;
   /**
    * Optional fine-grained reason — lets callers pick a more specific
    * override directive when regenerating. Set for the prop-firm
@@ -2784,12 +3009,15 @@ export function detectRestrictedGeography(
 
 export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
-  const parsedAmount = parseLeadAmountFromReply(text);
+  const parsedAmountDetails = parseLeadAmountDetailsFromReply(text);
+  const parsedAmount = parsedAmountDetails?.amount ?? null;
+  const parsedCurrency = parsedAmountDetails?.currency ?? null;
 
   if (parsedAmount !== null && capitalNumberNeedsComfortClarification(text)) {
     return {
       kind: 'ambiguous',
       amount: parsedAmount,
+      currency: parsedCurrency,
       reason: 'total_savings_or_financial_stress'
     };
   }
@@ -2884,7 +3112,11 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   //    includes hedging words, a concrete number beats the hedge —
   //    we'll compare it to threshold later.
   if (parsedAmount !== null) {
-    return { kind: 'amount', amount: parsedAmount };
+    return {
+      kind: 'amount',
+      amount: parsedAmount,
+      ...(parsedCurrency ? { currency: parsedCurrency } : {})
+    };
   }
 
   // 3. Hedging without a concrete number.
@@ -2925,31 +3157,23 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
 }
 
 /**
- * Returns 'GBP' if any lead message in the conversation contains the
- * £ symbol (the lead has been talking in pounds), else 'USD'. Used by
- * the R24 gate to convert £ amounts to a USD-equivalent comparison
- * against the persona's USD-stored threshold.
- *
- * Source priority: explicit candidate texts (mergedAnswers) first, then
- * a DB scan of LEAD messages on this conversation. Defaults to USD when
- * no £ is found anywhere — matches the historical behaviour for every
- * non-GBP account.
+ * Detect the currency a lead is using for capital amounts. Source
+ * priority: explicit candidate texts (mergedAnswers) first, then a DB
+ * scan of LEAD messages on this conversation. Defaults to USD when no
+ * explicit currency is found, matching historical behavior.
  */
 export async function detectConversationCurrency(
   conversationId: string,
   candidateTexts: string[] = []
-): Promise<'GBP' | 'USD'> {
-  for (const t of candidateTexts) {
-    if (t && t.includes('£')) return 'GBP';
-  }
+): Promise<ConversationCurrency> {
+  const candidateCurrency = detectCurrencyFromTexts(candidateTexts);
+  if (candidateCurrency) return candidateCurrency;
+
   const leadMsgs = await prisma.message.findMany({
     where: { conversationId, sender: 'LEAD' },
     select: { content: true }
   });
-  for (const m of leadMsgs) {
-    if (m.content.includes('£')) return 'GBP';
-  }
-  return 'USD';
+  return detectCurrencyFromTexts(leadMsgs.map((m) => m.content)) ?? 'USD';
 }
 
 /**
@@ -2989,7 +3213,10 @@ async function checkR24Verification(
     // and your education in USD", "what's your budget for this",
     // "what are you working with on the capital side", etc.
     /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-    /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat(?:'|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat(?:'|’)?s your capital situation\b/i,
+    /\bcapital situation\s+like\b/i,
     /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
     /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
     /\bwhat are you working with\b/i,
@@ -3119,34 +3346,27 @@ async function checkR24Verification(
   const nextLead = { id: best.msg.id, content: best.msg.content };
   const askedId = verificationAskedAt.id;
 
-  // ── Currency detection (Souljah J 2026-04-25) ──────────────────
-  // Threshold is stored in USD on the persona row. When the lead has
-  // been speaking in GBP throughout the conversation, comparing a £
-  // amount directly against the USD threshold mis-classifies real
-  // qualifiers — "I have £1,000" is ~$1,250, which clears a $1,000
-  // gate, but a literal `1000 >= 1000` USD compare without unit
-  // awareness happens to also pass at the threshold-equal edge and
-  // FAILS for amounts like "£800" (~$1,000) that should pass. Detect
-  // £ in the lead's actual answer + any earlier LEAD message in this
-  // convo. If GBP, compare `amt * 1.25 >= threshold` (1.25 USD per
-  // GBP, conservative round number — the gate is meant to catch
-  // clear under-funders, not split hairs at the boundary). USD or
-  // unknown → unchanged behaviour.
+  // ── Currency detection (Souljah J 2026-04-25, Eucanmax 2026-04-28) ──
+  // Threshold is stored in USD on the persona row. Compare the lead's
+  // native-currency amount against the threshold after converting to an
+  // approximate USD equivalent. This is intentionally coarse: the gate
+  // exists to catch obvious misses like R2000 ≈ $108, not split hairs.
   const conversationCurrency = await detectConversationCurrency(
     conversationId,
     mergedAnswers.map((m) => m.content)
   );
-  const usdEquivalent = (gbp: number) => gbp * 1.25;
   switch (classification.kind) {
     case 'amount': {
       const amt = classification.amount!;
-      const compareAmt =
-        conversationCurrency === 'GBP' ? usdEquivalent(amt) : amt;
+      const parsedCurrency = classification.currency ?? conversationCurrency;
+      const compareAmt = convertCapitalAmountToUsd(amt, parsedCurrency);
       if (compareAmt >= threshold) {
         return {
           blocked: false,
           reason: 'confirmed_amount',
           parsedAmount: amt,
+          parsedCurrency,
+          parsedAmountUsd: compareAmt,
           verificationAskedAt: askedId,
           verificationConfirmedAt: nextLead.id
         };
@@ -3155,6 +3375,8 @@ async function checkR24Verification(
         blocked: true,
         reason: 'answer_below_threshold',
         parsedAmount: amt,
+        parsedCurrency,
+        parsedAmountUsd: compareAmt,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
       };
@@ -3195,6 +3417,14 @@ async function checkR24Verification(
               ? 'answer_total_savings_needs_clarification'
               : 'answer_ambiguous',
         parsedAmount: classification.amount,
+        parsedCurrency: classification.currency ?? null,
+        parsedAmountUsd:
+          classification.amount !== null
+            ? convertCapitalAmountToUsd(
+                classification.amount,
+                classification.currency ?? conversationCurrency
+              )
+            : null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
       };

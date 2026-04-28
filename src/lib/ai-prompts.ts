@@ -126,6 +126,18 @@ export interface LeadContext {
   };
 }
 
+type PromptConversationCurrency =
+  | 'USD'
+  | 'GBP'
+  | 'ZAR'
+  | 'NGN'
+  | 'GHS'
+  | 'KES'
+  | 'PHP'
+  | 'UGX'
+  | 'EUR'
+  | 'CAD';
+
 // ---------------------------------------------------------------------------
 // Master System Prompt Template
 // ---------------------------------------------------------------------------
@@ -1360,12 +1372,11 @@ export async function buildDynamicSystemPrompt(
    */
   priorHumanMessages?: Array<{ content: string; timestamp: Date | string }>,
   /**
-   * Conversation currency inferred from £ symbols in lead messages.
-   * 'GBP' triggers a small prompt block telling the LLM the threshold
-   * is approximately £800 ≈ $1,000 USD so the AI mirrors the lead's
-   * currency in its phrasing. 'USD' / undefined → no extra block.
+   * Conversation currency inferred from lead messages. Non-USD values
+   * trigger a small prompt block so the LLM mirrors the lead's currency
+   * while the code gate still compares USD equivalents.
    */
-  conversationCurrency?: 'GBP' | 'USD',
+  conversationCurrency?: PromptConversationCurrency,
   /**
    * Pre-rendered ESTABLISHED FACTS bullet block (Rodrigo Moran
    * 2026-04-26 fix). Caller decides when to compute + pass — typically
@@ -2260,17 +2271,73 @@ Your "stage" field in the JSON output must reflect where the conversation actual
     prompt = ongoingOverride + '\n' + prompt;
   }
 
-  // ── GBP currency context (Fix 3, Souljah J 2026-04-25) ──────────
-  // When the lead has been speaking in £ throughout the conversation,
-  // mirror that in the AI's framing so a "minimum capital" pivot
-  // doesn't read as "we need exactly $1,000 USD" against a lead who
-  // has only ever mentioned pounds. The prompt-level guidance is the
-  // soft layer; the R24 gate (in ai-engine.ts) is the hard layer
-  // that converts £ amounts to USD-equivalent for the threshold
-  // comparison. £800 ≈ $1,000 at the conservative 1.25 USD/GBP rate.
-  if (conversationCurrency === 'GBP') {
-    const gbpBlock = `## CURRENCY CONTEXT (GBP)\nThe lead is speaking in £ (GBP). Mirror their currency when discussing amounts. The minimum capital is approximately £800 (equivalent to $1,000 USD). When confirming an amount, accept £ figures naturally — do NOT demand a USD number. Example:\n  Lead: "I have £1,000 ready"\n  RIGHT: "let's gooo bro 💪🏿 that's solid to start with"\n  WRONG: "can you tell me that in USD instead?"`;
-    prompt = gbpBlock + '\n\n' + prompt;
+  // ── Currency context (Fix 3 Souljah J, Eucanmax 2026-04-28) ─────
+  // Prompt-level guidance mirrors the lead's currency so the reply
+  // feels natural. The hard R24 gate in ai-engine.ts still converts
+  // native amounts to USD-equivalent for threshold comparison.
+  if (conversationCurrency && conversationCurrency !== 'USD') {
+    const minimums: Record<
+      Exclude<PromptConversationCurrency, 'USD'>,
+      { label: string; approxMinimum: string; example: string; right: string }
+    > = {
+      GBP: {
+        label: '£ (GBP)',
+        approxMinimum: '£800 (equivalent to $1,000 USD)',
+        example: 'I have £1,000 ready',
+        right: "let's gooo bro 💪🏿 that's solid to start with"
+      },
+      ZAR: {
+        label: 'R / rand (ZAR)',
+        approxMinimum: 'R18,500 (equivalent to $1,000 USD)',
+        example: 'R2000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      NGN: {
+        label: '₦ / naira (NGN)',
+        approxMinimum: '₦1,600,000 (equivalent to $1,000 USD)',
+        example: '₦200,000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      GHS: {
+        label: 'cedi (GHS)',
+        approxMinimum: 'GHS 15,000 (equivalent to $1,000 USD)',
+        example: 'GHS 3,000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      KES: {
+        label: 'KSh / KES',
+        approxMinimum: 'KES 130,000 (equivalent to $1,000 USD)',
+        example: 'KSh 20,000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      PHP: {
+        label: '₱ / PHP',
+        approxMinimum: '₱58,000 (equivalent to $1,000 USD)',
+        example: '₱20,000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      UGX: {
+        label: 'UGX',
+        approxMinimum: 'UGX 3,700,000 (equivalent to $1,000 USD)',
+        example: 'UGX 500,000',
+        right: "gotchu bro, that's below the main-program capital range"
+      },
+      EUR: {
+        label: '€ / EUR',
+        approxMinimum: '€925 (equivalent to $1,000 USD)',
+        example: '€1,000',
+        right: "let's gooo bro 💪🏿 that's solid to start with"
+      },
+      CAD: {
+        label: 'CAD / C$',
+        approxMinimum: 'CAD 1,350 (equivalent to $1,000 USD)',
+        example: 'CAD 1,500',
+        right: "let's gooo bro 💪🏿 that's solid to start with"
+      }
+    };
+    const info = minimums[conversationCurrency];
+    const currencyBlock = `## CURRENCY CONTEXT (${conversationCurrency})\nThe lead is speaking in ${info.label}. Mirror their currency when discussing amounts. The minimum capital is approximately ${info.approxMinimum}. When confirming an amount, accept ${conversationCurrency} figures naturally — do NOT demand a USD number. Example:\n  Lead: "${info.example}"\n  RIGHT: "${info.right}"\n  WRONG: "can you tell me that in USD instead?"`;
+    prompt = currencyBlock + '\n\n' + prompt;
   }
 
   // ── Human-handoff briefing (Fix 4, Souljah J 2026-04-25) ────────

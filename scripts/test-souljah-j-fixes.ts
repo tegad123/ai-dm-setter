@@ -114,12 +114,14 @@ async function main() {
   const gbp1k = parseLeadCapitalAnswer('I have £1,000 ready');
   expect('parseLeadCapitalAnswer extracts 1000 from "£1,000"', gbp1k, {
     kind: 'amount',
-    amount: 1000
+    amount: 1000,
+    currency: 'GBP'
   });
   const gbp800 = parseLeadCapitalAnswer('£800 saved up');
   expect('parseLeadCapitalAnswer extracts 800 from "£800"', gbp800, {
     kind: 'amount',
-    amount: 800
+    amount: 800,
+    currency: 'GBP'
   });
 
   // detectConversationCurrency: synthesise a conversation row + lead

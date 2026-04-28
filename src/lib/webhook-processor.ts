@@ -2816,6 +2816,21 @@ async function deliverBubbleGroup(params: {
 // 3. Send AI Reply (save to DB + deliver to platform)
 // ---------------------------------------------------------------------------
 
+export function matchFailedCapitalBookingPitch(text: string): string | null {
+  const patterns: RegExp[] = [
+    /\b(hop|jump)\s+on\s+(a\s+)?(quick\s+)?(call|chat|zoom|meeting|convo)\b/i,
+    /\b(hop|jump|get|book|schedule|lock)\s+(on|in|into|a|the|you)?\s*(quick\s+)?(call|chat|zoom|meeting|convo)\b/i,
+    /\b(quick\s+)?(call|chat|zoom|meeting|convo)\s+(with|for)\s+(the\s+)?(closer|team|us|me)\b/i,
+    /\b(the\s+)?(team|closer|setter|coach|anthony)\s+(will|would|gonna|is\s+gonna|can)\s+(reach\s+out|hit\s+you|call|chat|speak)\b/i,
+    /\b(fill\s+out|complete|submit)\s+(the\s+)?(typeform|application|form)\b/i,
+    /\bgrab\s+a\s+time\b/i
+  ];
+
+  return (
+    patterns.map((pat) => text.match(pat)?.[0] ?? null).find(Boolean) ?? null
+  );
+}
+
 async function sendAIReply(
   conversationId: string,
   accountId: string,
@@ -3110,6 +3125,55 @@ async function sendAIReply(
     return;
   }
 
+  const joinedAtShip = bubblesForEmptyCheck
+    .filter((b): b is string => typeof b === 'string')
+    .join(' ');
+
+  // ── Ship-time R24 backstop ────────────────────────────────────
+  // R24 runs in ai-engine before send and should regenerate failed-
+  // capital booking pitches into a downsell/clarifier. This final
+  // check makes the send path fail-closed if a future retry/fallback
+  // regression leaves a call proposal in the outgoing text after the
+  // capital gate has already marked the lead below threshold.
+  if (result.capitalOutcome === 'failed') {
+    const badPitchMatch = matchFailedCapitalBookingPitch(joinedAtShip);
+    if (badPitchMatch) {
+      console.error(
+        `[webhook-processor] r24_failed_call_pitch_at_ship for conv ${conversationId} — capitalOutcome=failed but outgoing text still contained "${badPitchMatch}". Pausing AI, notifying operator, no platform send.`
+      );
+      try {
+        if (result.suggestionId) {
+          await prisma.aISuggestion
+            .update({
+              where: { id: result.suggestionId },
+              data: { wasRejected: true, finalSentText: null }
+            })
+            .catch(() => {});
+        }
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: { aiActive: false }
+        });
+        broadcastAIStatusChange({ conversationId, aiActive: false });
+        await prisma.notification.create({
+          data: {
+            accountId: lead.accountId,
+            type: 'SYSTEM',
+            title: 'R24 blocked failed-capital call pitch',
+            body: `${lead.name} (@${lead.handle}): AI tried to send booking/call language after the capital gate marked the lead below threshold. Send was blocked before delivery. Please review and send the correct downsell manually.`,
+            leadId: lead.id
+          }
+        });
+      } catch (err) {
+        console.error(
+          '[webhook-processor] R24 ship-time block bookkeeping failed (non-fatal):',
+          err
+        );
+      }
+      return;
+    }
+  }
+
   // ── Ship-time bracketed-placeholder guard (P0) ────────────────
   // Defense-in-depth: even though voice-quality-gate.ts's
   // bracketed_placeholder_leaked hard fail is supposed to block
@@ -3186,9 +3250,6 @@ async function sendAIReply(
     /\bhere'?s\s+(the\s+|a\s+|your\s+|my\s+)?(link|url|application|booking\s+link|typeform|form)\b/i,
     /\b(send|drop|shoot)\s+you\s+the\s+link\b/i
   ];
-  const joinedAtShip = bubblesForEmptyCheck
-    .filter((b): b is string => typeof b === 'string')
-    .join(' ');
   const hasUrlAtShip = /\bhttps?:\/\/\S+|\bwww\.\S+\.\S+/i.test(joinedAtShip);
   const linkPromiseMatch = !hasUrlAtShip
     ? LINK_PROMISE_AT_SHIP.map((pat) => joinedAtShip.match(pat)).find(
