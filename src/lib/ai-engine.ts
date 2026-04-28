@@ -1272,6 +1272,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const ackQuestionSameBubbleFailed =
+        quality.softSignals.acknowledgment_and_question_in_same_bubble !==
+        undefined;
+      if (ackQuestionSameBubbleFailed) {
+        const ackQuestionOverride = `\n\n===== SPLIT ACK FROM QUESTION =====\nYour previous reply jammed an acknowledgment AND a question into one bubble. Split them into the messages[] array.\n\nWRONG:\n  messages: ["damn bro that's a real grind. how long you been at it?"]\n\nRIGHT:\n  messages: [\n    "damn bro, that's a real grind",\n    "how long you been at it?"\n  ]\n\nRule: ack in bubble 1, question in bubble 2. Never both in the same string.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + ackQuestionOverride;
+        console.warn(
+          `[ai-engine] Concatenated ack+question detected — forcing regen with split directive (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const repetitiveQuestionFailed =
         quality.softSignals.repetitive_question_pattern !== undefined;
       if (repetitiveQuestionFailed) {
@@ -2178,6 +2189,41 @@ function normaliseBubbles(raw: unknown): string[] | null {
   return strings.slice(0, MAX_BUBBLES_PER_GROUP);
 }
 
+// Casual acknowledgment phrases that, when they OPEN a bubble that ALSO
+// ends in a question mark, indicate the model jammed an ack and a
+// question into one bubble instead of splitting. Conservative list —
+// only short opener tokens we never use mid-thought.
+const ACK_OPENER_RE =
+  /^(that'?s|gotchu|gotcha|love that|fasho|damn|bet|sick|respect|facts?|fire|yo|yeah|appreciate|ah|aight|word|nice|solid|dope|aw|oh|hey|hell yeah|hella|big bro|bro)\b/i;
+
+/**
+ * Last-resort split for the no-newline concatenation pattern, e.g.
+ *   "damn bro, that's a real grind. how long you been at it?"
+ *
+ * Returns a 2-element array if the bubble matches:
+ *   - opens with a casual acknowledgment phrase
+ *   - ends with `?`
+ *   - has at least one sentence boundary `[.!]` between
+ *
+ * Otherwise returns null and the caller keeps the bubble whole.
+ */
+function splitConcatenatedAckQuestion(s: string): string[] | null {
+  if (!s || typeof s !== 'string') return null;
+  const trimmed = s.trim();
+  if (!trimmed.endsWith('?')) return null;
+  if (!ACK_OPENER_RE.test(trimmed)) return null;
+  // Find the LAST sentence boundary before the trailing question — we
+  // want to keep the question intact in bubble[1] and pile any leading
+  // ack/info into bubble[0].
+  const match = /^(.+[.!])\s+([^.!?]*\?)$/.exec(trimmed);
+  if (!match) return null;
+  const ack = match[1].trim();
+  const question = match[2].trim();
+  if (ack.length < MIN_BUBBLE_CHARS || question.length < MIN_BUBBLE_CHARS)
+    return null;
+  return [ack, question];
+}
+
 function parseAIResponse(raw: string): ParsedAIResponse {
   const defaults: ParsedAIResponse = {
     format: 'text',
@@ -2222,24 +2268,27 @@ function parseAIResponse(raw: string): ParsedAIResponse {
         ? obj.message
         : raw;
 
-    // Auto-split fallback (daetradez 2026-04-24): even with the
-    // strengthened multi-bubble prompt block, gpt-5.4-mini (and the
-    // other gpt-5.x minis in testing) frequently ignore the messages[]
-    // instruction and emit thoughts joined by \n\n in a single
-    // "message" field — e.g. "damn bro, that's a real grind\n\ngotchu
-    // though, if you got 2k set aside you're in a decent spot\n\nhow
-    // soon are you tryna make the jump?". Splitting on double-newline
-    // here guarantees the delivery pipeline ships each thought as its
-    // own bubble regardless of whether the LLM obeyed the schema.
-    // Cap at MAX_BUBBLES_PER_GROUP so a runaway output doesn't ship
-    // eight bubbles. Only activates when the LLM did NOT provide a
+    // Auto-split fallback (daetradez 2026-04-24, widened 2026-04-28):
+    // gpt-5.x minis frequently ignore the messages[] schema and emit
+    // thoughts joined by newlines in a single "message" field. The
+    // 2026-04-28 daetradez audit caught the failure mode: most rows
+    // had `messageBubbles=null bubbleCount=1` with responseText like:
+    //   "yo appreciate you reaching out bro\nare you new in the
+    //    markets or you been trading for a while?"
+    // — a single newline (not double) between an acknowledgment and
+    // a question, jammed into one bubble. Splitting on `\n+` (any
+    // number of newlines) catches this AND the legacy \n\n shape.
+    // In DM context, ANY newline is almost certainly a thought break
+    // — the model doesn't naturally use newlines mid-sentence. Cap
+    // at MAX_BUBBLES_PER_GROUP so a runaway output doesn't ship 8
+    // bubbles. Only activates when the LLM did NOT provide a
     // messages[] array — when it did, we trust its boundaries.
     let messages: string[];
     if (fromArray !== null) {
       messages = fromArray;
     } else {
       const split: string[] = fromString
-        .split(/\n{2,}/)
+        .split(/\n+/)
         .map((s: string) => s.trim())
         .filter((s: string) => s.length >= MIN_BUBBLE_CHARS);
       if (split.length >= 2) {
@@ -2250,7 +2299,14 @@ function parseAIResponse(raw: string): ParsedAIResponse {
           );
         }
       } else {
-        messages = [fromString];
+        // No newline separator — last resort: detect the
+        // "[ack phrase]. [question]?" concatenation pattern with a
+        // single sentence-boundary split. Only fires when the bubble
+        // starts with a casual acknowledgment phrase AND ends with a
+        // question mark, so we don't false-split legitimate single
+        // multi-clause thoughts.
+        const ackQuestionSplit = splitConcatenatedAckQuestion(fromString);
+        messages = ackQuestionSplit ?? [fromString];
       }
     }
     const message = messages[0] ?? fromString;

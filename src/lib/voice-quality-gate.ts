@@ -132,6 +132,28 @@ export function containsLogisticsQuestion(text: string): boolean {
   return SCHEDULING_QUESTION_RE.test(text) || TIMEZONE_QUESTION_RE.test(text);
 }
 
+// Casual ack openers that, when they OPEN a single-bubble reply that
+// also ends in `?`, indicate the model jammed an ack and a question
+// into one bubble instead of splitting. Mirrors the parser-side list
+// in ai-engine.ts. Conservative — only short opener tokens we never
+// use mid-thought.
+const CONCATENATED_ACK_QUESTION_RE =
+  /^(that'?s|gotchu|gotcha|love that|fasho|damn|bet|sick|respect|facts?|fire|yo|yeah|appreciate|ah|aight|word|nice|solid|dope|aw|oh|hey|hell yeah|hella|big bro|bro)\b[^?]*[.!,]\s+\w[^?]*\?$/i;
+
+/**
+ * True when a single bubble looks like an acknowledgment-then-question
+ * jammed together — opens with a casual ack phrase and ends in `?` with
+ * a sentence boundary (period, exclamation, or comma) between. Used as
+ * a backstop when the parser's auto-split missed a concatenation case.
+ */
+export function looksLikeConcatenatedAckQuestion(s: string): boolean {
+  if (!s || typeof s !== 'string') return false;
+  const trimmed = s.trim();
+  if (!trimmed.endsWith('?')) return false;
+  if (trimmed.length < 30) return false; // legit short single thought
+  return CONCATENATED_ACK_QUESTION_RE.test(trimmed);
+}
+
 export function isCallAcceptance(text: string): boolean {
   if (
     /\b(not\s+sure|maybe|i'?ll\s+think|let\s+me\s+think|not\s+now)\b/i.test(
@@ -1868,6 +1890,20 @@ export function scoreVoiceQualityGroup(
   const joinedQuality = scoreVoiceQuality(joined, options);
   const softSignals = joinedQuality.softSignals;
   const score = joinedQuality.score;
+
+  // Acknowledgment + question jammed into one bubble (daetradez
+  // 2026-04-28). Fires only when messages.length === 1 — a legitimate
+  // 2-bubble split where bubble 0 is the ack and bubble 1 is the
+  // question won't trigger this, since the parser already split it.
+  // Backstops the parser auto-split for cases where the regex didn't
+  // catch (no newline AND no period/exclamation between ack and
+  // question — e.g. comma-only).
+  if (messages.length === 1) {
+    const only = messages[0];
+    if (looksLikeConcatenatedAckQuestion(only)) {
+      softSignals.acknowledgment_and_question_in_same_bubble = -0.4;
+    }
+  }
 
   return {
     score,
