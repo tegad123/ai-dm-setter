@@ -15,6 +15,24 @@ enum Role {
   CLOSER
   SETTER
   READ_ONLY
+  // Platform-level operator (Tega). Sees /admin dashboard across ALL
+  // tenant accounts, can impersonate, run health checks, manage plans.
+  // Set via scripts/promote-tega-super-admin.ts; never assigned via UI.
+  SUPER_ADMIN
+}
+
+enum PlanStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+enum AccountHealthStatus {
+  HEALTHY
+  WARNING
+  CRITICAL
+  UNKNOWN
 }
 
 enum Platform {
@@ -296,7 +314,54 @@ model Account {
   inboundQualifications InboundQualification[]
   trainingEvents     TrainingEvent[]
 
+  // ── Phase 1 super-admin dashboard (2026-04-28) ────────────────
+  // Plan billing status (separate from `plan` enum; lifecycle state).
+  // Default ACTIVE so existing accounts keep working without
+  // backfill — new accounts can be flipped to TRIAL on creation.
+  planStatus         PlanStatus          @default(ACTIVE)
+  trialEndsAt        DateTime?
+  // Cached monthly API spend, refreshed by the health-check job.
+  // Computed off AISuggestion.estimatedCostUsd over the trailing
+  // 30d window. Decimal so we can show full-precision dollars in
+  // the admin table.
+  monthlyApiCostUsd  Decimal             @default(0) @db.Decimal(10, 4)
+  // Coarse health rollup used by the admin overview table. Set by
+  // the runHealthChecks helper. UNKNOWN = never run.
+  healthStatus       AccountHealthStatus @default(UNKNOWN)
+  lastHealthCheck    DateTime?
+  // Onboarding wizard step (Phase 2). Pre-seeded so Phase 1 schema
+  // doesn't need a follow-up migration when the wizard ships.
+  onboardingStep     Int                 @default(0)
+
+  // Cross-relation to AdminLog so audit rows survive cascade delete
+  // of the account.
+  adminLogs          AdminLog[]
+
   @@index([slug])
+  @@index([healthStatus])
+  @@index([planStatus])
+}
+
+// ─── Super-admin audit log ─────────────────────────────────────
+// Every action a SUPER_ADMIN takes against a tenant account
+// (impersonation start/exit, plan change, AI pause, persona edit,
+// account delete) writes one row here. Phase 1 just defines the
+// model; subsequent phases attach writes from the corresponding
+// admin endpoints.
+model AdminLog {
+  id              String   @id @default(cuid())
+  adminUserId     String                                 // User.id of the SUPER_ADMIN
+  targetAccountId String?                                // Account.id, nullable for system-level actions
+  action          String                                 // e.g. 'impersonate.start', 'account.pause_ai', 'plan.change'
+  metadata        Json?                                  // Free-form per-action context (old/new values, reason, etc.)
+  createdAt       DateTime @default(now())
+
+  adminUser     User     @relation("AdminUserLogs", fields: [adminUserId], references: [id], onDelete: Cascade)
+  targetAccount Account? @relation(fields: [targetAccountId], references: [id], onDelete: SetNull)
+
+  @@index([adminUserId, createdAt(sort: Desc)])
+  @@index([targetAccountId, createdAt(sort: Desc)])
+  @@index([action])
 }
 
 model AIPersona {
@@ -748,6 +813,10 @@ model User {
   leadsHandled    Int             @default(0)
   callsBooked     Int             @default(0)
   closeRate       Float?
+
+  // Phase 1 super-admin: audit log of platform-level actions taken
+  // by this user (only populated when role=SUPER_ADMIN).
+  adminLogs       AdminLog[]      @relation("AdminUserLogs")
 
   @@index([accountId])
   @@index([email])

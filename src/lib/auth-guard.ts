@@ -133,6 +133,21 @@ export async function requireAuth(_request?: any): Promise<AuthContext> {
   };
 }
 
+/**
+ * Like requireAuth, but additionally enforces role === 'SUPER_ADMIN'.
+ * Throws AuthError(403) on a regular tenant user. Used by every
+ * /admin route + /api/admin endpoint to keep the platform-operator
+ * surface invisible to tenants.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function requireSuperAdmin(_request?: any): Promise<AuthContext> {
+  const ctx = await requireAuth(_request);
+  if (ctx.role !== 'SUPER_ADMIN') {
+    throw new AuthError('Forbidden — super admin required', 403);
+  }
+  return ctx;
+}
+
 export class AuthError extends Error {
   status: number;
   constructor(message: string, status: number) {
