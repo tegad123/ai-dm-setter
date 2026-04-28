@@ -1987,8 +1987,12 @@ export async function scheduleAIReply(
           maxDebounceWindowSeconds: true
         }
       });
-      const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
-      const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
+      // Defaults nudged to (45, 120) so a row with NULL columns
+      // (impossibly old account, schema drift, etc.) never produces
+      // an instant 0-second fire — instant replies are a bot tell.
+      // Operator-set values always take precedence over the defaults.
+      const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 45);
+      const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 120);
       let debounceSec = Math.max(0, accountRow?.debounceWindowSeconds ?? 45);
       const maxDebounceSec = Math.max(
         debounceSec,
@@ -2045,20 +2049,27 @@ export async function scheduleAIReply(
       const { humanResponseDelay } = await import('@/lib/delay-utils');
       const delayRandomSec = humanResponseDelay(minDelay, maxDelay);
       const now = Date.now();
-      // Debounce floor: at least `debounceSec` from now OR the random
-      // response delay, whichever is later. This replaces the additive
-      // "debounce + delay" stacking — either one naturally provides the
-      // conversational pause.
-      const preferredFireAt =
-        now + Math.max(debounceSec, delayRandomSec) * 1000;
-      // Cap: never fire later than `maxDebounceSec` after the FIRST lead
-      // msg in the batch.
-      const maxFireAt = earliestLeadInBatch
-        ? earliestLeadInBatch.timestamp.getTime() + maxDebounceSec * 1000
-        : preferredFireAt;
-      // Final: min(preferred, cap), but always at least 1s from now so
-      // the cron can pick it up.
-      const fireAt = Math.max(now + 1000, Math.min(preferredFireAt, maxFireAt));
+      // ── Two independent floors, take the max ─────────────────────
+      // 1. DEBOUNCE phase — how long we wait for MORE lead messages
+      //    before generating. Capped at maxDebounceSec measured from
+      //    the FIRST lead message in the batch so a chatty lead can't
+      //    indefinitely postpone the AI.
+      // 2. RESPONSE DELAY phase — operator-configured human-feel pause
+      //    that ALWAYS applies regardless of debounce state. Pre-fix
+      //    bug: this was clamped by maxDebounceSec, which silently
+      //    overrode operator settings (daetradez 2026-04-28 incident:
+      //    operator set 2-10min, AI fired in <60s because
+      //    maxDebounceWindowSeconds=120 was capping fireAt).
+      const debouncedFireAt = earliestLeadInBatch
+        ? Math.min(
+            now + debounceSec * 1000,
+            earliestLeadInBatch.timestamp.getTime() + maxDebounceSec * 1000
+          )
+        : now + debounceSec * 1000;
+      const responseDelayFireAt = now + delayRandomSec * 1000;
+      // Final: take the LATER of the two floors. Always at least 1s
+      // from now so the cron can pick it up.
+      const fireAt = Math.max(now + 1000, debouncedFireAt, responseDelayFireAt);
       const scheduledFor = new Date(fireAt);
 
       await prisma.scheduledReply.create({
@@ -4927,8 +4938,10 @@ export async function computeReplyDelaySeconds(
     where: { id: accountId },
     select: { responseDelayMin: true, responseDelayMax: true }
   });
-  const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 0);
-  const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 0);
+  // Same defaults as the inline path in scheduleAIReply — never fall
+  // back to 0 (instant fire = bot tell). Operator's set value wins.
+  const minDelay = Math.max(0, accountRow?.responseDelayMin ?? 45);
+  const maxDelay = Math.max(minDelay, accountRow?.responseDelayMax ?? 120);
   if (maxDelay <= 0) return 0;
   return Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 }

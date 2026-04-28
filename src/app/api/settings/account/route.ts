@@ -72,6 +72,9 @@ export async function PUT(req: NextRequest) {
       responseDelayMax
     } = body;
 
+    const RESPONSE_DELAY_MIN_FLOOR = 30;
+    const RESPONSE_DELAY_MAX_CEILING = 3600;
+
     const data: Record<string, unknown> = {};
     if (name !== undefined) data.name = name;
     if (brandName !== undefined) data.brandName = brandName;
@@ -81,10 +84,39 @@ export async function PUT(req: NextRequest) {
       data.onboardingComplete = onboardingComplete;
     if (ghostThresholdDays !== undefined)
       data.ghostThresholdDays = ghostThresholdDays;
-    if (typeof responseDelayMin === 'number' && responseDelayMin >= 0)
+
+    if (responseDelayMin !== undefined) {
+      if (
+        typeof responseDelayMin !== 'number' ||
+        !Number.isFinite(responseDelayMin) ||
+        responseDelayMin < RESPONSE_DELAY_MIN_FLOOR ||
+        responseDelayMin > RESPONSE_DELAY_MAX_CEILING
+      ) {
+        return NextResponse.json(
+          {
+            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds (instant replies look like a bot)`
+          },
+          { status: 400 }
+        );
+      }
       data.responseDelayMin = Math.floor(responseDelayMin);
-    if (typeof responseDelayMax === 'number' && responseDelayMax >= 0)
+    }
+    if (responseDelayMax !== undefined) {
+      if (
+        typeof responseDelayMax !== 'number' ||
+        !Number.isFinite(responseDelayMax) ||
+        responseDelayMax < RESPONSE_DELAY_MIN_FLOOR ||
+        responseDelayMax > RESPONSE_DELAY_MAX_CEILING
+      ) {
+        return NextResponse.json(
+          {
+            error: `responseDelayMax must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds`
+          },
+          { status: 400 }
+        );
+      }
       data.responseDelayMax = Math.floor(responseDelayMax);
+    }
 
     // Normalize: ensure max >= min if either was updated
     if (

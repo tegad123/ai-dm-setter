@@ -200,11 +200,49 @@ export async function PUT(req: NextRequest) {
     data.contextUpdatedAt = new Date();
     data.contextUpdatedByUserId = auth.userId || null;
 
-    // AI engine settings (optional, only set if provided)
-    if (responseDelayMin !== undefined)
-      data.responseDelayMin = responseDelayMin;
-    if (responseDelayMax !== undefined)
-      data.responseDelayMax = responseDelayMax;
+    // AI engine settings (optional, only set if provided).
+    // Validate against floor/ceiling — instant replies (<30s) read as bot.
+    const RESPONSE_DELAY_MIN_FLOOR = 30;
+    const RESPONSE_DELAY_MAX_CEILING = 3600;
+    if (responseDelayMin !== undefined) {
+      if (
+        typeof responseDelayMin !== 'number' ||
+        !Number.isFinite(responseDelayMin) ||
+        responseDelayMin < RESPONSE_DELAY_MIN_FLOOR ||
+        responseDelayMin > RESPONSE_DELAY_MAX_CEILING
+      ) {
+        return NextResponse.json(
+          {
+            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds (instant replies look like a bot)`
+          },
+          { status: 400 }
+        );
+      }
+      data.responseDelayMin = Math.floor(responseDelayMin);
+    }
+    if (responseDelayMax !== undefined) {
+      if (
+        typeof responseDelayMax !== 'number' ||
+        !Number.isFinite(responseDelayMax) ||
+        responseDelayMax < RESPONSE_DELAY_MIN_FLOOR ||
+        responseDelayMax > RESPONSE_DELAY_MAX_CEILING
+      ) {
+        return NextResponse.json(
+          {
+            error: `responseDelayMax must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds`
+          },
+          { status: 400 }
+        );
+      }
+      data.responseDelayMax = Math.floor(responseDelayMax);
+    }
+    if (
+      typeof data.responseDelayMin === 'number' &&
+      typeof data.responseDelayMax === 'number' &&
+      data.responseDelayMax < data.responseDelayMin
+    ) {
+      data.responseDelayMax = data.responseDelayMin;
+    }
     if (voiceNotesEnabled !== undefined)
       data.voiceNotesEnabled = voiceNotesEnabled;
     if (setupStep !== undefined) data.setupStep = setupStep;
