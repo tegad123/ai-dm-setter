@@ -32,8 +32,7 @@ const NAV_ITEMS: Array<{
     label: 'Onboard New Client',
     href: '/admin/onboard',
     icon: IconUserPlus,
-    enabled: false,
-    phase: 'Phase 2'
+    enabled: true
   },
   {
     label: 'System Health',
