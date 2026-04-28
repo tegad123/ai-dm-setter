@@ -7,9 +7,11 @@ import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
 import {
   containsCapitalQuestion,
   containsIncomeGoalQuestion,
+  stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
   isUnkeptPromise
 } from '@/lib/voice-quality-gate';
+import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -422,14 +424,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   });
   const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
   const capitalCustomPrompt = personaForGate?.capitalVerificationPrompt ?? null;
+  const promptConfigForGate = (personaForGate?.promptConfig || {}) as {
+    callHandoff?: { closerName?: string };
+    homeworkUrl?: unknown;
+  };
+  const homeworkUrl =
+    typeof promptConfigForGate.homeworkUrl === 'string' &&
+    /^https?:\/\//i.test(promptConfigForGate.homeworkUrl.trim())
+      ? promptConfigForGate.homeworkUrl.trim()
+      : null;
+  const conversationCallState = activeConversationId
+    ? await prisma.conversation.findUnique({
+        where: { id: activeConversationId },
+        select: { scheduledCallAt: true }
+      })
+    : null;
   // Harvest closer names from both the legacy closerName field and the
   // newer promptConfig.callHandoff.closerName. Lowercased for case-
   // insensitive regex construction inside detectBookingAdvancement.
   const closerNames: string[] = [];
   if (personaForGate?.closerName) closerNames.push(personaForGate.closerName);
-  const handoffCfg =
-    (personaForGate?.promptConfig as { callHandoff?: { closerName?: string } })
-      ?.callHandoff ?? null;
+  const handoffCfg = promptConfigForGate.callHandoff ?? null;
   if (
     handoffCfg?.closerName &&
     handoffCfg.closerName !== personaForGate?.closerName
@@ -555,30 +570,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       previousLeadMessage: lastLeadMsg?.content ?? null,
       previousLeadHadImage: lastLeadHadImage,
       leadEmail: leadContext.booking?.leadEmail ?? null,
+      scheduledCallAt: conversationCallState?.scheduledCallAt ?? null,
+      homeworkUrl,
       // Rodrigo Moran 2026-04-26 — count prior capital-verification
       // questions in the AI history so the gate hard-fails a repeat
-      // ask. Local pattern set kept inside conversation-facts to
-      // avoid duplicating the regexes here.
-      priorCapitalQuestionAskCount: priorAIMessages.filter((m) => {
-        const t = m.content || '';
-        return (
-          /\byou got at least \$\d/i.test(t) ||
-          /\byou have at least \$\d/i.test(t) ||
-          /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i.test(
-            t
-          ) ||
-          /\bcapital ready\b/i.test(t) ||
-          /\bjust to confirm.*\$\d/i.test(t) ||
-          /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i.test(
-            t
-          ) ||
-          /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i.test(
-            t
-          ) ||
-          /\bwhat are you working with\b/i.test(t) ||
-          /\bon the (capital|money|budget) side\b/i.test(t)
-        );
-      }).length,
+      // ask. conversation-facts is the single source of truth for
+      // capital-question shapes, including curly-apostrophe variants.
+      priorCapitalQuestionAskCount: countCapitalQuestionAsks(priorAIMessages),
       // Rodrigo Moran 2026-04-26 — count prior "real quick" usage so
       // overuse triggers the soft penalty when the LLM keeps
       // reaching for the same transition phrase.
@@ -749,11 +747,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       quality.softSignals.unnecessary_scheduling_question !== undefined;
     const logisticsBeforeQualificationFailed =
       quality.softSignals.logistics_before_qualification !== undefined;
+    const repeatedQuestionFailed =
+      quality.softSignals.repeated_question !== undefined;
+    const homeworkBeforeCallFailed =
+      quality.softSignals.homework_sent_before_call_confirmed !== undefined;
 
     if (
       quality.passed &&
       !unnecessarySchedulingQuestionFailed &&
       !logisticsBeforeQualificationFailed &&
+      !repeatedQuestionFailed &&
+      !homeworkBeforeCallFailed &&
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
@@ -816,6 +820,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
         case 'answer_hedging':
           r24Directive = `The lead hedged on the capital question ("kinda", "working on it", "almost", etc.) without giving a concrete number. Do NOT route to booking. Ask a single follow-up that pins down a concrete dollar figure — for example "no stress, what's the number you're working with rn?". Do NOT send booking-handoff messaging until you have a concrete amount.`;
+          break;
+        case 'answer_total_savings_needs_clarification':
+          r24Directive = `The lead gave a capital number, but framed it as total savings / tight funds / family financial stress. Total savings is NOT the same as available trading capital. Do NOT route to booking yet. Ask one clarifying question that surfaces what they are actually comfortable investing, for example: "got it bro — of that amount, how much would you actually be comfortable putting toward your trading education right now?" Wait for that answer before any call proposal or booking handoff.`;
           break;
         case 'answer_ambiguous':
           r24Directive = `The lead's reply to the capital question didn't give a clear answer ("depends", "varies", "not sure", etc.). Do NOT route to booking. Ask a short clarifying question that gets a concrete dollar figure. Do NOT send booking-handoff messaging yet.`;
@@ -1263,6 +1270,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
     }
 
+    if (repeatedQuestionFailed) {
+      const repeatedQuestionOverride = `\n\n===== REPEATED QUESTION OVERRIDE =====\nYour previous reply repeated a question already asked in this conversation. The lead answered or gave new context, so asking the same thing again reads like a loop. Regenerate without repeating that question. Acknowledge the lead's latest answer specifically, then either ask a different clarifying question or move to the correct next step.\n=====`;
+      systemPromptForLLM += repeatedQuestionOverride;
+      console.warn(
+        `[ai-engine] Repeated question detected — forcing regen with no-repeat directive (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
+    if (homeworkBeforeCallFailed) {
+      const homeworkOverride = `\n\n===== PRE-CALL HOMEWORK BLOCKED =====\nDo NOT send the homework link yet. The lead has not confirmed a specific day and time for their call in the system. The homework link is only sent as call preparation after scheduledCallAt is set, not during the booking flow. Regenerate without the homework URL and keep the lead moving toward confirming the call time.\n=====`;
+      systemPromptForLLM += homeworkOverride;
+      console.warn(
+        `[ai-engine] Homework link before scheduledCallAt detected — forcing regen without homework URL (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
     if (attempt === MAX_RETRIES) {
       if (r24Blocked) {
         console.error(
@@ -1333,6 +1356,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] Logistics-before-qualification gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
         );
         parsed.escalateToHuman = true;
+      } else if (repeatedQuestionFailed) {
+        console.error(
+          `[ai-engine] Repeated-question gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+        );
+        parsed.escalateToHuman = true;
+      } else if (homeworkBeforeCallFailed) {
+        console.warn(
+          `[ai-engine] Homework-before-call gate exhausted ${MAX_RETRIES + 1} attempts — stripping homework URL before send for convo ${activeConversationId}`
+        );
+        parsed.messages = stripPreCallHomeworkFromMessages(
+          parsed.messages,
+          homeworkUrl
+        );
+        parsed.message = parsed.messages[0] || '';
       } else if (!quality.passed) {
         // Voice quality gate exhausted. Most voice-quality failures are
         // "soft" — low score from missing emoji, one long sentence,
@@ -1362,7 +1399,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
             f.includes('markdown_in_single_bubble:') ||
-            f.includes('call_pitch_before_capital_verification:')
+            f.includes('call_pitch_before_capital_verification:') ||
+            f.includes('repeated_capital_question:')
         );
         if (allBubblesEmpty) {
           console.error(
@@ -1527,6 +1565,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         capitalOutcome = 'hedging';
         break;
       case 'answer_ambiguous':
+      case 'answer_total_savings_needs_clarification':
       case 'answer_prop_firm_only':
         // Prop-firm-only is an ambiguous-class outcome for the
         // downstream `capitalOutcome` consumer (lead.stage mapping).
@@ -2262,6 +2301,7 @@ type R24Reason =
   | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
   | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
   | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
+  | 'answer_total_savings_needs_clarification' // Number given as total savings / stress, not investable capital
   | 'answer_prop_firm_only'; // Lead mentioned a prop firm but no personal capital
 
 interface R24GateResult {
@@ -2619,6 +2659,7 @@ interface ParsedLeadAnswer {
    */
   reason?:
     | 'prop_firm_mentioned_no_personal_capital_stated'
+    | 'total_savings_or_financial_stress'
     | 'no_pattern_matched'
     | 'generic';
 }
@@ -2640,6 +2681,19 @@ const PERSONAL_CAPITAL_INDICATOR =
   /\b(i\s+(have|got|saved|put|set)|i'?ve\s+(got|saved|put|set)|my\s+(savings|personal|own|capital|money|side))\b/i;
 const PLUS_PHRASE =
   /\b(plus|also|on\s+top\s+of|besides|separate\s+from|aside\s+from|in\s+addition\s+to|as\s+well\s+as)\b/i;
+
+function capitalNumberNeedsComfortClarification(text: string): boolean {
+  const totalSavingsContext =
+    /\b((in|from|out\s+of|my|our|total)\s+savings?|savings?\s+(left|total)|all\s+(we|i)\s+(have|got)|everything\s+(we|i)\s+(have|got)|total\s+(savings?|money|funds?)|only\s+(savings?|money|funds?))\b/i;
+  const financialStressContext =
+    /\b(tight\s+on\s+funds|really\s+tight|struggling|struggle|hard\s+right\s+now|difficult\s+right\s+now|lost\s+my\s+job|no\s+job|unemployed|laid\s+off|new\s+baby|had\s+a\s+baby|wife|family|rent|bills?)\b/i;
+  const explicitlyInvestable =
+    /\b(set\s+aside|put\s+aside|ready|available|towards?\s+(trading|the\s+markets?|education|this)|for\s+(trading|the\s+markets?|education|this)|trading\s+capital|capital\s+ready)\b/i;
+
+  if (explicitlyInvestable.test(text)) return false;
+
+  return totalSavingsContext.test(text) || financialStressContext.test(text);
+}
 
 // ─── Geography gate ────────────────────────────────────────────
 // Funding-partner (FTMO-style funded account) programs only accept
@@ -2730,6 +2784,15 @@ export function detectRestrictedGeography(
 
 export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   const text = raw.trim();
+  const parsedAmount = parseLeadAmountFromReply(text);
+
+  if (parsedAmount !== null && capitalNumberNeedsComfortClarification(text)) {
+    return {
+      kind: 'ambiguous',
+      amount: parsedAmount,
+      reason: 'total_savings_or_financial_stress'
+    };
+  }
 
   // 1. Non-numeric disqualifiers — handle first so "I got nothing" doesn't
   //    get amount-parsed into some weird accidental hit. Split across
@@ -2820,9 +2883,8 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   // 2. Amount (numeric parse). Even if the lead also says "kinda" or
   //    includes hedging words, a concrete number beats the hedge —
   //    we'll compare it to threshold later.
-  const parsed = parseLeadAmountFromReply(text);
-  if (parsed !== null) {
-    return { kind: 'amount', amount: parsed };
+  if (parsedAmount !== null) {
+    return { kind: 'amount', amount: parsedAmount };
   }
 
   // 3. Hedging without a concrete number.
@@ -3129,8 +3191,10 @@ async function checkR24Verification(
           classification.reason ===
           'prop_firm_mentioned_no_personal_capital_stated'
             ? 'answer_prop_firm_only'
-            : 'answer_ambiguous',
-        parsedAmount: null,
+            : classification.reason === 'total_savings_or_financial_stress'
+              ? 'answer_total_savings_needs_clarification'
+              : 'answer_ambiguous',
+        parsedAmount: classification.amount,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
       };

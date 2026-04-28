@@ -252,6 +252,12 @@ export interface VoiceQualityOptions {
    */
   previousAIMessage?: string | null;
   /**
+   * Prior AI questions from the wider conversation history. Used as a
+   * backstop for repeated_question when the duplicate ask is not the
+   * immediately previous AI bubble.
+   */
+  previousAIQuestions?: string[];
+  /**
    * Count of AI Message rows after including the current generated turn.
    * Used for qualification pacing so the AI doesn't spend dozens of
    * messages in free trading consultation without moving the script.
@@ -267,14 +273,19 @@ export interface VoiceQualityOptions {
   capitalVerificationRequired?: boolean;
   /** True only after a capital question was asked and a lead answer was received. */
   capitalVerificationSatisfied?: boolean;
-  /** Last three AI questions before the current generated turn. */
-  previousAIQuestions?: string[];
   /** Most recent lead message before this generated reply. */
   previousLeadMessage?: string | null;
   /** True when the most recent lead message included an image attachment. */
   previousLeadHadImage?: boolean;
   /** Email already captured for this lead. Used to prevent repeat asks. */
   leadEmail?: string | null;
+  /**
+   * Conversation scheduled call timestamp. When null, homework links
+   * must not be sent because the call time has not been confirmed.
+   */
+  scheduledCallAt?: Date | string | null;
+  /** Configured pre-call homework URL for this account, when present. */
+  homeworkUrl?: string | null;
   /**
    * Count of prior AI messages that contained a capital-verification
    * question (Rodrigo Moran 2026-04-26 fix). When >= 1 and the current
@@ -796,7 +807,10 @@ export function scoreVoiceQuality(
       /\bready to start with \$/i,
       /\bjust to confirm.*\$\d/i,
       /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-      /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat(?:'|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat(?:'|’)?s your capital situation\b/i,
+      /\bcapital situation\s+like\b/i,
       /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
       /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
       /\bwhat are you working with\b/i,
@@ -833,11 +847,12 @@ export function scoreVoiceQuality(
       /\bcapital ready\b/i,
       /\bjust to confirm.*\$\d/i,
       /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-      /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat(?:'|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
+      /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
       /\bwhat are you working with\b/i,
       /\bon the (capital|money|budget) side\b/i,
       // Open-ended phrasings introduced by Rodrigo Moran 2026-04-26
-      /\bwhat'?s your capital situation\b/i,
+      /\bwhat(?:'|’)?s your capital situation\b/i,
       /\bcapital situation\s+like\b/i,
       /\banything set aside for (this|trading|the markets?)\b/i,
       /\bstill building toward it\b/i,
@@ -868,6 +883,21 @@ export function scoreVoiceQuality(
     containsLogisticsQuestion(reply)
   ) {
     softSignals.logistics_before_qualification = -0.4;
+  }
+
+  // 9i-4. Homework before call confirmation (Tareefah Allen 2026-04-28).
+  // The homework page is call preparation, not a booking-flow asset. If
+  // the conversation has no confirmed scheduledCallAt yet, sending the
+  // homework link implies a call exists before the system has a real time
+  // on file. Keep this as a soft signal for analytics, while ai-engine
+  // treats the signal as a forced retry and strips the URL on exhaustion.
+  if (
+    options &&
+    Object.prototype.hasOwnProperty.call(options, 'scheduledCallAt') &&
+    !hasConfirmedScheduledCall(options.scheduledCallAt) &&
+    containsHomeworkUrl(reply, options.homeworkUrl)
+  ) {
+    softSignals.homework_sent_before_call_confirmed = -0.3;
   }
 
   // 9j. "or nah" question tail (Rodrigo Moran 2026-04-26). Daniel's
@@ -1199,11 +1229,21 @@ export function scoreVoiceQuality(
   // gate doesn't hard-fail on this because legit re-asking after a
   // clarifying digression is sometimes acceptable; combined with any
   // other soft loss it pushes the reply under 0.7 and forces regen.
+  const priorQuestionTexts: string[] = [];
   if (options?.previousAIMessage) {
-    const prevQs = extractQuestions(options.previousAIMessage);
+    priorQuestionTexts.push(...extractQuestions(options.previousAIMessage));
+  }
+  if (Array.isArray(options?.previousAIQuestions)) {
+    priorQuestionTexts.push(
+      ...options.previousAIQuestions
+        .filter((q) => typeof q === 'string' && q.trim().length > 0)
+        .map((q) => q.trim().toLowerCase().replace(/\s+/g, ' '))
+    );
+  }
+  if (priorQuestionTexts.length > 0) {
     const currQs = extractQuestions(reply);
     let bestSim = 0;
-    for (const p of prevQs) {
+    for (const p of priorQuestionTexts) {
       for (const c of currQs) {
         const sim = jaccardSimilarity(p, c);
         if (sim > bestSim) bestSim = sim;
@@ -1472,6 +1512,51 @@ function jaccardSimilarity(a: string, b: string): number {
   return minSize === 0 ? 0 : intersect / minSize;
 }
 
+function hasConfirmedScheduledCall(value: Date | string | null | undefined) {
+  if (value instanceof Date) {
+    return !Number.isNaN(value.getTime());
+  }
+  if (typeof value === 'string') {
+    return value.trim().length > 0 && !Number.isNaN(new Date(value).getTime());
+  }
+  return false;
+}
+
+function escapeRegex(raw: string): string {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function containsHomeworkUrl(
+  text: string,
+  homeworkUrl?: string | null
+): boolean {
+  if (!text || typeof text !== 'string') return false;
+
+  const configured = typeof homeworkUrl === 'string' ? homeworkUrl.trim() : '';
+  if (configured.length > 0) {
+    const configuredRe = new RegExp(escapeRegex(configured), 'i');
+    if (configuredRe.test(text)) return true;
+  }
+
+  return /\bhttps?:\/\/\S*(?:homework|thank-you-confirmation)\S*/i.test(text);
+}
+
+export function stripPreCallHomeworkFromMessages(
+  messages: string[],
+  homeworkUrl?: string | null
+): string[] {
+  const kept = messages
+    .filter((message) => !containsHomeworkUrl(message, homeworkUrl))
+    .map((message) => message.trim())
+    .filter((message) => message.length > 0);
+
+  if (kept.length > 0) return kept;
+
+  return [
+    "gotchu bro, once the call time is locked in i'll send the prep over."
+  ];
+}
+
 export function containsCapitalQuestion(text: string): boolean {
   const patterns: RegExp[] = [
     /\bhow much.{0,40}(capital|set aside|ready|saved|available)\b/i,
@@ -1487,7 +1572,9 @@ export function containsCapitalQuestion(text: string): boolean {
     /\bready to start with \$?\d/i,
     /\bjust to confirm.*\b(capital|\$|£)\b/i,
     /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-    /\bwhat('s| is) your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat(?:'|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat(?:'|’)?s your capital situation\b/i,
     /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
     /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
     /\bwhat are you working with\b/i,

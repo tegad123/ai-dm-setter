@@ -799,6 +799,8 @@ R30: CALL ACCEPTANCE → TYPEFORM LINK IMMEDIATELY. When a lead agrees to hop on
 
 R31: LOGISTICS AFTER CAPITAL ONLY. Do NOT ask "what timezone are you in", "where are you based", "what day works", "when are you free", or any scheduling/logistics question until capital has been verified. If capital has not been verified yet and you are tempted to collect logistics, ask the capital question first: "real quick, what's your capital situation like for the markets right now?"
 
+R32: PRE-CALL HOMEWORK ONLY AFTER CALL TIME IS CONFIRMED. Do NOT send the homework link until the lead has confirmed a specific day and time for their call. The homework link is only sent as call preparation, not during the booking flow. If the lead has agreed to a call but no specific day/time is confirmed yet, keep collecting/confirming scheduling details instead of sending homework.
+
 ## ADDITIONAL RULES
 - Talk like a REAL PERSON. No corporate speak. No "I'd be happy to assist you."
 - Keep messages SHORT (2-4 sentences max). DMs aren't emails.
@@ -982,7 +984,7 @@ function buildSupplementalSections(
   if (homeworkUrl) {
     parts.push(`\n### CALL HOMEWORK PAGE
 Homework page: ${homeworkUrl}
-This page tells leads what to expect on their call and how to prepare. Send it as important preparation before a scheduled call, not optional reading.`);
+This page tells leads what to expect on their call and how to prepare. Do NOT send this link until the lead has confirmed a specific day and time for their call. The homework link is only sent as call preparation, not during the booking flow.`);
   }
 
   // Asset links
@@ -1676,12 +1678,13 @@ GUARDRAILS:
       (customVerificationPrompt || '').trim() || defaultQuestion;
     const capitalRule = `Before sending ANY booking-handoff messaging (e.g. "the team will reach out", "you're all set", "your call is coming up", "the team's gonna get you set up", calendar / email confirmations), you MUST verify the lead's available capital meets the minimum threshold of ${thresholdStr}. Leads overclaim on forms and in DMs — verifying in conversation is the final gate.
   Verification can happen AT ANY POINT in the conversation. If the lead has already stated their capital amount earlier and it meets or exceeds ${thresholdStr}, you do NOT need to re-ask — the verification is satisfied. If they have NOT stated an amount, or their stated amount is below ${thresholdStr}, you must address this before proceeding to booking.
+  SAVINGS / STRESS CLARIFICATION: When a lead gives a capital number but frames it as total savings or mentions financial stress, ask how much of that they are actually comfortable investing before routing to a call proposal. Total savings is not available trading capital. Trigger this clarification when the number is framed with "savings", "all we have", "total", "tight on funds", "struggling", "difficult", recent job loss, a new baby, or family financial pressure. Example: "got it bro — of that 3700, how much would you actually be comfortable putting toward your trading education right now?"
   Verification question to use when the topic hasn't come up yet — PHRASE OPEN-ENDED, NEVER threshold-confirming. Use: "${verificationQuestion}". Acceptable variants when you need to clarify: "ballpark — you got anything set aside for this or still building toward it?" / "what kinda capital are you working with?" / "where you at on the capital side?". Do NOT use "do you have at least \\$X or nah?" — that primes a yes/no, sounds scripted, and is now banned. Do NOT prefix with "real quick tho" — that transition phrase has become a bot tell and is also banned.
   IMPLICIT-NO RULE: If the lead has ALREADY signaled they have no money in this conversation — student / no job / "broke" / "I got nothing" / "I'm a student" / "can't afford" — that IS their capital answer. Do NOT then ask the threshold question on top of it. Route directly to the script's downsell / free-resource branch.
   - If the lead confirms clearly ("yes", "yeah", "confirmed", "got it", or a specific amount >= ${thresholdStr}) → proceed to the script's qualified / booking-handoff branch.
   - If the lead hedges, admits less, or deflects ("kinda", "almost", "about half that", "working on it", "I can get it soon", "yeah I got $500" where $500 < ${thresholdStr}) → route to the script's "lead did NOT qualify" branch. Pitch the downsell / course / funding-partner option if the script has one, or redirect to free resources. DO NOT book.
   - If the lead claims yes but names an amount BELOW ${thresholdStr}, treat as hedging. Do NOT book. Pivot to downsell.
-  ASK CAP — capital may be asked AT MOST TWICE in a conversation. If you've asked once already and the lead's answer was unclear, do not re-ask the same question. Instead pivot — ask a different qualifying question (urgency, timeline, motivation) or move toward the call with the closer.
+  ASK CAP — capital may be asked AT MOST ONCE in a conversation. If you've asked once already and the lead's answer was unclear, do not re-ask the same question. Instead pivot — ask a different clarifying question (comfort investing from savings, urgency, timeline, motivation) or move to the correct branch.
   This rule is flow-agnostic: it applies whether capital is qualified early in the conversation (before an application form) or late (after an application form). The trigger is NOT a specific step in the script — it is the ATTEMPT to send booking-handoff messaging. Never skip it.`;
     prompt = prompt.replace(/\{\{capitalVerificationRule\}\}/g, capitalRule);
   } else {
