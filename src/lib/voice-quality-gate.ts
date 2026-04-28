@@ -1405,6 +1405,48 @@ export function scoreVoiceQuality(
     }
   }
 
+  // ── SOFT HESITATION EXIT SIGNAL (soft penalty -0.5) ─────────────
+  // Erik Torosian 2026-04-28. Lead had enough capital but said he
+  // "wouldn't want to" use it. That's hesitation, not a hard refusal.
+  // Routing immediately to YouTube / "better spot" kills a qualified
+  // lead. Probe the concern instead.
+  if (options?.previousLeadMessage) {
+    const softHesitationPatterns: RegExp[] = [
+      /\bwouldn['’]?t\s+want\s+to\b/i,
+      /\bnot\s+sure\s+(about|if)\s+(that|this|it)\b/i,
+      /\bprobably\s+not\b/i,
+      /\bi['’]?d\s+rather\s+not\b/i,
+      /\bnot\s+really\s+(sure|ready|there\s+yet)\b/i,
+      /\bmaybe\s+not\b/i
+    ];
+    const hardNoPatterns: RegExp[] = [
+      /\b(definitely|absolutely)\s+not\b/i,
+      /\bno\s+way\b/i,
+      /\bcan['’]?t\s+afford\s+(anything|it|that|this)\b/i,
+      /\bnot\s+interested\b/i,
+      /\bstop\s+(messaging|texting|contacting)\s+me\b/i,
+      /\bleave\s+me\s+alone\b/i
+    ];
+    const prematureExitPatterns: RegExp[] = [
+      /youtu\.be/i,
+      /youtube\.com/i,
+      /when\s+you['’]?re\s+in\s+a\s+better\s+spot/i,
+      /hit\s+me\s+up\s+when/i,
+      /start\s+with\s+the\s+free\s+video/i
+    ];
+    const prevLead = options.previousLeadMessage;
+    const leadSoftHesitated = softHesitationPatterns.some((pat) =>
+      pat.test(prevLead)
+    );
+    const leadHardNo = hardNoPatterns.some((pat) => pat.test(prevLead));
+    const currentSoftExits = prematureExitPatterns.some((pat) =>
+      pat.test(reply)
+    );
+    if (leadSoftHesitated && !leadHardNo && currentSoftExits) {
+      softSignals.premature_exit_on_soft_hesitation = -0.5;
+    }
+  }
+
   if (
     options?.previousLeadMessage &&
     isCallAcceptance(options.previousLeadMessage) &&

@@ -788,6 +788,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       quality.softSignals.repeated_question !== undefined;
     const homeworkBeforeCallFailed =
       quality.softSignals.homework_sent_before_call_confirmed !== undefined;
+    const prematureExitOnSoftHesitationFailed =
+      quality.softSignals.premature_exit_on_soft_hesitation !== undefined;
 
     if (
       quality.passed &&
@@ -795,6 +797,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       !logisticsBeforeQualificationFailed &&
       !repeatedQuestionFailed &&
       !homeworkBeforeCallFailed &&
+      !prematureExitOnSoftHesitationFailed &&
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
@@ -1331,6 +1334,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
     }
 
+    if (prematureExitOnSoftHesitationFailed) {
+      const softHesitationOverride = `\n\n===== SOFT HESITATION OBJECTION OVERRIDE =====\nThe lead expressed hesitation, not a hard refusal. Do NOT soft exit. Do NOT send the YouTube/free-resource link. Do NOT say "when you're in a better spot." Ask what their specific concern is and keep the conversation open. Example: "i hear you bro, what's the main concern, is it the amount or just not wanting to put it toward this right now?"\n=====`;
+      systemPromptForLLM += softHesitationOverride;
+      console.warn(
+        `[ai-engine] Premature exit on soft hesitation detected — forcing objection probe (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
     if (attempt === MAX_RETRIES) {
       if (r24Blocked) {
         console.error(
@@ -1427,6 +1438,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           homeworkUrl
         );
         parsed.message = parsed.messages[0] || '';
+      } else if (prematureExitOnSoftHesitationFailed) {
+        console.warn(
+          `[ai-engine] Soft-hesitation exit gate exhausted ${MAX_RETRIES + 1} attempts — replacing soft exit with objection probe for convo ${activeConversationId}`
+        );
+        parsed.message =
+          "i hear you bro, what's the main concern, is it the amount or just not wanting to put it toward this right now?";
+        parsed.messages = [parsed.message];
+        parsed.stage = parsed.stage || 'FINANCIAL_SCREENING';
+        parsed.subStage = null;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
       } else if (!quality.passed) {
         // Voice quality gate exhausted. Most voice-quality failures are
         // "soft" — low score from missing emoji, one long sentence,
@@ -2846,7 +2869,13 @@ const CURRENCY_DETECTORS: Array<{
   },
   {
     currency: 'CAD',
-    patterns: [/\bCAD\b/i, /\bC\$\s*\d/i, /\d\s*CAD\b/i]
+    patterns: [
+      /\bCAD\b/i,
+      /\bC\$\s*\d/i,
+      /\d\s*CAD\b/i,
+      /\bcanadian\s+(dollars?|dollar)\b/i,
+      /\bin\s+canadian\b/i
+    ]
   },
   {
     currency: 'GBP',
