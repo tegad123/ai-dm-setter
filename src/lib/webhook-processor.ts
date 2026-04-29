@@ -17,6 +17,10 @@ import {
   backfillEffectivenessTracking
 } from '@/lib/conversation-state-machine';
 import {
+  detectTypeformFilledNoBookingContext,
+  TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
+} from '@/lib/voice-quality-gate';
+import {
   runPostMessageScoring,
   getScoringContextForPrompt,
   runPostAIReplyScoring
@@ -713,7 +717,10 @@ export async function processIncomingMessage(
         proposedSlots: undefined,
         selectedSlot: undefined,
         bookingId: null,
-        bookingUrl: null
+        bookingUrl: null,
+        typeformFilledNoBooking: false,
+        typeformFilledNoBookingAt: null,
+        typeformFilledNoBookingMessageId: null
       }
     });
     // Stage transition goes through the sanctioned helper so the
@@ -1164,7 +1171,59 @@ export async function processIncomingMessage(
     );
   }
 
-  // ── Step 3b: Scheduling-conflict detection ─────────────────────
+  // ── Step 3b-ii: Typeform filled but no booking slot ────────────
+  // If the AI asked "what day and time did you book?" and the lead
+  // says they only completed the basic form / did not book a time,
+  // the Typeform screening likely did not approve them into the
+  // calendar step. This is expected flow, not an Action Required
+  // item. Ship the fixed soft exit, mark UNQUALIFIED, tag the lead,
+  // pause AI, and skip the LLM.
+  try {
+    const previousAI = await prisma.message.findFirst({
+      where: {
+        conversationId,
+        sender: 'AI',
+        timestamp: { lt: now }
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { content: true }
+    });
+
+    if (
+      detectTypeformFilledNoBookingContext(previousAI?.content, messageText)
+    ) {
+      console.warn(
+        `[webhook-processor] TYPEFORM_FILLED_NO_BOOKING detected on ${conversationId} — lead=@${senderHandle}`
+      );
+      await handleTypeformFilledNoBookingScreenOut({
+        conversationId,
+        leadId: lead.id,
+        accountId,
+        platform: lead.platform,
+        platformUserId: lead.platformUserId,
+        inboundMessageId: message.id,
+        inboundContent: messageText,
+        inboundImageUrl: message.imageUrl,
+        inboundHasImage: message.hasImage,
+        inboundAt: now,
+        unreadCount: lead.conversation!.unreadCount || 0
+      });
+      return {
+        leadId: lead.id,
+        conversationId,
+        messageId: message.id,
+        isNewLead,
+        skipReply: true
+      };
+    }
+  } catch (screenOutErr) {
+    console.error(
+      '[webhook-processor] typeform-filled-no-booking detection threw (non-fatal):',
+      screenOutErr
+    );
+  }
+
+  // ── Step 3c: Scheduling-conflict detection ─────────────────────
   // Only fires when the lead has ALREADY filled out the Typeform (i.e.
   // stage=CALL_PROPOSED and no scheduledCallAt yet). Detects "can't
   // make it", "available Sunday", "move to Monday" style messages the
@@ -2980,6 +3039,8 @@ async function sendAIReply(
     distressDetected?: boolean;
     distressMatch?: string | null;
     distressLabel?: string | null;
+    // Typeform screen-out safety net from ai-engine direct generation.
+    typeformFilledNoBooking?: boolean;
   }
 ): Promise<void> {
   // ── LAYER 2 distress handler ──────────────────────────────────
@@ -3589,8 +3650,65 @@ async function sendAIReply(
     );
   }
 
+  // ── Typeform screened-out safety net ──────────────────────────
+  // Normal live flow handles this pre-generation in
+  // processIncomingMessage. This branch covers any path that entered
+  // generateReply directly and returned the deterministic screen-out
+  // response.
+  if (result.typeformFilledNoBooking) {
+    const latestLead = await prisma.message.findFirst({
+      where: { conversationId, sender: 'LEAD' },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, timestamp: true }
+    });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        outcome: 'UNQUALIFIED_REDIRECT',
+        aiActive: false,
+        typeformFilledNoBooking: true,
+        typeformFilledNoBookingAt: latestLead?.timestamp ?? now,
+        typeformFilledNoBookingMessageId: latestLead?.id ?? null
+      }
+    });
+    await transitionLeadStage(
+      lead.id,
+      'UNQUALIFIED',
+      'ai',
+      'typeform_no_booking'
+    ).catch((err) =>
+      console.error(
+        '[webhook-processor] typeform_no_booking safety transition failed (non-fatal):',
+        err
+      )
+    );
+    await applyAutoTags(
+      lead.accountId,
+      lead.id,
+      ['typeform-screened-out'],
+      1.0
+    ).catch((err) =>
+      console.error(
+        '[webhook-processor] typeform_no_booking safety tag failed (non-fatal):',
+        err
+      )
+    );
+    await prisma.scheduledReply.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    await prisma.scheduledMessage.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    broadcastAIStatusChange({ conversationId, aiActive: false });
+    console.log(
+      `[webhook-processor] Typeform no-booking screen-out finalized for ${conversationId}`
+    );
+  }
+
   // ── Handle soft exit ──────────────────────────────────────────
-  if (result.softExit) {
+  if (result.softExit && !result.typeformFilledNoBooking) {
     await prisma.conversation.update({
       where: { id: conversationId },
       data: { outcome: 'SOFT_EXIT', aiActive: false }
@@ -4854,6 +4972,151 @@ async function handleGeographyDisqualification(
     conversationId: p.conversationId,
     sender: 'AI',
     content: exitMessage,
+    timestamp: exitMsg.timestamp.toISOString()
+  });
+  broadcastConversationUpdate({
+    id: p.conversationId,
+    leadId: p.leadId,
+    aiActive: false,
+    unreadCount: p.unreadCount + 1,
+    lastMessageAt: p.inboundAt.toISOString()
+  });
+  broadcastAIStatusChange({
+    conversationId: p.conversationId,
+    aiActive: false
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Typeform filled but no booking slot
+// ---------------------------------------------------------------------------
+// Expected screened-out path. The lead completed some/all of the Typeform
+// but could not report a booked day/time after the AI asked for it. Do not
+// create Action Required; close the conversation gracefully.
+
+interface HandleTypeformFilledNoBookingParams {
+  conversationId: string;
+  leadId: string;
+  accountId: string;
+  platform: string;
+  platformUserId: string | null;
+  inboundMessageId: string;
+  inboundContent: string;
+  inboundImageUrl: string | null;
+  inboundHasImage: boolean;
+  inboundAt: Date;
+  unreadCount: number;
+}
+
+async function handleTypeformFilledNoBookingScreenOut(
+  p: HandleTypeformFilledNoBookingParams
+): Promise<void> {
+  await prisma.conversation.update({
+    where: { id: p.conversationId },
+    data: {
+      aiActive: false,
+      outcome: 'UNQUALIFIED_REDIRECT',
+      typeformFilledNoBooking: true,
+      typeformFilledNoBookingAt: p.inboundAt,
+      typeformFilledNoBookingMessageId: p.inboundMessageId
+    }
+  });
+
+  try {
+    await transitionLeadStage(
+      p.leadId,
+      'UNQUALIFIED',
+      'ai',
+      'typeform_no_booking'
+    );
+  } catch (stageErr) {
+    console.error(
+      '[webhook-processor] typeform_no_booking transitionLeadStage failed (non-fatal):',
+      stageErr
+    );
+  }
+
+  try {
+    await applyAutoTags(p.accountId, p.leadId, ['typeform-screened-out'], 1.0);
+  } catch (tagErr) {
+    console.error(
+      '[webhook-processor] typeform_no_booking tag application failed (non-fatal):',
+      tagErr
+    );
+  }
+
+  try {
+    await prisma.scheduledReply.updateMany({
+      where: { conversationId: p.conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    await prisma.scheduledMessage.updateMany({
+      where: { conversationId: p.conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    const { cancelAllPendingFollowUps } = await import(
+      '@/lib/follow-up-sequence'
+    );
+    await cancelAllPendingFollowUps(p.conversationId);
+  } catch (cancelErr) {
+    console.error(
+      '[webhook-processor] typeform_no_booking cancel pending messages failed (non-fatal):',
+      cancelErr
+    );
+  }
+
+  const exitMsg = await prisma.message.create({
+    data: {
+      conversationId: p.conversationId,
+      sender: 'AI',
+      content: TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
+      timestamp: new Date(),
+      stage: 'UNQUALIFIED',
+      subStage: 'TYPEFORM_NO_BOOKING'
+    }
+  });
+
+  if (p.platformUserId) {
+    const ship = await shipTextToMeta(
+      p.platform,
+      p.accountId,
+      p.platformUserId,
+      TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
+    );
+    if (ship.messageId) {
+      await prisma.message
+        .update({
+          where: { id: exitMsg.id },
+          data: { platformMessageId: ship.messageId }
+        })
+        .catch((err) =>
+          console.error(
+            '[webhook-processor] typeform_no_booking failed to patch platformMessageId (non-fatal):',
+            err
+          )
+        );
+    } else {
+      console.error(
+        '[webhook-processor] typeform_no_booking platform send failed (non-fatal):',
+        ship.error
+      );
+    }
+  }
+
+  broadcastNewMessage({
+    id: p.inboundMessageId,
+    conversationId: p.conversationId,
+    sender: 'LEAD',
+    content: p.inboundContent,
+    imageUrl: p.inboundImageUrl,
+    hasImage: p.inboundHasImage,
+    timestamp: p.inboundAt.toISOString()
+  });
+  broadcastNewMessage({
+    id: exitMsg.id,
+    conversationId: p.conversationId,
+    sender: 'AI',
+    content: TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
     timestamp: exitMsg.timestamp.toISOString()
   });
   broadcastConversationUpdate({

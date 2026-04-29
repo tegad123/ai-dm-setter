@@ -10,7 +10,9 @@ import {
   stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
   isUnkeptPromise,
-  isValidationOnlyMessage
+  isValidationOnlyMessage,
+  detectTypeformFilledNoBookingContext,
+  TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 
@@ -165,6 +167,8 @@ export interface GenerateReplyResult {
   distressDetected?: boolean;
   distressMatch?: string | null;
   distressLabel?: string | null;
+  /** Typeform was filled but no booking slot was selected. Expected screen-out path. */
+  typeformFilledNoBooking?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +192,9 @@ export async function generateReply(
   const lastLeadMsg = [...conversationHistory]
     .reverse()
     .find((m) => m.sender === 'LEAD');
+  const lastAiMsg = [...conversationHistory]
+    .reverse()
+    .find((m) => m.sender === 'AI');
 
   // 0a. LAYER 2 SAFETY NET — distress detection on the last LEAD
   // message. Layer 1 (webhook-processor.ts pre-generation gate) is the
@@ -249,6 +256,47 @@ export async function generateReply(
         err
       );
     }
+  }
+
+  // 0a-ii. TYPEFORM SCREEN-OUT SAFETY NET. The webhook processor
+  // catches this before generation in normal live flow. This backstop
+  // covers retries, tests, and any future entry point that calls
+  // generateReply directly.
+  if (
+    detectTypeformFilledNoBookingContext(
+      lastAiMsg?.content,
+      lastLeadMsg?.content
+    )
+  ) {
+    return {
+      reply: TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
+      messages: [TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE],
+      format: 'text',
+      stage: 'UNQUALIFIED',
+      subStage: 'TYPEFORM_NO_BOOKING',
+      stageConfidence: 1,
+      sentimentScore: 0,
+      experiencePath: null,
+      objectionDetected: null,
+      stallType: null,
+      affirmationDetected: false,
+      followUpNumber: null,
+      softExit: true,
+      escalateToHuman: false,
+      leadTimezone: null,
+      selectedSlotIso: null,
+      leadEmail: null,
+      suggestedTag: 'typeform-screened-out',
+      suggestedTags: ['typeform-screened-out'],
+      shouldVoiceNote: false,
+      voiceNoteAction: null,
+      qualityScore: 100,
+      suggestedDelay: 0,
+      systemPromptVersion: 'typeform-no-booking-screenout',
+      suggestionId: null,
+      capitalOutcome: 'not_evaluated',
+      typeformFilledNoBooking: true
+    };
   }
 
   // 0b. Retrieve few-shot examples from training data (non-fatal)
@@ -370,9 +418,6 @@ export async function generateReply(
   // must deliver on that promise this turn before advancing the funnel.
   // This fires regardless of voice note availability — it's about
   // conversational continuity, not voice notes specifically.
-  const lastAiMsg = [...conversationHistory]
-    .reverse()
-    .find((m) => m.sender === 'AI');
   const unkeptPattern = lastAiMsg ? isUnkeptPromise(lastAiMsg.content) : null;
   if (unkeptPattern) {
     const promiseText = lastAiMsg!.content.trim();
@@ -1278,6 +1323,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       const incomeGoalOverdueFailed = quality.hardFails.some((f) =>
         f.includes('income_goal_overdue:')
       );
+      const typeformNoBookingWrongPathFailed = quality.hardFails.some((f) =>
+        f.includes('typeform_filled_no_booking_wrong_path:')
+      );
+      if (typeformNoBookingWrongPathFailed) {
+        const directive = `\n\n===== TYPEFORM FILLED BUT NO BOOKING SLOT =====\nThe lead filled the Typeform but did not book a time slot. This means they were not approved by the team screening. Do NOT ask what they need to complete the booking. Send the soft exit message and set stage to UNQUALIFIED:\n\n"${TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE}"\n\nNothing else. One message. Then stop.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Typeform filled without booking slot — forcing screened-out soft exit (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       if (incomeGoalOverdueFailed) {
         const incomeGoalOverride = `\n\n===== QUALIFICATION PACE OVERRIDE — INCOME GOAL =====\nYou have reached the income-goal deadline. Ask about the lead's income goal NOW. Do not ask another trading setup, chart, strategy, or "what's the main thing" discovery question first. Keep it natural and short, but the next reply must ask what they want to be making.\n=====`;
         systemPromptForLLM = baseSystemPrompt + incomeGoalOverride;
@@ -1502,6 +1558,21 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         parsed.stage = parsed.stage || 'FINANCIAL_SCREENING';
         parsed.subStage = null;
         parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (
+        quality.hardFails.some((f) =>
+          f.includes('typeform_filled_no_booking_wrong_path:')
+        )
+      ) {
+        console.warn(
+          `[ai-engine] Typeform-no-booking gate exhausted ${MAX_RETRIES + 1} attempts — replacing with screened-out soft exit for convo ${activeConversationId}`
+        );
+        parsed.message = TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE;
+        parsed.messages = [TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE];
+        parsed.stage = 'UNQUALIFIED';
+        parsed.subStage = 'TYPEFORM_NO_BOOKING';
+        parsed.softExit = true;
         parsed.escalateToHuman = false;
         parsed.voiceNoteAction = null;
       } else if (capitalQuestionOverdueFailed) {
@@ -1788,7 +1859,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     suggestedDelay,
     systemPromptVersion,
     suggestionId,
-    capitalOutcome
+    capitalOutcome,
+    typeformFilledNoBooking:
+      parsed.subStage === 'TYPEFORM_NO_BOOKING' &&
+      parsed.message === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
   };
 }
 

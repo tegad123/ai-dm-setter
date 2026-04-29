@@ -124,6 +124,42 @@ const VALIDATION_PHRASE_RE =
   /\b(facts bro|gotchu bro|yeah bro|bet bro|love that bro|fasho bro)\b/i;
 const VALIDATION_THOUSAND_RE = /^\s*1000\b/i;
 
+export const TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE =
+  "no worries bro, the team will review your application and reach out directly if it's a good fit 🙏🏿";
+
+const BOOKING_CONFIRMATION_QUESTION_PATTERNS: RegExp[] = [
+  /\bwhat\s+day\s+and\s+time\s+did\s+you\s+book\b/i,
+  /\bwhat\s+day\s*\/\s*time\s+did\s+you\s+book\b/i,
+  /\bwhat\s+time\s+did\s+you\s+(book|schedule)\b/i
+];
+
+const BOOKED_DAY_TIME_PATTERNS: RegExp[] = [
+  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i,
+  /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i,
+  /\b(morning|afternoon|evening)\b/i
+];
+
+const TYPEFORM_FILLED_NO_BOOKING_PATTERNS: RegExp[] = [
+  /\bnot\s+yet\b/i,
+  /\bonly\s+(the\s+)?(basic|form|questions?)\b/i,
+  /\bjust\s+(the\s+)?(form|questions?|basic)\b/i,
+  /\bfilled\s+(it\s+)?out\b/i,
+  /\bcompleted\s+(it|the\s+form)\b/i,
+  /\bdone(\s+with\s+(it|the\s+form))?\b/i,
+  /\bsubmitted\s+(it|the\s+form|the\s+application|my\s+application)\b/i,
+  /\b(no|didn'?t\s+see\s+a)\s+(booking\s+)?(option|booking\s+option)\b/i,
+  /\bno\s+time\s+(booked|selected|picked|chosen)\b/i,
+  /\b(form|application)\s+(is\s+)?(done|complete|completed|submitted)\b/i
+];
+
+const SCHEDULING_CONFLICT_INSTEAD_OF_SCREENOUT_PATTERNS: RegExp[] = [
+  /\b(couldn'?t|could\s+not|can'?t|cannot)\s+find\s+(any\s+)?(available\s+)?(times?|slots?)\b/i,
+  /\bno\s+(available\s+)?(times?|slots?)\s+(available|showed|showed\s+up|were\s+available)\b/i,
+  /\b(no|none\s+of\s+the)\s+(available\s+)?(times?|slots?)\s+(worked|work|fit)\b/i,
+  /\bonly\s+(slot|time)\s+(was|is)\b/i,
+  /\b(the\s+)?(times?|slots?)\s+(don'?t|didn'?t|do\s+not|did\s+not)\s+work\b/i
+];
+
 export function containsCallPitch(text: string): boolean {
   return CALL_PITCH_RE.test(text);
 }
@@ -143,6 +179,46 @@ export function isValidationOnlyMessage(text: string): boolean {
   return (
     VALIDATION_PHRASE_RE.test(trimmed) || VALIDATION_THOUSAND_RE.test(trimmed)
   );
+}
+
+export function containsBookingConfirmationQuestion(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return BOOKING_CONFIRMATION_QUESTION_PATTERNS.some((pat) => pat.test(text));
+}
+
+export function containsBookedDayTimeAnswer(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return BOOKED_DAY_TIME_PATTERNS.some((pat) => pat.test(text));
+}
+
+export function looksLikeSchedulingConflictInsteadOfScreenOut(
+  text: string
+): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return SCHEDULING_CONFLICT_INSTEAD_OF_SCREENOUT_PATTERNS.some((pat) =>
+    pat.test(text)
+  );
+}
+
+export function looksLikeTypeformFilledNoBookingAnswer(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  if (containsBookedDayTimeAnswer(text)) return false;
+  if (looksLikeSchedulingConflictInsteadOfScreenOut(text)) return false;
+  return TYPEFORM_FILLED_NO_BOOKING_PATTERNS.some((pat) => pat.test(text));
+}
+
+export function detectTypeformFilledNoBookingContext(
+  previousAIMessage: string | null | undefined,
+  currentLeadMessage: string | null | undefined
+): boolean {
+  return (
+    containsBookingConfirmationQuestion(previousAIMessage || '') &&
+    looksLikeTypeformFilledNoBookingAnswer(currentLeadMessage || '')
+  );
+}
+
+export function isTypeformNoBookingSoftExitReply(text: string): boolean {
+  return (text || '').trim() === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE.trim();
 }
 
 // Casual ack openers that, when they OPEN a single-bubble reply that
@@ -1516,6 +1592,24 @@ export function scoreVoiceQuality(
     containsSchedulingQuestion(reply)
   ) {
     softSignals.unnecessary_scheduling_question = -0.4;
+  }
+
+  // ── TYPEFORM FILLED BUT NO BOOKING SLOT ───────────────────────
+  // Atigib Bliz 2026-04-29. If the AI asked "what day and time did
+  // you book for?" and the lead says they only completed the basic
+  // form / did not get a time, that is not a logistics problem. The
+  // Typeform screened them before the booking step. The only valid
+  // reply is the fixed soft-exit line.
+  if (
+    detectTypeformFilledNoBookingContext(
+      options?.previousAIMessage,
+      options?.previousLeadMessage
+    ) &&
+    !isTypeformNoBookingSoftExitReply(reply)
+  ) {
+    hardFails.push(
+      'typeform_filled_no_booking_wrong_path: lead filled Typeform but did not book a time slot; send the fixed screened-out soft exit only'
+    );
   }
 
   // ── Calculate final score ───────────────────────────────────────

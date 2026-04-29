@@ -917,6 +917,15 @@ model Conversation {
   schedulingConflictMessageId String?
   schedulingConflictPreference String?
 
+  // ── Typeform screened out ─────────────────────────────────────
+  // Set when the AI asked which day/time the lead booked and the lead
+  // says they only completed the form / did not get a booking slot.
+  // This is an expected Typeform screening outcome, not an Action
+  // Required item.
+  typeformFilledNoBooking          Boolean   @default(false)
+  typeformFilledNoBookingAt        DateTime?
+  typeformFilledNoBookingMessageId String?
+
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on
   // this conversation and the lead's first messages identified them
