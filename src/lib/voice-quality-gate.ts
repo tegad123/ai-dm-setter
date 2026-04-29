@@ -120,6 +120,10 @@ const TIMEZONE_QUESTION_RE =
 const CALL_ACCEPTANCE_RE =
   /\b(yes|yeah|yep|yup|sure|sounds\s+good|let'?s\s+do\s+it|lets\s+do\s+it|i'?m\s+down|im\s+down|that\s+works|works\s+for\s+me|any\s+day|asap|send\s+(it|the\s+link)|drop\s+(it|the\s+link)|go\s+ahead|perfect|okay|ok)\b/i;
 
+const VALIDATION_PHRASE_RE =
+  /\b(facts bro|gotchu bro|yeah bro|bet bro|love that bro|fasho bro)\b/i;
+const VALIDATION_THOUSAND_RE = /^\s*1000\b/i;
+
 export function containsCallPitch(text: string): boolean {
   return CALL_PITCH_RE.test(text);
 }
@@ -130,6 +134,15 @@ export function containsSchedulingQuestion(text: string): boolean {
 
 export function containsLogisticsQuestion(text: string): boolean {
   return SCHEDULING_QUESTION_RE.test(text) || TIMEZONE_QUESTION_RE.test(text);
+}
+
+export function isValidationOnlyMessage(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes('?')) return false;
+  return (
+    VALIDATION_PHRASE_RE.test(trimmed) || VALIDATION_THOUSAND_RE.test(trimmed)
+  );
 }
 
 // Casual ack openers that, when they OPEN a single-bubble reply that
@@ -334,6 +347,17 @@ export interface VoiceQualityOptions {
    * like "real quick" / "real quick g".
    */
   priorRealQuickPhraseCount?: number;
+  /**
+   * Count of trailing prior AI messages that were validation-only
+   * ("facts bro", "yeah bro", etc.) with no question. Cedric Chaar
+   * 2026-04-29 fix: 3 in a row becomes a soft retry signal so the AI
+   * advances qualification instead of validating forever.
+   */
+  priorValidationOnlyCount?: number;
+  /** Prior uses of "facts bro" in AI history. Max allowed: 2. */
+  priorFactsBroCount?: number;
+  /** Prior uses of "yeah bro" in AI history. Max allowed: 2. */
+  priorYeahBroCount?: number;
   /**
    * True when any LEAD message in conversation history reads as an
    * implicit-no for capital — student / no money / unemployed /
@@ -949,6 +973,29 @@ export function scoreVoiceQuality(
     softSignals.overused_transition_phrase = -0.3 * overuse;
   }
 
+  // 9l. Validation-loop guard (Cedric Chaar 2026-04-29). Three
+  // consecutive "facts bro" / "yeah bro" style replies with no
+  // question means the AI is entertaining trading talk instead of
+  // advancing qualification.
+  const validationOnlyCount =
+    (options?.priorValidationOnlyCount ?? 0) +
+    (isValidationOnlyMessage(reply) ? 1 : 0);
+  if (validationOnlyCount >= 3) {
+    softSignals.validation_loop = -0.5;
+  }
+
+  // 9m. Validation phrase overuse. These phrases are not banned from
+  // Daniel's voice, but the same one more than twice per conversation
+  // becomes a bot tell.
+  const usedFactsBro = /\bfacts bro\b/i.test(reply);
+  const usedYeahBro = /\byeah bro\b/i.test(reply);
+  if (
+    (usedFactsBro && (options?.priorFactsBroCount ?? 0) >= 2) ||
+    (usedYeahBro && (options?.priorYeahBroCount ?? 0) >= 2)
+  ) {
+    softSignals.overused_validation_phrase = -0.4;
+  }
+
   // 10. Title-case opener — Daniel's voice starts messages in lowercase.
   // "That's smart thinking bro" breaks the voice; "that's smart thinking bro"
   // keeps it. Only fires on the first alphabetic character — inside the
@@ -1142,14 +1189,18 @@ export function scoreVoiceQuality(
   // ── QUALIFICATION PACE GATES ───────────────────────────────────
   // Message-count guardrails prevent the AI from giving free trading
   // consultation forever. By the fourth AI message the income-goal
-  // question should be asked; deep discovery without capital after
-  // 10+ AI messages is a hard stop.
+  // question should be asked; if the AI is still in Goal/Why after
+  // eight AI messages it must move to urgency, and if capital is not
+  // asked by message 12 it must ask capital immediately.
   const aiMsgCount = options?.aiMessageCount;
   const currentStage = (options?.currentStage || '').toUpperCase();
-  const stageStillDiscovery =
+  const stageGoalWhyOrEarlier =
     currentStage === 'OPENING' ||
     currentStage === 'DISCOVERY' ||
-    currentStage === 'SITUATION_DISCOVERY';
+    currentStage === 'SITUATION_DISCOVERY' ||
+    currentStage === 'GOAL' ||
+    currentStage === 'GOAL_WHY' ||
+    currentStage === 'GOAL_EMOTIONAL_WHY';
   const incomeGoalAskedThisTurn = containsIncomeGoalQuestion(reply);
   const capitalAskedThisTurn = containsCapitalQuestion(reply);
 
@@ -1164,18 +1215,30 @@ export function scoreVoiceQuality(
     );
   }
 
-  if (typeof aiMsgCount === 'number' && aiMsgCount > 6 && stageStillDiscovery) {
+  if (
+    typeof aiMsgCount === 'number' &&
+    aiMsgCount > 6 &&
+    stageGoalWhyOrEarlier
+  ) {
     softSignals.qualification_pace_too_slow = -0.3 * (aiMsgCount - 6);
   }
 
   if (
     typeof aiMsgCount === 'number' &&
-    aiMsgCount > 10 &&
+    aiMsgCount > 12 &&
     !options?.capitalQuestionAsked &&
     !capitalAskedThisTurn
   ) {
     hardFails.push(
-      'qualification_stalled: AI has been in discovery too long without asking the capital question'
+      'capital_question_overdue: capital question has not been asked by message 12'
+    );
+  } else if (
+    typeof aiMsgCount === 'number' &&
+    aiMsgCount > 8 &&
+    stageGoalWhyOrEarlier
+  ) {
+    hardFails.push(
+      'qualification_stalled: AI has been in discovery/goal discussion too long and must advance to urgency'
     );
   }
 

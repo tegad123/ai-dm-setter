@@ -9,7 +9,8 @@ import {
   containsIncomeGoalQuestion,
   stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
-  isUnkeptPromise
+  isUnkeptPromise,
+  isValidationOnlyMessage
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 
@@ -297,6 +298,20 @@ export async function generateReply(
   const priorAIMessages = conversationHistory
     .filter((m) => m.sender === 'AI')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  const priorValidationOnlyCount = (() => {
+    let count = 0;
+    for (let i = priorAIMessages.length - 1; i >= 0; i--) {
+      if (!isValidationOnlyMessage(priorAIMessages[i].content || '')) break;
+      count++;
+    }
+    return count;
+  })();
+  const priorFactsBroCount = priorAIMessages.filter((m) =>
+    /\bfacts bro\b/i.test(m.content || '')
+  ).length;
+  const priorYeahBroCount = priorAIMessages.filter((m) =>
+    /\byeah bro\b/i.test(m.content || '')
+  ).length;
   // Souljah J 2026-04-25 — Fix 3 + Fix 4 inputs.
   const priorHumanMessages = conversationHistory
     .filter((m) => m.sender === 'HUMAN')
@@ -620,6 +635,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       priorRealQuickPhraseCount: priorAIMessages.filter((m) =>
         /\breal\s+quick\b/i.test(m.content || '')
       ).length,
+      priorValidationOnlyCount,
+      priorFactsBroCount,
+      priorYeahBroCount,
       // Rodrigo Moran 2026-04-26 spec rule 3 — if the lead has
       // already signaled they have no capital (student / broke /
       // unemployed / "I got nothing"), the AI must NOT ask the
@@ -790,6 +808,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       quality.softSignals.homework_sent_before_call_confirmed !== undefined;
     const prematureExitOnSoftHesitationFailed =
       quality.softSignals.premature_exit_on_soft_hesitation !== undefined;
+    const validationLoopFailed =
+      quality.softSignals.validation_loop !== undefined;
+    const overusedValidationPhraseFailed =
+      quality.softSignals.overused_validation_phrase !== undefined;
+    const qualificationStalledFailed = quality.hardFails.some((f) =>
+      f.includes('qualification_stalled:')
+    );
+    const capitalQuestionOverdueFailed = quality.hardFails.some((f) =>
+      f.includes('capital_question_overdue:')
+    );
 
     if (
       quality.passed &&
@@ -798,6 +826,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       !repeatedQuestionFailed &&
       !homeworkBeforeCallFailed &&
       !prematureExitOnSoftHesitationFailed &&
+      !validationLoopFailed &&
+      !overusedValidationPhraseFailed &&
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
@@ -1256,14 +1286,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
-      const qualificationStalledFailed = quality.hardFails.some((f) =>
-        f.includes('qualification_stalled:')
-      );
       if (qualificationStalledFailed) {
-        const stalledOverride = `\n\n===== QUALIFICATION STALLED OVERRIDE =====\nYou have been in discovery for too long. Ask the capital question NOW. Do not ask any more trading questions first.\n=====`;
+        const stalledOverride = `\n\n===== QUALIFICATION STALLED OVERRIDE =====\nYou have been in discovery / goal discussion for too long. Advance NOW to the next stage. Ask the urgency question: "how soon are you trying to make this happen?" Do not send more trading validation first.\n=====`;
         systemPromptForLLM = baseSystemPrompt + stalledOverride;
         console.warn(
-          `[ai-engine] Qualification stalled — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+          `[ai-engine] Qualification stalled — forcing urgency question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (capitalQuestionOverdueFailed) {
+        const capitalOverdueOverride = `\n\n===== CAPITAL QUESTION OVERDUE =====\nYou must ask the capital question NOW regardless of the current topic: "real quick, what's your capital situation like for the markets right now?" Do not send validation, trading commentary, a call pitch, or any other qualification question first.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + capitalOverdueOverride;
+        console.warn(
+          `[ai-engine] Capital question overdue — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
@@ -1342,6 +1377,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       systemPromptForLLM += softHesitationOverride;
       console.warn(
         `[ai-engine] Premature exit on soft hesitation detected — forcing objection probe (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
+    if (validationLoopFailed) {
+      const validationLoopOverride = `\n\n===== VALIDATION LOOP OVERRIDE =====\nYou have sent 3+ validation messages in a row without advancing. Stop validating and ask a qualification question NOW. Move to the next script stage. If you are still in Goal/Why, ask: "how soon are you trying to make this happen?"\n=====`;
+      systemPromptForLLM += validationLoopOverride;
+      console.warn(
+        `[ai-engine] Validation loop detected — forcing qualification advancement (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+      );
+    }
+
+    if (overusedValidationPhraseFailed) {
+      const overusedValidationOverride = `\n\n===== OVERUSED VALIDATION PHRASE =====\n"facts bro" and "yeah bro" are allowed at most 2 times per conversation. You used one again. Regenerate without that phrase and ask the next qualification question instead of sending another validation line.\n=====`;
+      systemPromptForLLM += overusedValidationOverride;
+      console.warn(
+        `[ai-engine] Overused validation phrase detected — forcing alternate phrasing (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
       );
     }
 
@@ -1449,6 +1500,50 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           "i hear you bro, what's the main concern, is it the amount or just not wanting to put it toward this right now?";
         parsed.messages = [parsed.message];
         parsed.stage = parsed.stage || 'FINANCIAL_SCREENING';
+        parsed.subStage = null;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (capitalQuestionOverdueFailed) {
+        console.warn(
+          `[ai-engine] Capital-question-overdue gate exhausted ${MAX_RETRIES + 1} attempts — replacing with capital question for convo ${activeConversationId}`
+        );
+        parsed.message =
+          "real quick, what's your capital situation like for the markets right now?";
+        parsed.messages = [parsed.message];
+        parsed.stage = 'FINANCIAL_SCREENING';
+        parsed.subStage = null;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (qualificationStalledFailed || validationLoopFailed) {
+        console.warn(
+          `[ai-engine] Qualification-stall/validation-loop gate exhausted ${MAX_RETRIES + 1} attempts — replacing with urgency question for convo ${activeConversationId}`
+        );
+        parsed.message = 'how soon are you trying to make this happen?';
+        parsed.messages = [parsed.message];
+        parsed.stage = 'URGENCY';
+        parsed.subStage = null;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (overusedValidationPhraseFailed) {
+        console.warn(
+          `[ai-engine] Overused-validation-phrase gate exhausted ${MAX_RETRIES + 1} attempts — stripping repeated phrase before send for convo ${activeConversationId}`
+        );
+        parsed.messages = (parsed.messages || [])
+          .map((m) => m.replace(/\b(facts bro|yeah bro),?\s*/gi, '').trim())
+          .filter(Boolean);
+        if (
+          parsed.messages.length === 0 ||
+          !parsed.messages.join(' ').includes('?')
+        ) {
+          parsed.message = 'how soon are you trying to make this happen?';
+          parsed.messages = [parsed.message];
+          parsed.stage = 'URGENCY';
+        } else {
+          parsed.message = parsed.messages[0];
+        }
         parsed.subStage = null;
         parsed.softExit = false;
         parsed.escalateToHuman = false;
