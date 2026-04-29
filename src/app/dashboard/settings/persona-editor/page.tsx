@@ -170,6 +170,15 @@ export default function PersonaEditorPage() {
     useState('');
   const [savingVerifiedFacts, setSavingVerifiedFacts] = useState(false);
 
+  // Lead filtering — geography gate. When ON, leads from non-first-
+  // world regions get a fixed exit message before any AI generation
+  // fires. Persisted under promptConfig.geographyGate.enabled. OFF by
+  // default. See src/lib/geography-gate.ts for country lists.
+  const [geographyGateEnabled, setGeographyGateEnabled] = useState(false);
+  const [geographyGateSavedSnapshot, setGeographyGateSavedSnapshot] =
+    useState(false);
+  const [savingGeographyGate, setSavingGeographyGate] = useState(false);
+
   // Rotating placeholder for campaigns textarea. Cycles every 4s; pauses
   // once the user has typed anything so we don't distract.
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
@@ -249,6 +258,14 @@ export default function PersonaEditorPage() {
         const vf = data.persona.verifiedDetails || '';
         setVerifiedFacts(vf);
         setVerifiedFactsSavedSnapshot(vf);
+
+        // Geography gate (under promptConfig.geographyGate.enabled)
+        const geoCfg =
+          (config.geographyGate as { enabled?: boolean } | undefined) ||
+          undefined;
+        const geoEnabled = geoCfg?.enabled === true;
+        setGeographyGateEnabled(geoEnabled);
+        setGeographyGateSavedSnapshot(geoEnabled);
       }
     } catch (err) {
       console.error('Failed to load persona:', err);
@@ -499,6 +516,29 @@ export default function PersonaEditorPage() {
     }
   };
 
+  const saveGeographyGate = async () => {
+    setSavingGeographyGate(true);
+    try {
+      const currentConfig = personaData?.persona?.promptConfig || {};
+      const newConfig = {
+        ...currentConfig,
+        geographyGate: { enabled: geographyGateEnabled }
+      };
+      await persistAndRefresh(
+        { promptConfig: newConfig },
+        geographyGateEnabled
+          ? 'Geography gate enabled'
+          : 'Geography gate disabled'
+      );
+      setGeographyGateSavedSnapshot(geographyGateEnabled);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to save geography gate');
+    } finally {
+      setSavingGeographyGate(false);
+    }
+  };
+
   // ── Unsaved-changes warning on navigation ───────────────────────
   const currentHandoffSnapshot = JSON.stringify({
     closerName,
@@ -521,7 +561,8 @@ export default function PersonaEditorPage() {
     currentHandoffSnapshot !== handoffSavedSnapshot ||
     currentCapitalSnapshot !== capitalSavedSnapshot ||
     outOfScope !== outOfScopeSavedSnapshot ||
-    verifiedFacts !== verifiedFactsSavedSnapshot;
+    verifiedFacts !== verifiedFactsSavedSnapshot ||
+    geographyGateEnabled !== geographyGateSavedSnapshot;
   const hasUnsavedRef = useRef(hasUnsavedChanges);
   hasUnsavedRef.current = hasUnsavedChanges;
 
@@ -1010,6 +1051,68 @@ Categories that commonly come up:
               size='sm'
             >
               {savingVerifiedFacts && (
+                <Loader2 className='mr-2 h-3 w-3 animate-spin' />
+              )}
+              Save
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── SECTION 8 — Lead Filtering ──────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className='text-lg'>Lead Filtering</CardTitle>
+          <CardDescription>
+            Auto-disqualify leads from regions outside your service area BEFORE
+            any AI generation runs. Zero credits used on filtered conversations.
+            Off by default.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-4'>
+          <div className='flex items-start justify-between gap-4'>
+            <div className='min-w-0 flex-1'>
+              <Label
+                htmlFor='geographyGateEnabled'
+                className='cursor-pointer text-sm'
+              >
+                Geography Gate
+              </Label>
+              <p className='text-muted-foreground mt-0.5 text-[11px]'>
+                When ON, leads who identify themselves as based in
+                non-first-world regions (by country name, major city, or native
+                currency symbol) receive a polite exit message referencing your
+                free YouTube link, then are marked UNQUALIFIED with a
+                &apos;geography&apos; tag. No follow-ups. No AI calls.
+              </p>
+            </div>
+            <Switch
+              id='geographyGateEnabled'
+              checked={geographyGateEnabled}
+              onCheckedChange={(v) => setGeographyGateEnabled(Boolean(v))}
+            />
+          </div>
+          {geographyGateEnabled ? (
+            <div className='rounded-md bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:bg-blue-950/30 dark:text-blue-300'>
+              ℹ️ Leads from non-first-world regions will receive a polite exit
+              message and be marked unqualified. No AI generation credits are
+              used for these conversations.
+            </div>
+          ) : null}
+          <div className='flex items-center justify-between'>
+            <span className='text-muted-foreground text-xs'>
+              {geographyGateEnabled !== geographyGateSavedSnapshot &&
+                '• Unsaved changes'}
+            </span>
+            <Button
+              onClick={saveGeographyGate}
+              disabled={
+                savingGeographyGate ||
+                geographyGateEnabled === geographyGateSavedSnapshot
+              }
+              size='sm'
+            >
+              {savingGeographyGate && (
                 <Loader2 className='mr-2 h-3 w-3 animate-spin' />
               )}
               Save

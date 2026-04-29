@@ -1083,6 +1083,87 @@ export async function processIncomingMessage(
     );
   }
 
+  // ── Step 3d: Geography gate (opt-in per persona) ───────────────
+  // When the persona has `promptConfig.geographyGate.enabled = true`,
+  // scan lead messages so far for HIGH-confidence non-first-world
+  // signals (country/city name, native currency symbol). If matched,
+  // ship a single hardcoded exit message, mark the lead UNQUALIFIED,
+  // pause AI, apply the 'geography' tag, cancel any pending
+  // ScheduledReplies, and return early — zero LLM credits used.
+  //
+  // Default off. Failures here are non-fatal: if the gate throws, we
+  // fall through to normal processing.
+  try {
+    const persona = await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, promptConfig: true, freeValueLink: true }
+    });
+    const gateEnabled =
+      persona &&
+      typeof persona.promptConfig === 'object' &&
+      persona.promptConfig !== null &&
+      (persona.promptConfig as Record<string, unknown>).geographyGate &&
+      typeof (persona.promptConfig as Record<string, unknown>).geographyGate ===
+        'object' &&
+      (persona.promptConfig as { geographyGate?: { enabled?: boolean } })
+        .geographyGate?.enabled === true;
+    if (gateEnabled) {
+      const { detectGeography, isFirstWorldCountry } = await import(
+        '@/lib/geography-gate'
+      );
+      const priorLeadMsgs = await prisma.message.findMany({
+        where: { conversationId, sender: 'LEAD' },
+        orderBy: { timestamp: 'asc' },
+        select: { content: true }
+      });
+      const corpus = [...priorLeadMsgs.map((m) => m.content), messageText];
+      const geo = detectGeography(corpus);
+      if (
+        geo.country &&
+        geo.confidence === 'high' &&
+        !isFirstWorldCountry(geo.country)
+      ) {
+        console.warn(
+          `[webhook-processor] GEOGRAPHY GATE fired on conv ${conversationId} — country="${geo.country}" lead=@${senderHandle}`
+        );
+        await handleGeographyDisqualification({
+          conversationId,
+          leadId: lead.id,
+          accountId,
+          platform: lead.platform,
+          platformUserId: lead.platformUserId,
+          inboundMessageId: message.id,
+          inboundContent: messageText,
+          inboundImageUrl,
+          inboundAt: now,
+          unreadCount: lead.conversation!.unreadCount || 0,
+          detectedCountry: geo.country,
+          freeValueLink: persona!.freeValueLink ?? null
+        });
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: message.id,
+          isNewLead,
+          skipReply: true
+        };
+      }
+      if (geo.country && geo.confidence === 'medium') {
+        // Log only — never block on medium confidence (someone might
+        // mention IST in passing without being in India).
+        console.log(
+          `[webhook-processor] geography MEDIUM signal on conv ${conversationId} — country="${geo.country}" (no action)`
+        );
+      }
+    }
+  } catch (geoErr) {
+    console.error(
+      '[webhook-processor] geography gate threw (non-fatal, continuing):',
+      geoErr
+    );
+  }
+
   // ── Step 3b: Scheduling-conflict detection ─────────────────────
   // Only fires when the lead has ALREADY filled out the Typeform (i.e.
   // stage=CALL_PROPOSED and no scheduledCallAt yet). Detects "can't
@@ -4632,6 +4713,159 @@ async function backfillFromMetaAPI(
   return prisma.message.findMany({
     where: { conversationId },
     orderBy: { timestamp: 'asc' }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Geography-gate disqualification
+// ---------------------------------------------------------------------------
+// Hardcoded exit path for leads filtered by the persona-level geography
+// gate. NO LLM call fires — the message text is fixed. Mirrors the
+// hard-scheduling-conflict / cold-pitch shape (mark conversation,
+// transition lead stage, apply tag, save message row, ship via the
+// platform helper, broadcast). Skip-reply is enforced by the caller.
+
+interface HandleGeographyParams {
+  conversationId: string;
+  leadId: string;
+  accountId: string;
+  platform: string;
+  platformUserId: string | null;
+  inboundMessageId: string;
+  inboundContent: string;
+  inboundImageUrl: string | null;
+  inboundAt: Date;
+  unreadCount: number;
+  detectedCountry: string;
+  freeValueLink: string | null;
+}
+
+async function handleGeographyDisqualification(
+  p: HandleGeographyParams
+): Promise<void> {
+  const { GEOGRAPHY_DEFAULT_EXIT_MESSAGE, GEOGRAPHY_TAG_NAME } = await import(
+    '@/lib/geography-gate'
+  );
+
+  // Compose exit message: hardcoded copy + persona's freeValueLink if
+  // set. Never includes a course/booking link.
+  const exitMessage = p.freeValueLink
+    ? `${GEOGRAPHY_DEFAULT_EXIT_MESSAGE}\n${p.freeValueLink}`
+    : GEOGRAPHY_DEFAULT_EXIT_MESSAGE;
+
+  // Mark the conversation. Pause AI so subsequent inbound messages
+  // don't accidentally generate replies (the gate already returns
+  // skipReply on this turn; this guards future turns + manual review).
+  await prisma.conversation.update({
+    where: { id: p.conversationId },
+    data: {
+      aiActive: false,
+      geographyGated: true,
+      geographyCountry: p.detectedCountry
+    }
+  });
+
+  // Mark the lead. transitionLeadStage handles the audit trail;
+  // geographyDisqualified is a separate permanent flag for analytics.
+  await prisma.lead.update({
+    where: { id: p.leadId },
+    data: { geographyDisqualified: true }
+  });
+  try {
+    await transitionLeadStage(
+      p.leadId,
+      'UNQUALIFIED',
+      'system',
+      `geography_gate: detected ${p.detectedCountry}`
+    );
+  } catch (stageErr) {
+    console.error(
+      '[webhook-processor] geography_gate transitionLeadStage failed (non-fatal):',
+      stageErr
+    );
+  }
+
+  // Apply the 'geography' tag for ops visibility.
+  try {
+    await applyAutoTags(p.accountId, p.leadId, [GEOGRAPHY_TAG_NAME], 1.0);
+  } catch (tagErr) {
+    console.error(
+      '[webhook-processor] geography_gate tag application failed (non-fatal):',
+      tagErr
+    );
+  }
+
+  // Cancel any pending scheduled replies on this conversation. None
+  // should exist at this point (gate fires pre-generation), but a
+  // defensive sweep makes sure no cron tick fires an AI reply after
+  // the exit message has shipped.
+  try {
+    await prisma.scheduledReply.updateMany({
+      where: { conversationId: p.conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+  } catch (cancelErr) {
+    console.error(
+      '[webhook-processor] geography_gate cancel pending replies failed (non-fatal):',
+      cancelErr
+    );
+  }
+
+  // Save the AI exit message + ship via the platform helper. Save-
+  // before-ship intentional: the copy is fixed (no fabrication risk),
+  // and ops can retry the platform send manually if it fails.
+  const exitMsg = await prisma.message.create({
+    data: {
+      conversationId: p.conversationId,
+      sender: 'AI',
+      content: exitMessage,
+      timestamp: new Date(),
+      stage: null,
+      subStage: null
+    }
+  });
+  if (p.platformUserId) {
+    try {
+      if (p.platform === 'INSTAGRAM') {
+        await sendInstagramDM(p.accountId, p.platformUserId, exitMessage);
+      } else if (p.platform === 'FACEBOOK') {
+        await sendFacebookMessage(p.accountId, p.platformUserId, exitMessage);
+      }
+    } catch (sendErr) {
+      console.error(
+        '[webhook-processor] geography_gate platform send failed (non-fatal):',
+        sendErr
+      );
+    }
+  }
+
+  // Broadcast — keep the dashboard live-updating.
+  broadcastNewMessage({
+    id: p.inboundMessageId,
+    conversationId: p.conversationId,
+    sender: 'LEAD',
+    content: p.inboundContent,
+    imageUrl: p.inboundImageUrl,
+    hasImage: !!p.inboundImageUrl,
+    timestamp: p.inboundAt.toISOString()
+  });
+  broadcastNewMessage({
+    id: exitMsg.id,
+    conversationId: p.conversationId,
+    sender: 'AI',
+    content: exitMessage,
+    timestamp: exitMsg.timestamp.toISOString()
+  });
+  broadcastConversationUpdate({
+    id: p.conversationId,
+    leadId: p.leadId,
+    aiActive: false,
+    unreadCount: p.unreadCount + 1,
+    lastMessageAt: p.inboundAt.toISOString()
+  });
+  broadcastAIStatusChange({
+    conversationId: p.conversationId,
+    aiActive: false
   });
 }
 

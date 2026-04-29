@@ -846,6 +846,11 @@ model Lead {
   experience             String?              // "beginner" | "intermediate" | "experienced"
   incomeLevel            String?              // "low" | "mid" | "high"
   geography              String?              // "US" | "Europe" | "Other"
+  // Set true when the geography gate (persona-controlled, opt-in)
+  // disqualified this lead before any AI generation fired. Permanent
+  // flag — if an operator overrides and re-engages, this stays true so
+  // analytics can credit the saved generation cost.
+  geographyDisqualified  Boolean    @default(false)
   createdAt              DateTime   @default(now())
   updatedAt              DateTime   @updatedAt
 
@@ -911,6 +916,15 @@ model Conversation {
   schedulingConflictAt        DateTime?
   schedulingConflictMessageId String?
   schedulingConflictPreference String?
+
+  // ── Geography gate ────────────────────────────────────────────
+  // Set when the persona-level geographyGate.enabled flag fired on
+  // this conversation and the lead's first messages identified them
+  // as based outside the supported regions. The exit message is sent
+  // ONCE; AI is paused; no follow-ups are scheduled. geographyCountry
+  // stores the detected country name for sidebar display + analytics.
+  geographyGated       Boolean   @default(false)
+  geographyCountry     String?
 
   // ── Per-conversation auto-send override ───────────────────────
   // When true, this specific conversation auto-sends even if the

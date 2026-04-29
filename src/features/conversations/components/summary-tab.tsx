@@ -34,6 +34,8 @@ interface ConversationDetail {
   stageSoftPitchCommitmentAt?: string | null;
   stageFinancialScreeningAt?: string | null;
   stageBookingAt?: string | null;
+  geographyGated?: boolean;
+  geographyCountry?: string | null;
   lead?: {
     experience?: string | null;
     incomeLevel?: string | null;
@@ -415,6 +417,23 @@ export function SummaryTab({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Geography gate filter notice */}
+        {detail?.geographyGated && (
+          <div className='rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-950/30'>
+            <h5 className='mb-1 text-xs font-semibold tracking-wider text-amber-900 uppercase dark:text-amber-200'>
+              Geography Filtered
+            </h5>
+            <p className='text-[11px] text-amber-800 dark:text-amber-300'>
+              Lead identified as based in{' '}
+              <span className='font-medium'>
+                {detail.geographyCountry || 'a non-supported region'}
+              </span>
+              . Auto-disqualified before any AI generation. No follow-ups
+              scheduled.
+            </p>
           </div>
         )}
 
