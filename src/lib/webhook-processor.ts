@@ -1093,10 +1093,27 @@ export async function processIncomingMessage(
   // ── Step 3d: Geography gate (opt-in per persona) ───────────────
   // When the persona has `promptConfig.geographyGate.enabled = true`,
   // scan lead messages so far for HIGH-confidence non-first-world
-  // signals (country/city name, native currency symbol). If matched,
-  // ship a single hardcoded exit message, mark the lead UNQUALIFIED,
-  // pause AI, apply the 'geography' tag, cancel any pending
-  // ScheduledReplies, and return early — zero LLM credits used.
+  // signals (country/city name, native currency symbol). If matched
+  // AND the conversation is FRESH, ship a single hardcoded exit
+  // message, mark the lead UNQUALIFIED, pause AI, apply the
+  // 'geography' tag, cancel any pending ScheduledReplies, and
+  // return early — zero LLM credits used.
+  //
+  // P0 fix (Abdulahi 2026-04-29): the gate must NOT retroactively
+  // fire on conversations that were already in progress when the
+  // operator toggled it on. Freshness gate below checks:
+  //   • aiActive === true (no human override in place)
+  //   • zero HUMAN-sender messages on the convo
+  //   • <= 3 AI messages so far
+  //   • conversation < 24 hours old
+  //   • lead stage in NEW_LEAD / ENGAGED / QUALIFYING
+  // If ANY of those fail, we leave the conversation alone — the
+  // toggle only affects new conversations going forward.
+  //
+  // Belt-and-suspenders: if a HIGH-confidence non-first-world signal
+  // matches BUT aiActive is false, we still SET the tracking flags
+  // (so analytics can credit the saved generation cost) and skip
+  // sending the exit message. Human took over → respect that.
   //
   // Default off. Failures here are non-fatal: if the gate throws, we
   // fall through to normal processing.
@@ -1131,30 +1148,85 @@ export async function processIncomingMessage(
         geo.confidence === 'high' &&
         !isFirstWorldCountry(geo.country)
       ) {
-        console.warn(
-          `[webhook-processor] GEOGRAPHY GATE fired on conv ${conversationId} — country="${geo.country}" lead=@${senderHandle}`
-        );
-        await handleGeographyDisqualification({
-          conversationId,
-          leadId: lead.id,
-          accountId,
-          platform: lead.platform,
-          platformUserId: lead.platformUserId,
-          inboundMessageId: message.id,
-          inboundContent: messageText,
-          inboundImageUrl,
-          inboundAt: now,
-          unreadCount: lead.conversation!.unreadCount || 0,
-          detectedCountry: geo.country,
-          freeValueLink: persona!.freeValueLink ?? null
-        });
-        return {
-          leadId: lead.id,
-          conversationId,
-          messageId: message.id,
-          isNewLead,
-          skipReply: true
-        };
+        // Freshness gate — only act on conversations that are still
+        // owned by the AI and at the very start of the funnel. Counts
+        // are run in parallel; cheap (indexed by conversationId).
+        const [humanMsgCount, aiMsgCount] = await Promise.all([
+          prisma.message.count({
+            where: { conversationId, sender: 'HUMAN' }
+          }),
+          prisma.message.count({
+            where: { conversationId, sender: 'AI' }
+          })
+        ]);
+        const conv = lead.conversation!;
+        const aiActive = conv.aiActive === true;
+        const ageMs = now.getTime() - new Date(conv.createdAt).getTime();
+        const isYoung = ageMs < 24 * 60 * 60 * 1000;
+        const stageOk =
+          lead.stage === 'NEW_LEAD' ||
+          lead.stage === 'ENGAGED' ||
+          lead.stage === 'QUALIFYING';
+        const isFresh =
+          aiActive &&
+          humanMsgCount === 0 &&
+          aiMsgCount <= 3 &&
+          isYoung &&
+          stageOk;
+
+        // FIX 1: aiActive === false → human took over. Track flags
+        // for analytics, but DO NOT send the exit message. Skip the
+        // rest of normal processing too — the human is handling it.
+        if (!aiActive) {
+          console.warn(
+            `[webhook-processor] GEOGRAPHY signal on conv ${conversationId} — country="${geo.country}" — aiActive=false, tracking only (no exit msg sent)`
+          );
+          await prisma.conversation.update({
+            where: { id: conversationId },
+            data: { geographyGated: true, geographyCountry: geo.country }
+          });
+          await prisma.lead.update({
+            where: { id: lead.id },
+            data: { geographyDisqualified: true }
+          });
+          // Fall through to normal flow — the human will respond
+          // manually, no AI scheduling will happen because aiActive
+          // is already false. Don't return skipReply here so the
+          // message ingestion path completes (broadcasts, etc.).
+        } else if (!isFresh) {
+          // FIX 2: Existing in-progress conversation — leave it
+          // alone. The toggle only applies to new conversations.
+          console.warn(
+            `[webhook-processor] GEOGRAPHY signal on conv ${conversationId} — country="${geo.country}" SKIPPED (not fresh: humanMsgCount=${humanMsgCount} aiMsgCount=${aiMsgCount} ageHours=${Math.round(ageMs / 3600000)} stage=${lead.stage})`
+          );
+          // Continue normal flow — fall through to AI generation.
+        } else {
+          // FRESH + aiActive + non-first-world → fire the gate.
+          console.warn(
+            `[webhook-processor] GEOGRAPHY GATE fired on conv ${conversationId} — country="${geo.country}" lead=@${senderHandle}`
+          );
+          await handleGeographyDisqualification({
+            conversationId,
+            leadId: lead.id,
+            accountId,
+            platform: lead.platform,
+            platformUserId: lead.platformUserId,
+            inboundMessageId: message.id,
+            inboundContent: messageText,
+            inboundImageUrl,
+            inboundAt: now,
+            unreadCount: lead.conversation!.unreadCount || 0,
+            detectedCountry: geo.country,
+            freeValueLink: persona!.freeValueLink ?? null
+          });
+          return {
+            leadId: lead.id,
+            conversationId,
+            messageId: message.id,
+            isNewLead,
+            skipReply: true
+          };
+        }
       }
       if (geo.country && geo.confidence === 'medium') {
         // Log only — never block on medium confidence (someone might
@@ -4864,6 +4936,31 @@ async function handleGeographyDisqualification(
   const { GEOGRAPHY_DEFAULT_EXIT_MESSAGE, GEOGRAPHY_TAG_NAME } = await import(
     '@/lib/geography-gate'
   );
+
+  // Belt-and-suspenders aiActive guard. The Step-3d freshness check
+  // already requires aiActive=true before calling this handler, but
+  // re-check here in case the conversation flipped between the
+  // freshness read and this update (race), or this handler is ever
+  // invoked from another code path. When aiActive=false, set the
+  // tracking flags ONLY and skip the exit message.
+  const live = await prisma.conversation.findUnique({
+    where: { id: p.conversationId },
+    select: { aiActive: true }
+  });
+  if (live?.aiActive === false) {
+    console.warn(
+      `[webhook-processor] handleGeographyDisqualification: aiActive=false at handler time — tracking flags only, no exit message sent (conv ${p.conversationId})`
+    );
+    await prisma.conversation.update({
+      where: { id: p.conversationId },
+      data: { geographyGated: true, geographyCountry: p.detectedCountry }
+    });
+    await prisma.lead.update({
+      where: { id: p.leadId },
+      data: { geographyDisqualified: true }
+    });
+    return;
+  }
 
   // Compose exit message: hardcoded copy + persona's freeValueLink if
   // set. Never includes a course/booking link.

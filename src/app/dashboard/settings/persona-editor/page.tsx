@@ -1099,6 +1099,12 @@ Categories that commonly come up:
               used for these conversations.
             </div>
           ) : null}
+          <div className='rounded-md bg-zinc-50 px-3 py-2 text-[11px] text-zinc-600 dark:bg-zinc-900/40 dark:text-zinc-400'>
+            ℹ️ Only applies to NEW conversations going forward. Existing
+            conversations (any human message, more than 3 AI messages, older
+            than 24 hours, in human-mode, or past the QUALIFYING stage) are not
+            affected by toggling this setting.
+          </div>
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-xs'>
               {geographyGateEnabled !== geographyGateSavedSnapshot &&

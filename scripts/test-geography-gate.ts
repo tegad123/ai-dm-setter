@@ -116,6 +116,39 @@ const detectCases: DetectCase[] = [
     messages: [],
     expectCountry: null,
     expectConfidence: 'medium'
+  },
+  // False-positive guards (Abdulahi 2026-04-29)
+  {
+    label: 'Bare "real" in casual speech → null (not Brazil)',
+    messages: ["yo bro, I'll be real with you, I don't have the budget"],
+    expectCountry: null,
+    expectConfidence: 'medium'
+  },
+  {
+    label: 'Bare "rand" word → null (not South Africa)',
+    messages: ['the trade was rand-om, not planned'],
+    expectCountry: null,
+    expectConfidence: 'medium'
+  },
+  // Brazil still detects on country name + R$ amount
+  {
+    label: '"Brazilian real" → Brazil',
+    messages: ['I deal in brazilian real not USD'],
+    expectCountry: 'Brazil',
+    expectConfidence: 'high'
+  },
+  {
+    label: 'R$ amount → Brazil',
+    messages: ['I have R$5000 saved up'],
+    expectCountry: 'Brazil',
+    expectConfidence: 'high'
+  },
+  // South Africa still detects on R-amount + city
+  {
+    label: 'R200 amount → South Africa',
+    messages: ['I have R200 saved'],
+    expectCountry: 'South Africa',
+    expectConfidence: 'high'
   }
 ];
 

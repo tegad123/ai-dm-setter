@@ -286,8 +286,12 @@ const DISALLOWED_RULES: CountryRule[] = [
   },
   {
     country: 'South Africa',
+    // Bare "rand" is too common in English (proper names, "rand" as
+    // a verb in some dialects) — only match when it's clearly the
+    // currency word ("south african rand", "in rand", currency code).
     high: [
-      /\b(south\s+africa|south\s+african|johannesburg|cape\s+town|durban|pretoria|soweto|rand\b|\bzar\b)\b/i,
+      /\b(south\s+africa|south\s+african|johannesburg|cape\s+town|durban|pretoria|soweto|\bzar\b)\b/i,
+      /\b(south\s+african\s+rand|rand\s+(currency|notes?|coins?))\b/i,
       /\bR\s*\d{2,}/
     ]
   },
@@ -530,8 +534,15 @@ const DISALLOWED_RULES: CountryRule[] = [
   },
   {
     country: 'Brazil',
+    // Abdulahi 2026-04-29 false-positive: bare "real" matched in
+    // "I'll be real with you". Bare currency words that are also
+    // common English words ("real", "kiwi") need explicit currency
+    // context to count. R$ pattern is its own regex (no outer \b)
+    // because the trailing word boundary fails on "R$5000".
     high: [
-      /\b(brazil|brazilian|brasil|sao\s+paulo|são\s+paulo|rio\s+de\s+janeiro|brasilia|salvador|fortaleza|recife|real\b|\bbrl\b|r\$)\b/i
+      /\b(brazil|brazilian|brasil|sao\s+paulo|são\s+paulo|rio\s+de\s+janeiro|brasilia|salvador|fortaleza|recife|\bbrl\b)\b/i,
+      /r\$\s*\d/i,
+      /\b(brazilian\s+real|real\s+(currency|notes?))\b/i
     ]
   },
   {
