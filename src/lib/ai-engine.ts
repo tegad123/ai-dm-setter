@@ -867,6 +867,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         case 'answer_prop_firm_only':
           r24Directive = `The lead mentioned a prop firm, funded account, or challenge (FTMO / Apex / Topstep / etc.) but did NOT state personal capital they have set aside. Firm capital is NOT personal capital — the lead accessing a $100k challenge account means the FIRM put up that money, not the lead. Do NOT route to booking. Ask specifically about PERSONAL capital: something like "respect bro, prop firms are solid. but what I'm asking is what YOU'VE got set aside for your own education and trading — not the firm's money. you got ${thresholdStr} ready on your end?". Make the distinction clear and wait for a concrete answer.`;
           break;
+        case 'answer_currency_unclear':
+          r24Directive = `The lead gave a capital number but the currency is unclear — no recognized symbol ($, £, ₦, ₵, R, ₱, €, CAD, etc.) and no prior currency context in this conversation. Do NOT assume USD. Do NOT say the amount is good or bad. Do NOT route to booking, downsell, or anywhere else yet. Ask exactly one short clarifying question — for example: "is that in USD bro, or a different currency?" Wait for the answer before classifying. Once they confirm the currency, the next turn will re-evaluate against the threshold and route correctly.`;
+          break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
       systemPromptForLLM = baseSystemPrompt + r24Override;
@@ -1647,10 +1650,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       case 'answer_ambiguous':
       case 'answer_total_savings_needs_clarification':
       case 'answer_prop_firm_only':
-        // Prop-firm-only is an ambiguous-class outcome for the
-        // downstream `capitalOutcome` consumer (lead.stage mapping).
-        // The directive-specific handling lives in the R24 override
-        // switch above; the lead.stage side just needs "not passed".
+      case 'answer_currency_unclear':
+        // Prop-firm-only / currency-unclear are ambiguous-class
+        // outcomes for the downstream `capitalOutcome` consumer
+        // (lead.stage mapping). The directive-specific handling
+        // lives in the R24 override switch above; the lead.stage
+        // side just needs "not passed".
         capitalOutcome = 'ambiguous';
         break;
       case 'never_asked':
@@ -2427,7 +2432,8 @@ export type R24Reason =
   | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
   | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
   | 'answer_total_savings_needs_clarification' // Number given as total savings / stress, not investable capital
-  | 'answer_prop_firm_only'; // Lead mentioned a prop firm but no personal capital
+  | 'answer_prop_firm_only' // Lead mentioned a prop firm but no personal capital
+  | 'answer_currency_unclear'; // Lead gave a number with no recognized currency symbol/context
 
 interface R24GateResult {
   /** True = block this response, force regen with override directive. */
@@ -2518,6 +2524,12 @@ export function buildR24BlockedFallbackMessage(
       return {
         message:
           "gotchu, just so i don't point you wrong, what number are you actually working with for this?",
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'answer_currency_unclear':
+      return {
+        message: 'is that in USD bro, or a different currency?',
         stage: 'FINANCIAL_SCREENING',
         subStage: null
       };
@@ -3262,6 +3274,47 @@ export async function detectConversationCurrency(
 }
 
 /**
+ * Confidence-graded currency detection (Paul 2026-04-29 incident).
+ *
+ *   HIGH   — the lead's CURRENT capital answer carries a recognized
+ *            currency symbol/word ($, £, ₦, "naira", "USD", etc.).
+ *            Convert + route immediately, no clarification.
+ *   MEDIUM — the answer itself has no symbol, but earlier LEAD
+ *            messages on this conversation do. Treat that as the
+ *            conversation's currency. Convert + route, no
+ *            clarification.
+ *   LOW    — neither the answer nor any prior LEAD message has a
+ *            recognized currency signal. Caller MUST ask a
+ *            clarification question before routing — the previous
+ *            "default to USD" behavior was silently mis-routing
+ *            non-USD leads (e.g. "#100000" parsed as $100k USD when
+ *            it was meant as ₦100,000 ≈ $62 USD).
+ */
+export async function detectConversationCurrencyConfidence(
+  conversationId: string,
+  answerText: string,
+  alreadyMergedAnswerTexts: string[] = []
+): Promise<{
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  currency: ConversationCurrency | null;
+}> {
+  const onAnswer = detectCurrencyFromText(answerText);
+  if (onAnswer) return { confidence: 'HIGH', currency: onAnswer };
+  // mergedAnswerTexts can include the answer itself + any later
+  // clarification turns — try those next.
+  const onMergedAnswers = detectCurrencyFromTexts(alreadyMergedAnswerTexts);
+  if (onMergedAnswers) return { confidence: 'HIGH', currency: onMergedAnswers };
+  // Otherwise scan the conversation's prior LEAD messages.
+  const leadMsgs = await prisma.message.findMany({
+    where: { conversationId, sender: 'LEAD' },
+    select: { content: true }
+  });
+  const onHistory = detectCurrencyFromTexts(leadMsgs.map((m) => m.content));
+  if (onHistory) return { confidence: 'MEDIUM', currency: onHistory };
+  return { confidence: 'LOW', currency: null };
+}
+
+/**
  * Look through the conversation's AI messages for a prior capital
  * verification question (threshold-confirming OR open-ended), then
  * check the next LEAD reply. Return a structured reason so the caller
@@ -3443,6 +3496,31 @@ async function checkR24Verification(
   switch (classification.kind) {
     case 'amount': {
       const amt = classification.amount!;
+      // Confidence-graded currency check (Paul 2026-04-29). When the
+      // lead gives a bare number with no recognized currency
+      // symbol/word AND no prior conversation currency context, we
+      // can't safely default to USD — historically that mis-routed
+      // non-USD leads (e.g. "#100000" treated as $100k USD when the
+      // lead meant ₦100,000 ≈ $62 USD). Block + ask for currency
+      // clarification instead.
+      if (!classification.currency) {
+        const conf = await detectConversationCurrencyConfidence(
+          conversationId,
+          best.msg.content,
+          mergedAnswers.map((m) => m.content)
+        );
+        if (conf.confidence === 'LOW') {
+          return {
+            blocked: true,
+            reason: 'answer_currency_unclear',
+            parsedAmount: amt,
+            parsedCurrency: null,
+            parsedAmountUsd: null,
+            verificationAskedAt: askedId,
+            verificationConfirmedAt: null
+          };
+        }
+      }
       const parsedCurrency = classification.currency ?? conversationCurrency;
       const compareAmt = convertCapitalAmountToUsd(amt, parsedCurrency);
       if (compareAmt >= threshold) {
