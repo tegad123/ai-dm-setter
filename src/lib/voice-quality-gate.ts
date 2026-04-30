@@ -464,6 +464,24 @@ export interface VoiceQualityOptions {
    * matched tokens (case as written by the lead).
    */
   recentLeadDetails?: Array<{ category: string; token: string }>;
+  /**
+   * Steven Biggam 2026-04-30 — true when the most recent lead message
+   * matches the vague-capital pattern set in ai-engine.ts. Combined
+   * with the previous AI bubble being a capital question, fires the
+   * `vague_capital_answer` soft signal (-0.4) when the current reply
+   * doesn't contain a probe phrase. Backstop for the parser-level
+   * routing in case the AI ignores its directive.
+   */
+  leadVagueCapitalAnswerInLastReply?: boolean;
+  /**
+   * Steven Biggam 2026-04-30 — true when ANY of the last 4 lead
+   * messages contain a capital pre-objection phrase ("anyone asking
+   * for a lot is a red flag", "I'm on a budget"). When true AND the
+   * current AI reply asks the capital question (or pitches the call)
+   * without any reassurance phrase, fires `pre_objection_not_addressed`
+   * soft signal (-0.3). Encourages but doesn't force the regen.
+   */
+  leadPreObjectedToCapital?: boolean;
 }
 
 export function scoreVoiceQuality(
@@ -1498,6 +1516,41 @@ export function scoreVoiceQuality(
     }
     if (bestStructuralSim > 0.6) {
       softSignals.repetitive_question_pattern = -0.4;
+    }
+  }
+
+  // ── VAGUE CAPITAL ANSWER SIGNAL (soft penalty -0.4) ────────────
+  // Steven Biggam 2026-04-30. Lead replied to the capital question
+  // with a vague non-answer ("very little", "manageable amount",
+  // "saving up"). The AI's response should be the multi-anchor probe
+  // ("ballpark is fine bro — like under $500, closer to $1k, or
+  // more than that?") — anything else (acknowledgment + advance,
+  // generic question, soft exit) lets the lead keep dodging.
+  if (options?.leadVagueCapitalAnswerInLastReply === true) {
+    const PROBE_PHRASE_RE =
+      /\b(ballpark|under\s+\$?500|closer\s+to\s+\$?1k|more\s+than\s+that|what'?s\s+the\s+(actual\s+)?number|how\s+much\s+(do\s+you\s+have\s+set\s+aside|are\s+you\s+working\s+with))\b/i;
+    if (!PROBE_PHRASE_RE.test(reply)) {
+      softSignals.vague_capital_answer = -0.4;
+    }
+  }
+
+  // ── PRE-OBJECTION NOT ADDRESSED SIGNAL (soft penalty -0.3) ─────
+  // Steven Biggam 2026-04-30. Lead expressed concern about cost
+  // ("anyone asking for a lot is a red flag", "I'm on a budget").
+  // The AI's reply asks the capital question (or pitches the call)
+  // without acknowledging the concern. Soft penalty — encourages but
+  // doesn't force regen, since the operator may legitimately want a
+  // reassurance-light approach.
+  if (options?.leadPreObjectedToCapital === true) {
+    const ASKS_CAPITAL_RE =
+      /\b(capital|how\s+much|set\s+aside|to\s+invest|to\s+start\s+with|working\s+with|budget)\b/i;
+    const REASSURANCE_RE =
+      /\b(no\s+pressure|not\s+(here\s+to\s+)?pressure|not\s+pushing|nah\s+bro\s+(i'?m|im)\s+not|just\s+need\s+to\s+know\s+(what|where)|point\s+you\s+in\s+the\s+right\s+direction|no\s+stress|chill\s+bro|not\s+forcing|not\s+(trying|trynna)\s+to\s+sell\s+you)\b/i;
+    if (
+      (ASKS_CAPITAL_RE.test(reply) || CALL_PITCH_RE.test(reply)) &&
+      !REASSURANCE_RE.test(reply)
+    ) {
+      softSignals.pre_objection_not_addressed = -0.3;
     }
   }
 

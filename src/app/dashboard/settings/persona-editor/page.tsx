@@ -170,14 +170,14 @@ export default function PersonaEditorPage() {
     useState('');
   const [savingVerifiedFacts, setSavingVerifiedFacts] = useState(false);
 
-  // Lead filtering — geography gate. When ON, leads from non-first-
-  // world regions get a fixed exit message before any AI generation
-  // fires. Persisted under promptConfig.geographyGate.enabled. OFF by
-  // default. See src/lib/geography-gate.ts for country lists.
-  const [geographyGateEnabled, setGeographyGateEnabled] = useState(false);
-  const [geographyGateSavedSnapshot, setGeographyGateSavedSnapshot] =
+  // Capital screening pace — early-capital-gate toggle. When ON, the
+  // AI is forced to ask the capital question by AI message #4 instead
+  // of waiting for the urgency-stage default position. Persisted
+  // under promptConfig.earlyCapitalGate. OFF by default.
+  const [earlyCapitalGate, setEarlyCapitalGate] = useState(false);
+  const [earlyCapitalGateSavedSnapshot, setEarlyCapitalGateSavedSnapshot] =
     useState(false);
-  const [savingGeographyGate, setSavingGeographyGate] = useState(false);
+  const [savingEarlyCapitalGate, setSavingEarlyCapitalGate] = useState(false);
 
   // Rotating placeholder for campaigns textarea. Cycles every 4s; pauses
   // once the user has typed anything so we don't distract.
@@ -259,13 +259,10 @@ export default function PersonaEditorPage() {
         setVerifiedFacts(vf);
         setVerifiedFactsSavedSnapshot(vf);
 
-        // Geography gate (under promptConfig.geographyGate.enabled)
-        const geoCfg =
-          (config.geographyGate as { enabled?: boolean } | undefined) ||
-          undefined;
-        const geoEnabled = geoCfg?.enabled === true;
-        setGeographyGateEnabled(geoEnabled);
-        setGeographyGateSavedSnapshot(geoEnabled);
+        // Early capital gate (under promptConfig.earlyCapitalGate)
+        const ecg = (config.earlyCapitalGate as boolean | undefined) === true;
+        setEarlyCapitalGate(ecg);
+        setEarlyCapitalGateSavedSnapshot(ecg);
       }
     } catch (err) {
       console.error('Failed to load persona:', err);
@@ -516,26 +513,26 @@ export default function PersonaEditorPage() {
     }
   };
 
-  const saveGeographyGate = async () => {
-    setSavingGeographyGate(true);
+  const saveEarlyCapitalGate = async () => {
+    setSavingEarlyCapitalGate(true);
     try {
       const currentConfig = personaData?.persona?.promptConfig || {};
       const newConfig = {
         ...currentConfig,
-        geographyGate: { enabled: geographyGateEnabled }
+        earlyCapitalGate
       };
       await persistAndRefresh(
         { promptConfig: newConfig },
-        geographyGateEnabled
-          ? 'Geography gate enabled'
-          : 'Geography gate disabled'
+        earlyCapitalGate
+          ? 'Early capital screening enabled'
+          : 'Early capital screening disabled'
       );
-      setGeographyGateSavedSnapshot(geographyGateEnabled);
+      setEarlyCapitalGateSavedSnapshot(earlyCapitalGate);
     } catch (err) {
       console.error(err);
-      toast.error('Failed to save geography gate');
+      toast.error('Failed to save capital screening pace');
     } finally {
-      setSavingGeographyGate(false);
+      setSavingEarlyCapitalGate(false);
     }
   };
 
@@ -562,7 +559,7 @@ export default function PersonaEditorPage() {
     currentCapitalSnapshot !== capitalSavedSnapshot ||
     outOfScope !== outOfScopeSavedSnapshot ||
     verifiedFacts !== verifiedFactsSavedSnapshot ||
-    geographyGateEnabled !== geographyGateSavedSnapshot;
+    earlyCapitalGate !== earlyCapitalGateSavedSnapshot;
   const hasUnsavedRef = useRef(hasUnsavedChanges);
   hasUnsavedRef.current = hasUnsavedChanges;
 
@@ -1059,66 +1056,53 @@ Categories that commonly come up:
         </CardContent>
       </Card>
 
-      {/* ── SECTION 8 — Lead Filtering ──────────────────────────── */}
+      {/* ── SECTION 8 — Capital Screening Pace ───────────────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className='text-lg'>Lead Filtering</CardTitle>
+          <CardTitle className='text-lg'>Capital Screening Pace</CardTitle>
           <CardDescription>
-            Auto-disqualify leads from regions outside your service area BEFORE
-            any AI generation runs. Zero credits used on filtered conversations.
-            Off by default.
+            Control how early in the conversation the AI asks the capital
+            qualification question. Default behavior asks after the urgency
+            stage; turn this on to filter unqualified leads faster.
           </CardDescription>
         </CardHeader>
         <CardContent className='space-y-4'>
           <div className='flex items-start justify-between gap-4'>
             <div className='min-w-0 flex-1'>
               <Label
-                htmlFor='geographyGateEnabled'
+                htmlFor='earlyCapitalGate'
                 className='cursor-pointer text-sm'
               >
-                Geography Gate
+                Early Capital Screening
               </Label>
               <p className='text-muted-foreground mt-0.5 text-[11px]'>
-                When ON, leads who identify themselves as based in
-                non-first-world regions (by country name, major city, or native
-                currency symbol) receive a polite exit message referencing your
-                free YouTube link, then are marked UNQUALIFIED with a
-                &apos;geography&apos; tag. No follow-ups. No AI calls.
+                Ask about capital earlier in the conversation to qualify leads
+                faster. When ON, the AI is forced to surface the capital
+                question by AI message #4 — discovery is compressed and
+                unqualified leads are routed to the downsell sooner. Recommended
+                for high-volume accounts.
               </p>
             </div>
             <Switch
-              id='geographyGateEnabled'
-              checked={geographyGateEnabled}
-              onCheckedChange={(v) => setGeographyGateEnabled(Boolean(v))}
+              id='earlyCapitalGate'
+              checked={earlyCapitalGate}
+              onCheckedChange={(v) => setEarlyCapitalGate(Boolean(v))}
             />
-          </div>
-          {geographyGateEnabled ? (
-            <div className='rounded-md bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:bg-blue-950/30 dark:text-blue-300'>
-              ℹ️ Leads from non-first-world regions will receive a polite exit
-              message and be marked unqualified. No AI generation credits are
-              used for these conversations.
-            </div>
-          ) : null}
-          <div className='rounded-md bg-zinc-50 px-3 py-2 text-[11px] text-zinc-600 dark:bg-zinc-900/40 dark:text-zinc-400'>
-            ℹ️ Only applies to NEW conversations going forward. Existing
-            conversations (any human message, more than 3 AI messages, older
-            than 24 hours, in human-mode, or past the QUALIFYING stage) are not
-            affected by toggling this setting.
           </div>
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-xs'>
-              {geographyGateEnabled !== geographyGateSavedSnapshot &&
+              {earlyCapitalGate !== earlyCapitalGateSavedSnapshot &&
                 '• Unsaved changes'}
             </span>
             <Button
-              onClick={saveGeographyGate}
+              onClick={saveEarlyCapitalGate}
               disabled={
-                savingGeographyGate ||
-                geographyGateEnabled === geographyGateSavedSnapshot
+                savingEarlyCapitalGate ||
+                earlyCapitalGate === earlyCapitalGateSavedSnapshot
               }
               size='sm'
             >
-              {savingGeographyGate && (
+              {savingEarlyCapitalGate && (
                 <Loader2 className='mr-2 h-3 w-3 animate-spin' />
               )}
               Save

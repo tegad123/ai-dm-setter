@@ -84,7 +84,9 @@ export type ConversationCurrency =
   | 'PHP'
   | 'UGX'
   | 'EUR'
-  | 'CAD';
+  | 'CAD'
+  | 'AUD'
+  | 'NZD';
 
 // Approximate USD conversion rates for capital-gate sanity checks.
 // Update quarterly, or replace with an FX API in Sprint 7. Exactness
@@ -99,7 +101,9 @@ const CAPITAL_CURRENCY_TO_USD: Record<ConversationCurrency, number> = {
   PHP: 1 / 58,
   UGX: 1 / 3700,
   EUR: 1.08,
-  CAD: 0.74
+  CAD: 0.74,
+  AUD: 0.65,
+  NZD: 0.61
 };
 
 export function convertCapitalAmountToUsd(
@@ -524,7 +528,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const promptConfigForGate = (personaForGate?.promptConfig || {}) as {
     callHandoff?: { closerName?: string };
     homeworkUrl?: unknown;
+    earlyCapitalGate?: boolean;
   };
+  const earlyCapitalGateEnabled = promptConfigForGate.earlyCapitalGate === true;
   const homeworkUrl =
     typeof promptConfigForGate.homeworkUrl === 'string' &&
     /^https?:\/\//i.test(promptConfigForGate.homeworkUrl.trim())
@@ -601,8 +607,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const lastLeadHadImage = Boolean(
     lastLeadMsg?.hasImage || lastLeadMsg?.imageUrl
   );
+  // Early capital gate (FIX G, 2026-04-30). When the persona has the
+  // toggle on AND we've already had 4+ AI messages without surfacing
+  // the capital question AND the lead is still in early funnel, force
+  // the next turn to ask for capital instead of continuing discovery.
+  // Off by default — preserves current pacing behaviour.
+  const earlyCapitalGateDirective =
+    earlyCapitalGateEnabled &&
+    typeof capitalThreshold === 'number' &&
+    capitalThreshold > 0 &&
+    !capitalQuestionAsked &&
+    priorAIMessagesForPacing.length >= 4 &&
+    (leadContext.status === 'NEW_LEAD' ||
+      leadContext.status === 'ENGAGED' ||
+      leadContext.status === 'QUALIFYING' ||
+      !leadContext.status)
+      ? `\n\n===== EARLY CAPITAL GATE =====\nBy AI message #4 the capital question must be on the table. You've already had ${priorAIMessagesForPacing.length} AI message${priorAIMessagesForPacing.length === 1 ? '' : 's'} without asking. Skip remaining discovery and ask the capital question on this turn — open-ended is fine ("how much do you have set aside for the markets right now?"). The minimum threshold for this account is $${capitalThreshold.toLocaleString('en-US')}. Do NOT continue Goal/Why or Urgency questions before pinning down capital.\n=====`
+      : '';
   const baseSystemPrompt =
-    systemPrompt + unqualifiedGuard + botDetectionDirective;
+    systemPrompt +
+    unqualifiedGuard +
+    botDetectionDirective +
+    earlyCapitalGateDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -728,7 +754,21 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           priorConsecutivePureQuestionCount,
           recentLeadDetails
         };
-      })()
+      })(),
+      // Steven Biggam 2026-04-30 — pre-objection + vague-answer
+      // signals. The voice gate's per-bubble check uses these to fire
+      // soft signals when the AI ignores the lead's pre-objection or
+      // their vague capital answer.
+      leadVagueCapitalAnswerInLastReply:
+        capitalQuestionAsked &&
+        Boolean(lastLeadMsg?.content) &&
+        looksLikeVagueCapitalAnswer(lastLeadMsg!.content),
+      leadPreObjectedToCapital: leadHasPreObjectedToCapital(
+        conversationHistory
+          .filter((m) => m.sender === 'LEAD')
+          .slice(-4)
+          .map((m) => m.content)
+      )
     });
     finalQualityScore = quality.score;
 
@@ -897,9 +937,21 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       r24GateEverForcedRegen = true;
       const thresholdStr = `$${capitalThreshold!.toLocaleString('en-US')}`;
       let r24Directive = '';
+      // Pre-objection check (Steven Biggam 2026-04-30). When the lead
+      // has flagged "anyone asking for a lot is a red flag" / "I'm on
+      // a budget" / similar, the capital question must be prefaced
+      // with reassurance. Compute once for the whole switch.
+      const recentLeadForPreObj = conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .slice(-4)
+        .map((m) => m.content);
+      const leadPreObjected = leadHasPreObjectedToCapital(recentLeadForPreObj);
+      const preObjPrefix = leadPreObjected
+        ? `IMPORTANT — the lead pre-objected to being asked for capital (e.g. "anyone asking for a lot is a red flag", "I'm on a budget"). Open with reassurance BEFORE the capital question, exactly like: "nah bro i'm not here to pressure you into anything — just need to know what you're working with to point you in the right direction". Then ask the capital question naturally. Do NOT ignore the pre-objection.\n\n`
+        : '';
       switch (r24LastResult.reason) {
         case 'never_asked':
-          r24Directive = `Your previous reply tried to route the lead into booking-handoff messaging (team reaching out, call confirmation, etc.) BUT this conversation has not yet asked the capital verification question. You MUST regenerate. Your next reply must ask the lead about their capital — either the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") whichever fits your voice. Do NOT send any booking-handoff language until the lead confirms an amount.`;
+          r24Directive = `${preObjPrefix}Your previous reply tried to route the lead into booking-handoff messaging (team reaching out, call confirmation, etc.) BUT this conversation has not yet asked the capital verification question. You MUST regenerate. Your next reply must ask the lead about their capital — either the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") whichever fits your voice. Do NOT send any booking-handoff language until the lead confirms an amount.`;
           break;
         case 'asked_but_no_answer':
           r24Directive = `You already asked the capital verification question, but the lead hasn't answered yet. Do NOT route to booking-handoff. Wait for their answer, or send a short nudge to re-ask. Do NOT advance until they state an amount.`;
@@ -946,7 +998,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           r24Directive = `The lead gave a capital number but the currency is unclear — no recognized symbol ($, £, ₦, ₵, R, ₱, €, CAD, etc.) and no prior currency context in this conversation. Do NOT assume USD. Do NOT say the amount is good or bad. Do NOT route to booking, downsell, or anywhere else yet. Ask exactly one short clarifying question — for example: "is that in USD bro, or a different currency?" Wait for the answer before classifying. Once they confirm the currency, the next turn will re-evaluate against the threshold and route correctly.`;
           break;
         case 'answer_vague_capital':
-          r24Directive = `The lead's reply to the capital question was a vague non-answer ("manageable amount", "starting small", "saving up", "I'll figure it out") — no concrete dollar figure was given. Do NOT route to booking. Do NOT pitch the call. Do NOT send the Typeform. Ask ONE short follow-up that pins down a ballpark number, exactly like: "what's the actual number you're working with bro, ballpark is fine". This is your single probe — if the lead dodges again, the next turn will route to the downsell automatically. Do NOT acknowledge the vague answer with "respect the grind" or "love that" — that signals acceptance and the lead will keep dodging.`;
+          r24Directive = `The lead's reply to the capital question was a vague non-answer ("manageable amount", "starting small", "saving up", "very little", "I'll figure it out") — no concrete dollar figure was given. Do NOT route to booking. Do NOT pitch the call. Do NOT send the Typeform. Ask ONE short follow-up that pins down a ballpark number with multiple-choice anchors, exactly like: "ballpark is fine bro — like under $500, closer to $1k, or more than that?". The anchors give them concrete ranges to pick from — much harder to dodge than an open-ended "what number". This is your single probe — if the lead dodges again, the next turn will route to the downsell automatically. Do NOT acknowledge the vague answer with "respect the grind" or "love that" — that signals acceptance and the lead will keep dodging.`;
           break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
@@ -1669,6 +1721,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
           );
         }
+      }
+
+      // ── Guaranteed-fallback safety (Steven Biggam 2026-04-30) ───
+      // If we reached MAX_RETRIES AND the final output is escalating
+      // to human OR completely empty, replace the message with a
+      // friendly holding line so the lead doesn't sit in silence
+      // while the human picks up. The escalation still fires (the
+      // operator gets the SYSTEM notification downstream); we just
+      // don't leave the lead staring at no reply. None of the other
+      // exhaustion branches above need this — they all set a
+      // deterministic fallback message themselves.
+      const finalIsEmpty =
+        !Array.isArray(parsed.messages) ||
+        parsed.messages.length === 0 ||
+        parsed.messages.every(
+          (b) => typeof b !== 'string' || b.trim().length === 0
+        );
+      if (parsed.escalateToHuman && finalIsEmpty) {
+        const holdingLine = 'gimme a sec bro, looking into this';
+        parsed.message = holdingLine;
+        parsed.messages = [holdingLine];
+        parsed.softExit = false;
+        parsed.voiceNoteAction = null;
+        console.warn(
+          `[ai-engine] Empty + escalating output — shipping holding line so lead doesn't sit silent (conv ${activeConversationId})`
+        );
       }
     }
   }
@@ -2711,7 +2789,7 @@ export function buildR24BlockedFallbackMessage(
     case 'answer_vague_capital':
       return {
         message:
-          "what's the actual number you're working with bro, ballpark is fine",
+          'ballpark is fine bro — like under $500, closer to $1k, or more than that?',
         stage: 'FINANCIAL_SCREENING',
         subStage: null
       };
@@ -3075,6 +3153,27 @@ const CURRENCY_DETECTORS: Array<{
     currency: 'GBP',
     patterns: [/£/, /\b(gbp|pounds?|quid)\b/i, /\d\s*GBP\b/i]
   },
+  // AUD/NZD listed BEFORE USD so the bare "$5000" check doesn't
+  // pre-empt the more specific A$/NZ$ shapes. The USD detector still
+  // owns plain "$" and the word "dollars?".
+  {
+    currency: 'AUD',
+    patterns: [
+      /\bAUD\b/i,
+      /\bA\$\s*\d/i,
+      /\d\s*AUD\b/i,
+      /\b(aussie\s+dollars?|australian\s+dollars?)\b/i
+    ]
+  },
+  {
+    currency: 'NZD',
+    patterns: [
+      /\bNZD\b/i,
+      /\bNZ\$\s*\d/i,
+      /\d\s*NZD\b/i,
+      /\b(kiwi\s+dollars?|new\s+zealand\s+dollars?)\b/i
+    ]
+  },
   {
     currency: 'USD',
     patterns: [/\$\s*\d/, /\b(usd|us dollars?|dollars?)\b/i, /\d\s*USD\b/i]
@@ -3181,7 +3280,14 @@ const VAGUE_CAPITAL_PATTERNS: RegExp[] = [
   /\b(manageable|enough\s+to\s+start|something\s+small|small\s+amount|modest|decent\s+amount|reasonable\s+amount)\b/i,
   /\bstarting\s+(out\s+)?(with|on)\s+(a\s+)?(manageable|small|modest|little|bit)\b/i,
   /\b(i'?ll\s+figure\s+it\s+out|i'?m\s+(working\s+on|building|saving|figuring))\b/i,
-  /\b(plan\s+to|hoping\s+to|tryna|trying\s+to)\s+(get|save|build|raise)\s+(more|up|enough|the\s+capital)?\b/i
+  /\b(plan\s+to|hoping\s+to|tryna|trying\s+to)\s+(get|save|build|raise)\s+(more|up|enough|the\s+capital)?\b/i,
+  // Steven Biggam 2026-04-30: "very little tbh" needs to land here so
+  // we probe with the multi-anchor question instead of falling
+  // through to the generic ambiguous path. Same intent as the older
+  // disqualifier set ("not much"), but kept in vague rather than
+  // disqualifier so the lead gets ONE chance to name a number before
+  // we route them to downsell.
+  /\b(very\s+little|barely\s+anything|hardly\s+anything|next\s+to\s+nothing|barely\s+any|tiny\s+bit|not\s+much\s+tbh|not\s+a\s+lot\s+tbh)\b/i
 ];
 
 function looksLikeVagueCapitalAnswer(text: string): boolean {
@@ -3189,6 +3295,46 @@ function looksLikeVagueCapitalAnswer(text: string): boolean {
     if (p.test(text)) return true;
   }
   return false;
+}
+
+// Pre-objection patterns (Steven Biggam 2026-04-30). Lead pre-emptively
+// flags concern about being asked for a lot of money. Asking the
+// capital question without acknowledging the concern reads tone-deaf
+// and tanks rapport. Caller (R24 directive layer) prepends a one-line
+// reassurance before the probe; voice gate fires a soft signal if the
+// reassurance is missing.
+const CAPITAL_PRE_OBJECTION_PATTERNS: RegExp[] = [
+  /\b(red\s+flag|red[-\s]?flag)\b/i,
+  // "wanna" already implies "to" — the literal "to" is optional.
+  /\bdon'?t\s+(want|wanna)\s+(to\s+)?(spend|invest|put\s+(in|down))\s+(much|a\s+lot|too\s+much)\b/i,
+  /\bdon'?t\s+have\s+much\s+to\s+(invest|spend|put\s+(in|down))\b/i,
+  /\b(i'?m|im)\s+on\s+a\s+(tight\s+)?budget\b/i,
+  /\banyone\s+(asking|wants?|charging)\s+for\s+a\s+lot\b/i,
+  /\b(sketchy|scam|sus|too\s+expensive|overpriced)\b/i,
+  /\bnot\s+(trying|looking|trynna)\s+to\s+(spend|drop|invest)\s+(a\s+lot|much|big)\b/i
+];
+
+export function leadHasPreObjectedToCapital(
+  recentLeadMessages: string[]
+): boolean {
+  const window = recentLeadMessages.slice(-4);
+  for (const msg of window) {
+    if (typeof msg !== 'string') continue;
+    for (const p of CAPITAL_PRE_OBJECTION_PATTERNS) {
+      if (p.test(msg)) return true;
+    }
+  }
+  return false;
+}
+
+// Reassurance phrases — the AI's response counts as "addressed" the
+// pre-objection if any of these (or the exact reassurance line from
+// the directive) appear.
+const REASSURANCE_PHRASES_RE =
+  /\b(no\s+pressure|not\s+(here\s+to\s+)?pressure|not\s+pushing|nah\s+bro\s+(i'?m|im)\s+not\s+here|just\s+need\s+to\s+know\s+(what|where)|point\s+you\s+in\s+the\s+right\s+direction|no\s+stress|chill\s+bro|not\s+forcing|not\s+(trying|trynna)\s+to\s+sell\s+you)\b/i;
+
+export function aiResponseAddressesPreObjection(text: string): boolean {
+  return REASSURANCE_PHRASES_RE.test(text);
 }
 
 // Prop-firm phrase list. Lead responses that reference a prop firm but

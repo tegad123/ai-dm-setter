@@ -136,7 +136,9 @@ type PromptConversationCurrency =
   | 'PHP'
   | 'UGX'
   | 'EUR'
-  | 'CAD';
+  | 'CAD'
+  | 'AUD'
+  | 'NZD';
 
 // ---------------------------------------------------------------------------
 // Master System Prompt Template
@@ -2359,6 +2361,18 @@ Your "stage" field in the JSON output must reflect where the conversation actual
         label: 'CAD / C$',
         approxMinimum: 'CAD 1,350 (equivalent to $1,000 USD)',
         example: 'CAD 1,500',
+        right: "let's gooo bro 💪🏿 that's solid to start with"
+      },
+      AUD: {
+        label: 'AUD / A$',
+        approxMinimum: 'AUD 1,540 (equivalent to $1,000 USD)',
+        example: 'AUD 1,500',
+        right: "let's gooo bro 💪🏿 that's solid to start with"
+      },
+      NZD: {
+        label: 'NZD / NZ$',
+        approxMinimum: 'NZD 1,640 (equivalent to $1,000 USD)',
+        example: 'NZD 2,000',
         right: "let's gooo bro 💪🏿 that's solid to start with"
       }
     };
