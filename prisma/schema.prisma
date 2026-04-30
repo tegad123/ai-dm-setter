@@ -94,6 +94,7 @@ enum IntegrationProvider {
   ANTHROPIC
   CALENDLY
   CALCOM
+  MANYCHAT
 }
 
 enum ContentType {
@@ -153,6 +154,18 @@ enum LeadIntentTag {
 enum LeadSource {
   INBOUND
   OUTBOUND
+}
+
+// Fine-grained conversation origin — distinguishes ManyChat outbound
+// handoff from a future CSV-upload flow. INBOUND is the default. The
+// webhook-processor sets MANYCHAT when it detects the lead was first
+// contacted via ManyChat (subscriber lookup hit on new-conversation
+// creation). UI shows an "Outbound" tag for non-INBOUND sources;
+// analytics can group by source for outbound-vs-inbound ROI.
+enum ConversationSource {
+  INBOUND
+  MANYCHAT
+  MANUAL_UPLOAD
 }
 
 enum DataSource {
@@ -925,6 +938,14 @@ model Conversation {
   typeformFilledNoBooking          Boolean   @default(false)
   typeformFilledNoBookingAt        DateTime?
   typeformFilledNoBookingMessageId String?
+
+  // ── Conversation source (ManyChat handoff, future CSV upload) ─
+  // INBOUND for everything that arrived via the regular webhook path
+  // (lead messaged first). Set to MANYCHAT when the inbound handler
+  // detects a ManyChat subscriber at conversation-creation time —
+  // suppresses the AI's opener (ManyChat already sent one) and
+  // injects an outbound_context block in the system prompt.
+  source               ConversationSource @default(INBOUND)
 
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on

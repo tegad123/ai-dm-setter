@@ -47,7 +47,8 @@ function toLocalConvo(
     priorityScore: c.priorityScore ?? 0,
     qualityScore: c.qualityScore ?? 0,
     scheduledCallAt: c.scheduledCallAt ?? null,
-    hasPendingSuggestion: c.hasPendingSuggestion ?? false
+    hasPendingSuggestion: c.hasPendingSuggestion ?? false,
+    source: c.source ?? 'INBOUND'
   };
 }
 

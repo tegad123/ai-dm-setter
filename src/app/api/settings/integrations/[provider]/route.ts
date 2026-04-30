@@ -13,7 +13,8 @@ const VALID_PROVIDERS = [
   'LEADCONNECTOR',
   'OPENAI',
   'ANTHROPIC',
-  'CALENDLY'
+  'CALENDLY',
+  'MANYCHAT'
 ] as const;
 type Provider = (typeof VALID_PROVIDERS)[number];
 

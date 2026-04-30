@@ -72,6 +72,8 @@ export interface Conversation {
   scheduledCallAt?: string | null;
   /** True when the AI has generated a reply the operator hasn't actioned yet. */
   hasPendingSuggestion?: boolean;
+  /** Conversation origin — INBOUND default, MANYCHAT for outbound handoff. */
+  source?: 'INBOUND' | 'MANYCHAT' | 'MANUAL_UPLOAD';
   createdAt: string;
 }
 

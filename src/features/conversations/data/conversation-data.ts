@@ -54,6 +54,10 @@ export interface Conversation {
   scheduledCallAt?: string | null;
   /** True when the AI has a reply pending operator review (⚡ icon in list). */
   hasPendingSuggestion?: boolean;
+  /** Conversation origin — INBOUND (default) or MANYCHAT (outbound
+   *  handoff). Drives the blue "Outbound" badge in the conversation
+   *  list. MANUAL_UPLOAD reserved for the future CSV path. */
+  source?: 'INBOUND' | 'MANYCHAT' | 'MANUAL_UPLOAD';
 }
 
 export const conversations: Conversation[] = [

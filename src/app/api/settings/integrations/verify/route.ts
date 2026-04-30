@@ -137,6 +137,30 @@ export async function POST(req: NextRequest) {
         break;
       }
 
+      case 'MANYCHAT': {
+        const apiKey = credentials.apiKey;
+        if (!apiKey) {
+          return NextResponse.json({
+            valid: false,
+            error: 'apiKey is required'
+          });
+        }
+        try {
+          const { verifyApiKey } = await import('@/lib/manychat');
+          const res = await verifyApiKey(apiKey);
+          valid = res.valid;
+          if (!valid) {
+            error = res.error || 'ManyChat key invalid or unreachable';
+          }
+          if (valid && res.pageName) {
+            return NextResponse.json({ valid: true, pageName: res.pageName });
+          }
+        } catch (e) {
+          error = e instanceof Error ? e.message : 'Failed to reach ManyChat';
+        }
+        break;
+      }
+
       default:
         return NextResponse.json(
           { valid: false, error: `Unknown provider: ${provider}` },

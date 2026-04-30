@@ -28,7 +28,8 @@ type Provider =
   | 'INSTAGRAM'
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
-  | 'CALENDLY';
+  | 'CALENDLY'
+  | 'MANYCHAT';
 type AIProvider = 'OPENAI' | 'ANTHROPIC';
 
 interface IntegrationStatus {
@@ -71,7 +72,8 @@ export default function IntegrationsPage() {
     INSTAGRAM: false,
     ELEVENLABS: false,
     LEADCONNECTOR: false,
-    CALENDLY: false
+    CALENDLY: false,
+    MANYCHAT: false
   });
 
   // AI provider toggle
@@ -101,6 +103,14 @@ export default function IntegrationsPage() {
   const [calEventTypeUri, setCalEventTypeUri] = useState('');
   const [calSaving, setCalSaving] = useState(false);
   const [calSavedKey, setCalSavedKey] = useState('');
+
+  // Form state -- ManyChat (outbound new-follower handoff)
+  const [mcApiKey, setMcApiKey] = useState('');
+  const [mcOpenerMessage, setMcOpenerMessage] = useState('');
+  const [mcEntryStep, setMcEntryStep] = useState<number>(2);
+  const [mcSaving, setMcSaving] = useState(false);
+  const [mcSavedKey, setMcSavedKey] = useState('');
+  const [mcPageName, setMcPageName] = useState('');
 
   // Meta / Facebook
   const [metaDisconnecting, setMetaDisconnecting] = useState(false);
@@ -143,6 +153,15 @@ export default function IntegrationsPage() {
           if (typeof meta.locationId === 'string')
             setLcLocationId(meta.locationId);
         }
+        // Hydrate ManyChat config from metadata
+        if (i.provider === 'MANYCHAT' && i.metadata) {
+          const meta = i.metadata as any;
+          if (typeof meta.openerMessage === 'string')
+            setMcOpenerMessage(meta.openerMessage);
+          if (typeof meta.entryStep === 'number')
+            setMcEntryStep(meta.entryStep);
+          if (typeof meta.pageName === 'string') setMcPageName(meta.pageName);
+        }
         // Store masked keys from API
         if (i.maskedKey) {
           if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC')
@@ -150,6 +169,7 @@ export default function IntegrationsPage() {
           if (i.provider === 'ELEVENLABS') setElSavedKey(i.maskedKey);
           if (i.provider === 'LEADCONNECTOR') setLcSavedKey(i.maskedKey);
           if (i.provider === 'CALENDLY') setCalSavedKey(i.maskedKey);
+          if (i.provider === 'MANYCHAT') setMcSavedKey(i.maskedKey);
         }
       }
       setStatuses((prev) => ({ ...prev, ...map }));
@@ -380,6 +400,69 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function saveManyChat() {
+    if (!mcApiKey.trim() && !mcSavedKey) {
+      toast.error('Please enter your ManyChat API key');
+      return;
+    }
+    setMcSaving(true);
+    try {
+      // Verify the key first when a new one is being entered. Skip the
+      // verify call when the user is just updating opener / entry step
+      // and the key is already saved.
+      let verifiedPageName = mcPageName;
+      if (mcApiKey.trim()) {
+        const verifyRes = await apiFetch<{
+          valid: boolean;
+          pageName?: string;
+          error?: string;
+        }>('/api/settings/integrations/verify', {
+          method: 'POST',
+          body: JSON.stringify({
+            provider: 'MANYCHAT',
+            credentials: { apiKey: mcApiKey.trim() }
+          })
+        });
+        if (!verifyRes.valid) {
+          toast.error(verifyRes.error || 'ManyChat key invalid');
+          setMcSaving(false);
+          return;
+        }
+        verifiedPageName = verifyRes.pageName || '';
+      }
+
+      const credentials: Record<string, string | number> = {};
+      if (mcApiKey.trim()) credentials.apiKey = mcApiKey.trim();
+      // Mirror non-secret config to credentials too so getCredentials()
+      // returns them in one shot for the prompt-injection path.
+      credentials.openerMessage = mcOpenerMessage.trim();
+      credentials.entryStep = mcEntryStep;
+
+      await apiFetch('/api/settings/integrations/MANYCHAT', {
+        method: 'PUT',
+        body: JSON.stringify({
+          credentials,
+          metadata: {
+            openerMessage: mcOpenerMessage.trim(),
+            entryStep: mcEntryStep,
+            ...(verifiedPageName ? { pageName: verifiedPageName } : {})
+          }
+        })
+      });
+      toast.success('ManyChat integration saved');
+      if (mcApiKey.trim()) {
+        setMcSavedKey(maskKey(mcApiKey));
+        setMcApiKey('');
+      }
+      if (verifiedPageName) setMcPageName(verifiedPageName);
+      setStatuses((prev) => ({ ...prev, MANYCHAT: true }));
+    } catch {
+      toast.error('Failed to save ManyChat integration');
+    } finally {
+      setMcSaving(false);
+    }
+  }
+
   // --------------------------------------------------
   // Disconnect handlers
   // --------------------------------------------------
@@ -401,6 +484,12 @@ export default function IntegrationsPage() {
         setLcLocationId('');
       }
       if (provider === 'CALENDLY') setCalSavedKey('');
+      if (provider === 'MANYCHAT') {
+        setMcSavedKey('');
+        setMcOpenerMessage('');
+        setMcEntryStep(2);
+        setMcPageName('');
+      }
       if (provider === 'META') setMetaMetadata(null);
       if (provider === 'INSTAGRAM') setIgMetadata(null);
     } catch {
@@ -1007,6 +1096,104 @@ export default function IntegrationsPage() {
                 Connect Instagram
               </Button>
             )}
+          </CardFooter>
+        </Card>
+
+        {/* Card: ManyChat — outbound new-follower handoff */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div>
+                <CardTitle>ManyChat</CardTitle>
+                <CardDescription>
+                  Auto-handoff conversations from your ManyChat outbound flows.
+                  New followers who reply to a ManyChat opener get qualified by
+                  the AI without re-introducing the persona.
+                </CardDescription>
+              </div>
+              <StatusBadge connected={statuses.MANYCHAT} />
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-3'>
+            <div className='space-y-1.5'>
+              <Label htmlFor='mc-key'>API Key</Label>
+              <Input
+                id='mc-key'
+                type='password'
+                placeholder={mcSavedKey || 'Paste your ManyChat API key'}
+                value={mcApiKey}
+                onChange={(e) => setMcApiKey(e.target.value)}
+              />
+              {mcSavedKey ? (
+                <p className='text-muted-foreground text-xs'>
+                  Saved key: {mcSavedKey}
+                  {mcPageName ? ` · Connected to ${mcPageName}` : ''}
+                </p>
+              ) : (
+                <p className='text-muted-foreground text-xs'>
+                  Find your API key in ManyChat → Settings → API.
+                </p>
+              )}
+            </div>
+            <div className='space-y-1.5'>
+              <Label htmlFor='mc-opener'>Opener message</Label>
+              <Input
+                id='mc-opener'
+                placeholder='hey [name], saw you just followed...'
+                value={mcOpenerMessage}
+                onChange={(e) =>
+                  setMcOpenerMessage(e.target.value.slice(0, 500))
+                }
+              />
+              <p className='text-muted-foreground text-[11px]'>
+                What does your ManyChat flow send as the first DM? Pasting it
+                here lets the AI reference the same wording on the next turn.
+              </p>
+            </div>
+            <div className='space-y-1.5'>
+              <Label htmlFor='mc-step'>AI starts conversation at</Label>
+              <select
+                id='mc-step'
+                className='border-input bg-background ring-offset-background h-10 w-full rounded-md border px-3 py-2 text-sm'
+                value={mcEntryStep}
+                onChange={(e) => setMcEntryStep(Number(e.target.value) || 2)}
+              >
+                <option value={1}>
+                  Step 1 — AI sends full opener (if ManyChat just says
+                  &quot;hey&quot;)
+                </option>
+                <option value={2}>
+                  Step 2 — AI skips intro, starts with discovery
+                </option>
+                <option value={3}>
+                  Step 3 — AI skips intro + breakdown, starts with work
+                  background
+                </option>
+              </select>
+            </div>
+            {statuses.MANYCHAT ? (
+              <div className='rounded-md bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:bg-blue-950/30 dark:text-blue-300'>
+                ℹ️ Active — ManyChat outbound conversations will be
+                automatically handed off to your AI setter.
+              </div>
+            ) : null}
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            <Button onClick={saveManyChat} disabled={mcSaving}>
+              {mcSaving
+                ? 'Saving…'
+                : statuses.MANYCHAT
+                  ? 'Save Configuration'
+                  : 'Connect ManyChat'}
+            </Button>
+            {statuses.MANYCHAT ? (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('MANYCHAT')}
+              >
+                Disconnect
+              </Button>
+            ) : null}
           </CardFooter>
         </Card>
       </div>

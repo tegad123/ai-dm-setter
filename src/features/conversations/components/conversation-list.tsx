@@ -249,6 +249,15 @@ export function ConversationList({
                       </span>
                     )}
                   </div>
+                  {/* Source badge — outbound (ManyChat) flagged in
+                      blue. INBOUND (default) shows nothing. */}
+                  {convo.source && convo.source !== 'INBOUND' && (
+                    <div className='mt-1'>
+                      <span className='inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'>
+                        Outbound
+                      </span>
+                    </div>
+                  )}
                   {/* AI-generated tags */}
                   {convo.tags && convo.tags.length > 0 && (
                     <div className='mt-1 flex flex-wrap gap-0.5'>

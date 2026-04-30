@@ -170,6 +170,7 @@ export async function GET(request: NextRequest) {
         // send (no review-banner UX).
         hasPendingSuggestion:
           showSuggestionBanner && !wouldAutoSend && c.aiSuggestions.length > 0,
+        source: c.source,
         createdAt: c.createdAt.toISOString()
       };
     });

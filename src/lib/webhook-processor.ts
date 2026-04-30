@@ -593,6 +593,39 @@ export async function processIncomingMessage(
           : false;
     const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
 
+    // ── ManyChat handoff detection (2026-04-30) ───────────────────
+    // For Instagram leads on accounts that have a ManyChat
+    // integration active, check whether this username is a recent
+    // ManyChat subscriber. If yes, the lead just replied to a
+    // ManyChat-sent opener — mark the conversation source MANYCHAT
+    // so the AI suppresses its own opener and prepends an
+    // outbound_context block. Fail-closed: any error → INBOUND.
+    let initialSource: 'INBOUND' | 'MANYCHAT' = 'INBOUND';
+    if (platform === 'INSTAGRAM' && senderHandle) {
+      try {
+        const { getCredentials } = await import('@/lib/credential-store');
+        const creds = await getCredentials(accountId, 'MANYCHAT');
+        if (creds?.apiKey && typeof creds.apiKey === 'string') {
+          const { looksLikeManyChatHandoff } = await import('@/lib/manychat');
+          const isManyChat = await looksLikeManyChatHandoff(
+            creds.apiKey,
+            senderHandle
+          );
+          if (isManyChat) {
+            initialSource = 'MANYCHAT';
+            console.log(
+              `[webhook-processor] ManyChat handoff detected for new lead @${senderHandle} on account ${accountId}`
+            );
+          }
+        }
+      } catch (mcErr) {
+        console.warn(
+          '[webhook-processor] ManyChat handoff detection threw (non-fatal, falling back to INBOUND):',
+          mcErr
+        );
+      }
+    }
+
     // Create new lead + conversation
     lead = await prisma.lead.create({
       data: {
@@ -609,7 +642,11 @@ export async function processIncomingMessage(
           create: {
             aiActive: shouldEnableAI,
             unreadCount: 1,
-            leadEmail: detectedEmail
+            leadEmail: detectedEmail,
+            source: initialSource,
+            // Mirror to leadSource so existing analytics that read
+            // OUTBOUND vs INBOUND continue to work.
+            leadSource: initialSource === 'MANYCHAT' ? 'OUTBOUND' : 'INBOUND'
           }
         }
       },

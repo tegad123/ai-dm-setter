@@ -539,9 +539,49 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const conversationCallState = activeConversationId
     ? await prisma.conversation.findUnique({
         where: { id: activeConversationId },
-        select: { scheduledCallAt: true }
+        select: { scheduledCallAt: true, source: true }
       })
     : null;
+
+  // ManyChat outbound-context block. When the conversation originated
+  // as a ManyChat handoff, prepend an instruction so the AI doesn't
+  // send its own greeting and starts at the configured script step.
+  // Reads metadata (openerMessage, entryStep) from the persona-level
+  // MANYCHAT integration credential. Fail-closed: any read error
+  // skips the block, AI uses its default opener flow.
+  if (conversationCallState?.source === 'MANYCHAT') {
+    try {
+      const { getCredentials } = await import('@/lib/credential-store');
+      const mcCreds = await getCredentials(accountId, 'MANYCHAT');
+      const opener =
+        typeof mcCreds?.openerMessage === 'string'
+          ? mcCreds.openerMessage.trim()
+          : '';
+      const entryStep =
+        typeof mcCreds?.entryStep === 'number' && mcCreds.entryStep >= 1
+          ? mcCreds.entryStep
+          : 1;
+      const stepDescriptor =
+        entryStep === 1
+          ? 'the very start (Step 1)'
+          : entryStep === 2
+            ? 'Step 2 (skip the intro, start with discovery)'
+            : entryStep === 3
+              ? 'Step 3 (skip the intro and breakdown, start with work background)'
+              : `Step ${entryStep}`;
+      const openerLine = opener
+        ? `The outbound opener that ManyChat already sent was: "${opener}"`
+        : 'ManyChat already sent the outbound opener (exact text not configured — assume a brief intro DM).';
+      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted FIRST by an outbound message via ManyChat. ${openerLine}\n\nThe lead is responding to that outreach — they already know who this account is.\n\n  • DO NOT send another opener or greeting.\n  • DO NOT re-introduce the persona / business.\n  • Treat this as a WARM inbound, not a cold start.\n  • Begin the conversation at ${stepDescriptor} of the script.\n  • Acknowledge their reply naturally and move into the configured entry step on the very first turn.\n</outbound_context>`;
+      systemPrompt = outboundBlock + '\n' + systemPrompt;
+    } catch (mcErr) {
+      console.warn(
+        '[ai-engine] ManyChat outbound-context prompt injection failed (non-fatal):',
+        mcErr
+      );
+    }
+  }
+
   // Harvest closer names from both the legacy closerName field and the
   // newer promptConfig.callHandoff.closerName. Lowercased for case-
   // insensitive regex construction inside detectBookingAdvancement.
