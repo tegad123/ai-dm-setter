@@ -8,8 +8,10 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && tsx scripts/lint-schema-defaults.ts && tsx scripts/safe-migrate.ts && next build",
     "db:check-drift": "tsx scripts/check-schema-drift.ts",
+    "db:lint-schema": "tsx scripts/lint-schema-defaults.ts",
+    "db:migrate-safe": "tsx scripts/safe-migrate.ts",
     "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
