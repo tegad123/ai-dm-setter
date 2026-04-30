@@ -889,21 +889,33 @@ export async function processIncomingMessage(
           where: { conversationId, status: 'PENDING' },
           data: { status: 'CANCELLED' }
         });
-        // Create the urgent notification. SYSTEM type + prefixed title
-        // so it sorts / renders distinctly in the operator's feed.
+        // Escalate via unified dispatcher: writes the in-app SYSTEM
+        // notification AND sends the URGENT email when the operator
+        // has notifyOnDistress=true (default ON). 2026-04-30 — was
+        // notif-only previously, which meant operators only saw
+        // distress alerts when they happened to refresh the
+        // dashboard. Email is the right channel for safety alerts.
         try {
-          await prisma.notification.create({
-            data: {
-              accountId,
-              type: 'SYSTEM',
-              title: 'URGENT — distress signal detected, review immediately',
-              body: `${senderName} (@${senderHandle}): the lead's latest message matched a crisis / distress pattern ("${distress.match}"). AI has been paused on this conversation. Please review and respond personally.`,
-              leadId: lead.id
-            }
+          const { escalate } = await import('@/lib/escalation-dispatch');
+          const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+          const link = origin
+            ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+            : undefined;
+          await escalate({
+            type: 'distress',
+            accountId,
+            leadId: lead.id,
+            conversationId,
+            leadName: senderName,
+            leadHandle: senderHandle,
+            title: 'URGENT — distress signal detected, review immediately',
+            body: `${senderName} (@${senderHandle}): the lead's latest message matched a crisis / distress pattern ("${distress.match}"). AI has been paused on this conversation. Please review and respond personally.`,
+            details: `Match: "${distress.match}"`,
+            link
           });
         } catch (notifErr) {
           console.error(
-            '[webhook-processor] Distress notification create failed (non-fatal):',
+            '[webhook-processor] Distress escalation dispatch failed (non-fatal):',
             notifErr
           );
         }
@@ -3003,18 +3015,26 @@ async function sendAIReply(
         data: { status: 'CANCELLED' }
       });
       try {
-        await prisma.notification.create({
-          data: {
-            accountId: lead.accountId,
-            type: 'SYSTEM',
-            title: 'URGENT — distress signal detected, review immediately',
-            body: `${lead.name} (@${lead.handle}): the lead's latest message matched a crisis / distress pattern ("${result.distressMatch ?? 'unknown'}"). AI has been paused. Please review and respond personally. (Layer 2 safety net — Layer 1 was bypassed, investigate.)`,
-            leadId: lead.id
-          }
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          : undefined;
+        await escalate({
+          type: 'distress',
+          accountId: lead.accountId,
+          leadId: lead.id,
+          conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          title: 'URGENT — distress signal detected, review immediately',
+          body: `${lead.name} (@${lead.handle}): the lead's latest message matched a crisis / distress pattern ("${result.distressMatch ?? 'unknown'}"). AI has been paused. Please review and respond personally. (Layer 2 safety net — Layer 1 was bypassed, investigate.)`,
+          details: `Match: "${result.distressMatch ?? 'unknown'}" (Layer 2)`,
+          link
         });
       } catch (notifErr) {
         console.error(
-          '[webhook-processor] Layer 2 distress notification failed (non-fatal):',
+          '[webhook-processor] Layer 2 distress escalation failed (non-fatal):',
           notifErr
         );
       }
@@ -3185,14 +3205,22 @@ async function sendAIReply(
         data: { aiActive: false }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
-      await prisma.notification.create({
-        data: {
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'AI produced empty response — human takeover required',
-          body: `${lead.name} (@${lead.handle}): the AI's last generation had no text content to send (voice quality gate likely exhausted retries on a failing reply). AI is now paused on this conversation. Please review and take over.`,
-          leadId: lead.id
-        }
+      const { escalate } = await import('@/lib/escalation-dispatch');
+      const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+      const link = origin
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        : undefined;
+      await escalate({
+        type: 'ai_stuck',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        conversationId,
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        title: 'AI produced empty response — human takeover required',
+        body: `${lead.name} (@${lead.handle}): the AI's last generation had no text content to send (voice quality gate likely exhausted retries on a failing reply). AI is now paused on this conversation. Please review and take over.`,
+        details: 'Empty AI output at ship time',
+        link
       });
     } catch (err) {
       console.error(
@@ -3233,14 +3261,22 @@ async function sendAIReply(
           data: { aiActive: false }
         });
         broadcastAIStatusChange({ conversationId, aiActive: false });
-        await prisma.notification.create({
-          data: {
-            accountId: lead.accountId,
-            type: 'SYSTEM',
-            title: 'R24 blocked failed-capital call pitch',
-            body: `${lead.name} (@${lead.handle}): AI tried to send booking/call language after the capital gate marked the lead below threshold. Send was blocked before delivery. Please review and send the correct downsell manually.`,
-            leadId: lead.id
-          }
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          : undefined;
+        await escalate({
+          type: 'ai_stuck',
+          accountId: lead.accountId,
+          leadId: lead.id,
+          conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          title: 'R24 blocked failed-capital call pitch',
+          body: `${lead.name} (@${lead.handle}): AI tried to send booking/call language after the capital gate marked the lead below threshold. Send was blocked before delivery. Please review and send the correct downsell manually.`,
+          details: `R24 ship-time block: matched "${badPitchMatch}"`,
+          link
         });
       } catch (err) {
         console.error(
@@ -3289,14 +3325,22 @@ async function sendAIReply(
         data: { aiActive: false }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
-      await prisma.notification.create({
-        data: {
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'AI produced bracketed placeholder — human takeover required',
-          body: `${lead.name} (@${lead.handle}): the AI's last generation contained a literal placeholder token (${match?.[0] ?? '[PLACEHOLDER]'}) that cannot reach the lead — typically "[BOOKING LINK]" or similar. AI is now paused on this conversation. Please review and send the correct URL manually.`,
-          leadId: lead.id
-        }
+      const { escalate } = await import('@/lib/escalation-dispatch');
+      const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+      const link = origin
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        : undefined;
+      await escalate({
+        type: 'ai_stuck',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        conversationId,
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        title: 'AI produced bracketed placeholder — human takeover required',
+        body: `${lead.name} (@${lead.handle}): the AI's last generation contained a literal placeholder token (${match?.[0] ?? '[PLACEHOLDER]'}) that cannot reach the lead — typically "[BOOKING LINK]" or similar. AI is now paused on this conversation. Please review and send the correct URL manually.`,
+        details: `Placeholder leaked: "${match?.[0] ?? '[PLACEHOLDER]'}"`,
+        link
       });
     } catch (err) {
       console.error(
@@ -3352,15 +3396,23 @@ async function sendAIReply(
         data: { aiActive: false }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
-      await prisma.notification.create({
-        data: {
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title:
-            'AI promised a link without including URL — human takeover required',
-          body: `${lead.name} (@${lead.handle}): the AI's last generation announced sending a link ("${linkPromiseMatch[0]}") but did not include the actual URL. Lead would be left waiting. AI is now paused on this conversation. Please review and send the correct link manually.`,
-          leadId: lead.id
-        }
+      const { escalate } = await import('@/lib/escalation-dispatch');
+      const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+      const link = origin
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        : undefined;
+      await escalate({
+        type: 'ai_stuck',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        conversationId,
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        title:
+          'AI promised a link without including URL — human takeover required',
+        body: `${lead.name} (@${lead.handle}): the AI's last generation announced sending a link ("${linkPromiseMatch[0]}") but did not include the actual URL. Lead would be left waiting. AI is now paused on this conversation. Please review and send the correct link manually.`,
+        details: `Link promise without URL: "${linkPromiseMatch[0]}"`,
+        link
       });
     } catch (err) {
       console.error(
@@ -3371,15 +3423,14 @@ async function sendAIReply(
     return;
   }
 
-  // ── Ship-time markdown-formatting guard (P0) ──────────────────
-  // Parallel to the bracketed-placeholder + link-promise ship-time
-  // guards. voice-quality-gate's markdown_in_single_bubble hard fail
-  // + the ai-engine escalate_to_human on retry-exhaustion SHOULD
-  // catch this at generation time, but escalateToHuman is processed
-  // AFTER the ship. This guard blocks the send outright if the
-  // outgoing bubbles contain literal markdown the messaging app
-  // can't render. Drove daetradez 2026-04-24 incident — AI shipped
-  // "1. **FTMO**: https://..." verbatim including the asterisks.
+  // ── Ship-time markdown observer (soft, 2026-04-30) ───────────
+  // Was a hard pause + SYSTEM notif (P0 daetradez 2026-04-24); now
+  // soft-fail best-effort: write a bookingRoutingAudit row so the
+  // dashboard surfaces an amber Action Required item, ship the
+  // bubbles as-is, AI stays active. Lead may see literal asterisks
+  // — readable but ugly — and ops review during their daily check.
+  // Trade-off: fewer cold pauses for cosmetic formatting failures
+  // vs. occasional broken-looking messages reaching the lead.
   const MARKDOWN_NUMBERED_BOLD = /^\s*\d+\.\s+\*\*/m;
   const MARKDOWN_HEADER_LINE = /(^|\n)\s{0,3}#{1,6}\s/;
   const markdownBubble = bubblesForEmptyCheck.find(
@@ -3388,39 +3439,33 @@ async function sendAIReply(
       (MARKDOWN_NUMBERED_BOLD.test(b) || MARKDOWN_HEADER_LINE.test(b))
   );
   if (markdownBubble) {
-    console.error(
-      `[webhook-processor] markdown_in_single_bubble_at_ship for conv ${conversationId} — AI output contained markdown formatting (numbered list with **bold** or ## header) that messenger won't render. Pausing AI, notifying operator, no platform send.`
+    console.warn(
+      `[webhook-processor] markdown_in_single_bubble_at_ship for conv ${conversationId} — sending best effort, logging audit row for dashboard review`
     );
     try {
-      if (result.suggestionId) {
-        await prisma.aISuggestion
-          .update({
-            where: { id: result.suggestionId },
-            data: { wasRejected: true, finalSentText: null }
-          })
-          .catch(() => {});
-      }
-      await prisma.conversation.update({
-        where: { id: conversationId },
-        data: { aiActive: false }
-      });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
-      await prisma.notification.create({
+      await prisma.bookingRoutingAudit.create({
         data: {
+          conversationId,
           accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'AI emitted markdown — human takeover required',
-          body: `${lead.name} (@${lead.handle}): the AI's last generation used markdown formatting (numbered list with **bold** headers or ## headings) that messaging apps render as literal asterisks/hashes. AI is paused on this conversation — please review and send a properly-formatted reply manually.`,
-          leadId: lead.id
+          routingAllowed: false,
+          regenerationForced: false,
+          blockReason: 'gate_exhausted_sent_best_effort',
+          aiStageReported: result.stage || null,
+          aiSubStageReported: `gate=markdown_at_ship${result.subStage ? '|' + result.subStage : ''}`,
+          contentPreview:
+            typeof markdownBubble === 'string'
+              ? markdownBubble.slice(0, 200)
+              : null
         }
       });
-    } catch (err) {
+    } catch (auditErr) {
       console.error(
-        '[webhook-processor] Markdown escalation bookkeeping failed (non-fatal):',
-        err
+        '[webhook-processor] markdown_at_ship audit write failed (non-fatal):',
+        auditErr
       );
     }
-    return;
+    // Fall through — no return, no pause, no notification. The send
+    // path below ships the bubbles as the LLM produced them.
   }
 
   // ── Dedup safety net ──────────────────────────────────────────
@@ -3655,17 +3700,25 @@ async function sendAIReply(
         data: { aiActive: false }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
-      await prisma.notification.create({
-        data: {
-          accountId: lead.accountId,
-          type: 'SYSTEM',
-          title: 'AI escalated conversation — needs human',
-          body: `${lead.name} (@${lead.handle}): AI hit an escalation condition (stuck loop or repeat issue). AI is now paused. Please review the conversation and take over.`,
-          leadId: lead.id
-        }
+      const { escalate } = await import('@/lib/escalation-dispatch');
+      const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+      const link = origin
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        : undefined;
+      await escalate({
+        type: 'ai_stuck',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        conversationId,
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        title: 'AI escalated conversation — needs human',
+        body: `${lead.name} (@${lead.handle}): AI hit an escalation condition (stuck loop or repeat issue). AI is now paused. Please review the conversation and take over.`,
+        details: 'R20 escalateToHuman set by ai-engine retry loop',
+        link
       });
       console.log(
-        `[webhook-processor] R20 escalation to human for ${conversationId} — AI paused, notification created`
+        `[webhook-processor] R20 escalation to human for ${conversationId} — AI paused, escalation dispatched`
       );
     } catch (err) {
       console.error(

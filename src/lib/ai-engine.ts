@@ -1579,21 +1579,49 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             auditErr
           );
         }
-      } else if (unnecessarySchedulingQuestionFailed) {
-        console.error(
-          `[ai-engine] Unnecessary scheduling question gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
+      } else if (
+        unnecessarySchedulingQuestionFailed ||
+        logisticsBeforeQualificationFailed ||
+        repeatedQuestionFailed
+      ) {
+        // Loosened 2026-04-30 (was hard escalate_to_human). The
+        // "AI asked a slightly off follow-up question" class — these
+        // gates produce conversational drift, not lead-facing harm,
+        // so paying for a human pause + manual unblock is more
+        // expensive than letting ops audit later. Same pattern as
+        // the existing fixB / booking-fabrication soft-fail policy
+        // (~line 1541): write a bookingRoutingAudit row with
+        // blockReason='gate_exhausted_sent_best_effort' so the
+        // dashboard surfaces an amber Action Required item, ship
+        // the LLM's last best-effort reply as-is, AI stays active.
+        const gateType = unnecessarySchedulingQuestionFailed
+          ? 'scheduling_q'
+          : logisticsBeforeQualificationFailed
+            ? 'logistics_before_qualification'
+            : 'repeated_question';
+        console.warn(
+          `[ai-engine] ${gateType} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review on convo ${activeConversationId}`
         );
-        parsed.escalateToHuman = true;
-      } else if (logisticsBeforeQualificationFailed) {
-        console.error(
-          `[ai-engine] Logistics-before-qualification gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
-        );
-        parsed.escalateToHuman = true;
-      } else if (repeatedQuestionFailed) {
-        console.error(
-          `[ai-engine] Repeated-question gate exhausted ${MAX_RETRIES + 1} attempts — forcing escalate_to_human on convo ${activeConversationId}`
-        );
-        parsed.escalateToHuman = true;
+        try {
+          await prisma.bookingRoutingAudit.create({
+            data: {
+              conversationId: activeConversationId!,
+              accountId,
+              personaMinimumCapital: capitalThreshold,
+              routingAllowed: false,
+              regenerationForced: true,
+              blockReason: 'gate_exhausted_sent_best_effort',
+              aiStageReported: parsed.stage || null,
+              aiSubStageReported: `gate=${gateType}${parsed.subStage ? '|' + parsed.subStage : ''}`,
+              contentPreview: parsed.message.slice(0, 200)
+            }
+          });
+        } catch (auditErr) {
+          console.error(
+            `[ai-engine] gate_exhausted_sent_best_effort audit write failed (gate=${gateType}, non-fatal):`,
+            auditErr
+          );
+        }
       } else if (homeworkBeforeCallFailed) {
         console.warn(
           `[ai-engine] Homework-before-call gate exhausted ${MAX_RETRIES + 1} attempts — stripping homework URL before send for convo ${activeConversationId}`
@@ -1679,31 +1707,43 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // "soft" — low score from missing emoji, one long sentence,
         // minor voice drift. Best-effort ship for those is fine.
         //
-        // But some voice-quality hard fails produce output that's
-        // objectively UNSHIPPABLE regardless of the rest of the
-        // message:
+        // The "unshippable" classes split (2026-04-30):
+        //
+        // HARD-ESCALATE (parsed.escalateToHuman=true) — output that
+        // objectively breaks the lead-facing message regardless of
+        // surrounding text. Better to pause + human-review than ship.
         //   - bracketed_placeholder_leaked: literal "[BOOKING LINK]"
         //     reaches the lead, who can't click it — Steven Petty
         //     2026-04-20 incident.
         //   - link_promise_without_url: "I'll send you the link" with
         //     no URL anywhere — the ship has nothing to deliver.
-        //   - empty output: nothing to send at all.
+        //   - call_pitch_before_capital_verification: pitching the
+        //     call without verifying capital is a hard R24 violation.
         //
-        // For these unshippable classes, escalate to human instead of
-        // best-effort shipping. The operator review workflow is a
-        // better fallback than shipping a broken message to the lead.
+        // SOFT-FAIL BEST-EFFORT (audit row only) — bad form but the
+        // lead can still parse the intent. Cheaper to ship + audit
+        // than pause.
+        //   - markdown_in_single_bubble: literal **bold** in the
+        //     message — readable, just ugly.
+        //   - repeated_capital_question: redundant ask, lead may
+        //     re-explain instead of getting paused.
+        //
+        // EMPTY OUTPUT also escalates — there's nothing to ship.
         const allBubblesEmpty =
           !Array.isArray(parsed.messages) ||
           parsed.messages.length === 0 ||
           parsed.messages.every(
             (b) => typeof b !== 'string' || b.trim().length === 0
           );
-        const hasUnshippableFailure = quality.hardFails.some(
+        const hardUnshippable = quality.hardFails.some(
           (f) =>
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
+            f.includes('call_pitch_before_capital_verification:')
+        );
+        const softUnshippable = quality.hardFails.find(
+          (f) =>
             f.includes('markdown_in_single_bubble:') ||
-            f.includes('call_pitch_before_capital_verification:') ||
             f.includes('repeated_capital_question:')
         );
         if (allBubblesEmpty) {
@@ -1711,11 +1751,44 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
           );
           parsed.escalateToHuman = true;
-        } else if (hasUnshippableFailure) {
+        } else if (hardUnshippable) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts with UNSHIPPABLE hard fail — forcing escalate_to_human on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
           );
           parsed.escalateToHuman = true;
+        } else if (softUnshippable) {
+          // Soft-fail best-effort (markdown / repeated capital Q).
+          // Audit row → amber Action Required item; AI stays active.
+          const gateType = softUnshippable.includes(
+            'markdown_in_single_bubble:'
+          )
+            ? 'markdown'
+            : 'repeated_capital_question';
+          console.warn(
+            `[ai-engine] ${gateType} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review on convo ${activeConversationId}`
+          );
+          if (activeConversationId) {
+            try {
+              await prisma.bookingRoutingAudit.create({
+                data: {
+                  conversationId: activeConversationId,
+                  accountId,
+                  personaMinimumCapital: capitalThreshold,
+                  routingAllowed: false,
+                  regenerationForced: true,
+                  blockReason: 'gate_exhausted_sent_best_effort',
+                  aiStageReported: parsed.stage || null,
+                  aiSubStageReported: `gate=${gateType}${parsed.subStage ? '|' + parsed.subStage : ''}`,
+                  contentPreview: parsed.message.slice(0, 200)
+                }
+              });
+            } catch (auditErr) {
+              console.error(
+                `[ai-engine] gate_exhausted_sent_best_effort audit write failed (gate=${gateType}, non-fatal):`,
+                auditErr
+              );
+            }
+          }
         } else {
           console.warn(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
