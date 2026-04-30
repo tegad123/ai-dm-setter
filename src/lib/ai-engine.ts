@@ -945,6 +945,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         case 'answer_currency_unclear':
           r24Directive = `The lead gave a capital number but the currency is unclear — no recognized symbol ($, £, ₦, ₵, R, ₱, €, CAD, etc.) and no prior currency context in this conversation. Do NOT assume USD. Do NOT say the amount is good or bad. Do NOT route to booking, downsell, or anywhere else yet. Ask exactly one short clarifying question — for example: "is that in USD bro, or a different currency?" Wait for the answer before classifying. Once they confirm the currency, the next turn will re-evaluate against the threshold and route correctly.`;
           break;
+        case 'answer_vague_capital':
+          r24Directive = `The lead's reply to the capital question was a vague non-answer ("manageable amount", "starting small", "saving up", "I'll figure it out") — no concrete dollar figure was given. Do NOT route to booking. Do NOT pitch the call. Do NOT send the Typeform. Ask ONE short follow-up that pins down a ballpark number, exactly like: "what's the actual number you're working with bro, ballpark is fine". This is your single probe — if the lead dodges again, the next turn will route to the downsell automatically. Do NOT acknowledge the vague answer with "respect the grind" or "love that" — that signals acceptance and the lead will keep dodging.`;
+          break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
       systemPromptForLLM = baseSystemPrompt + r24Override;
@@ -1817,11 +1820,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       case 'answer_total_savings_needs_clarification':
       case 'answer_prop_firm_only':
       case 'answer_currency_unclear':
-        // Prop-firm-only / currency-unclear are ambiguous-class
-        // outcomes for the downstream `capitalOutcome` consumer
-        // (lead.stage mapping). The directive-specific handling
-        // lives in the R24 override switch above; the lead.stage
-        // side just needs "not passed".
+      case 'answer_vague_capital':
+        // Prop-firm-only / currency-unclear / vague-capital are
+        // ambiguous-class outcomes for the downstream
+        // `capitalOutcome` consumer (lead.stage mapping). The
+        // directive-specific handling lives in the R24 override
+        // switch above; the lead.stage side just needs "not
+        // passed".
         capitalOutcome = 'ambiguous';
         break;
       case 'never_asked':
@@ -2602,7 +2607,8 @@ export type R24Reason =
   | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
   | 'answer_total_savings_needs_clarification' // Number given as total savings / stress, not investable capital
   | 'answer_prop_firm_only' // Lead mentioned a prop firm but no personal capital
-  | 'answer_currency_unclear'; // Lead gave a number with no recognized currency symbol/context
+  | 'answer_currency_unclear' // Lead gave a number with no recognized currency symbol/context
+  | 'answer_vague_capital'; // Lead gave a vague non-answer ("manageable amount", "saving up") — probe once
 
 interface R24GateResult {
   /** True = block this response, force regen with override directive. */
@@ -2699,6 +2705,13 @@ export function buildR24BlockedFallbackMessage(
     case 'answer_currency_unclear':
       return {
         message: 'is that in USD bro, or a different currency?',
+        stage: 'FINANCIAL_SCREENING',
+        subStage: null
+      };
+    case 'answer_vague_capital':
+      return {
+        message:
+          "what's the actual number you're working with bro, ballpark is fine",
         stage: 'FINANCIAL_SCREENING',
         subStage: null
       };
@@ -3152,7 +3165,30 @@ interface ParsedLeadAnswer {
     | 'prop_firm_mentioned_no_personal_capital_stated'
     | 'total_savings_or_financial_stress'
     | 'no_pattern_matched'
-    | 'generic';
+    | 'generic'
+    | 'vague_no_number';
+}
+
+// Vague non-answers to a capital question — phrases that DON'T name a
+// number but pretend to. Lead said "starting with a manageable
+// amount" / "saving up" / "working on it" — needs a specific probe.
+// Distinct from the disqualifier set ("not much", "broke") because
+// the lead may genuinely have capital but is dodging the dollar
+// figure. First occurrence → ask the ballpark probe (FIX 1). Second
+// occurrence → checkR24Verification routes below_threshold via the
+// 2-evasions guard (FIX 3). Amos Edoja 2026-04-30.
+const VAGUE_CAPITAL_PATTERNS: RegExp[] = [
+  /\b(manageable|enough\s+to\s+start|something\s+small|small\s+amount|modest|decent\s+amount|reasonable\s+amount)\b/i,
+  /\bstarting\s+(out\s+)?(with|on)\s+(a\s+)?(manageable|small|modest|little|bit)\b/i,
+  /\b(i'?ll\s+figure\s+it\s+out|i'?m\s+(working\s+on|building|saving|figuring))\b/i,
+  /\b(plan\s+to|hoping\s+to|tryna|trying\s+to)\s+(get|save|build|raise)\s+(more|up|enough|the\s+capital)?\b/i
+];
+
+function looksLikeVagueCapitalAnswer(text: string): boolean {
+  for (const p of VAGUE_CAPITAL_PATTERNS) {
+    if (p.test(text)) return true;
+  }
+  return false;
 }
 
 // Prop-firm phrase list. Lead responses that reference a prop firm but
@@ -3394,6 +3430,16 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     return { kind: 'hedging', amount: null };
   }
 
+  // 3b. Vague non-answer (FIX 1, Amos Edoja 2026-04-30). Lead used a
+  //    pseudo-answer phrase that pretends to address the capital
+  //    question without naming a number ("manageable amount",
+  //    "something small to start"). First occurrence: caller probes
+  //    once with a ballpark prompt. Second occurrence (counted in
+  //    checkR24Verification): routed to below_threshold.
+  if (looksLikeVagueCapitalAnswer(text)) {
+    return { kind: 'ambiguous', amount: null, reason: 'vague_no_number' };
+  }
+
   // 4. Ambiguous — can't tell. Don't pass the gate.
   if (
     /\b(depends|varies|some|a\s+bit|not\s+sure|dunno|idk|i'?ll\s+let\s+you\s+know|it'?s\s+complicated|maybe)\b/i.test(
@@ -3535,11 +3581,19 @@ async function checkR24Verification(
     patterns.push(new RegExp(escaped, 'i'));
   }
 
+  // Track BOTH the first capital Q (anchor for "answers after this
+  // point") AND the total count of capital Qs the AI has asked. The
+  // count drives the FIX 3 evasion guard: if the lead has been asked
+  // twice but never named a number, route to downsell rather than
+  // letting the AI ask a third time.
   let verificationAskedAt: { id: string; timestamp: Date } | null = null;
+  let totalCapitalQuestionsAsked = 0;
   for (const msg of aiMsgs) {
     if (patterns.some((p) => p.test(msg.content))) {
-      verificationAskedAt = { id: msg.id, timestamp: msg.timestamp };
-      break;
+      totalCapitalQuestionsAsked++;
+      if (!verificationAskedAt) {
+        verificationAskedAt = { id: msg.id, timestamp: msg.timestamp };
+      }
     }
   }
 
@@ -3662,6 +3716,52 @@ async function checkR24Verification(
     conversationId,
     mergedAnswers.map((m) => m.content)
   );
+
+  // ── FIX 3 (Amos Edoja 2026-04-30): Two-evasions guard ──────────
+  // If the AI has asked the capital question 2+ times AND no answer
+  // ever named a number, the lead is dodging — route to downsell
+  // instead of asking a third time. This catches the failure mode
+  // where the lead drip-feeds vague non-answers ("manageable
+  // amount", "starting small") and the AI keeps accepting them.
+  const hasAnyAmountAnswer = classifications.some(
+    (c) => c.cls.kind === 'amount'
+  );
+  if (totalCapitalQuestionsAsked >= 2 && !hasAnyAmountAnswer) {
+    return {
+      blocked: true,
+      reason: 'answer_below_threshold',
+      parsedAmount: null,
+      parsedCurrency: classification.currency ?? null,
+      parsedAmountUsd: null,
+      verificationAskedAt: askedId,
+      verificationConfirmedAt: null
+    };
+  }
+
+  // ── FIX 2 (Amos Edoja 2026-04-30): Foreign currency, no amount ──
+  // If the lead's reply mentions a non-USD currency word
+  // (naira/NGN/₦, peso/PHP/₱, rupee/INR/₹, etc.) but never named a
+  // numeric amount, treat as below threshold. The currency word
+  // itself is the disqualifying signal — they're not banked in USD,
+  // and without a number we can't even hedge a conversion. Better to
+  // route to the downsell now than ask another clarifying question.
+  if (!hasAnyAmountAnswer) {
+    const foreignCurrency = detectCurrencyFromTexts(
+      mergedAnswers.map((m) => m.content)
+    );
+    if (foreignCurrency && foreignCurrency !== 'USD') {
+      return {
+        blocked: true,
+        reason: 'answer_below_threshold',
+        parsedAmount: null,
+        parsedCurrency: foreignCurrency,
+        parsedAmountUsd: null,
+        verificationAskedAt: askedId,
+        verificationConfirmedAt: null
+      };
+    }
+  }
+
   switch (classification.kind) {
     case 'amount': {
       const amt = classification.amount!;
@@ -3742,12 +3842,14 @@ async function checkR24Verification(
       return {
         blocked: true,
         reason:
-          classification.reason ===
-          'prop_firm_mentioned_no_personal_capital_stated'
-            ? 'answer_prop_firm_only'
-            : classification.reason === 'total_savings_or_financial_stress'
-              ? 'answer_total_savings_needs_clarification'
-              : 'answer_ambiguous',
+          classification.reason === 'vague_no_number'
+            ? 'answer_vague_capital'
+            : classification.reason ===
+                'prop_firm_mentioned_no_personal_capital_stated'
+              ? 'answer_prop_firm_only'
+              : classification.reason === 'total_savings_or_financial_stress'
+                ? 'answer_total_savings_needs_clarification'
+                : 'answer_ambiguous',
         parsedAmount: classification.amount,
         parsedCurrency: classification.currency ?? null,
         parsedAmountUsd:
