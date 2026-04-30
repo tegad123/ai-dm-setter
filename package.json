@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && prisma migrate deploy && next build",
+    "db:check-drift": "tsx scripts/check-schema-drift.ts",
     "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
