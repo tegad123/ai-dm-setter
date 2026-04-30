@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(
@@ -34,11 +34,11 @@ export async function POST(
       where: {
         id: body.suggestionId,
         conversationId,
-        accountId: auth.accountId
+        ...(isPlatformOperator(auth.role) ? {} : { accountId: auth.accountId })
       },
       include: {
         conversation: {
-          select: { lead: { select: { platform: true } } }
+          select: { lead: { select: { platform: true, accountId: true } } }
         }
       }
     });
@@ -73,7 +73,7 @@ export async function POST(
     await prisma.trainingEvent
       .create({
         data: {
-          accountId: auth.accountId,
+          accountId: suggestion.conversation.lead.accountId,
           conversationId,
           suggestionId: suggestion.id,
           type: 'REJECTED',

@@ -10,7 +10,9 @@ const PROVIDERS = [
   'INSTAGRAM',
   'ELEVENLABS',
   'LEADCONNECTOR',
-  'CALENDLY'
+  'CALENDLY',
+  'MANYCHAT',
+  'TYPEFORM'
 ] as const;
 
 function maskApiKey(key: string | undefined | null): string | null {
@@ -22,15 +24,21 @@ export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
 
-    const credentials = await prisma.integrationCredential.findMany({
-      where: { accountId: auth.accountId },
-      select: {
-        provider: true,
-        isActive: true,
-        verifiedAt: true,
-        metadata: true
-      }
-    });
+    const [account, credentials] = await Promise.all([
+      prisma.account.findUnique({
+        where: { id: auth.accountId },
+        select: { id: true, manyChatWebhookKey: true }
+      }),
+      prisma.integrationCredential.findMany({
+        where: { accountId: auth.accountId },
+        select: {
+          provider: true,
+          isActive: true,
+          verifiedAt: true,
+          metadata: true
+        }
+      })
+    ]);
 
     // Build status for all providers, including masked key for connected ones
     const integrations = await Promise.all(
@@ -46,7 +54,9 @@ export async function GET(req: NextRequest) {
             'ANTHROPIC',
             'ELEVENLABS',
             'LEADCONNECTOR',
-            'CALENDLY'
+            'CALENDLY',
+            'MANYCHAT',
+            'TYPEFORM'
           ].includes(provider)
         ) {
           try {
@@ -70,7 +80,22 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    return NextResponse.json({ integrations });
+    const persona = await prisma.aIPersona.findFirst({
+      where: { accountId: auth.accountId },
+      orderBy: { updatedAt: 'desc' },
+      select: { promptConfig: true }
+    });
+
+    return NextResponse.json({
+      integrations,
+      account: account
+        ? {
+            id: account.id,
+            manyChatWebhookKey: account.manyChatWebhookKey
+          }
+        : null,
+      personaConfig: persona?.promptConfig ?? null
+    });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(

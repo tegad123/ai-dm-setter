@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, scopedAccountId } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     const platform = searchParams.get('platform'); // "INSTAGRAM" | "FACEBOOK"
     const qualification = searchParams.get('qualification'); // "qualified" | "unqualified"
     const tagFilter = searchParams.get('tag'); // "cold-pitch" to surface SPAM bucket; omit = exclude
+    const accountId = scopedAccountId(auth, searchParams.get('accountId'));
 
     // Cold-pitch / SPAM gating. By default (no `tag` param) the
     // conversations list excludes spam-bucket rows so Omar-style
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest) {
     // explicitly passes `?tag=cold-pitch`, we INVERT the filter and
     // show only those rows.
     const leadFilter: Record<string, unknown> = {
-      accountId: auth.accountId,
+      accountId,
       ...(search
         ? {
             OR: [
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
     // showSuggestionBanner is the account-level master switch — when
     // false, ⚡ never shows anywhere (matches the banner endpoint).
     const account = await prisma.account.findUnique({
-      where: { id: auth.accountId },
+      where: { id: accountId },
       select: {
         awayModeInstagram: true,
         awayModeFacebook: true,

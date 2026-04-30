@@ -9,6 +9,10 @@ export interface AuthContext {
   accountId: string;
 }
 
+export function isPlatformOperator(role: string | null | undefined): boolean {
+  return role === 'SUPER_ADMIN' || role === 'MANAGER';
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function requireAuth(_request?: any): Promise<AuthContext> {
   const { userId: clerkUserId } = await auth();
@@ -146,6 +150,38 @@ export async function requireSuperAdmin(_request?: any): Promise<AuthContext> {
     throw new AuthError('Forbidden — super admin required', 403);
   }
   return ctx;
+}
+
+/**
+ * SUPER_ADMIN and MANAGER can read/action platform-wide operational data.
+ * Use requireSuperAdmin for destructive/account-settings/billing surfaces.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function requirePlatformAdmin(
+  _request?: any
+): Promise<AuthContext> {
+  const ctx = await requireAuth(_request);
+  if (!isPlatformOperator(ctx.role)) {
+    throw new AuthError('Forbidden — platform admin required', 403);
+  }
+  return ctx;
+}
+
+export function canAccessAccount(
+  auth: Pick<AuthContext, 'role' | 'accountId'>,
+  accountId: string
+): boolean {
+  return isPlatformOperator(auth.role) || auth.accountId === accountId;
+}
+
+export function scopedAccountId(
+  auth: Pick<AuthContext, 'role' | 'accountId'>,
+  requestedAccountId?: string | null
+): string {
+  if (isPlatformOperator(auth.role) && requestedAccountId) {
+    return requestedAccountId;
+  }
+  return auth.accountId;
 }
 
 export class AuthError extends Error {

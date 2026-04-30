@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 const PENDING_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -36,12 +36,17 @@ export async function GET(
     // (daetradez 2026-04-23 — 177 pre-graduation rows still sat in
     // the DB after awayModeInstagram flipped on).
     const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId, lead: { accountId: auth.accountId } },
+      where: {
+        id: conversationId,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       select: {
         id: true,
         aiActive: true,
         autoSendOverride: true,
-        lead: { select: { platform: true } }
+        lead: { select: { platform: true, accountId: true } }
       }
     });
     if (!conversation) {
@@ -52,7 +57,7 @@ export async function GET(
     }
 
     const account = await prisma.account.findUnique({
-      where: { id: auth.accountId },
+      where: { id: conversation.lead.accountId },
       select: {
         awayModeInstagram: true,
         awayModeFacebook: true,

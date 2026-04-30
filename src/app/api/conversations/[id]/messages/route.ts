@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import {
   broadcastNewMessage,
   broadcastConversationUpdate,
@@ -19,7 +19,12 @@ export async function GET(
 
     // Verify conversation belongs to this account
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } }
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      }
     });
     if (!conversation) {
       return NextResponse.json(
@@ -89,7 +94,13 @@ export async function POST(
 
     // Verify conversation belongs to this account
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } }
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
+      include: { lead: { select: { accountId: true } } }
     });
     if (!conversation) {
       return NextResponse.json(
@@ -141,7 +152,7 @@ export async function POST(
 
         if (recentSuggestion) {
           const accountRow = await prisma.account.findUnique({
-            where: { id: auth.accountId },
+            where: { id: conversation.lead.accountId },
             select: { trainingPhase: true }
           });
           const isOnboarding = accountRow?.trainingPhase === 'ONBOARDING';
@@ -178,7 +189,7 @@ export async function POST(
           // logic here so direct-API overrides (dashboard "send as human")
           // also accumulate training signal regardless of phase.
           await prisma.account.update({
-            where: { id: auth.accountId },
+            where: { id: conversation.lead.accountId },
             data: { trainingOverrideCount: { increment: 1 } }
           });
         }

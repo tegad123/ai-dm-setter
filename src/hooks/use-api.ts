@@ -137,7 +137,8 @@ export function useConversations(
   priority?: boolean,
   unread?: boolean,
   platform?: string,
-  qualification?: 'qualified' | 'unqualified'
+  qualification?: 'qualified' | 'unqualified',
+  accountId?: string | null
 ) {
   const {
     data: raw,
@@ -151,8 +152,9 @@ export function useConversations(
     if (unread) p.unread = 'true';
     if (platform) p.platform = platform;
     if (qualification) p.qualification = qualification;
+    if (accountId) p.accountId = accountId;
     return getConversations(Object.keys(p).length ? p : undefined);
-  }, [search, priority, unread, platform, qualification]);
+  }, [search, priority, unread, platform, qualification, accountId]);
   // API returns { conversations: [...] } — unwrap
   const conversations = Array.isArray(raw)
     ? raw

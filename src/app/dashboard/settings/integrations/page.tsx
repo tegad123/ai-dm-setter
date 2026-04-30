@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
+import { Copy } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,7 +30,8 @@ type Provider =
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'CALENDLY'
-  | 'MANYCHAT';
+  | 'MANYCHAT'
+  | 'TYPEFORM';
 type AIProvider = 'OPENAI' | 'ANTHROPIC';
 
 interface IntegrationStatus {
@@ -39,6 +41,24 @@ interface IntegrationStatus {
   metadata: Record<string, any> | null;
   maskedKey?: string | null;
 }
+
+interface IntegrationsResponse {
+  integrations: IntegrationStatus[];
+  account: {
+    id: string;
+    manyChatWebhookKey: string;
+  } | null;
+  personaConfig: Record<string, any> | null;
+}
+
+const TYPEFORM_MAPPING_FIELDS = [
+  ['email', 'Email field ID'],
+  ['instagramUsername', 'Instagram username field ID'],
+  ['capitalAmount', 'Capital amount field ID'],
+  ['scheduledCallTime', 'Call scheduled time field ID'],
+  ['fullName', 'Full name field ID'],
+  ['tradingExperience', 'Trading experience field ID']
+] as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +79,25 @@ function StatusBadge({ connected }: { connected: boolean }) {
   );
 }
 
+function CopyButton({ value }: { value: string }) {
+  return (
+    <Button
+      type='button'
+      variant='outline'
+      size='sm'
+      className='shrink-0 gap-1.5'
+      disabled={!value}
+      onClick={async () => {
+        await navigator.clipboard.writeText(value);
+        toast.success('Copied');
+      }}
+    >
+      <Copy className='h-3.5 w-3.5' />
+      Copy
+    </Button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -73,7 +112,8 @@ export default function IntegrationsPage() {
     ELEVENLABS: false,
     LEADCONNECTOR: false,
     CALENDLY: false,
-    MANYCHAT: false
+    MANYCHAT: false,
+    TYPEFORM: false
   });
 
   // AI provider toggle
@@ -111,6 +151,23 @@ export default function IntegrationsPage() {
   const [mcSaving, setMcSaving] = useState(false);
   const [mcSavedKey, setMcSavedKey] = useState('');
   const [mcPageName, setMcPageName] = useState('');
+  const [accountId, setAccountId] = useState('');
+  const [manyChatWebhookKey, setManyChatWebhookKey] = useState('');
+
+  // Form state -- Typeform application + booking handoff
+  const [tfApiKey, setTfApiKey] = useState('');
+  const [tfWebhookSecret, setTfWebhookSecret] = useState('');
+  const [tfFormId, setTfFormId] = useState('');
+  const [tfSaving, setTfSaving] = useState(false);
+  const [tfSavedKey, setTfSavedKey] = useState('');
+  const [tfFieldMapping, setTfFieldMapping] = useState({
+    email: '',
+    instagramUsername: '',
+    capitalAmount: '',
+    tradingExperience: '',
+    scheduledCallTime: '',
+    fullName: ''
+  });
 
   // Meta / Facebook
   const [metaDisconnecting, setMetaDisconnecting] = useState(false);
@@ -133,9 +190,28 @@ export default function IntegrationsPage() {
 
   const fetchStatuses = useCallback(async () => {
     try {
-      const data = await apiFetch<{ integrations: IntegrationStatus[] }>(
+      const data = await apiFetch<IntegrationsResponse>(
         '/api/settings/integrations'
       );
+      if (data.account) {
+        setAccountId(data.account.id);
+        setManyChatWebhookKey(data.account.manyChatWebhookKey);
+      }
+      const existingTypeformMapping =
+        data.personaConfig?.typeformFieldMapping &&
+        typeof data.personaConfig.typeformFieldMapping === 'object'
+          ? data.personaConfig.typeformFieldMapping
+          : null;
+      if (existingTypeformMapping) {
+        setTfFieldMapping((prev) => ({
+          ...prev,
+          ...Object.fromEntries(
+            Object.entries(existingTypeformMapping).filter(
+              ([, v]) => typeof v === 'string'
+            )
+          )
+        }));
+      }
       const map: Record<string, boolean> = {};
       for (const i of data.integrations) {
         map[i.provider] = i.isConnected;
@@ -162,6 +238,20 @@ export default function IntegrationsPage() {
             setMcEntryStep(meta.entryStep);
           if (typeof meta.pageName === 'string') setMcPageName(meta.pageName);
         }
+        if (i.provider === 'TYPEFORM' && i.metadata) {
+          const meta = i.metadata as any;
+          if (typeof meta.formId === 'string') setTfFormId(meta.formId);
+          if (meta.fieldMapping && typeof meta.fieldMapping === 'object') {
+            setTfFieldMapping((prev) => ({
+              ...prev,
+              ...Object.fromEntries(
+                Object.entries(meta.fieldMapping).filter(
+                  ([, v]) => typeof v === 'string'
+                )
+              )
+            }));
+          }
+        }
         // Store masked keys from API
         if (i.maskedKey) {
           if (i.provider === 'OPENAI' || i.provider === 'ANTHROPIC')
@@ -170,6 +260,7 @@ export default function IntegrationsPage() {
           if (i.provider === 'LEADCONNECTOR') setLcSavedKey(i.maskedKey);
           if (i.provider === 'CALENDLY') setCalSavedKey(i.maskedKey);
           if (i.provider === 'MANYCHAT') setMcSavedKey(i.maskedKey);
+          if (i.provider === 'TYPEFORM') setTfSavedKey(i.maskedKey);
         }
       }
       setStatuses((prev) => ({ ...prev, ...map }));
@@ -463,6 +554,73 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function saveTypeform() {
+    if (!tfApiKey.trim() && !tfSavedKey && !tfWebhookSecret.trim()) {
+      toast.error('Please enter a Typeform API key or webhook secret');
+      return;
+    }
+    if (!tfWebhookSecret.trim() && !statuses.TYPEFORM) {
+      toast.error('Please enter the Typeform webhook secret');
+      return;
+    }
+    setTfSaving(true);
+    try {
+      if (tfApiKey.trim()) {
+        const verifyRes = await apiFetch<{
+          valid: boolean;
+          error?: string;
+        }>('/api/settings/integrations/verify', {
+          method: 'POST',
+          body: JSON.stringify({
+            provider: 'TYPEFORM',
+            credentials: { apiKey: tfApiKey.trim() }
+          })
+        });
+        if (!verifyRes.valid) {
+          toast.error(verifyRes.error || 'Typeform API key invalid');
+          setTfSaving(false);
+          return;
+        }
+      }
+
+      const cleanMapping = Object.fromEntries(
+        Object.entries(tfFieldMapping)
+          .map(([key, value]) => [key, value.trim()])
+          .filter(([, value]) => value.length > 0)
+      );
+      const credentials: Record<string, unknown> = {
+        fieldMapping: cleanMapping
+      };
+      if (tfApiKey.trim()) credentials.apiKey = tfApiKey.trim();
+      if (tfWebhookSecret.trim())
+        credentials.webhookSecret = tfWebhookSecret.trim();
+
+      await apiFetch('/api/settings/integrations/TYPEFORM', {
+        method: 'PUT',
+        body: JSON.stringify({
+          credentials,
+          metadata: {
+            formId: tfFormId.trim(),
+            fieldMapping: cleanMapping,
+            hasWebhookSecret:
+              Boolean(tfWebhookSecret.trim()) || statuses.TYPEFORM
+          }
+        })
+      });
+      toast.success('Typeform integration saved');
+      if (tfApiKey.trim()) {
+        setTfSavedKey(maskKey(tfApiKey));
+        setTfApiKey('');
+      }
+      setTfWebhookSecret('');
+      setStatuses((prev) => ({ ...prev, TYPEFORM: true }));
+    } catch {
+      toast.error('Failed to save Typeform integration');
+    } finally {
+      setTfSaving(false);
+    }
+  }
+
   // --------------------------------------------------
   // Disconnect handlers
   // --------------------------------------------------
@@ -490,6 +648,12 @@ export default function IntegrationsPage() {
         setMcEntryStep(2);
         setMcPageName('');
       }
+      if (provider === 'TYPEFORM') {
+        setTfSavedKey('');
+        setTfApiKey('');
+        setTfWebhookSecret('');
+        setTfFormId('');
+      }
       if (provider === 'META') setMetaMetadata(null);
       if (provider === 'INSTAGRAM') setIgMetadata(null);
     } catch {
@@ -513,6 +677,11 @@ export default function IntegrationsPage() {
   }
 
   const aiConnected = statuses[selectedAI];
+  const appUrl = 'https://qualifydms.io';
+  const manyChatWebhookUrl = `${appUrl}/api/webhooks/manychat-handoff`;
+  const typeformWebhookUrl = accountId
+    ? `${appUrl}/api/webhooks/typeform?accountId=${accountId}`
+    : `${appUrl}/api/webhooks/typeform?accountId=...`;
 
   return (
     <div className='flex flex-1 flex-col gap-6 p-4 md:p-6'>
@@ -1115,6 +1284,31 @@ export default function IntegrationsPage() {
             </div>
           </CardHeader>
           <CardContent className='space-y-3'>
+            <div className='space-y-2 rounded-md border p-3'>
+              <Label>Your ManyChat webhook URL</Label>
+              <div className='flex gap-2'>
+                <Input
+                  readOnly
+                  value={manyChatWebhookUrl}
+                  className='font-mono text-xs'
+                />
+                <CopyButton value={manyChatWebhookUrl} />
+              </div>
+              <Label>Your webhook key</Label>
+              <div className='flex gap-2'>
+                <Input
+                  readOnly
+                  value={manyChatWebhookKey || 'Loading...'}
+                  className='font-mono text-xs'
+                />
+                <CopyButton value={manyChatWebhookKey} />
+              </div>
+              <p className='text-muted-foreground text-xs'>
+                Add an External Request step to the end of every ManyChat flow.
+                Use the URL above with your webhook key in the X-QualifyDMs-Key
+                header.
+              </p>
+            </div>
             <div className='space-y-1.5'>
               <Label htmlFor='mc-key'>API Key</Label>
               <Input
@@ -1190,6 +1384,116 @@ export default function IntegrationsPage() {
               <Button
                 variant='outline'
                 onClick={() => disconnectProvider('MANYCHAT')}
+              >
+                Disconnect
+              </Button>
+            ) : null}
+          </CardFooter>
+        </Card>
+
+        {/* Card: Typeform — application + booking handoff */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div>
+                <CardTitle>Typeform</CardTitle>
+                <CardDescription>
+                  Capture application answers and booked call times from your
+                  Typeform form.
+                </CardDescription>
+              </div>
+              <StatusBadge connected={statuses.TYPEFORM} />
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            <div className='space-y-2'>
+              <Label htmlFor='tf-api-key'>API Key</Label>
+              <Input
+                id='tf-api-key'
+                type='password'
+                placeholder={tfSavedKey || 'Paste your Typeform API key'}
+                value={tfApiKey}
+                onChange={(e) => setTfApiKey(e.target.value)}
+              />
+              {tfSavedKey ? (
+                <p className='text-muted-foreground text-xs'>
+                  Saved key: {tfSavedKey}
+                </p>
+              ) : null}
+            </div>
+
+            <div className='space-y-2'>
+              <Label htmlFor='tf-secret'>Webhook secret</Label>
+              <Input
+                id='tf-secret'
+                type='password'
+                placeholder={
+                  statuses.TYPEFORM
+                    ? 'Saved. Enter a new secret to rotate'
+                    : 'Paste the Typeform webhook secret'
+                }
+                value={tfWebhookSecret}
+                onChange={(e) => setTfWebhookSecret(e.target.value)}
+              />
+            </div>
+
+            <div className='space-y-2 rounded-md border p-3'>
+              <Label>Your Typeform webhook URL</Label>
+              <div className='flex gap-2'>
+                <Input
+                  readOnly
+                  value={typeformWebhookUrl}
+                  className='font-mono text-xs'
+                />
+                <CopyButton value={typeformWebhookUrl} />
+              </div>
+            </div>
+
+            <div className='space-y-2'>
+              <Label htmlFor='tf-form-id'>Form ID</Label>
+              <Input
+                id='tf-form-id'
+                placeholder='Paste the Typeform form ID'
+                value={tfFormId}
+                onChange={(e) => setTfFormId(e.target.value)}
+              />
+            </div>
+
+            <details className='rounded-md border p-3' open>
+              <summary className='cursor-pointer text-sm font-medium'>
+                Field Mapping
+              </summary>
+              <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                {TYPEFORM_MAPPING_FIELDS.map(([key, label]) => (
+                  <div key={key} className='space-y-1.5'>
+                    <Label htmlFor={`tf-${key}`}>{label}</Label>
+                    <Input
+                      id={`tf-${key}`}
+                      value={tfFieldMapping[key as keyof typeof tfFieldMapping]}
+                      onChange={(e) =>
+                        setTfFieldMapping((prev) => ({
+                          ...prev,
+                          [key]: e.target.value
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </details>
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            <Button onClick={saveTypeform} disabled={tfSaving}>
+              {tfSaving
+                ? 'Saving...'
+                : statuses.TYPEFORM
+                  ? 'Save Typeform'
+                  : 'Connect Typeform'}
+            </Button>
+            {statuses.TYPEFORM ? (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('TYPEFORM')}
               >
                 Disconnect
               </Button>

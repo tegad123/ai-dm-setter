@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,12 @@ export async function POST(
 
     // Verify conversation belongs to this account
     const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId, lead: { accountId: auth.accountId } }
+      where: {
+        id: conversationId,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      }
     });
     if (!conversation) {
       return NextResponse.json(

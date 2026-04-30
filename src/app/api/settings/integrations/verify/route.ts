@@ -161,6 +161,31 @@ export async function POST(req: NextRequest) {
         break;
       }
 
+      case 'TYPEFORM': {
+        const apiKey = credentials.apiKey;
+        if (!apiKey) {
+          return NextResponse.json({
+            valid: false,
+            error: 'apiKey is required'
+          });
+        }
+        try {
+          const res = await fetch(
+            'https://api.typeform.com/forms?page_size=1',
+            {
+              headers: { Authorization: `Bearer ${apiKey}` }
+            }
+          );
+          valid = res.ok;
+          if (!valid) {
+            error = `Typeform returned ${res.status}`;
+          }
+        } catch (e) {
+          error = e instanceof Error ? e.message : 'Failed to reach Typeform';
+        }
+        break;
+      }
+
       default:
         return NextResponse.json(
           { valid: false, error: `Unknown provider: ${provider}` },

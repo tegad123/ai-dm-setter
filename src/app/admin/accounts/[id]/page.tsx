@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { headers } from 'next/headers';
-import { requireSuperAdmin } from '@/lib/auth-guard';
+import { requirePlatformAdmin } from '@/lib/auth-guard';
 import { AccountInfoCard } from '@/features/admin/components/account-info-card';
 import { HealthMonitor } from '@/features/admin/components/health-monitor';
 import { ActivityStats } from '@/features/admin/components/activity-stats';
@@ -35,7 +35,7 @@ export default async function AdminAccountDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireSuperAdmin();
+  await requirePlatformAdmin();
   const { id } = await params;
   const data = await fetchDetail(id);
 

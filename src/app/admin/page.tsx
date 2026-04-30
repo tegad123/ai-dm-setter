@@ -2,10 +2,12 @@
 // Server component fetches once + renders client-side filter table.
 
 import Link from 'next/link';
-import { requireSuperAdmin } from '@/lib/auth-guard';
+import { requirePlatformAdmin } from '@/lib/auth-guard';
 import { headers } from 'next/headers';
 import { AccountsTable } from '@/features/admin/components/accounts-table';
 import { AdminSummaryCards } from '@/features/admin/components/admin-summary-cards';
+import { GlobalActionFeed } from '@/features/admin/components/global-action-feed';
+import { AddManagerForm } from '@/features/admin/components/add-manager-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,10 +21,13 @@ interface AdminAccountRow {
   planStatus: string;
   health: string;
   lastHealthCheck: string | null;
+  activeConversations: number;
+  todaysVolume: number;
+  qualifiedToday: number;
+  actionItemCount: number;
   leadsTotal: number;
-  leadsToday: number;
   aiMessagesToday: number;
-  callsBookedMonth: number;
+  callsBooked: number;
   revenueMonth: number;
   monthlyApiCostUsd: number;
   lastActive: string | null;
@@ -36,10 +41,22 @@ interface AdminSummary {
   apiCostMonth: number;
   revenueMonth: number;
 }
+interface GlobalActionItem {
+  id: string;
+  accountId: string;
+  accountName: string;
+  conversationId: string | null;
+  leadName: string;
+  label: string;
+  severity: 'RED' | 'AMBER';
+  occurredAt: string;
+  href: string;
+}
 
 async function fetchAccounts(): Promise<{
   accounts: AdminAccountRow[];
   summary: AdminSummary;
+  actionItems: GlobalActionItem[];
 }> {
   // Forward incoming cookies so requireSuperAdmin sees the same Clerk
   // session that the page render used.
@@ -58,8 +75,8 @@ async function fetchAccounts(): Promise<{
 }
 
 export default async function AdminAccountsPage() {
-  await requireSuperAdmin();
-  const { accounts, summary } = await fetchAccounts();
+  const auth = await requirePlatformAdmin();
+  const { accounts, summary, actionItems } = await fetchAccounts();
   return (
     <div className='space-y-6'>
       <div className='flex items-end justify-between'>
@@ -79,8 +96,10 @@ export default async function AdminAccountsPage() {
           Last refreshed {new Date().toLocaleTimeString()}
         </Link>
       </div>
+      {auth.role === 'SUPER_ADMIN' ? <AddManagerForm /> : null}
       <AdminSummaryCards summary={summary} />
       <AccountsTable accounts={accounts} />
+      <GlobalActionFeed items={actionItems} />
     </div>
   );
 }

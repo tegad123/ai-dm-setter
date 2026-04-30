@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { Prisma } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -14,9 +14,9 @@ import { NextRequest, NextResponse } from 'next/server';
 // Body: { conversationId: string, actionType: string }
 // Returns: { ok: true, dismissedAt: ISO }
 //
-// Authorization: the conversation must belong to the caller's account.
-// Cross-account dismissals would just silently miss (no row created) but
-// we reject explicitly to surface misuse.
+// Authorization: tenant admins can dismiss only their account's items.
+// Platform operators can dismiss cross-account items from the global
+// manager dashboard.
 // ---------------------------------------------------------------------------
 
 const ALLOWED_ACTION_TYPES = new Set([
@@ -61,9 +61,13 @@ export async function POST(request: NextRequest) {
       where: { id: conversationId },
       select: { lead: { select: { accountId: true } } }
     });
-    if (!conv || conv.lead.accountId !== auth.accountId) {
+    if (
+      !conv ||
+      (!isPlatformOperator(auth.role) && conv.lead.accountId !== auth.accountId)
+    ) {
       return NextResponse.json({ error: 'not found' }, { status: 404 });
     }
+    const accountId = conv.lead.accountId;
     // Upsert via unique constraint — bumps dismissedAt on re-dismiss.
     // The idempotency lets the client safely retry, and bumping the
     // timestamp means "dismiss again after lead messaged" works: the
@@ -73,13 +77,13 @@ export async function POST(request: NextRequest) {
     const row = await prisma.dismissedActionItem.upsert({
       where: {
         accountId_conversationId_actionType: {
-          accountId: auth.accountId,
+          accountId,
           conversationId,
           actionType
         }
       },
       create: {
-        accountId: auth.accountId,
+        accountId,
         conversationId,
         actionType,
         dismissedByUserId: auth.userId ?? null,

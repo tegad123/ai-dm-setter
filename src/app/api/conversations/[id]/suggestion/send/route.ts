@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import {
@@ -61,9 +61,14 @@ export async function POST(
       );
     }
 
-    // Load conversation + lead. Scoped to the caller's account.
+    // Load conversation + lead. Platform operators can act across accounts.
     const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId, lead: { accountId: auth.accountId } },
+      where: {
+        id: conversationId,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       select: {
         id: true,
         leadId: true,
@@ -91,7 +96,7 @@ export async function POST(
       where: {
         id: body.suggestionId,
         conversationId,
-        accountId: auth.accountId
+        accountId: conversation.lead.accountId
       }
     });
     if (!suggestion) {
@@ -266,7 +271,7 @@ export async function POST(
     await prisma.trainingEvent
       .create({
         data: {
-          accountId: auth.accountId,
+          accountId: lead.accountId,
           conversationId,
           suggestionId: suggestion.id,
           type: isEdited ? 'EDITED' : 'APPROVED',

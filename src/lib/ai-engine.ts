@@ -114,6 +114,104 @@ export function convertCapitalAmountToUsd(
   return amount * rate;
 }
 
+function buildApplicationContextBlock(params: {
+  submittedAt: Date;
+  capitalConfirmed: number | null;
+  callScheduledAt: Date | null;
+  typeformAnswers: Prisma.JsonValue | null;
+}): string {
+  const lines = [
+    '<application_context>',
+    'This lead submitted their application form.',
+    `Submitted: ${params.submittedAt.toISOString()}`
+  ];
+
+  if (typeof params.capitalConfirmed === 'number') {
+    lines.push(
+      '',
+      `Capital confirmed in application: $${params.capitalConfirmed.toLocaleString('en-US')}`
+    );
+  }
+  if (params.callScheduledAt) {
+    lines.push(
+      '',
+      `Call scheduled for: ${params.callScheduledAt.toISOString()}`,
+      'The lead has booked their call with Anthony.'
+    );
+  }
+
+  const answerLines = formatTypeformAnswersForPrompt(params.typeformAnswers);
+  if (answerLines.length > 0) {
+    lines.push('', 'Additional context from their application:');
+    lines.push(...answerLines);
+  }
+
+  lines.push(
+    '',
+    'Do NOT ask questions already answered in their application.',
+    'Do NOT ask about capital if it was confirmed in the form.',
+    'Reference the call time naturally if relevant.',
+    '</application_context>'
+  );
+  return `\n\n${lines.join('\n')}`;
+}
+
+function formatTypeformAnswersForPrompt(
+  typeformAnswers: Prisma.JsonValue | null
+): string[] {
+  if (!typeformAnswers || typeof typeformAnswers !== 'object') return [];
+  const root = typeformAnswers as {
+    parsed?: Record<string, unknown>;
+    answers?: Array<{
+      fieldTitle?: string | null;
+      fieldId?: string;
+      value?: unknown;
+    }>;
+  };
+  const parsed =
+    root.parsed && typeof root.parsed === 'object' ? root.parsed : {};
+  const preferredKeys = [
+    'fullName',
+    'email',
+    'instagramUsername',
+    'tradingExperience'
+  ];
+  const lines: string[] = [];
+  for (const key of preferredKeys) {
+    const value = parsed[key];
+    if (typeof value === 'string' && value.trim()) {
+      lines.push(`- ${humanizeApplicationKey(key)}: ${value.trim()}`);
+    }
+  }
+  if (Array.isArray(root.answers)) {
+    for (const answer of root.answers.slice(0, 8)) {
+      if (lines.length >= 8) break;
+      const label = answer.fieldTitle || answer.fieldId || 'Field';
+      const value = answer.value;
+      if (
+        typeof value === 'string' ||
+        typeof value === 'number' ||
+        typeof value === 'boolean'
+      ) {
+        const rendered = String(value).trim();
+        if (
+          rendered &&
+          !lines.some((line) =>
+            line.toLowerCase().includes(rendered.toLowerCase())
+          )
+        ) {
+          lines.push(`- ${label}: ${rendered}`);
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function humanizeApplicationKey(key: string): string {
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
 export interface GenerateReplyResult {
   reply: string;
   /**
@@ -539,7 +637,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const conversationCallState = activeConversationId
     ? await prisma.conversation.findUnique({
         where: { id: activeConversationId },
-        select: { scheduledCallAt: true, source: true }
+        select: {
+          scheduledCallAt: true,
+          source: true,
+          manyChatOpenerMessage: true,
+          manyChatTriggerType: true,
+          manyChatCommentText: true,
+          manyChatFiredAt: true,
+          typeformSubmittedAt: true,
+          typeformCapitalConfirmed: true,
+          typeformCallScheduledAt: true,
+          typeformAnswers: true
+        }
       })
     : null;
 
@@ -554,9 +663,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       const { getCredentials } = await import('@/lib/credential-store');
       const mcCreds = await getCredentials(accountId, 'MANYCHAT');
       const opener =
-        typeof mcCreds?.openerMessage === 'string'
+        conversationCallState.manyChatOpenerMessage?.trim() ||
+        (typeof mcCreds?.openerMessage === 'string'
           ? mcCreds.openerMessage.trim()
-          : '';
+          : '');
+      const triggerType =
+        conversationCallState.manyChatTriggerType || 'new_follower';
+      const commentText =
+        conversationCallState.manyChatCommentText?.trim() || '';
       const entryStep =
         typeof mcCreds?.entryStep === 'number' && mcCreds.entryStep >= 1
           ? mcCreds.entryStep
@@ -569,16 +683,33 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             : entryStep === 3
               ? 'Step 3 (skip the intro and breakdown, start with work background)'
               : `Step ${entryStep}`;
-      const openerLine = opener
-        ? `The outbound opener that ManyChat already sent was: "${opener}"`
-        : 'ManyChat already sent the outbound opener (exact text not configured — assume a brief intro DM).';
-      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted FIRST by an outbound message via ManyChat. ${openerLine}\n\nThe lead is responding to that outreach — they already know who this account is.\n\n  • DO NOT send another opener or greeting.\n  • DO NOT re-introduce the persona / business.\n  • Treat this as a WARM inbound, not a cold start.\n  • Begin the conversation at ${stepDescriptor} of the script.\n  • Acknowledge their reply naturally and move into the configured entry step on the very first turn.\n</outbound_context>`;
+      const triggerLine =
+        triggerType === 'comment'
+          ? `They commented "${commentText || 'unknown'}" on a post and received this DM: "${opener || 'opener not configured'}"`
+          : triggerType === 'story_reply'
+            ? `They replied to a story and received: "${opener || 'opener not configured'}"`
+            : triggerType === 'new_follower'
+              ? `They just followed the account and received this opener: "${opener || 'opener not configured'}"`
+              : `They received this outbound DM: "${opener || 'opener not configured'}"`;
+      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted via outbound automation.\n\nTrigger type: ${triggerType}\n${triggerLine}\n\nDo NOT send another opener or greeting.\nThe lead is responding to outreach.\nThey already know who you are.\nStart from ${stepDescriptor} of the script.\n</outbound_context>`;
       systemPrompt = outboundBlock + '\n' + systemPrompt;
     } catch (mcErr) {
       console.warn(
         '[ai-engine] ManyChat outbound-context prompt injection failed (non-fatal):',
         mcErr
       );
+    }
+  }
+
+  if (conversationCallState?.typeformSubmittedAt) {
+    const applicationBlock = buildApplicationContextBlock({
+      submittedAt: conversationCallState.typeformSubmittedAt,
+      capitalConfirmed: conversationCallState.typeformCapitalConfirmed,
+      callScheduledAt: conversationCallState.typeformCallScheduledAt,
+      typeformAnswers: conversationCallState.typeformAnswers
+    });
+    if (applicationBlock) {
+      systemPrompt = applicationBlock + '\n' + systemPrompt;
     }
   }
 

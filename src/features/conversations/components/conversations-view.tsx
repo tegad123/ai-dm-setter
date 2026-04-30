@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   useConversations,
   useMessages,
@@ -57,6 +58,9 @@ type InboxTab = 'all' | 'priority' | 'unread' | 'qualified' | 'unqualified';
 type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
 
 export function ConversationsView() {
+  const searchParams = useSearchParams();
+  const accountId = searchParams.get('accountId');
+  const conversationIdParam = searchParams.get('conversationId');
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('');
   const {
@@ -72,9 +76,16 @@ export function ConversationsView() {
       ? 'qualified'
       : inboxTab === 'unqualified'
         ? 'unqualified'
-        : undefined
+        : undefined,
+    accountId
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (conversationIdParam) {
+      setSelectedId(conversationIdParam);
+    }
+  }, [conversationIdParam]);
 
   // Determine which conversation is selected
   const activeId =

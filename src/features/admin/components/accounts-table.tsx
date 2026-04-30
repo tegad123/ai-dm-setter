@@ -19,10 +19,13 @@ export interface AdminAccountRow {
   planStatus: string;
   health: string;
   lastHealthCheck: string | null;
+  activeConversations: number;
+  todaysVolume: number;
+  qualifiedToday: number;
+  actionItemCount: number;
   leadsTotal: number;
-  leadsToday: number;
   aiMessagesToday: number;
-  callsBookedMonth: number;
+  callsBooked: number;
   revenueMonth: number;
   monthlyApiCostUsd: number;
   lastActive: string | null;
@@ -56,14 +59,6 @@ function fmtDate(iso: string | null) {
   });
 }
 
-function fmtCurrency(v: number) {
-  return v.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2
-  });
-}
-
 export function AccountsTable({ accounts }: { accounts: AdminAccountRow[] }) {
   const [filter, setFilter] = React.useState<Filter>('ALL');
   const [sort, setSort] = React.useState<Sort>('last_active');
@@ -74,7 +69,7 @@ export function AccountsTable({ accounts }: { accounts: AdminAccountRow[] }) {
       rows = rows.filter((r) => r.health === filter);
     }
     rows = [...rows].sort((a, b) => {
-      if (sort === 'leads_today') return b.leadsToday - a.leadsToday;
+      if (sort === 'leads_today') return b.todaysVolume - a.todaysVolume;
       if (sort === 'health') {
         return (HEALTH_RANK[a.health] ?? 9) - (HEALTH_RANK[b.health] ?? 9);
       }
@@ -113,25 +108,21 @@ export function AccountsTable({ accounts }: { accounts: AdminAccountRow[] }) {
             className='rounded border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900'
           >
             <option value='last_active'>Last active</option>
-            <option value='leads_today'>Leads today</option>
+            <option value='leads_today'>Today&apos;s volume</option>
             <option value='health'>Health (worst first)</option>
           </select>
         </label>
       </div>
 
       <div className='overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800'>
-        <table className='w-full min-w-[1100px] text-sm'>
+        <table className='w-full min-w-[980px] text-sm'>
           <thead className='border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900'>
             <tr className='text-left text-xs tracking-wide text-zinc-500 uppercase'>
-              <th className='px-3 py-2'>Account</th>
-              <th className='px-3 py-2'>Owner</th>
-              <th className='px-3 py-2'>Plan</th>
-              <th className='px-3 py-2'>Status</th>
-              <th className='px-3 py-2 text-right'>Leads</th>
-              <th className='px-3 py-2 text-right'>Today</th>
-              <th className='px-3 py-2 text-right'>AI msgs today</th>
-              <th className='px-3 py-2 text-right'>Calls (mo)</th>
-              <th className='px-3 py-2 text-right'>Revenue (mo)</th>
+              <th className='px-3 py-2'>Client name</th>
+              <th className='px-3 py-2 text-right'>Active convos</th>
+              <th className='px-3 py-2 text-right'>Today&apos;s volume</th>
+              <th className='px-3 py-2 text-right'>Qualified today</th>
+              <th className='px-3 py-2 text-right'>Calls booked</th>
               <th className='px-3 py-2'>Last active</th>
               <th className='px-3 py-2'>Health</th>
               <th className='px-3 py-2'>Actions</th>
@@ -140,10 +131,7 @@ export function AccountsTable({ accounts }: { accounts: AdminAccountRow[] }) {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td
-                  colSpan={12}
-                  className='px-3 py-8 text-center text-zinc-500'
-                >
+                <td colSpan={8} className='px-3 py-8 text-center text-zinc-500'>
                   No accounts match the current filter.
                 </td>
               </tr>
@@ -155,59 +143,53 @@ export function AccountsTable({ accounts }: { accounts: AdminAccountRow[] }) {
                 >
                   <td className='px-3 py-2'>
                     <p className='font-medium'>{row.name}</p>
-                    <p className='text-xs text-zinc-500'>{row.slug}</p>
-                  </td>
-                  <td className='px-3 py-2'>
-                    <p>{row.ownerName ?? '—'}</p>
                     <p className='text-xs text-zinc-500'>
-                      {row.ownerEmail ?? '—'}
+                      {row.ownerName ?? '—'} · {row.ownerEmail ?? row.slug}
                     </p>
                   </td>
-                  <td className='px-3 py-2 text-xs'>{row.plan}</td>
-                  <td className='px-3 py-2 text-xs'>{row.planStatus}</td>
                   <td className='px-3 py-2 text-right tabular-nums'>
-                    {row.leadsTotal.toLocaleString('en-US')}
+                    {row.activeConversations.toLocaleString('en-US')}
                   </td>
                   <td className='px-3 py-2 text-right tabular-nums'>
-                    {row.leadsToday.toLocaleString('en-US')}
+                    {row.todaysVolume.toLocaleString('en-US')}
                   </td>
                   <td className='px-3 py-2 text-right tabular-nums'>
-                    {row.aiMessagesToday.toLocaleString('en-US')}
+                    {row.qualifiedToday.toLocaleString('en-US')}
                   </td>
                   <td className='px-3 py-2 text-right tabular-nums'>
-                    {row.callsBookedMonth.toLocaleString('en-US')}
-                  </td>
-                  <td className='px-3 py-2 text-right tabular-nums'>
-                    {fmtCurrency(row.revenueMonth)}
+                    {row.callsBooked.toLocaleString('en-US')}
                   </td>
                   <td className='px-3 py-2 text-xs text-zinc-500'>
                     {fmtDate(row.lastActive)}
                   </td>
                   <td className='px-3 py-2'>
                     <HealthBadge status={row.health} />
+                    {row.actionItemCount > 0 ? (
+                      <p className='mt-1 text-[11px] text-zinc-500'>
+                        {row.actionItemCount} pending
+                      </p>
+                    ) : null}
                   </td>
                   <td className='px-3 py-2'>
-                    <div className='flex gap-1'>
+                    <div className='flex flex-wrap gap-1'>
                       <Link
                         href={`/admin/accounts/${row.id}`}
                         className='rounded border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800'
                       >
                         View
                       </Link>
-                      <button
-                        disabled
-                        className='cursor-not-allowed rounded border border-zinc-200 px-2 py-1 text-xs text-zinc-400 dark:border-zinc-800'
-                        title='Phase 3'
+                      <Link
+                        href={`/dashboard/conversations?accountId=${row.id}`}
+                        className='rounded border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800'
                       >
-                        Pause AI
-                      </button>
-                      <button
-                        disabled
-                        className='cursor-not-allowed rounded border border-zinc-200 px-2 py-1 text-xs text-zinc-400 dark:border-zinc-800'
-                        title='Phase 4'
+                        Conversations
+                      </Link>
+                      <Link
+                        href={`/admin/accounts/${row.id}#integrations`}
+                        className='rounded border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800'
                       >
-                        Edit plan
-                      </button>
+                        Settings
+                      </Link>
                     </div>
                   </td>
                 </tr>

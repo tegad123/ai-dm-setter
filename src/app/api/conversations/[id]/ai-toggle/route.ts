@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { broadcastAIStatusChange } from '@/lib/realtime';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -13,7 +13,13 @@ export async function PATCH(
 
     // Verify conversation belongs to this account
     const existing = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } }
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
+      include: { lead: { select: { accountId: true } } }
     });
     if (!existing) {
       return NextResponse.json(
@@ -52,7 +58,7 @@ export async function PATCH(
         const { scheduleBookingFollowupOnAIReenable } = await import(
           '@/lib/follow-up-sequence'
         );
-        await scheduleBookingFollowupOnAIReenable(id, auth.accountId);
+        await scheduleBookingFollowupOnAIReenable(id, existing.lead.accountId);
       } catch (err) {
         console.error(
           '[ai-toggle] booking-limbo re-enable hook failed (non-fatal):',

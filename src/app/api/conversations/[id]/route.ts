@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
@@ -11,7 +11,12 @@ export async function GET(
     const { id } = await params;
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       include: {
         lead: true,
         messages: {

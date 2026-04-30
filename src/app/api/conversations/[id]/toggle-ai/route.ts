@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { handleAIHandoff } from '@/lib/webhook-processor';
 import { broadcastAIStatusChange } from '@/lib/realtime';
 import { NextRequest, NextResponse } from 'next/server';
@@ -25,8 +25,18 @@ export async function POST(
 
     // Verify conversation belongs to this account
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
-      select: { id: true, aiActive: true, leadId: true }
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
+      select: {
+        id: true,
+        aiActive: true,
+        leadId: true,
+        lead: { select: { accountId: true } }
+      }
     });
 
     if (!conversation) {
@@ -59,7 +69,7 @@ export async function POST(
         where: { id },
         data: { autoSendOverride: true }
       });
-      await handleAIHandoff(id, auth.accountId);
+      await handleAIHandoff(id, conversation.lead.accountId);
 
       // Booking-limbo re-engagement: if this convo had the Typeform URL
       // sent earlier, no scheduledCallAt, stage=CALL_PROPOSED, and no
@@ -73,7 +83,7 @@ export async function POST(
         );
         const res = await scheduleBookingFollowupOnAIReenable(
           id,
-          auth.accountId
+          conversation.lead.accountId
         );
         if (res.scheduled) {
           console.log(

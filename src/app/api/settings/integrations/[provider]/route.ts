@@ -1,4 +1,5 @@
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import prisma from '@/lib/prisma';
 import {
   getCredentials,
   saveCredentials,
@@ -14,7 +15,8 @@ const VALID_PROVIDERS = [
   'OPENAI',
   'ANTHROPIC',
   'CALENDLY',
-  'MANYCHAT'
+  'MANYCHAT',
+  'TYPEFORM'
 ] as const;
 type Provider = (typeof VALID_PROVIDERS)[number];
 
@@ -50,6 +52,38 @@ export async function PUT(
     }
 
     await saveCredentials(auth.accountId, provider, credentials, metadata);
+
+    if (provider === 'TYPEFORM') {
+      const fieldMapping =
+        metadata?.fieldMapping && typeof metadata.fieldMapping === 'object'
+          ? (metadata.fieldMapping as Record<string, unknown>)
+          : credentials?.fieldMapping &&
+              typeof credentials.fieldMapping === 'object'
+            ? (credentials.fieldMapping as Record<string, unknown>)
+            : null;
+      if (fieldMapping) {
+        const persona = await prisma.aIPersona.findFirst({
+          where: { accountId: auth.accountId },
+          orderBy: { updatedAt: 'desc' },
+          select: { id: true, promptConfig: true }
+        });
+        if (persona) {
+          const promptConfig =
+            persona.promptConfig && typeof persona.promptConfig === 'object'
+              ? (persona.promptConfig as Record<string, unknown>)
+              : {};
+          await prisma.aIPersona.update({
+            where: { id: persona.id },
+            data: {
+              promptConfig: {
+                ...promptConfig,
+                typeformFieldMapping: fieldMapping
+              } as any
+            }
+          });
+        }
+      }
+    }
 
     return NextResponse.json({
       message: `${provider} credentials saved`,

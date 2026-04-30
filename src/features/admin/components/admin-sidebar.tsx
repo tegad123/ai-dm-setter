@@ -57,8 +57,9 @@ const NAV_ITEMS: Array<{
   }
 ];
 
-export function AdminSidebar() {
+export function AdminSidebar({ role }: { role: string }) {
   const pathname = usePathname() || '';
+  const isSuperAdmin = role === 'SUPER_ADMIN';
   return (
     <aside className='w-64 shrink-0 border-r border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900'>
       <div className='mb-6 px-2'>
@@ -69,12 +70,15 @@ export function AdminSidebar() {
       </div>
       <nav className='flex flex-col gap-1'>
         {NAV_ITEMS.map((item) => {
+          const enabled =
+            item.enabled &&
+            (isSuperAdmin || !['/admin/onboard'].includes(item.href));
           const Icon = item.icon;
           const active =
             item.href === '/admin'
               ? pathname === '/admin'
               : pathname.startsWith(item.href);
-          if (!item.enabled) {
+          if (!enabled) {
             return (
               <div
                 key={item.href}

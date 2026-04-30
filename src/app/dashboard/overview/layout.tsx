@@ -2,9 +2,11 @@ import PageContainer from '@/components/layout/page-container';
 import { Badge } from '@/components/ui/badge';
 import { ActionRequired } from '@/features/overview/components/action-required';
 import { KpiCards } from '@/features/overview/components/kpi-cards';
+import { requireAuth, isPlatformOperator } from '@/lib/auth-guard';
+import { redirect } from 'next/navigation';
 import React from 'react';
 
-export default function OverviewLayout({
+export default async function OverviewLayout({
   sales,
   pie_stats,
   bar_stats,
@@ -15,6 +17,11 @@ export default function OverviewLayout({
   bar_stats: React.ReactNode;
   area_stats: React.ReactNode;
 }) {
+  const auth = await requireAuth();
+  if (isPlatformOperator(auth.role)) {
+    redirect('/admin');
+  }
+
   return (
     <>
       {/* (app-bg is mounted once at the root layout for every page) */}

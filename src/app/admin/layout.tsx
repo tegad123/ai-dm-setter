@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { redirect } from 'next/navigation';
-import { requireSuperAdmin, AuthError } from '@/lib/auth-guard';
+import { requirePlatformAdmin, AuthError } from '@/lib/auth-guard';
 import { AdminSidebar } from '@/features/admin/components/admin-sidebar';
 
 export const dynamic = 'force-dynamic';
@@ -19,8 +19,10 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
+  let role = '';
   try {
-    await requireSuperAdmin();
+    const auth = await requirePlatformAdmin();
+    role = auth.role;
   } catch (err) {
     if (err instanceof AuthError && err.status === 403) {
       redirect('/dashboard');
@@ -30,7 +32,7 @@ export default async function AdminLayout({
 
   return (
     <div className='flex min-h-screen bg-zinc-50 dark:bg-zinc-950'>
-      <AdminSidebar />
+      <AdminSidebar role={role} />
       <main className='flex-1 overflow-x-auto p-8'>{children}</main>
     </div>
   );

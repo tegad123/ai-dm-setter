@@ -19,6 +19,10 @@ enum Role {
   // tenant accounts, can impersonate, run health checks, manage plans.
   // Set via scripts/promote-tega-super-admin.ts; never assigned via UI.
   SUPER_ADMIN
+  // Platform manager. Can view/action all tenant conversations from
+  // /admin, but cannot manage billing, delete accounts, or edit platform
+  // admin settings.
+  MANAGER
 }
 
 enum PlanStatus {
@@ -95,6 +99,7 @@ enum IntegrationProvider {
   CALENDLY
   CALCOM
   MANYCHAT
+  TYPEFORM
 }
 
 enum ContentType {
@@ -206,6 +211,7 @@ model Account {
   id                 String      @id @default(cuid())
   name               String                          // Business name
   slug               String      @unique             // URL-safe identifier
+  manyChatWebhookKey String      @unique @default(uuid())
   logoUrl            String?
   brandName          String?                         // Display name (optional override)
   primaryColor       String?     @default("#2563EB") // Brand color
@@ -946,6 +952,20 @@ model Conversation {
   // suppresses the AI's opener (ManyChat already sent one) and
   // injects an outbound_context block in the system prompt.
   source               ConversationSource @default(INBOUND)
+  manyChatOpenerMessage String?   @db.Text
+  manyChatTriggerType   String?
+  manyChatCommentText   String?   @db.Text
+  manyChatFiredAt       DateTime?
+
+  // ── Typeform application / booking handoff ─────────────────────
+  // Populated by POST /api/webhooks/typeform after signature
+  // verification. Lets the AI avoid re-asking application questions
+  // and lets managers see form-only leads that need manual review.
+  typeformSubmittedAt       DateTime?
+  typeformResponseToken     String?   @unique
+  typeformCapitalConfirmed  Int?
+  typeformCallScheduledAt   DateTime?
+  typeformAnswers           Json?
 
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on
@@ -1018,6 +1038,8 @@ model Conversation {
   @@index([priorityScore])
   @@index([outcome])
   @@index([scheduledCallAt])
+  @@index([source, manyChatFiredAt])
+  @@index([typeformSubmittedAt])
 }
 
 model Message {

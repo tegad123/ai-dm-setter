@@ -8,7 +8,7 @@
 // onto Account so the overview table reflects the latest run.
 
 import prisma from '@/lib/prisma';
-import { requireSuperAdmin, AuthError } from '@/lib/auth-guard';
+import { requirePlatformAdmin, AuthError } from '@/lib/auth-guard';
 import { runHealthChecks, rollupStatus } from '@/lib/admin-health';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -23,7 +23,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireSuperAdmin(request);
+    await requirePlatformAdmin(request);
     const { id } = await params;
 
     const acct = await prisma.account.findUnique({

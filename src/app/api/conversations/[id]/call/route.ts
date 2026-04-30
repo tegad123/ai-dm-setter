@@ -1,5 +1,5 @@
 import prisma from '@/lib/prisma';
-import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { cancelCallReminders } from '@/lib/call-reminders';
 import {
   scheduleCallConfirmationSequence,
@@ -31,7 +31,12 @@ export async function GET(
     const { id } = await params;
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       select: {
         id: true,
         scheduledCallAt: true,
@@ -131,7 +136,12 @@ export async function PUT(
     const { id } = await params;
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       include: { lead: true }
     });
     if (!conversation) {
@@ -213,7 +223,7 @@ export async function PUT(
     // create fresh confirmation-sequence rows for the new call.
     const remindersCreated = await scheduleCallConfirmationSequence({
       conversationId: id,
-      accountId: auth.accountId,
+      accountId: conversation.lead.accountId,
       scheduledCallAt: scheduledDate,
       leadTimezone: tz,
       createdByUserId: auth.userId ?? null
@@ -309,7 +319,12 @@ export async function PATCH(
     const auth = await requireAuth(req);
     const { id } = await params;
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       include: { lead: true }
     });
     if (!conversation) {
@@ -415,7 +430,12 @@ export async function DELETE(
     const { id } = await params;
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id, lead: { accountId: auth.accountId } },
+      where: {
+        id,
+        ...(isPlatformOperator(auth.role)
+          ? {}
+          : { lead: { accountId: auth.accountId } })
+      },
       select: { id: true }
     });
     if (!conversation) {
