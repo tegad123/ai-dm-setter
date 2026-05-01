@@ -482,6 +482,16 @@ export interface VoiceQualityOptions {
    * soft signal (-0.3). Encourages but doesn't force the regen.
    */
   leadPreObjectedToCapital?: boolean;
+  /**
+   * Wout Lngrs 2026-05-01 — recent message corpus (lead + prior AI)
+   * used to validate that any dollar amount the current reply
+   * mentions actually appeared earlier in the conversation. Pass
+   * the last ~30 messages joined or as an array. When the reply
+   * contains a $ amount that's NOT in this corpus, the
+   * `fabricated_capital_figure` soft signal (-0.5) fires — the
+   * LLM is hallucinating a number the lead never stated.
+   */
+  priorMessageCorpus?: string;
 }
 
 export function scoreVoiceQuality(
@@ -1551,6 +1561,66 @@ export function scoreVoiceQuality(
       !REASSURANCE_RE.test(reply)
     ) {
       softSignals.pre_objection_not_addressed = -0.3;
+    }
+  }
+
+  // ── DISQUALIFICATION AFTER CALL CONFIRMED (HARD FAIL) ──────────
+  // Wout Lngrs 2026-05-01. Lead had $5,000 capital + a confirmed
+  // Sunday call. R24 re-evaluated post-booking, parsed a stray "12"
+  // out of a lead message, fell into the deterministic
+  // answer_below_threshold fallback, and shipped the canned downsell
+  // ("better move is the lower-ticket/free route while you build
+  // closer to $2,000"). The lead read this as a hard rescind of the
+  // qualified call — actively destructive.
+  //
+  // Primary fix is in ai-engine (R24 early-return when scheduledCallAt
+  // is set). This gate is the belt-and-suspenders catch in case any
+  // path produces qualification/downsell language while the call is
+  // already booked.
+  if (hasConfirmedScheduledCall(options?.scheduledCallAt)) {
+    const DISQUAL_AFTER_BOOKING_RE =
+      /\b(better\s+move\s+is|lower[-\s]?ticket|build\s+closer\s+to|revisit\s+the\s+full|wouldn'?t\s+force\s+the\s+main\s+call|free[-\s]?route|free\s+resource|i\s+wouldn'?t\s+force|youtube\.com|youtu\.be)\b/i;
+    const QUAL_LANGUAGE_RE =
+      /\b(at\s+least\s+\$\d|capital\s+ready|ready\s+to\s+start\s+with\s+\$|with\s+\$\d[\d,]*\s+i\s+wouldn'?t)\b/i;
+    if (DISQUAL_AFTER_BOOKING_RE.test(reply) || QUAL_LANGUAGE_RE.test(reply)) {
+      hardFails.push(
+        'disqualification_after_call_confirmed: lead has a confirmed call (scheduledCallAt is set) but the AI reply contains downsell / qualification / disqualification language. The call is already booked — do not re-qualify or route to downsell.'
+      );
+    }
+  }
+
+  // ── FABRICATED CAPITAL FIGURE (soft penalty -0.5) ──────────────
+  // Wout Lngrs 2026-05-01. AI's reply contained "$12" — a number
+  // that appeared nowhere in the conversation history. The R24
+  // parser hit a stray "12" in some message; the deterministic
+  // fallback printed it back. Even outside R24, the LLM sometimes
+  // hallucinates dollar figures the lead never said.
+  //
+  // Detection: extract every $<number> token from the reply. For
+  // each, check whether the same numeric value appears in the
+  // priorMessageCorpus. If ANY don't match, fire the signal.
+  // Threshold check is "amount as a substring" (with thousands
+  // separators normalized) — the lead said "5000" or "$5,000",
+  // both forms count as present.
+  if (typeof options?.priorMessageCorpus === 'string') {
+    const replyAmounts: string[] = [];
+    const replyAmountRe = /\$\s?(\d{1,3}(?:,\d{3})+|\d{2,7})/g;
+    let amtMatch: RegExpExecArray | null;
+    while ((amtMatch = replyAmountRe.exec(reply)) !== null) {
+      const cleaned = amtMatch[1].replace(/,/g, '');
+      if (cleaned.length > 0) replyAmounts.push(cleaned);
+    }
+    if (replyAmounts.length > 0) {
+      const corpusNumbers = new Set<string>();
+      const corpusRe = /\d{1,3}(?:,\d{3})+|\d{2,7}/g;
+      let cMatch: RegExpExecArray | null;
+      while ((cMatch = corpusRe.exec(options.priorMessageCorpus)) !== null) {
+        corpusNumbers.add(cMatch[0].replace(/,/g, ''));
+      }
+      const fabricated = replyAmounts.filter((amt) => !corpusNumbers.has(amt));
+      if (fabricated.length > 0) {
+        softSignals.fabricated_capital_figure = -0.5;
+      }
     }
   }
 

@@ -939,7 +939,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           .filter((m) => m.sender === 'LEAD')
           .slice(-4)
           .map((m) => m.content)
-      )
+      ),
+      // Wout Lngrs 2026-05-01 — corpus of last 30 messages for the
+      // fabricated_capital_figure check. Joining as a single string
+      // keeps the gate side simple (one regex pass) and lets the
+      // reply's "$12" be cross-checked against every prior token.
+      priorMessageCorpus: conversationHistory
+        .slice(-30)
+        .map((m) => m.content)
+        .join('\n')
     });
     finalQualityScore = quality.score;
 
@@ -3932,6 +3940,27 @@ async function checkR24Verification(
   customPrompt: string | null,
   currentTurnLeadMsg?: { content: string; timestamp: Date | string }
 ): Promise<R24GateResult> {
+  // Wout Lngrs 2026-04-30 / 2026-05-01: once a call is booked, R24
+  // must NOT re-evaluate. Re-running the gate post-booking risks the
+  // parser hitting a stray number from a later lead message
+  // ("12pm", "5 hrs from now") and routing the lead to the downsell
+  // even though they passed qualification + booked a call. Treat
+  // a confirmed booking as "R24 already passed" — confirmed_affirmative
+  // is the existing pass reason, no new state needed.
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { scheduledCallAt: true }
+  });
+  if (conv?.scheduledCallAt) {
+    return {
+      blocked: false,
+      reason: 'confirmed_affirmative',
+      parsedAmount: null,
+      verificationAskedAt: null,
+      verificationConfirmedAt: null
+    };
+  }
+
   const aiMsgs = await prisma.message.findMany({
     where: { conversationId, sender: 'AI' },
     orderBy: { timestamp: 'asc' },

@@ -129,6 +129,15 @@ export interface FollowUpGateInput {
   conversationOutcome?: string | null;
   /** The shipped reply text — YouTube URL skips. */
   replyText?: string | null;
+  /**
+   * Wout Lngrs 2026-05-01: when a call is already booked, no
+   * follow-up cascade should fire. The "yo bro you still there?"
+   * 12h chase is meaningless once the lead has a confirmed call;
+   * BOOKING_LINK_FOLLOWUP's "did you book?" is even worse — they
+   * already booked. Pass conversation.scheduledCallAt here so the
+   * gate skips on a non-null value.
+   */
+  scheduledCallAt?: Date | string | null;
 }
 
 export interface FollowUpGateResult {
@@ -161,6 +170,9 @@ export function shouldSkipFollowUp(
   }
   if (input.replyText && containsFreeResourceLink(input.replyText)) {
     return { skip: true, reason: 'free_resource_url_sent' };
+  }
+  if (input.scheduledCallAt) {
+    return { skip: true, reason: 'call_already_booked' };
   }
   return { skip: false, reason: null };
 }
@@ -250,14 +262,23 @@ export async function scheduleFollowUp1AfterAiMessage(
     data: { status: 'CANCELLED' }
   });
 
-  if (gate) {
-    const verdict = shouldSkipFollowUp(gate);
-    if (verdict.skip) {
-      console.log(
-        `[follow-up-sequence] skipped FOLLOW_UP_1 for ${conversationId} — ${verdict.reason}`
-      );
-      return;
-    }
+  // Defense-in-depth: even when the caller omits scheduledCallAt
+  // from the gate input (older call sites), recheck the DB. A
+  // confirmed call always means no cascade.
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { scheduledCallAt: true }
+  });
+  const augmented: FollowUpGateInput = {
+    ...(gate ?? {}),
+    scheduledCallAt: gate?.scheduledCallAt ?? conv?.scheduledCallAt ?? null
+  };
+  const verdict = shouldSkipFollowUp(augmented);
+  if (verdict.skip) {
+    console.log(
+      `[follow-up-sequence] skipped FOLLOW_UP_1 for ${conversationId} — ${verdict.reason}`
+    );
+    return;
   }
 
   const scheduledFor = new Date(Date.now() + FOLLOW_UP_INTERVAL_MS);
@@ -310,6 +331,21 @@ export async function scheduleNextInCascade(
             ? 'FOLLOW_UP_SOFT_EXIT'
             : null;
   if (!nextType) return null;
+
+  // Wout Lngrs 2026-05-01: stop the cascade the moment a call is
+  // booked. Without this, FOLLOW_UP_1 fires 12h after the AI's last
+  // reply and pings the lead "yo bro you still there?" / triggers
+  // an AI generation that re-evaluates R24 against stale signals.
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { scheduledCallAt: true }
+  });
+  if (conv?.scheduledCallAt) {
+    console.log(
+      `[follow-up-sequence] cascade ${firedType} → ${nextType} skipped for ${conversationId} — call already booked at ${conv.scheduledCallAt.toISOString()}`
+    );
+    return null;
+  }
 
   const useBookingBody =
     firedType === 'BOOKING_LINK_FOLLOWUP' || isBookingCascadeBody(firedBody);
