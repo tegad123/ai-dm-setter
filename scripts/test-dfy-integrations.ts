@@ -6,6 +6,10 @@ import {
   parseTypeformApplication,
   verifyTypeformSignature
 } from '../src/lib/typeform-webhook';
+import {
+  sanitizeDashCharacters,
+  scoreVoiceQualityGroup
+} from '../src/lib/voice-quality-gate';
 
 let pass = 0;
 let fail = 0;
@@ -38,6 +42,26 @@ async function run() {
   const accountsTable = src('src/features/admin/components/accounts-table.tsx');
   const adminPage = src('src/app/admin/page.tsx');
   const authGuard = src('src/lib/auth-guard.ts');
+  const webhookProcessor = src('src/lib/webhook-processor.ts');
+  const aiPrompts = src('src/lib/ai-prompts.ts');
+  const voiceQualityGate = src('src/lib/voice-quality-gate.ts');
+  const manualMessagesRoute = src(
+    'src/app/api/conversations/[id]/messages/route.ts'
+  );
+  const suggestionSendRoute = src(
+    'src/app/api/conversations/[id]/suggestion/send/route.ts'
+  );
+  const scheduledMessagesRoute = src(
+    'src/app/api/cron/process-scheduled-messages/route.ts'
+  );
+  const windowKeepaliveRoute = src(
+    'src/app/api/cron/window-keepalive/route.ts'
+  );
+  const recoverStaleBubblesRoute = src(
+    'src/app/api/cron/recover-stale-bubbles/route.ts'
+  );
+  const voiceGenerateRoute = src('src/app/api/voice/generate/route.ts');
+  const callConfirmationSequence = src('src/lib/call-confirmation-sequence.ts');
 
   record(
     'TEST 1 - ManyChat new follower handoff stores source/opener and avoids AI generation',
@@ -183,6 +207,76 @@ async function run() {
       /X-QualifyDMs-Key/.test(integrationsPage) &&
       /Your Typeform webhook URL/.test(integrationsPage) &&
       /Field Mapping/.test(integrationsPage)
+  );
+
+  record(
+    'Reschedule TEST 1 - booked paused lead re-enables AI, clears call, cancels stale reminders, and returns to CALL_PROPOSED',
+    /!conversation\.aiActive[\s\S]{0,120}conversation\.scheduledCallAt[\s\S]{0,120}isRescheduleSignal/.test(
+      webhookProcessor
+    ) &&
+      /aiActive:\s*true/.test(webhookProcessor) &&
+      /autoSendOverride:\s*true/.test(webhookProcessor) &&
+      /rescheduleFlow:\s*rescheduleFlowActive/.test(webhookProcessor) &&
+      /scheduledCallAt:\s*null/.test(webhookProcessor) &&
+      /prisma\.scheduledMessage\.updateMany\(\{[\s\S]{0,140}status:\s*'PENDING'/.test(
+        webhookProcessor
+      ) &&
+      /transitionLeadStage\([\s\S]{0,120}'CALL_PROPOSED'/.test(webhookProcessor)
+  );
+
+  record(
+    'Reschedule TEST 2 - prompt requires Typeform URL in same message, not just a scheduling question',
+    /RESCHEDULE PATTERN/.test(aiPrompts) &&
+      /Typeform \/ booking URL:/.test(aiPrompts) &&
+      /Send the Typeform \/ booking URL immediately/.test(aiPrompts) &&
+      /Do NOT ask "what day works better\?" without also sending/.test(
+        aiPrompts
+      )
+  );
+
+  record(
+    'Reschedule TEST 3 - normal mid-qualification "another day" does not trigger without a scheduled call',
+    /conversation\.scheduledCallAt/.test(webhookProcessor) &&
+      /!conversation\.aiActive/.test(webhookProcessor) &&
+      /\/another day\/i/.test(webhookProcessor) &&
+      /!rescheduleFlow[\s\S]{0,120}typeof capitalThreshold/.test(aiEngine) &&
+      /Reschedule flow bypassed/.test(aiEngine)
+  );
+
+  record(
+    'Bug TEST 1 - SYSTEM/operator-note messages are not parsed for capital',
+    /if \(message\.sender !== 'LEAD'\) continue;/.test(aiEngine) &&
+      /message\.content\.trimStart\(\)\.startsWith\('OPERATOR NOTE:'\)/.test(
+        aiEngine
+      ) &&
+      /isLeadCapitalParseCandidate/.test(aiEngine)
+  );
+
+  record(
+    'Bug TEST 2 - HUMAN/AI messages are excluded before capital regex parsing',
+    /if \(message\.sender !== 'LEAD'\) continue;/.test(aiEngine) &&
+      /parseLeadCapitalAnswer\(message\.content\)/.test(aiEngine)
+  );
+
+  const dashQuality = scoreVoiceQualityGroup([
+    'my bad bro, ignore that last one — no stress on the mixup.'
+  ]);
+  const sanitizedDash = sanitizeDashCharacters(
+    'my bad bro, ignore that last one — no stress on the mixup.'
+  );
+  record(
+    'Bug TEST 3 - R17 catches U+2014 and delivery paths sanitize AI messages',
+    dashQuality.hardFails.some((failure) => failure.includes('em_dash')) &&
+      !sanitizedDash.includes('\u2014') &&
+      /\\u2014/.test(voiceQualityGate) &&
+      /sanitizeAIResultDashes/.test(webhookProcessor) &&
+      /sanitizeDashCharacters/.test(manualMessagesRoute) &&
+      /sanitizeDashCharacters/.test(suggestionSendRoute) &&
+      /sanitizeDashCharacters/.test(scheduledMessagesRoute) &&
+      /sanitizeDashCharacters/.test(windowKeepaliveRoute) &&
+      /sanitizeDashCharacters/.test(recoverStaleBubblesRoute) &&
+      /sanitizeDashCharacters/.test(voiceGenerateRoute) &&
+      /sanitizeDashCharacters/.test(callConfirmationSequence)
   );
 
   console.log(

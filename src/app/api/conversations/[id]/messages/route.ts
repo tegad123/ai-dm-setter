@@ -7,6 +7,7 @@ import {
 } from '@/lib/realtime';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
@@ -132,6 +133,9 @@ export async function POST(
         { status: 400 }
       );
     }
+    const contentText = typeof content === 'string' ? content : String(content);
+    const messageContent =
+      sender === 'AI' ? sanitizeDashCharacters(contentText) : contentText;
 
     const now = new Date();
 
@@ -159,7 +163,7 @@ export async function POST(
 
           // Jaccard similarity
           const sArr = recentSuggestion.responseText.toLowerCase().split(/\s+/);
-          const hArr = (content as string).toLowerCase().split(/\s+/);
+          const hArr = messageContent.toLowerCase().split(/\s+/);
           const sWords = new Set(sArr);
           const hWords = new Set(hArr);
           const inter = sArr.filter((w) => hWords.has(w)).length;
@@ -179,7 +183,7 @@ export async function POST(
             data: {
               wasRejected: true,
               wasEdited: sim > 0.7,
-              finalSentText: content,
+              finalSentText: messageContent,
               similarityToFinalSent: sim
             }
           });
@@ -201,7 +205,7 @@ export async function POST(
     const message = await prisma.message.create({
       data: {
         conversationId: id,
-        content,
+        content: messageContent,
         sender,
         timestamp: now,
         // Populate sentByUserId for HUMAN messages so the UI can show
@@ -343,7 +347,7 @@ export async function POST(
               sendResult = await sendFacebookMessage(
                 lead.accountId,
                 lead.platformUserId,
-                content
+                messageContent
               );
               console.log(
                 `[send] Facebook message sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
@@ -352,7 +356,7 @@ export async function POST(
               sendResult = await sendInstagramDM(
                 lead.accountId,
                 lead.platformUserId,
-                content
+                messageContent
               );
               console.log(
                 `[send] Instagram DM sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`

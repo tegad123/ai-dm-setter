@@ -6,6 +6,7 @@ import {
   broadcastNewMessage
 } from '@/lib/realtime';
 import { escalate } from '@/lib/escalation-dispatch';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import type { Prisma, ScheduledMessageType } from '@prisma/client';
 
 export const CALL_CONFIRMATION_TYPES: ScheduledMessageType[] = [
@@ -747,7 +748,7 @@ function firstName(name: string): string {
 }
 
 function cleanBubble(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  return sanitizeDashCharacters(text.replace(/\s+/g, ' ').trim());
 }
 
 function formatDayAtTime(d: Date, tz: string | null): string {

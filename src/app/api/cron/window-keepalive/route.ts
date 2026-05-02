@@ -5,6 +5,7 @@ import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { generateKeepaliveMessage } from '@/lib/keepalive-generator';
 import { isClosingSignal } from '@/lib/closing-signal-detector';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import {
   broadcastNewMessage,
   broadcastConversationUpdate
@@ -231,11 +232,13 @@ export async function GET(req: NextRequest) {
         }
 
         // All guardrails passed — generate + ship inline.
-        const keepaliveText = await generateKeepaliveMessage({
-          leadName: conv.lead.name,
-          scheduledCallAt: conv.scheduledCallAt!,
-          now
-        });
+        const keepaliveText = sanitizeDashCharacters(
+          await generateKeepaliveMessage({
+            leadName: conv.lead.name,
+            scheduledCallAt: conv.scheduledCallAt!,
+            now
+          })
+        );
 
         // Final dedup pass: even with all the structural guardrails
         // above, Haiku can regenerate a line that rehashes a recent

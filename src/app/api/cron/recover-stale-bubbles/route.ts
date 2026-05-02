@@ -24,6 +24,7 @@ import prisma from '@/lib/prisma';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { broadcastNewMessage, broadcastNotification } from '@/lib/realtime';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60;
@@ -170,7 +171,7 @@ export async function GET(req: NextRequest) {
       let groupFailed = false;
       let lastShippedAt = now;
       for (let i = shipped; i < bubbles.length; i++) {
-        const bubble = bubbles[i];
+        const bubble = sanitizeDashCharacters(bubbles[i]);
         try {
           let messageId: string | null = null;
           if (conv.lead.platform === 'INSTAGRAM') {

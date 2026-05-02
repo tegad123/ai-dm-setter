@@ -22,12 +22,26 @@ import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 
 export interface ConversationMessage {
   id: string;
-  sender: string; // 'LEAD' | 'AI' | 'HUMAN'
+  sender: string; // 'LEAD' | 'AI' | 'HUMAN' | internal/system senders
   content: string;
   timestamp: Date | string;
   isVoiceNote?: boolean;
   imageUrl?: string | null;
   hasImage?: boolean;
+}
+
+function isOperatorNoteContent(content: string | null | undefined): boolean {
+  return (content ?? '').trimStart().startsWith('OPERATOR NOTE:');
+}
+
+function isLeadCapitalParseCandidate(message: {
+  sender?: string | null;
+  content?: string | null;
+}): boolean {
+  if (message.sender !== 'LEAD') return false;
+  if (!message.content || message.content.trim().length === 0) return false;
+  if (isOperatorNoteContent(message.content)) return false;
+  return true;
 }
 
 type LLMTextContentPart = {
@@ -293,10 +307,11 @@ export async function generateReply(
   // 0. Extract the last lead message for few-shot retrieval
   const lastLeadMsg = [...conversationHistory]
     .reverse()
-    .find((m) => m.sender === 'LEAD');
+    .find((m) => isLeadCapitalParseCandidate(m));
   const lastAiMsg = [...conversationHistory]
     .reverse()
     .find((m) => m.sender === 'AI');
+  const rescheduleFlow = leadContext.rescheduleFlow === true;
 
   // 0a. LAYER 2 SAFETY NET — distress detection on the last LEAD
   // message. Layer 1 (webhook-processor.ts pre-generation gate) is the
@@ -781,7 +796,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const capitalVerificationSatisfied =
     hasCapitalVerificationQuestionAndAnswer(conversationHistory);
   const botDetectionCount = conversationHistory.filter(
-    (m) => m.sender === 'LEAD' && isBotDetectionQuestion(m.content)
+    (m) => isLeadCapitalParseCandidate(m) && isBotDetectionQuestion(m.content)
   ).length;
   const botDetectionDirective =
     botDetectionCount >= 2
@@ -965,6 +980,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       // gate matches whatever closer is configured for this persona.
       closerNames
     });
+    if (rescheduleFlow) {
+      const ignoredRescheduleFailures = [
+        'income_goal_overdue:',
+        'capital_question_overdue:',
+        'qualification_stalled:',
+        'call_pitch_before_capital_verification:',
+        'logistics_before_qualification:'
+      ];
+      const beforeCount = quality.hardFails.length;
+      quality.hardFails = quality.hardFails.filter(
+        (failure) =>
+          !ignoredRescheduleFailures.some((token) => failure.includes(token))
+      );
+      delete quality.softSignals.unnecessary_scheduling_question;
+      delete quality.softSignals.logistics_before_qualification;
+      if (quality.hardFails.length !== beforeCount) {
+        quality.passed = quality.hardFails.length === 0 && quality.score >= 0.7;
+        console.log(
+          `[ai-engine] Reschedule flow bypassed ${beforeCount - quality.hardFails.length} qualification gate failure(s)`
+        );
+      }
+    }
     finalQualityScore = quality.score;
 
     // 5b. R24 CAPITAL VERIFICATION GATE. Runs only when (a) the active
@@ -980,6 +1017,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     let r24Blocked = false;
     if (
       activeConversationId &&
+      !rescheduleFlow &&
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0 &&
       isRoutingToBookingHandoff(parsed)
@@ -995,7 +1033,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // answer-to-the-Q still gets classified. See checkR24
         // Verification doc for the specifics.
         lastLeadMsg
-          ? { content: lastLeadMsg.content, timestamp: lastLeadMsg.timestamp }
+          ? {
+              sender: lastLeadMsg.sender,
+              content: lastLeadMsg.content,
+              timestamp: lastLeadMsg.timestamp
+            }
           : undefined
       );
       r24Blocked = r24LastResult.blocked;
@@ -1015,6 +1057,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     let fixBResult: CapitalVerificationBlockResult | null = null;
     if (
       !r24Blocked &&
+      !rescheduleFlow &&
       activeConversationId &&
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0
@@ -1026,7 +1069,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         capitalCustomPrompt,
         closerNames,
         currentTurnLeadMsg: lastLeadMsg
-          ? { content: lastLeadMsg.content, timestamp: lastLeadMsg.timestamp }
+          ? {
+              sender: lastLeadMsg.sender,
+              content: lastLeadMsg.content,
+              timestamp: lastLeadMsg.timestamp
+            }
           : undefined
       });
       fixBBlocked = fixBResult.blocked;
@@ -2359,11 +2406,7 @@ function hasCapitalVerificationQuestionAndAnswer(
       continue;
     }
 
-    if (
-      capitalQuestionSeen &&
-      msg.sender === 'LEAD' &&
-      msg.content.trim().length > 0
-    ) {
+    if (capitalQuestionSeen && isLeadCapitalParseCandidate(msg)) {
       return true;
     }
   }
@@ -3231,7 +3274,11 @@ async function shouldBlockForCapitalVerification(params: {
   capitalThreshold: number | null;
   capitalCustomPrompt: string | null;
   closerNames?: string[];
-  currentTurnLeadMsg?: { content: string; timestamp: Date | string };
+  currentTurnLeadMsg?: {
+    sender?: string;
+    content: string;
+    timestamp: Date | string;
+  };
 }): Promise<CapitalVerificationBlockResult> {
   const {
     parsed,
@@ -3938,9 +3985,15 @@ export async function detectConversationCurrency(
 
   const leadMsgs = await prisma.message.findMany({
     where: { conversationId, sender: 'LEAD' },
-    select: { content: true }
+    select: { sender: true, content: true }
   });
-  return detectCurrencyFromTexts(leadMsgs.map((m) => m.content)) ?? 'USD';
+  return (
+    detectCurrencyFromTexts(
+      leadMsgs
+        .filter((m) => isLeadCapitalParseCandidate(m))
+        .map((m) => m.content)
+    ) ?? 'USD'
+  );
 }
 
 /**
@@ -3977,9 +4030,11 @@ export async function detectConversationCurrencyConfidence(
   // Otherwise scan the conversation's prior LEAD messages.
   const leadMsgs = await prisma.message.findMany({
     where: { conversationId, sender: 'LEAD' },
-    select: { content: true }
+    select: { sender: true, content: true }
   });
-  const onHistory = detectCurrencyFromTexts(leadMsgs.map((m) => m.content));
+  const onHistory = detectCurrencyFromTexts(
+    leadMsgs.filter((m) => isLeadCapitalParseCandidate(m)).map((m) => m.content)
+  );
   if (onHistory) return { confidence: 'MEDIUM', currency: onHistory };
   return { confidence: 'LOW', currency: null };
 }
@@ -3995,7 +4050,11 @@ async function checkR24Verification(
   conversationId: string,
   threshold: number,
   customPrompt: string | null,
-  currentTurnLeadMsg?: { content: string; timestamp: Date | string }
+  currentTurnLeadMsg?: {
+    sender?: string;
+    content: string;
+    timestamp: Date | string;
+  }
 ): Promise<R24GateResult> {
   // Wout Lngrs 2026-04-30 / 2026-05-01: once a call is booked, R24
   // must NOT re-evaluate. Re-running the gate post-booking risks the
@@ -4103,19 +4162,23 @@ async function checkR24Verification(
       timestamp: { gt: verificationAskedAt.timestamp }
     },
     orderBy: { timestamp: 'asc' },
-    select: { id: true, content: true, timestamp: true }
+    select: { id: true, sender: true, content: true, timestamp: true }
   });
   // Merge in the current-turn override if it sits after the Q AND is
   // not already in the DB result (dedupe by content + timestamp).
   const mergedAnswers: Array<{
     id: string | null;
+    sender: string;
     content: string;
     timestamp: Date;
-  }> = laterLeadMsgs.map((m) => ({
-    id: m.id,
-    content: m.content,
-    timestamp: m.timestamp
-  }));
+  }> = laterLeadMsgs
+    .filter((m) => isLeadCapitalParseCandidate(m))
+    .map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      content: m.content,
+      timestamp: m.timestamp
+    }));
   if (currentTurnLeadMsg) {
     const overrideTs =
       currentTurnLeadMsg.timestamp instanceof Date
@@ -4123,14 +4186,23 @@ async function checkR24Verification(
         : new Date(currentTurnLeadMsg.timestamp);
     const afterQ =
       overrideTs.getTime() > verificationAskedAt.timestamp.getTime();
+    const overrideCandidate = {
+      sender: currentTurnLeadMsg.sender ?? 'LEAD',
+      content: currentTurnLeadMsg.content
+    };
     const alreadyInSet = mergedAnswers.some(
       (m) =>
         m.content === currentTurnLeadMsg.content &&
         Math.abs(m.timestamp.getTime() - overrideTs.getTime()) < 2000
     );
-    if (afterQ && !alreadyInSet) {
+    if (
+      afterQ &&
+      !alreadyInSet &&
+      isLeadCapitalParseCandidate(overrideCandidate)
+    ) {
       mergedAnswers.push({
         id: null,
+        sender: overrideCandidate.sender,
         content: currentTurnLeadMsg.content,
         timestamp: overrideTs
       });
@@ -4155,10 +4227,30 @@ async function checkR24Verification(
   // routing a lead with no money to the booking handoff is far costlier
   // than asking a second clarifying question. If only one signal is
   // present, its own priority governs as usual.
-  const classifications = mergedAnswers.map((m) => ({
-    msg: m,
-    cls: parseLeadCapitalAnswer(m.content)
-  }));
+  const classifications: Array<{
+    msg: (typeof mergedAnswers)[number];
+    cls: ParsedLeadAnswer;
+  }> = [];
+  for (const message of mergedAnswers) {
+    // R24 capital parsing must only ever read the lead's own words.
+    // Operator/system notes can contain dollar amounts, times, or
+    // thresholds as instructions and must never become "capital answers".
+    if (message.sender !== 'LEAD') continue;
+    if (message.content.trimStart().startsWith('OPERATOR NOTE:')) continue;
+    classifications.push({
+      msg: message,
+      cls: parseLeadCapitalAnswer(message.content)
+    });
+  }
+  if (classifications.length === 0) {
+    return {
+      blocked: true,
+      reason: 'asked_but_no_answer',
+      parsedAmount: null,
+      verificationAskedAt: verificationAskedAt.id,
+      verificationConfirmedAt: null
+    };
+  }
   // amount > disqualifier > affirmative > hedging > ambiguous.
   const priority: Record<string, number> = {
     amount: 5,

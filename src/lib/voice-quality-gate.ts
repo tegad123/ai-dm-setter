@@ -12,6 +12,27 @@ export interface QualityResult {
   softSignals: Record<string, number>;
 }
 
+export const FORBIDDEN_AI_DASH_PATTERN = /[\u2013\u2014]/;
+
+/**
+ * Last-line R17 sanitizer for AI delivery paths.
+ *
+ * The quality gate hard-fails em/en dashes and forces regeneration, but
+ * manually approved suggestions, scheduled sends, and operator-triggered AI
+ * sends can enter closer to delivery. Keep one shared scrubber so forbidden
+ * dash characters never reach Meta even when generation was triggered outside
+ * the normal webhook path.
+ */
+export function sanitizeDashCharacters(text: string): string {
+  return text
+    .replace(/\s*\u2014\s*/g, ', ')
+    .replace(/\u2013/g, '-')
+    .replace(/\s+-\s+/g, ', ')
+    .replace(/,\s*,/g, ',')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -548,11 +569,13 @@ export function scoreVoiceQuality(
     }
   }
 
-  // 5. Em dash or en dash
-  if (reply.includes('—')) {
+  // 5. Em dash or en dash. Match the explicit Unicode code points so
+  // lookalike/editor substitutions are obvious in tests and reviews:
+  // U+2014 em dash, U+2013 en dash.
+  if (/\u2014/.test(reply)) {
     hardFails.push('em_dash');
   }
-  if (reply.includes('–')) {
+  if (/\u2013/.test(reply)) {
     hardFails.push('en_dash');
   }
 

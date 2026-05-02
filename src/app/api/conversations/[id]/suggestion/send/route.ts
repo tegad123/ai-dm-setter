@@ -32,6 +32,7 @@ import {
   broadcastNewMessage,
   broadcastConversationUpdate
 } from '@/lib/realtime';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 function calcTypingDelayMs(nextChars: number): number {
@@ -125,12 +126,15 @@ export async function POST(
     // (operator typed one message); verbatim approval of a multi-bubble
     // suggestion ships each bubble separately.
     const bubblesRaw = suggestion.messageBubbles;
-    const bubbles: string[] =
+    const unsanitizedBubbles: string[] =
       !isEdited && Array.isArray(bubblesRaw) && bubblesRaw.length > 1
         ? (bubblesRaw as unknown as string[]).filter(
             (s) => typeof s === 'string' && s.trim().length > 0
           )
         : [isEdited ? editedRaw : suggestion.responseText];
+    const bubbles = isEdited
+      ? unsanitizedBubbles
+      : unsanitizedBubbles.map((bubble) => sanitizeDashCharacters(bubble));
 
     if (bubbles.length === 0 || bubbles.every((b) => !b.trim())) {
       return NextResponse.json(

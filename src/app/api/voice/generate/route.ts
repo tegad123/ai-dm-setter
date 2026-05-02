@@ -1,6 +1,7 @@
 import { generateVoiceNote } from '@/lib/elevenlabs';
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
@@ -15,11 +16,12 @@ export async function POST(req: NextRequest) {
     if (!text || text.trim().length === 0) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
+    const sanitizedText = sanitizeDashCharacters(text);
 
     // Generate voice note via account's ElevenLabs key (BYOK)
     const { audioUrl, duration } = await generateVoiceNote(
       auth.accountId,
-      text
+      sanitizedText
     );
 
     let messageId: string | undefined;
@@ -41,7 +43,7 @@ export async function POST(req: NextRequest) {
         data: {
           conversationId,
           sender: 'AI',
-          content: text,
+          content: sanitizedText,
           isVoiceNote: true,
           voiceNoteUrl: audioUrl
         }

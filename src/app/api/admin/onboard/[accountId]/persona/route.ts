@@ -20,7 +20,7 @@ export async function POST(
 
     const persona = await prisma.aIPersona.findFirst({
       where: { accountId },
-      select: { id: true }
+      select: { id: true, promptConfig: true }
     });
     if (!persona) {
       return NextResponse.json(
@@ -93,6 +93,28 @@ export async function POST(
       scopeAndLimits,
       verifiedFacts
     };
+    const existingPromptConfig =
+      persona.promptConfig &&
+      typeof persona.promptConfig === 'object' &&
+      !Array.isArray(persona.promptConfig)
+        ? (persona.promptConfig as Record<string, unknown>)
+        : {};
+    const existingAssetLinks =
+      existingPromptConfig.assetLinks &&
+      typeof existingPromptConfig.assetLinks === 'object' &&
+      !Array.isArray(existingPromptConfig.assetLinks)
+        ? (existingPromptConfig.assetLinks as Record<string, unknown>)
+        : {};
+    const promptConfig = typeformUrl
+      ? {
+          ...existingPromptConfig,
+          typeformUrl,
+          assetLinks: {
+            ...existingAssetLinks,
+            bookingLink: typeformUrl
+          }
+        }
+      : existingPromptConfig;
 
     const updated = await prisma.$transaction(async (tx) => {
       const row = await tx.aIPersona.update({
@@ -102,6 +124,8 @@ export async function POST(
           personaName,
           tone,
           minimumCapitalRequired,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          promptConfig: promptConfig as any,
           // Cast to satisfy Prisma's `Json` input typing without
           // pulling the heavy types at the route layer.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

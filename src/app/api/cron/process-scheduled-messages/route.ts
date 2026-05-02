@@ -15,6 +15,7 @@ import {
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { scheduleNextInCascade } from '@/lib/follow-up-sequence';
 import { transitionLeadStage } from '@/lib/lead-stage';
+import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 import type { LeadContext } from '@/lib/ai-prompts';
 
@@ -361,6 +362,7 @@ async function fireScheduledMessage(
   if (!messageBody || !messageBody.trim()) {
     throw new Error('generated empty body');
   }
+  messageBody = sanitizeDashCharacters(messageBody);
 
   // Dedup: if this body is a near-duplicate of a recent AI message in
   // the same conversation, skip the send entirely. Catches two bad

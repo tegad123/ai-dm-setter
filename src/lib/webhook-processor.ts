@@ -18,6 +18,7 @@ import {
 } from '@/lib/conversation-state-machine';
 import {
   detectTypeformFilledNoBookingContext,
+  sanitizeDashCharacters,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import {
@@ -200,10 +201,12 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pc = (persona.promptConfig as any) || {};
     const candidates: unknown[] = [
+      pc.typeformUrl,
       pc.bookingLink,
       pc.calendarLink,
       pc.freeValueLink,
       pc.courseLink,
+      pc.assetLinks?.typeformUrl,
       pc.assetLinks?.bookingLink,
       pc.assetLinks?.courseLink,
       pc.assetLinks?.freeValueLink
@@ -297,6 +300,36 @@ function stripHallucinatedUrls(
   return { sanitized, removed };
 }
 
+function sanitizeAIResultDashes(
+  result: { reply: string; messages?: string[] },
+  context: string
+): void {
+  const beforeReply = result.reply;
+  const beforeMessages = Array.isArray(result.messages)
+    ? [...result.messages]
+    : null;
+
+  result.reply = sanitizeDashCharacters(result.reply);
+  if (Array.isArray(result.messages)) {
+    result.messages = result.messages.map((message) =>
+      sanitizeDashCharacters(message)
+    );
+  }
+
+  const changedReply = result.reply !== beforeReply;
+  const changedMessages =
+    beforeMessages !== null &&
+    result.messages?.some(
+      (message, index) => message !== beforeMessages[index]
+    );
+
+  if (changedReply || changedMessages) {
+    console.warn(
+      `[webhook-processor] R17 violation for ${context}: AI used em/en-dashes — sanitized before delivery.`
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -373,6 +406,21 @@ function extractFirstAudioUrl(
 }
 
 const LEAD_EMAIL_PATTERN = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
+
+export const RESCHEDULE_PATTERNS: RegExp[] = [
+  /reschedule/i,
+  /mix.?up/i,
+  /wasn.t prepared/i,
+  /missed the call/i,
+  /another time/i,
+  /another day/i,
+  /can we do.*(sunday|monday|tomorrow|later)/i
+];
+
+export function isRescheduleSignal(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return RESCHEDULE_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 function extractLeadEmail(text: string): string | null {
   const match = text.match(LEAD_EMAIL_PATTERN);
@@ -1763,6 +1811,62 @@ export async function scheduleAIReply(
 
   const { lead } = conversation;
 
+  const latestLeadMessage = [...conversation.messages]
+    .reverse()
+    .find((m) => m.sender === 'LEAD');
+  let rescheduleFlowActive = false;
+  if (
+    !conversation.aiActive &&
+    conversation.scheduledCallAt &&
+    isRescheduleSignal(latestLeadMessage?.content)
+  ) {
+    const cancelledReminders = await prisma.scheduledMessage.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        aiActive: true,
+        autoSendOverride: true,
+        scheduledCallAt: null,
+        scheduledCallTimezone: null,
+        scheduledCallSource: null,
+        scheduledCallConfirmed: false,
+        callConfirmed: false,
+        callConfirmedAt: null,
+        callOutcome: null,
+        typeformCallScheduledAt: null
+      }
+    });
+    if (lead.stage !== 'CALL_PROPOSED') {
+      await transitionLeadStage(
+        lead.id,
+        'CALL_PROPOSED',
+        'system',
+        'AI re-enabled for reschedule flow'
+      );
+      lead.stage = 'CALL_PROPOSED';
+    }
+    conversation.aiActive = true;
+    conversation.autoSendOverride = true;
+    conversation.scheduledCallAt = null;
+    conversation.scheduledCallTimezone = null;
+    conversation.scheduledCallSource = null;
+    conversation.scheduledCallConfirmed = false;
+    conversation.callConfirmed = false;
+    conversation.callConfirmedAt = null;
+    conversation.callOutcome = null;
+    conversation.typeformCallScheduledAt = null;
+    broadcastAIStatusChange({ conversationId, aiActive: true });
+    log(
+      'sched.step1.rescheduleReenabled',
+      `AI re-enabled for reschedule flow; autoSendOverride=true; cancelled ${cancelledReminders.count} pending scheduled message(s)`
+    );
+    console.log('AI re-enabled for reschedule flow');
+    rescheduleFlowActive = true;
+  }
+
   // Check account-level PER-PLATFORM away mode. The lead's platform decides
   // whether the Instagram or Facebook switch applies to this conversation.
   //
@@ -1872,6 +1976,7 @@ export async function scheduleAIReply(
     incomeLevel: lead.incomeLevel || undefined,
     geography: lead.geography || undefined,
     timezone: lead.timezone || undefined,
+    rescheduleFlow: rescheduleFlowActive || undefined,
     // Safety: when the conversation has a previously-detected distress
     // flag and the operator has re-enabled AI, the prompt needs to
     // know so it can soft check-in instead of pitching. Permanent flag
@@ -2579,32 +2684,9 @@ export async function scheduleAIReply(
   // Em-dashes (—) and en-dashes (–) are dead giveaways that text was
   // written by an AI. The system prompt rule R17 tells the AI not to
   // use them, but as a last line of defense we sanitize the reply
-  // before delivery:
-  //   - em-dash (—, U+2014)  → ", "  (parenthetical break becomes a comma)
-  //   - en-dash (–, U+2013)  → "-"   (range becomes a normal hyphen)
-  //   - " - " connector      → ", "  (hyphen-as-clause-connector becomes a comma)
-  // Hyphens inside compound words ("well-known", "9-5") are preserved.
+  // and every multi-bubble item before delivery.
   try {
-    const before = result.reply;
-    const after = before
-      // Em-dash → comma + space (collapse any surrounding whitespace)
-      .replace(/\s*—\s*/g, ', ')
-      // En-dash → hyphen (preserves ranges like "9–5" → "9-5")
-      .replace(/–/g, '-')
-      // " - " used as a clause connector → ", " (must have spaces on both
-      // sides — this is the AI tell, not the legitimate compound-word use)
-      .replace(/\s+-\s+/g, ', ')
-      // Collapse any double-comma artifacts the replacements may create
-      .replace(/,\s*,/g, ',')
-      // Tidy double spaces
-      .replace(/ {2,}/g, ' ');
-
-    if (after !== before) {
-      console.warn(
-        `[webhook-processor] R17 violation for ${conversationId}: AI used em/en-dashes — sanitized before delivery.`
-      );
-      result.reply = after;
-    }
+    sanitizeAIResultDashes(result, conversationId);
   } catch (err) {
     console.error(
       '[webhook-processor] Dash sanitization failed (non-fatal):',
@@ -2739,7 +2821,13 @@ async function deliverBubbleGroup(params: {
   firstMessageId: string;
 }> {
   const { conversationId, lead, bubbles, result, now } = params;
-  const totalCharacters = bubbles.reduce((sum, b) => sum + b.length, 0);
+  const sanitizedBubbles = bubbles.map((bubble) =>
+    sanitizeDashCharacters(bubble)
+  );
+  const totalCharacters = sanitizedBubbles.reduce(
+    (sum, b) => sum + b.length,
+    0
+  );
 
   // 1. Create the parent MessageGroup first so bubble rows can link.
   const group = await prisma.messageGroup.create({
@@ -2747,7 +2835,7 @@ async function deliverBubbleGroup(params: {
       conversationId,
       generatedAt: now,
       aiSuggestionId: result.suggestionId || null,
-      bubbleCount: bubbles.length,
+      bubbleCount: sanitizedBubbles.length,
       totalCharacters,
       sentByType: 'AI'
     }
@@ -2759,9 +2847,9 @@ async function deliverBubbleGroup(params: {
   let firstMessageId = '';
   let abortedByHuman = false;
 
-  for (let i = 0; i < bubbles.length; i++) {
+  for (let i = 0; i < sanitizedBubbles.length; i++) {
     const isFirst = i === 0;
-    const bubble = bubbles[i];
+    const bubble = sanitizedBubbles[i];
 
     // Mid-group human-takeover check (skip on the first bubble — we
     // already passed the top-of-sendAIReply preflight).
@@ -2777,7 +2865,7 @@ async function deliverBubbleGroup(params: {
       if (humanInterrupt) {
         abortedByHuman = true;
         console.log(
-          `[webhook-processor] Multi-bubble group ${group.id} aborted at bubble ${i}/${bubbles.length}: human took over`
+          `[webhook-processor] Multi-bubble group ${group.id} aborted at bubble ${i}/${sanitizedBubbles.length}: human took over`
         );
         break;
       }
@@ -2794,7 +2882,7 @@ async function deliverBubbleGroup(params: {
         timestamp: bubbleTimestamp,
         messageGroupId: group.id,
         bubbleIndex: i,
-        bubbleTotalCount: bubbles.length,
+        bubbleTotalCount: sanitizedBubbles.length,
         intraGroupDelayMs: null, // back-filled below on the NEXT bubble
         stage: isFirst ? result.stage || null : null,
         subStage: isFirst ? result.subStage || null : null,
@@ -2831,7 +2919,7 @@ async function deliverBubbleGroup(params: {
           })
           .catch(() => {});
         console.log(
-          `[webhook-processor] bubble ${i}/${bubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id}, mid=${ship.messageId})`
+          `[webhook-processor] bubble ${i}/${sanitizedBubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id}, mid=${ship.messageId})`
         );
       } else {
         // Ship FAILED — delete the ghost bubble row so the dashboard
@@ -2839,7 +2927,7 @@ async function deliverBubbleGroup(params: {
         // whatever already shipped (bubbles 0..i-1) stays on Meta.
         failedAt = new Date();
         console.error(
-          `[webhook-processor] Multi-bubble delivery failed at bubble ${i}/${bubbles.length}:`,
+          `[webhook-processor] Multi-bubble delivery failed at bubble ${i}/${sanitizedBubbles.length}:`,
           ship.error
         );
         await prisma.message
@@ -2864,7 +2952,7 @@ async function deliverBubbleGroup(params: {
                 accountId: lead.accountId,
                 type: 'SYSTEM',
                 title: 'Multi-bubble delivery failed',
-                body: `Bubble ${i + 1} of ${bubbles.length} failed to deliver to ${lead.platformUserId} on ${lead.platform}: ${(ship.error?.message || 'Unknown error').slice(0, 200)}. Earlier bubbles were delivered; no further bubbles will be sent.`,
+                body: `Bubble ${i + 1} of ${sanitizedBubbles.length} failed to deliver to ${lead.platformUserId} on ${lead.platform}: ${(ship.error?.message || 'Unknown error').slice(0, 200)}. Earlier bubbles were delivered; no further bubbles will be sent.`,
                 leadId: lead.id
               }
             });
@@ -2894,7 +2982,7 @@ async function deliverBubbleGroup(params: {
       timestamp: msg.timestamp.toISOString(),
       messageGroupId: group.id,
       bubbleIndex: i,
-      bubbleTotalCount: bubbles.length
+      bubbleTotalCount: sanitizedBubbles.length
     });
 
     delivered++;
@@ -2914,7 +3002,7 @@ async function deliverBubbleGroup(params: {
           containsBookingLink,
           scheduleBookingLinkFollowup
         } = await import('@/lib/follow-up-sequence');
-        const joinedReply = bubbles.join(' ');
+        const joinedReply = sanitizedBubbles.join(' ');
         const convLookup = await prisma.conversation.findUnique({
           where: { id: conversationId },
           select: {
@@ -3079,6 +3167,10 @@ async function sendAIReply(
     typeformFilledNoBooking?: boolean;
   }
 ): Promise<void> {
+  // Delivery-path R17 backstop. scheduleAIReply normally sanitizes right after
+  // generation, but direct/manual AI send paths can call this closer to ship.
+  sanitizeAIResultDashes(result, conversationId);
+
   // ── LAYER 2 distress handler ──────────────────────────────────
   // ai-engine.generateReply sets distressDetected=true when the lead's
   // latest message matched the distress detector — happens when Layer 1

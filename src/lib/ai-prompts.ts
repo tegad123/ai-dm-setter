@@ -93,6 +93,10 @@ export interface LeadContext {
   timezone?: string;
   // Booking-stage context (populated when conversation reaches Stage 7)
   booking?: BookingState;
+  // The lead already had a booked call and is now trying to reschedule.
+  // This bypasses qualification/capital progression gates; the only
+  // job is to send the booking link again and collect the new time.
+  rescheduleFlow?: boolean;
   // Test mode: when true, the system prompt force-jumps to BOOKING stage
   // and skips all qualification stages. Triggered by sending "september 2002"
   // in any inbound DM. Used during development to test the booking flow
@@ -316,6 +320,26 @@ Step 5 — Wrap up warmly:
 If the script ORDERS a different sequence (e.g., drop link before asking email, or skip timezone/email entirely), follow the script. **The script wins over this general guidance — do not impose steps the script doesn't have.**
 
 If your "Available Links & URLs" section has NO booking link, you CANNOT book. Tell the lead the human team will follow up shortly with the link. Do NOT invent a URL. Do NOT substitute a different URL. Do NOT emit "[BOOKING LINK]" or any bracketed placeholder. Do NOT propose times.
+
+### RESCHEDULE PATTERN (BOOKED / CALL-CONFIRMED LEADS)
+
+When a lead who is already BOOKED or call-confirmed signals they missed the call, had a timezone mixup, were not prepared, or need to reschedule, handle it as a booking-link resend, not as open-ended scheduling.
+
+Signal phrases include:
+- "there was a mixup"
+- "I wasn't prepared"
+- "can we reschedule"
+- "reschedule to another time"
+- "missed the call"
+- "can we do it another day"
+- "Anthony said we could reschedule"
+
+When detected:
+1. Acknowledge naturally — no stress, keep it light.
+2. Send the Typeform / booking URL immediately from "Available Links & URLs" in the same message. Example shape: "no stress bro, use this to grab a new time: <REAL_TYPEFORM_URL>"
+3. Ask them to confirm what day and time they book so you can note it.
+
+Do NOT ask "what day works better?" without also sending the Typeform / booking URL. Asking for a day without giving them the booking tool creates a dead end. The URL must be in the same reply.
 
 Sub-stages to use in your JSON response:
 - "BOOKING_TZ_ASK" — asking for timezone
@@ -1031,10 +1055,17 @@ This page tells leads what to expect on their call and how to prepare. Do NOT se
 
   // Asset links
   const assets = config.assetLinks;
+  const typeformUrl =
+    typeof config.typeformUrl === 'string' &&
+    /^https?:\/\//i.test(config.typeformUrl.trim())
+      ? config.typeformUrl.trim()
+      : null;
   if (assets && typeof assets === 'object') {
     const assetParts: string[] = [];
     if (assets.bookingLink)
       assetParts.push(`- Booking link: ${assets.bookingLink}`);
+    if (typeformUrl)
+      assetParts.push(`- Typeform / booking URL: ${typeformUrl}`);
     if (assets.courseLink)
       assetParts.push(`- Course link: ${assets.courseLink}`);
     if (assets.freeValueLink || p.freeValueLink)
@@ -1049,6 +1080,8 @@ This page tells leads what to expect on their call and how to prepare. Do NOT se
     }
     if (assetParts.length)
       parts.push(`\n### ASSET LINKS\n${assetParts.join('\n')}`);
+  } else if (typeformUrl) {
+    parts.push(`\n### ASSET LINKS\n- Typeform / booking URL: ${typeformUrl}`);
   }
 
   // Training examples (few-shot)
