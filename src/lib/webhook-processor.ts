@@ -1452,6 +1452,34 @@ export async function processIncomingMessage(
     } else {
       await cancelAllPendingFollowUps(conversationId);
     }
+
+    // Wout Lngrs follow-up 2026-05-02: WINDOW_KEEPALIVE rows exist
+    // to nudge a stale conversation back to life. The moment the
+    // lead re-engages on their own (this inbound), the keepalive
+    // is moot — cancel any pending one. Call-day reminders
+    // (DAY_BEFORE_REMINDER / MORNING_OF_REMINDER / CALL_DAY_* /
+    // PRE_CALL_HOMEWORK) are NOT cancelled here — those fire on
+    // their own time regardless of inbound activity.
+    try {
+      const cancelled = await prisma.scheduledMessage.updateMany({
+        where: {
+          conversationId,
+          status: 'PENDING',
+          messageType: 'WINDOW_KEEPALIVE'
+        },
+        data: { status: 'CANCELLED' }
+      });
+      if (cancelled.count > 0) {
+        console.log(
+          `[webhook-processor] cancelled ${cancelled.count} pending WINDOW_KEEPALIVE row(s) on lead inbound for ${conversationId}`
+        );
+      }
+    } catch (kaErr) {
+      console.error(
+        '[webhook-processor] WINDOW_KEEPALIVE cancellation failed (non-fatal):',
+        kaErr
+      );
+    }
   } catch (err) {
     console.error(
       '[webhook-processor] snooze/cancel hook failed (non-fatal):',

@@ -1,10 +1,7 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { cancelCallReminders } from '@/lib/call-reminders';
-import {
-  scheduleCallConfirmationSequence,
-  sendImmediateCallConfirmation
-} from '@/lib/call-confirmation-sequence';
+import { scheduleCallConfirmationSequence } from '@/lib/call-confirmation-sequence';
 import { transitionLeadStage } from '@/lib/lead-stage';
 import type { LeadStage } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
@@ -233,18 +230,18 @@ export async function PUT(
       `[api/call] Call set for ${id} at ${scheduledDate.toISOString()} (${tz}) by user ${auth.userId} — sequence: homework=${remindersCreated.homeworkId} confirmation=${remindersCreated.confirmationId} reminder=${remindersCreated.reminderId}`
     );
 
-    if (
-      conversation.lead.stage === 'QUALIFIED' ||
-      conversation.lead.stage === 'CALL_PROPOSED' ||
-      conversation.lead.stage === 'BOOKED'
-    ) {
-      await sendImmediateCallConfirmation(id).catch((err) =>
-        console.error(
-          '[api/call] immediate call confirmation failed (non-fatal):',
-          err
-        )
-      );
-    }
+    // Wout Lngrs follow-up 2026-05-02: operator-driven updates
+    // are SILENT. Was previously firing
+    // sendImmediateCallConfirmation here whenever the operator set
+    // OR updated the call via this UI, which produced unsolicited
+    // "perfect bro, [day], [time] is locked in" messages on every
+    // reschedule. The ONLY path that should send a confirmation
+    // is the AI parse path (lead confirmed a time in conversation),
+    // which calls sendImmediateCallConfirmation directly from
+    // ai-engine. Operator backend updates stay invisible to the
+    // lead — if the operator wants to notify, they message manually.
+    // Reminders are still cancelled + recreated above via
+    // scheduleCallConfirmationSequence.
 
     // Re-fetch the newly-scheduled PENDING reminder rows so the
     // response shape matches GET exactly — the client stores this
