@@ -29,8 +29,8 @@ async function main() {
         select: {
           id: true,
           name: true,
-          awayMode: true,
-          notificationEmail: true
+          awayModeFacebook: true,
+          awayModeInstagram: true
         }
       }
     }
@@ -46,12 +46,19 @@ async function main() {
   const c = lead.conversation;
   console.log('═══════════════════════════════════════════════════════════');
   console.log(`Lead: ${lead.name} (@${lead.handle})`);
-  console.log(`  platform=${lead.platform} platformUserId=${lead.platformUserId}`);
-  console.log(`  stage=${lead.stage} status=${lead.status}`);
+  console.log(
+    `  platform=${lead.platform} platformUserId=${lead.platformUserId}`
+  );
+  console.log(
+    `  stage=${lead.stage} previousStage=${lead.previousStage ?? '—'}`
+  );
   console.log(`  leadId=${lead.id} accountId=${lead.accountId}`);
   console.log('───────────────────────────────────────────────────────────');
   console.log(`Account: ${lead.account?.name}`);
-  console.log(`  awayMode=${lead.account?.awayMode}`);
+  console.log(
+    `  awayModeFacebook=${lead.account?.awayModeFacebook} ` +
+      `awayModeInstagram=${lead.account?.awayModeInstagram}`
+  );
   console.log('───────────────────────────────────────────────────────────');
   console.log(`Conversation: ${c.id}`);
   console.log(`  aiActive=${c.aiActive}`);
@@ -61,10 +68,16 @@ async function main() {
   console.log(`  lastMessageAt=${c.lastMessageAt?.toISOString() ?? '—'}`);
   console.log(`  unreadCount=${c.unreadCount}`);
   console.log('  ── safety flags ──');
-  console.log(`  distressDetected=${c.distressDetected} at=${c.distressDetectedAt?.toISOString() ?? '—'} msgId=${c.distressMessageId ?? '—'}`);
-  console.log(`  schedulingConflict=${c.schedulingConflict} at=${c.schedulingConflictAt?.toISOString() ?? '—'} pref=${c.schedulingConflictPreference ?? '—'}`);
+  console.log(
+    `  distressDetected=${c.distressDetected} at=${c.distressDetectedAt?.toISOString() ?? '—'} msgId=${c.distressMessageId ?? '—'}`
+  );
+  console.log(
+    `  schedulingConflict=${c.schedulingConflict} at=${c.schedulingConflictAt?.toISOString() ?? '—'} pref=${c.schedulingConflictPreference ?? '—'}`
+  );
   console.log(`  typeformFilledNoBooking=${c.typeformFilledNoBooking}`);
-  console.log(`  geographyGated=${c.geographyGated} country=${c.geographyCountry ?? '—'}`);
+  console.log(
+    `  geographyGated=${c.geographyGated} country=${c.geographyCountry ?? '—'}`
+  );
   console.log('───────────────────────────────────────────────────────────');
 
   console.log(`\n── Last 25 messages (oldest → newest) ──`);
@@ -84,53 +97,51 @@ async function main() {
     orderBy: { createdAt: 'desc' },
     take: 10
   });
-  console.log(`\n── ScheduledReply rows (${scheduled.length}, newest first) ──`);
+  console.log(
+    `\n── ScheduledReply rows (${scheduled.length}, newest first) ──`
+  );
   for (const s of scheduled) {
     console.log(
       `${s.createdAt.toISOString()} status=${s.status} ` +
         `scheduledFor=${s.scheduledFor.toISOString()} ` +
         `processedAt=${s.processedAt?.toISOString() ?? '—'} ` +
-        `attempts=${s.attempts ?? '—'} ` +
-        `error="${(s.error ?? '').slice(0, 80)}"`
+        `attempts=${s.attempts} ` +
+        `lastError="${(s.lastError ?? '').slice(0, 80)}"`
     );
   }
 
-  // ── ScheduledMessage rows (follow-up sequence uses this) ────────
-  try {
-    const sm = await prisma.scheduledMessage.findMany({
-      where: { conversationId: c.id },
-      orderBy: { createdAt: 'desc' },
-      take: 10
-    });
-    console.log(`\n── ScheduledMessage rows (${sm.length}, newest first) ──`);
-    for (const s of sm) {
-      console.log(
-        `${s.createdAt.toISOString()} status=${s.status} ` +
-          `scheduledFor=${s.scheduledFor.toISOString()} ` +
-          `kind=${(s as any).kind ?? '—'} ` +
-          `processedAt=${s.processedAt?.toISOString() ?? '—'}`
-      );
-    }
-  } catch (e) {
-    console.log('(ScheduledMessage table not present or shape mismatch)');
+  // ── ScheduledMessage rows (call reminders + follow-up sequence) ──
+  const sm = await prisma.scheduledMessage.findMany({
+    where: { conversationId: c.id },
+    orderBy: { createdAt: 'desc' },
+    take: 10
+  });
+  console.log(`\n── ScheduledMessage rows (${sm.length}, newest first) ──`);
+  for (const s of sm) {
+    console.log(
+      `${s.createdAt.toISOString()} status=${s.status} ` +
+        `scheduledFor=${s.scheduledFor.toISOString()} ` +
+        `messageType=${s.messageType} ` +
+        `firedAt=${s.firedAt?.toISOString() ?? '—'} ` +
+        `attempts=${s.attempts} ` +
+        `lastError="${(s.lastError ?? '').slice(0, 80)}"`
+    );
   }
 
-  // ── Notifications in the last 7 days ────────────────────────────
+  // ── Notifications for this lead in the last 7 days ──────────────
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const notifs = await prisma.notification.findMany({
     where: {
       accountId: lead.accountId,
-      createdAt: { gte: since },
-      OR: [
-        { details: { contains: lead.id } },
-        { body: { contains: lead.name ?? '' } },
-        { title: { contains: lead.name ?? '' } }
-      ]
+      leadId: lead.id,
+      createdAt: { gte: since }
     },
     orderBy: { createdAt: 'desc' },
     take: 10
   });
-  console.log(`\n── Notification rows for this lead (last 7d, ${notifs.length}) ──`);
+  console.log(
+    `\n── Notification rows for this lead (last 7d, ${notifs.length}) ──`
+  );
   for (const n of notifs) {
     console.log(
       `${n.createdAt.toISOString()} type=${n.type} title="${(n.title ?? '').slice(0, 70)}"`
@@ -140,19 +151,23 @@ async function main() {
   // ── LeadStageTransition rows (audit trail) ──────────────────────
   const transitions = await prisma.leadStageTransition.findMany({
     where: { leadId: lead.id },
-    orderBy: { transitionedAt: 'desc' },
+    orderBy: { createdAt: 'desc' },
     take: 10
   });
-  console.log(`\n── LeadStageTransition rows (${transitions.length}, newest first) ──`);
+  console.log(
+    `\n── LeadStageTransition rows (${transitions.length}, newest first) ──`
+  );
   for (const t of transitions) {
     console.log(
-      `${t.transitionedAt.toISOString()} ${t.fromStage ?? '—'} → ${t.toStage} ` +
-        `reason="${(t.reason ?? '').slice(0, 60)}" trigger=${t.triggeredBy ?? '—'}`
+      `${t.createdAt.toISOString()} ${t.fromStage} → ${t.toStage} ` +
+        `reason="${(t.reason ?? '').slice(0, 60)}" by=${t.transitionedBy}`
     );
   }
 
   // ── AISuggestion rows around the silence ────────────────────────
-  const lastLeadMsg = [...c.messages].reverse().find((m) => m.sender === 'LEAD');
+  const lastLeadMsg = [...c.messages]
+    .reverse()
+    .find((m) => m.sender === 'LEAD');
   if (lastLeadMsg) {
     const sugs = await prisma.aISuggestion.findMany({
       where: {
@@ -164,7 +179,9 @@ async function main() {
     console.log(
       `\n── AISuggestion rows generated AFTER last lead msg (${sugs.length}) ──`
     );
-    console.log(`Last lead msg: ${lastLeadMsg.timestamp.toISOString()} "${lastLeadMsg.content.slice(0, 70)}"`);
+    console.log(
+      `Last lead msg: ${lastLeadMsg.timestamp.toISOString()} "${lastLeadMsg.content.slice(0, 70)}"`
+    );
     for (const s of sugs) {
       const preview = (s.responseText || '').slice(0, 90).replace(/\n/g, ' ');
       console.log(
@@ -185,16 +202,32 @@ async function main() {
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('Diagnosis cheat sheet:');
-  console.log('  • aiActive=false + distressDetected=true  → distress-detector fired');
-  console.log('  • aiActive=false + schedulingConflict=true → scheduling-conflict path');
-  console.log('  • aiActive=false + typeformFilledNoBooking=true → typeform soft exit');
+  console.log(
+    '  • aiActive=false + distressDetected=true  → distress-detector fired'
+  );
+  console.log(
+    '  • aiActive=false + schedulingConflict=true → scheduling-conflict path'
+  );
+  console.log(
+    '  • aiActive=false + typeformFilledNoBooking=true → typeform soft exit'
+  );
   console.log('  • aiActive=false + geographyGated=true    → geo gate fired');
-  console.log('  • aiActive=false + outcome=SOFT_EXIT      → soft-exit classifier');
+  console.log(
+    '  • aiActive=false + outcome=SOFT_EXIT      → soft-exit classifier'
+  );
   console.log('  • aiActive=true + 0 AISuggestion + 0 ScheduledReply');
-  console.log('      → webhook never fired (check vercel logs for the platform)');
-  console.log('  • aiActive=true + ScheduledReply.status=PENDING (older than ~5 min)');
-  console.log('      → cron not picking up; check /api/cron/process-scheduled-replies');
-  console.log('  • aiActive=true + ScheduledReply.status=FAILED + error message');
+  console.log(
+    '      → webhook never fired (check vercel logs for the platform)'
+  );
+  console.log(
+    '  • aiActive=true + ScheduledReply.status=PENDING (older than ~5 min)'
+  );
+  console.log(
+    '      → cron not picking up; check /api/cron/process-scheduled-replies'
+  );
+  console.log(
+    '  • aiActive=true + ScheduledReply.status=FAILED + error message'
+  );
   console.log('      → AI generation or send failed; error column has details');
   console.log('═══════════════════════════════════════════════════════════');
 
