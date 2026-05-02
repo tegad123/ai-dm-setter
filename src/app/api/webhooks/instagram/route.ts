@@ -30,6 +30,43 @@ function hasImageAttachment(attachments: unknown): boolean {
   );
 }
 
+// Voice notes are delivered as `attachments[].type === 'audio'`. The
+// inbound filter must let these through (FAILURE B 2026-05-02);
+// dropping them silently meant lead voice notes never reached the
+// app and operator voice notes never paused the AI.
+function hasAudioAttachment(attachments: unknown): boolean {
+  return (
+    Array.isArray(attachments) &&
+    attachments.some((attachment) => {
+      const candidate = attachment as {
+        type?: unknown;
+        payload?: { url?: unknown } | null;
+      };
+      return (
+        candidate?.type === 'audio' &&
+        typeof candidate.payload?.url === 'string'
+      );
+    })
+  );
+}
+
+function firstAudioAttachmentUrl(attachments: unknown): string | null {
+  if (!Array.isArray(attachments)) return null;
+  for (const attachment of attachments) {
+    const candidate = attachment as {
+      type?: unknown;
+      payload?: { url?: unknown } | null;
+    };
+    if (
+      candidate?.type === 'audio' &&
+      typeof candidate.payload?.url === 'string'
+    ) {
+      return candidate.payload.url;
+    }
+  }
+  return null;
+}
+
 // Vercel Hobby defaults to 10s — AI generation + send needs more time.
 // Bumped to 120s to accommodate the inline-delay-then-reply path (after()
 // callback): up to 90s delay + ~25s for AI generation + Instagram send.
@@ -256,7 +293,12 @@ async function processInstagramEvents(payload: any): Promise<void> {
       const platformMessageId: string = event.message?.mid ?? '';
       const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!messageText && !hasImageAttachment(attachments)) continue;
+      if (
+        !messageText &&
+        !hasImageAttachment(attachments) &&
+        !hasAudioAttachment(attachments)
+      )
+        continue;
 
       // ── Admin/page message detection ────────────────────────────────
       // Meta sends message echoes when the page sends a message (is_echo=true)
@@ -270,13 +312,19 @@ async function processInstagramEvents(payload: any): Promise<void> {
       );
 
       if (isAdminMessage) {
-        if (!messageText) continue;
+        const audioUrl = firstAudioAttachmentUrl(attachments);
+        // FAILURE A 2026-05-02: operator voice note echoes were
+        // dropped by `if (!messageText) continue` above. Now we
+        // accept the echo when EITHER text OR audio is present and
+        // pass the audioUrl through so the admin handler can mark
+        // the saved row as a voice note + cancel pending AI replies.
+        if (!messageText && !audioUrl) continue;
         // This message was sent by the business/admin, not the lead
         const leadPlatformUserId = isEcho
           ? recipientId
           : recipientId || senderId;
         console.log(
-          `[instagram-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}`
+          `[instagram-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}, voiceNote=${Boolean(audioUrl)}), lead=${leadPlatformUserId}`
         );
         try {
           const { processAdminMessage } = await import(
@@ -286,7 +334,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
             accountId,
             platformUserId: leadPlatformUserId,
             platform: 'INSTAGRAM',
-            messageText,
+            messageText: messageText || (audioUrl ? '[Voice note]' : ''),
+            audioUrl: audioUrl ?? undefined,
             platformMessageId: platformMessageId || undefined
           });
         } catch (adminErr) {

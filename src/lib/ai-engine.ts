@@ -515,6 +515,18 @@ export async function generateReply(
     systemPrompt += '\n\n' + scoringContext;
   }
 
+  // 1b-ii. Voice-note received block (FAILURE B 2026-05-02). When
+  // the most recent LEAD message was an audio attachment, the LLM
+  // sees only the placeholder content "[Voice note]" — without
+  // this directive it tends to either ignore the message or
+  // hallucinate what was said. Force the next reply to acknowledge
+  // it can't hear the audio and ask the lead to type their question
+  // out instead. Only fires when isVoiceNote is true on the last
+  // lead message, so normal text turns are unaffected.
+  if (lastLeadMsg?.isVoiceNote === true) {
+    systemPrompt += `\n\n<voice_note_received>\nThe lead just sent a voice note. You CANNOT hear it — transcription isn't wired up yet, so you have no idea what they said. Do NOT pretend you understood it. Do NOT make up content. Do NOT ignore it silently — that reads as the bot dropping the conversation.\n\nAcknowledge naturally and ask the lead to type the message out instead. Variations to choose from (don't reuse one verbatim):\n  • "couldn't catch the audio bro, what did you say?"\n  • "voice notes don't come through clean on my end bro, what's up?"\n  • "my bad audio isn't loading right rn, type it out real quick"\n\nKeep it casual, short, and apologetic-but-not-grovelling. ONE bubble. Then wait — do not also try to advance the funnel on this turn.\n</voice_note_received>`;
+  }
+
   // 1c. Promise-tracking: if the last AI turn was an unkept promise
   // (e.g., "My G! I'll explain" with nothing that followed), the LLM
   // must deliver on that promise this turn before advancing the funnel.

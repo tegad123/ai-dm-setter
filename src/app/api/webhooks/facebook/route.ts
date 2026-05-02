@@ -16,6 +16,39 @@ export const maxDuration = 120;
 // Short delays bypass the per-minute cron and run inline via after().
 const INLINE_DELAY_THRESHOLD_SECONDS = 90;
 
+function hasAudioAttachment(attachments: unknown): boolean {
+  return (
+    Array.isArray(attachments) &&
+    attachments.some((attachment) => {
+      const candidate = attachment as {
+        type?: unknown;
+        payload?: { url?: unknown } | null;
+      };
+      return (
+        candidate?.type === 'audio' &&
+        typeof candidate.payload?.url === 'string'
+      );
+    })
+  );
+}
+
+function firstAudioAttachmentUrl(attachments: unknown): string | null {
+  if (!Array.isArray(attachments)) return null;
+  for (const attachment of attachments) {
+    const candidate = attachment as {
+      type?: unknown;
+      payload?: { url?: unknown } | null;
+    };
+    if (
+      candidate?.type === 'audio' &&
+      typeof candidate.payload?.url === 'string'
+    ) {
+      return candidate.payload.url;
+    }
+  }
+  return null;
+}
+
 function hasImageAttachment(attachments: unknown): boolean {
   return (
     Array.isArray(attachments) &&
@@ -259,7 +292,12 @@ async function processFacebookEvents(payload: any): Promise<void> {
       const platformMessageId: string = event.message?.mid ?? '';
       const isEcho: boolean = event.message?.is_echo === true;
 
-      if (!messageText && !hasImageAttachment(attachments)) continue;
+      if (
+        !messageText &&
+        !hasImageAttachment(attachments) &&
+        !hasAudioAttachment(attachments)
+      )
+        continue;
 
       // ── Admin/page message detection ────────────────────────────────
       const isAdminMessage = isEcho || pageOwnIds.has(senderId);
@@ -271,7 +309,8 @@ async function processFacebookEvents(payload: any): Promise<void> {
       );
 
       if (isAdminMessage) {
-        if (!messageText) continue;
+        const audioUrl = firstAudioAttachmentUrl(attachments);
+        if (!messageText && !audioUrl) continue;
         const candidateLeadIds = Array.from(
           new Set(
             [recipientId, senderId].filter((id) => id && !pageOwnIds.has(id))
@@ -281,7 +320,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
           candidateLeadIds[0] ||
           (isEcho ? recipientId : recipientId || senderId);
         console.log(
-          `[facebook-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}), lead=${leadPlatformUserId}, candidates=[${candidateLeadIds.join(',')}]`
+          `[facebook-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}, voiceNote=${Boolean(audioUrl)}), lead=${leadPlatformUserId}, candidates=[${candidateLeadIds.join(',')}]`
         );
         try {
           const { processAdminMessage } = await import(
@@ -291,7 +330,8 @@ async function processFacebookEvents(payload: any): Promise<void> {
             accountId,
             platformUserId: leadPlatformUserId,
             platform: 'FACEBOOK',
-            messageText,
+            messageText: messageText || (audioUrl ? '[Voice note]' : ''),
+            audioUrl: audioUrl ?? undefined,
             platformMessageId: platformMessageId || undefined,
             candidatePlatformUserIds: candidateLeadIds
           });

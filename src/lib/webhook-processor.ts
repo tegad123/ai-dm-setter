@@ -353,6 +353,25 @@ function extractFirstImageUrl(
   return null;
 }
 
+// Extract the first audio attachment URL (voice note from IG/FB
+// messenger). Webhooks deliver these alongside text in the same
+// `attachments` array. Without this helper the inbound filter
+// silently dropped voice-note-only messages, and operator voice
+// notes echoed by Meta were never tagged as HUMAN sends.
+function extractFirstAudioUrl(
+  attachments?: IncomingMessageAttachment[]
+): string | null {
+  if (!Array.isArray(attachments)) return null;
+  for (const attachment of attachments) {
+    if (attachment?.type !== 'audio') continue;
+    const url = attachment.payload?.url;
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      return url;
+    }
+  }
+  return null;
+}
+
 const LEAD_EMAIL_PATTERN = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
 
 function extractLeadEmail(text: string): string | null {
@@ -551,8 +570,17 @@ export async function processIncomingMessage(
     triggerSource
   } = params;
   const inboundImageUrl = extractFirstImageUrl(attachments);
+  const inboundAudioUrl = extractFirstAudioUrl(attachments);
+  // Voice notes (FAILURE B 2026-05-02): when the lead sends an
+  // audio attachment with no text, we used to drop the message at
+  // the webhook layer. Accept it here and use a placeholder content
+  // string so downstream save / broadcast / AI generation see SOMETHING
+  // (the AI's prompt path uses a voice_note_received directive to
+  // ensure the reply asks the lead to type it out instead of
+  // hallucinating what was said).
   const messageText =
-    rawMessageText?.trim() || (inboundImageUrl ? '[Image]' : '');
+    rawMessageText?.trim() ||
+    (inboundAudioUrl ? '[Voice note]' : inboundImageUrl ? '[Image]' : '');
   const detectedEmail = extractLeadEmail(messageText);
 
   console.log(
@@ -815,6 +843,12 @@ export async function processIncomingMessage(
         content: messageText,
         imageUrl: persistedImageUrl,
         hasImage: Boolean(persistedImageUrl),
+        // Voice note (FAILURE B 2026-05-02): persist the Meta CDN URL
+        // so a future transcription job can read it. isVoiceNote
+        // drives the dashboard 🎙️ indicator + the ai-prompt
+        // voice_note_received directive.
+        isVoiceNote: Boolean(inboundAudioUrl),
+        voiceNoteUrl: inboundAudioUrl,
         timestamp: now,
         platformMessageId: params.platformMessageId || null
       }
@@ -4204,6 +4238,13 @@ export interface AdminMessageParams {
   candidatePlatformUserIds?: string[]; // Defensive FB echo sender/recipient variants
   platform: 'INSTAGRAM' | 'FACEBOOK';
   messageText: string;
+  /**
+   * Voice note CDN URL for operator-sent audio (FAILURE A 2026-05-02).
+   * When present, the saved Message row is tagged isVoiceNote=true and
+   * voiceNoteUrl=<this>. The cancel-pending-replies path runs as
+   * normal so the AI doesn't fire on top of the operator's audio.
+   */
+  audioUrl?: string;
   platformMessageId?: string;
 }
 
@@ -4220,6 +4261,7 @@ export async function processAdminMessage(
     candidatePlatformUserIds = [],
     platform,
     messageText,
+    audioUrl,
     platformMessageId
   } = params;
 
@@ -4420,6 +4462,8 @@ export async function processAdminMessage(
       timestamp: new Date(),
       platformMessageId: platformMessageId || null,
       humanSource: 'PHONE',
+      isVoiceNote: Boolean(audioUrl),
+      voiceNoteUrl: audioUrl ?? null,
       isHumanOverride,
       rejectedAISuggestionId,
       editedFromSuggestion,
