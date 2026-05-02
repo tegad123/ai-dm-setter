@@ -3465,15 +3465,44 @@ function detectCurrencyFromTexts(
  * 2500 (the `.5` was dropped before the k-multiplier). Now we capture
  * the decimal and use parseFloat, multiplying by 1000 for the k suffix.
  */
+// Time-expression patterns stripped from the input before the
+// capital-amount regex runs. Wout Lngrs 2026-05-01: "Yeah 12am is
+// perfect" got parsed as 12 because the bare-number regex matched
+// the leading "12" of "12am". Time tokens have nothing to do with
+// capital, so strip them outright. Order matters — the most-specific
+// pattern (HH:MM[am|pm]) runs first so its colon doesn't survive
+// into the simpler patterns.
+const TIME_PATTERNS_TO_EXCLUDE: RegExp[] = [
+  /\b\d{1,2}:\d{2}\s*(am|pm)?\b/gi, // "9:30am", "14:00"
+  /\b\d{1,2}\s*(am|pm)\b/gi, // "12am", "3 pm"
+  /\b\d{1,2}\s*o['’]clock\b/gi // "5 o'clock"
+];
+
+function stripTimeExpressions(text: string): string {
+  let out = text;
+  for (const re of TIME_PATTERNS_TO_EXCLUDE) {
+    out = out.replace(re, ' ');
+  }
+  return out;
+}
+
 function parseLeadAmountDetailsFromReply(
   text: string
 ): ParsedCapitalAmount | null {
+  // Detect currency on the ORIGINAL text — currency words like
+  // "naira" / "USD" can appear next to a time but the time itself
+  // never carries a currency signal, so this stays correct.
   const currency = detectCurrencyFromText(text);
+  // Strip time expressions before the amount regex runs. Replaces
+  // matched substrings with a space so word boundaries are preserved
+  // (e.g. "yeah 12am perfect" → "yeah  perfect", and the bare-number
+  // regex finds nothing to latch onto).
+  const cleaned = stripTimeExpressions(text);
   // Match optional currency symbol/letter prefix, integer portion
   // (thousands-commas OR plain digits), optional decimal portion,
   // optional k/K suffix. Currency conversion is applied at the
   // threshold-comparison layer, not here.
-  const m = text.match(
+  const m = cleaned.match(
     /(?:[$£€₦₵₱]|C\$|R|N)?\s*(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?([kK])?/
   );
   if (!m) return null;
