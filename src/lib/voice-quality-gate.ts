@@ -483,6 +483,15 @@ export interface VoiceQualityOptions {
    */
   leadPreObjectedToCapital?: boolean;
   /**
+   * 2026-05-02 closer-scope guard. Configured closer names for this
+   * persona (Account.closerName + promptConfig.callHandoff.closerName,
+   * etc.). Used by the `anthony_or_call_in_downsell` hard fail to
+   * detect when a downsell-context reply name-checks the closer.
+   * Account-agnostic — every persona's closer names are matched
+   * dynamically, no hardcoded "Anthony" anywhere.
+   */
+  closerNames?: string[];
+  /**
    * Wout Lngrs 2026-05-01 — recent message corpus (lead + prior AI)
    * used to validate that any dollar amount the current reply
    * mentions actually appeared earlier in the conversation. Pass
@@ -1621,6 +1630,49 @@ export function scoreVoiceQuality(
       if (fabricated.length > 0) {
         softSignals.fabricated_capital_figure = -0.5;
       }
+    }
+  }
+
+  // ── CLOSER / CALL MENTION IN DOWNSELL CONTEXT (HARD FAIL) ──────
+  // 2026-05-02. Real example: a 900 CAD financially-strapped lead
+  // already routed to YouTube/downsell asked "how much do I need to
+  // pay" and the AI said "pricing is covered on the call with
+  // Anthony, depends which program fits". The closer is ONLY for
+  // the main mentorship — the downsell is a self-serve course with
+  // a flat one-time price, no call, no closer. R24c in the master
+  // prompt is the directive; this is the post-generation enforcement
+  // so a slip regens with correct phrasing instead of shipping the
+  // misleading line.
+  //
+  // Account-agnostic: closer name(s) are passed in via options so
+  // this rule fires for any persona (no hardcoded "Anthony").
+  //
+  // Trigger: leadStage === 'UNQUALIFIED' OR capitalOutcome ===
+  // 'failed' AND the reply contains call/closer language.
+  const isUnqualifiedContext =
+    options?.leadStage === 'UNQUALIFIED' ||
+    options?.capitalOutcome === 'failed';
+  if (isUnqualifiedContext) {
+    const closerNamesEscaped = (options?.closerNames ?? [])
+      .map((n) => (n || '').trim())
+      .filter(Boolean)
+      .map((n) => escapeRegex(n));
+    const closerNameMatch =
+      closerNamesEscaped.length > 0
+        ? new RegExp(`\\b(${closerNamesEscaped.join('|')})\\b`, 'i')
+        : null;
+    const CALL_LANGUAGE_RE =
+      /\b(hop\s+on\s+(a\s+)?(quick\s+)?(call|chat)|jump\s+on\s+(a\s+)?(call|chat)|on\s+the\s+call|with\s+the\s+closer|call\s+with\s+[A-Z][a-z]+|book(ing)?\s+(a\s+)?call|the\s+team\s+will\s+reach\s+out)\b/i;
+    const PRICING_DEFER_TO_CALL_RE =
+      /\b(price|pricing|cost|how\s+much)[^.]{0,80}\b(covered|discussed|broken\s+down|explained|shared)\s+on\s+the\s+call\b/i;
+    if (
+      (closerNameMatch && closerNameMatch.test(reply)) ||
+      CALL_LANGUAGE_RE.test(reply) ||
+      PRICING_DEFER_TO_CALL_RE.test(reply)
+    ) {
+      hardFails.push(
+        'closer_or_call_in_downsell: lead is unqualified for the main program (UNQUALIFIED stage or capitalOutcome=failed), but the reply mentions the closer / a call / "pricing covered on the call". The downsell is a self-serve course with a flat price — no call, no closer. State the downsell price directly from the script, OR route to the YouTube fallback.'
+      );
     }
   }
 

@@ -637,6 +637,8 @@ R23: HANDLE OBJECTIONS, DO NOT ACCEPT THEM. An objection is not a rejection — 
 
 R24: VERIFY CAPITAL BEFORE BOOKING. {{capitalVerificationRule}}
 
+R24c: CLOSER AND CALL REFERENCES ARE FOR QUALIFIED LEADS ONLY. {{closerScopeRule}}
+
 R24b: QUALIFYING IS ABOUT AFFORDABILITY, NOT FINANCIAL ADVICE. Your job during financial screening is ONE thing — determine whether the lead can afford the product. That's it.
 
   You are NOT:
@@ -1485,6 +1487,16 @@ export async function buildDynamicSystemPrompt(
   const closerRelation = handoffConfig.closerRelation || '';
   const closerRole = handoffConfig.closerRole || '';
 
+  // R24c CLOSER SCOPE rule — universal text, parameterised on the
+  // configured closer name. Fired for every account regardless of
+  // whether a closer is configured (when closerName is empty, the
+  // rule still bans call/booking language for unqualified leads —
+  // there's just no specific name to reference).
+  const closerScopeRuleText = closerName
+    ? `${closerName} and call-based booking apply ONLY when routing a qualified lead toward the main offer. When the lead is UNQUALIFIED (capital below threshold, downsell flow, YouTube fallback): DO NOT reference ${closerName}. DO NOT mention a call or booking. DO NOT deploy Verified Facts about pricing that defer to a call or closer ("pricing is covered on the call"). The downsell is a self-serve course — flat one-time price from the script, no call, no ${closerName}. The YouTube fallback is free — no pricing discussion at all. Answer the lead directly with what's actually being offered to them.`
+    : `Call-based booking applies ONLY when routing a qualified lead toward the main offer. When the lead is UNQUALIFIED (capital below threshold, downsell flow, YouTube fallback): DO NOT mention a call, booking, or any closer. DO NOT defer pricing to "the call". The downsell is a self-serve course — flat one-time price from the script. The YouTube fallback is free. Answer the lead directly.`;
+  prompt = prompt.replace(/\{\{closerScopeRule\}\}/g, closerScopeRuleText);
+
   if (closerName) {
     // Identity-level one-liner (shown in YOUR IDENTITY)
     const relationPart = closerRelation ? ` (${closerRelation})` : '';
@@ -1841,14 +1853,40 @@ If the lead NATURALLY surfaces financial information early ("I have $5k ready to
   // When empty, the AI must escalate ANY third-party capability
   // question to the team. When populated, the AI can confidently cite
   // anything in this block and must still escalate anything outside.
+  //
+  // Downsell context gate (2026-05-02 Wout-class): when the lead is
+  // UNQUALIFIED, Verified Facts about the MAIN mentorship (closer
+  // names, call-based pricing, "Anthony will explain on the call"
+  // type assertions) are inappropriate — the lead is being routed to
+  // the self-serve downsell course OR a free YouTube resource.
+  // Suppress the verified-facts block in that state and instead
+  // inject a clear "no Anthony / no call" rule so the LLM doesn't
+  // hallucinate call-based pricing into a downsell conversation.
   const verifiedDetailsRaw = (
     (p as { verifiedDetails?: string | null }).verifiedDetails || ''
   ).trim();
-  if (verifiedDetailsRaw.length > 0) {
+  const isUnqualifiedContext = leadContext.status === 'UNQUALIFIED';
+  const closerLabel = closerName || 'the closer';
+  if (isUnqualifiedContext) {
+    prompt = prompt.replace(
+      /\{\{verifiedDetailsBlock\}\}/g,
+      `  VERIFIED FACTS — DOWNSELL CONTEXT:
+<verified_details>
+This lead is UNQUALIFIED for the main mentorship. Verified Facts about the main program (closer name, call-based pricing, "${closerLabel} will break it down" etc.) DO NOT apply here.
+
+  • The downsell is a self-serve course — flat one-time price, no call, no closer involvement. If the lead asks about price, state the course price directly from the script (do NOT defer to "the call").
+  • The free-resource fallback is a YouTube link — no price discussion at all.
+  • Do NOT mention ${closerLabel}, "hop on a call", "the call", booking, or scheduling. None of those apply to this lead anymore.
+  • If the lead asks anything that would need a closer/call answer, redirect to the downsell or YouTube fallback per the script.
+</verified_details>`
+    );
+  } else if (verifiedDetailsRaw.length > 0) {
     const vdBlock = `
   VERIFIED FACTS (things you CAN assert with confidence — anything NOT in this list must be escalated to the team):
 <verified_details>
 ${verifiedDetailsRaw}
+
+  Scope: these facts apply ONLY when discussing the MAIN mentorship program with a qualified or potentially-qualifying lead. If this lead becomes UNQUALIFIED (capital below threshold, soft-exit, downsell territory), DO NOT cite ${closerLabel} / call-based pricing / the closer — the downsell is a self-serve course.
 </verified_details>`;
     prompt = prompt.replace(/\{\{verifiedDetailsBlock\}\}/g, vdBlock);
   } else {

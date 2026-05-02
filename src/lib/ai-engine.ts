@@ -959,7 +959,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       priorMessageCorpus: conversationHistory
         .slice(-30)
         .map((m) => m.content)
-        .join('\n')
+        .join('\n'),
+      // 2026-05-02 — closer name list for the
+      // closer_or_call_in_downsell hard fail. Account-agnostic;
+      // gate matches whatever closer is configured for this persona.
+      closerNames
     });
     finalQualityScore = quality.score;
 
@@ -1615,6 +1619,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const closerOrCallInDownsellFailed = quality.hardFails.some((f) =>
+        f.includes('closer_or_call_in_downsell:')
+      );
+      if (closerOrCallInDownsellFailed) {
+        const downsellCallOverride = `\n\n===== NO CLOSER / NO CALL IN DOWNSELL =====\nThis lead is UNQUALIFIED for the main mentorship. The downsell is a SELF-SERVE COURSE — flat one-time price, no call, no closer. The previous reply mentioned the closer / a call / "pricing covered on the call" — that's wrong here.\n\nIf the lead asked about price, state the downsell course price directly from the script (e.g. "it's a one-time $497 bro, you get the full course"). If the persona has no downsell configured, route to the YouTube free-resource fallback per the script — no pricing discussion.\n\nDO NOT name-check the closer. DO NOT mention any call. DO NOT defer pricing to "the call". DO NOT pitch booking or scheduling. The qualification flow is over for this lead.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + downsellCallOverride;
+        console.warn(
+          `[ai-engine] Closer/call mention in downsell context — forcing regen with downsell-only override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const ackQuestionSameBubbleFailed =
         quality.softSignals.acknowledgment_and_question_in_same_bubble !==
         undefined;
@@ -1930,7 +1945,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           (f) =>
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
-            f.includes('call_pitch_before_capital_verification:')
+            f.includes('call_pitch_before_capital_verification:') ||
+            f.includes('closer_or_call_in_downsell:')
         );
         const softUnshippable = quality.hardFails.find(
           (f) =>
