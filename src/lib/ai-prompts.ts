@@ -1984,6 +1984,37 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     prompt = prompt.replace(/\{\{linksAlreadySentBlock\}\}/g, '');
   }
 
+  // ── Phrases already sent in this conversation ───────────────────
+  // Few-shot examples bias the LLM toward verbatim copies of canned
+  // lines (e.g. "a lot of traders get caught in that exact loop when
+  // capital's tiny and leverage is high"). When two consecutive lead
+  // turns retrieve the same example, the model can paste the same
+  // sentence back-to-back — the #1 tell that the lead is talking to
+  // a bot. List the recent AI bubbles verbatim and forbid reuse.
+  if (Array.isArray(priorAIMessages) && priorAIMessages.length > 0) {
+    const recentBubbles = priorAIMessages
+      .slice(-6)
+      .flatMap((m) =>
+        typeof m.content === 'string'
+          ? m.content
+              .split(/\n+/)
+              .map((s) => s.trim())
+              .filter((s) => s.length >= 12)
+          : []
+      );
+    if (recentBubbles.length > 0) {
+      const phrasesBlock = `
+
+<recently_sent_phrases>
+You have already sent these messages to this lead in the last few turns:
+${recentBubbles.map((p) => `- "${p.replace(/"/g, '\\"')}"`).join('\n')}
+
+DO NOT reuse any of the sentences above verbatim or near-verbatim. If the lead's new message is similar to one you already addressed, respond with NEW wording — different sentence structure, different metaphor, different opener. Reusing the same canned line twice is the single biggest tell that the lead is talking to AI. Vary your phrasing every turn.
+</recently_sent_phrases>`;
+      prompt += phrasesBlock;
+    }
+  }
+
   // ── Booking state (what the lead has already disclosed) ──────────
   const booking = leadContext.booking || {};
   const bookingStateLines: string[] = [];

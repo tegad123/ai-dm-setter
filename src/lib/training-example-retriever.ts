@@ -448,7 +448,9 @@ function formatFewShotBlock(
 
   return `<few_shot_examples>
 These are REAL conversations from your training data, selected because they match the current conversation context (${tierLabel}).
-Your response MUST match this voice, vocabulary, and message length. Study the patterns: short messages, casual slang, no corporate speak, multiple short bubbles instead of long paragraphs.
+Model the voice, slang, rhythm, and message length — short messages, casual texting, no corporate speak, multiple short bubbles instead of long paragraphs.
+
+DO NOT copy whole sentences verbatim from these examples. Reuse vocabulary and tone, NOT exact phrasing. A lead who sees the same canned line twice (e.g. an opener like "gotchu bro" followed by an identical analogy across two turns) immediately flags you as a bot. Vary your wording every turn, even when the lead's message is similar to a prior one.
 
 ${formatted}
 </few_shot_examples>`;
