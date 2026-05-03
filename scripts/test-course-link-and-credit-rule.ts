@@ -125,7 +125,7 @@ async function main() {
   // ── TEST 7: CREDIT CARD PIVOT RULE in master prompt ───────────
   console.log('\n[TEST 7] CREDIT CARD PIVOT RULE — master prompt assertions');
   const persona = await prisma.aIPersona.findFirst({
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (persona) {
     const minimalContext = {
@@ -139,6 +139,7 @@ async function main() {
     } as any;
     const prompt = await buildDynamicSystemPrompt(
       persona.accountId,
+      persona.id,
       minimalContext
     );
     expect(

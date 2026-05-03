@@ -207,7 +207,7 @@ async function main() {
   // ── FIX 3 prompt block emission ───────────────────────────────
   console.log('\n[FIX 3] GBP prompt block emission');
   const personaForPrompt = await prisma.aIPersona.findFirst({
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (!personaForPrompt) {
     console.error('No aIPersona row found — skipping prompt-block tests.');
@@ -224,6 +224,7 @@ async function main() {
     } as any;
     const promptGbp = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext,
       undefined,
       undefined,
@@ -242,6 +243,7 @@ async function main() {
     );
     const promptUsd = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext,
       undefined,
       undefined,
@@ -258,6 +260,7 @@ async function main() {
     console.log('\n[FIX 4] Human-handoff briefing block');
     const promptWithHumans = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext,
       undefined,
       undefined,
@@ -283,6 +286,7 @@ async function main() {
     );
     const promptNoHumans = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext,
       undefined,
       undefined,

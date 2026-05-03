@@ -338,7 +338,7 @@ async function main() {
   // ── PROMPT: master prompt now contains both rules ─────────────
   console.log('\n[PROMPT] master prompt contains the two new rules');
   const persona = await prisma.aIPersona.findFirst({
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (persona) {
     const minimalContext = {
@@ -352,6 +352,7 @@ async function main() {
     } as any;
     const prompt = await buildDynamicSystemPrompt(
       persona.accountId,
+      persona.id,
       minimalContext
     );
     expect(

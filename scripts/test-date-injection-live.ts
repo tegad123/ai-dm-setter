@@ -17,7 +17,7 @@ async function main() {
   // Pick any account that has an aiPersona row — we just need a valid
   // accountId so the prompt assembly executes.
   const persona = await prisma.aIPersona.findFirst({
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (!persona) {
     console.error('No aIPersona rows found — cannot run live assembly test.');
@@ -47,6 +47,7 @@ async function main() {
 
   const prompt = await buildDynamicSystemPrompt(
     persona.accountId,
+    persona.id,
     minimalContext
   );
 

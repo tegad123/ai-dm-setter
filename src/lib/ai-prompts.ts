@@ -1459,6 +1459,16 @@ function buildLegacyTenantData(
  */
 export async function buildDynamicSystemPrompt(
   accountId: string,
+  /**
+   * Audit F3.2 — the AIPersona that owns this conversation. Required.
+   * Replaces the previous non-deterministic findFirst lookup that
+   * could pick a different persona on each call for multi-persona
+   * accounts. Caller threads this from generateReply's personaId
+   * parameter (audit F3.1) or, for synthetic/admin paths with no
+   * Conversation row, from an explicit operator-visible active-persona
+   * selection.
+   */
+  personaId: string,
   leadContext: LeadContext,
   fewShotBlock?: string,
   /**
@@ -1498,19 +1508,14 @@ export async function buildDynamicSystemPrompt(
    */
   establishedFactsBlock?: string | null
 ): Promise<string> {
-  // Fetch the active persona for this account
-  const persona = await prisma.aIPersona.findFirst({
-    where: { accountId, isActive: true }
+  // F3.2: load the EXACT persona the caller named, not a guess.
+  // Cross-account FK is impossible at this point — generateReply's
+  // F3.1 guard already proved persona.accountId === accountId.
+  const persona = await prisma.aIPersona.findUnique({
+    where: { id: personaId }
   });
 
-  // If no active persona, use the first one (or a default)
-  const fallbackPersona =
-    persona ||
-    (await prisma.aIPersona.findFirst({
-      where: { accountId }
-    }));
-
-  const p = fallbackPersona || {
+  const p = persona || {
     fullName: 'Sales Rep',
     personaName: 'AI Setter',
     companyName: null,

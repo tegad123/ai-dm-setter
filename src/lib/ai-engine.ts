@@ -750,6 +750,7 @@ export async function generateReply(
   }
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
+    personaId,
     leadContext,
     fewShotBlock || undefined,
     priorAIMessages,
@@ -870,8 +871,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // threshold + optional custom phrasing ONCE, reuse inside the retry
   // loop. When the threshold is null, the gate is disabled entirely
   // (backward compatible for accounts that haven't configured it).
-  const personaForGate = await prisma.aIPersona.findFirst({
-    where: { accountId, isActive: true },
+  // F3.2: load the EXACT persona threaded from the caller, not a
+  // findFirst({accountId, isActive}) guess. F3.1's cross-account FK
+  // guard upstream proved persona.accountId === accountId so this is
+  // safe to scope by id alone.
+  const personaForGate = await prisma.aIPersona.findUnique({
+    where: { id: personaId },
     select: {
       minimumCapitalRequired: true,
       capitalVerificationPrompt: true,
@@ -2961,17 +2966,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     where: { id: accountId },
     select: { responseDelayMin: true, responseDelayMax: true }
   });
-  const persona =
-    (await prisma.aIPersona.findFirst({
-      where: { accountId, isActive: true },
-      orderBy: { updatedAt: 'desc' },
-      select: { voiceNotesEnabled: true }
-    })) ??
-    (await prisma.aIPersona.findFirst({
-      where: { accountId },
-      orderBy: { updatedAt: 'desc' },
-      select: { voiceNotesEnabled: true }
-    }));
+  // F3.2: persona for delay/voice settings — use the threaded
+  // personaId so multi-persona accounts get the right voice
+  // configuration deterministically.
+  const persona = await prisma.aIPersona.findUnique({
+    where: { id: personaId },
+    select: { voiceNotesEnabled: true }
+  });
 
   const delayMin = account?.responseDelayMin ?? 300;
   const delayMax = account?.responseDelayMax ?? 600;

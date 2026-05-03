@@ -226,7 +226,7 @@ async function main() {
   console.log('\n[TEST 8] master prompt — open-ended capital phrasing');
   const persona = await prisma.aIPersona.findFirst({
     where: { minimumCapitalRequired: { gt: 0 } },
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (persona) {
     const minimalContext = {
@@ -240,6 +240,7 @@ async function main() {
     } as any;
     const prompt = await buildDynamicSystemPrompt(
       persona.accountId,
+      persona.id,
       minimalContext
     );
     expect(
