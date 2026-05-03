@@ -7,7 +7,8 @@ import {
   IconEye,
   IconTargetArrow,
   IconCash,
-  IconMessage
+  IconMessage,
+  IconPhoto
 } from '@tabler/icons-react';
 import { useOverviewStats } from '@/hooks/use-api';
 
@@ -19,7 +20,7 @@ import { useOverviewStats } from '@/hooks/use-api';
 // ---------------------------------------------------------------------------
 
 const GRID =
-  'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6';
+  'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7';
 
 type KpiIcon = typeof IconUsers;
 interface KpiProps {
@@ -82,7 +83,7 @@ export function KpiCards() {
   if (loading) {
     return (
       <div className={GRID}>
-        {Array.from({ length: 6 }).map((_, i) => (
+        {Array.from({ length: 7 }).map((_, i) => (
           <KpiSkeleton key={i} />
         ))}
       </div>
@@ -98,6 +99,11 @@ export function KpiCards() {
       </div>
     );
   }
+
+  const media = stats.mediaProcessing;
+  const mediaFooter = media
+    ? `${media.dailyVolume} today · p50/p95 ${(media.p50LatencyMs / 1000).toFixed(1)}/${(media.p95LatencyMs / 1000).toFixed(1)}s · $${media.totalCostUsd.toFixed(4)}`
+    : 'no media yet';
 
   return (
     <div className={GRID}>
@@ -146,6 +152,12 @@ export function KpiCards() {
         delta='+24%'
         deltaIcon={IconTrendingUp}
         footer='this month'
+      />
+      <Kpi
+        icon={IconPhoto}
+        label='Media AI'
+        value={media ? `${media.successRate}%` : '100%'}
+        footer={media?.alert ? 'alert: below 95% last hour' : mediaFooter}
       />
     </div>
   );

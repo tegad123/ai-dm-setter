@@ -340,6 +340,7 @@ model Account {
   aiSuggestions           AISuggestion[]
   inboundQualifications   InboundQualification[]
   trainingEvents          TrainingEvent[]
+  mediaProcessingLogs     MediaProcessingLog[]
 
   // ── Phase 1 super-admin dashboard (2026-04-28) ────────────────
   // Plan billing status (separate from `plan` enum; lifecycle state).
@@ -470,6 +471,7 @@ model AIPersona {
   responseDelayMin             Int       @default(300) // Min response delay in seconds (default 5 min)
   responseDelayMax             Int       @default(600) // Max response delay in seconds (default 10 min)
   voiceNotesEnabled            Boolean   @default(true) // Whether voice notes are enabled
+  mediaTranscriptionEnabled    Boolean   @default(false) // Process inbound audio/image attachments before AI generation
   setupStep                    Int       @default(0) // Onboarding progress (0-8), 8 = all steps complete
   setupComplete                Boolean   @default(false) // All setup steps done
   isActive                     Boolean   @default(false) // AI goes live only after activation
@@ -1060,17 +1062,24 @@ model Conversation {
 }
 
 model Message {
-  id                String        @id @default(cuid())
-  conversationId    String
-  sender            MessageSender
-  content           String
-  isVoiceNote       Boolean       @default(false)
-  voiceNoteUrl      String?
-  imageUrl          String? // Permanent URL of image sent by lead; Meta CDN fallback may expire
-  hasImage          Boolean       @default(false)
-  sentByUserId      String? // Only for HUMAN sender
-  platformMessageId String? // Meta's message ID (event.message.mid) for dedup
-  timestamp         DateTime      @default(now())
+  id                   String        @id @default(cuid())
+  conversationId       String
+  sender               MessageSender
+  content              String
+  isVoiceNote          Boolean       @default(false)
+  voiceNoteUrl         String?
+  imageUrl             String? // Permanent URL of image sent by lead; Meta CDN fallback may expire
+  hasImage             Boolean       @default(false)
+  mediaType            String? // 'audio' | 'image' | 'video'
+  mediaUrl             String? // Supabase Storage path (or fallback Blob URL) for saved attachment
+  transcription        String?       @db.Text // Whisper output for audio attachments
+  imageMetadata        Json? // { extractedText, description, contextualNote }
+  mediaProcessedAt     DateTime?
+  mediaProcessingError String?       @db.Text
+  mediaCostUsd         Decimal?      @db.Decimal(10, 6)
+  sentByUserId         String? // Only for HUMAN sender
+  platformMessageId    String? // Meta's message ID (event.message.mid) for dedup
+  timestamp            DateTime      @default(now())
 
   // Self-Optimizing Layer: Effectiveness Tracking
   stage                     String? // Conversation stage from AI response
@@ -1117,16 +1126,38 @@ model Message {
   intraGroupDelayMs Int?
 
   // Relations
-  conversation       Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser         User?         @relation("HumanSender", fields: [sentByUserId], references: [id])
-  suggestion         AISuggestion? @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
-  rejectedSuggestion AISuggestion? @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
-  messageGroup       MessageGroup? @relation(fields: [messageGroupId], references: [id], onDelete: SetNull)
+  conversation        Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser          User?                @relation("HumanSender", fields: [sentByUserId], references: [id])
+  suggestion          AISuggestion?        @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
+  rejectedSuggestion  AISuggestion?        @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
+  messageGroup        MessageGroup?        @relation(fields: [messageGroupId], references: [id], onDelete: SetNull)
+  mediaProcessingLogs MediaProcessingLog[]
 
   @@unique([conversationId, platformMessageId])
   @@index([conversationId, timestamp])
   @@index([conversationId, sender, timestamp])
   @@index([messageGroupId])
+}
+
+model MediaProcessingLog {
+  id                  String   @id @default(cuid())
+  accountId           String
+  messageId           String
+  mediaType           String
+  latencyMs           Int
+  success             Boolean
+  errorMessage        String?  @db.Text
+  transcriptionLength Int?
+  costUsd             Decimal? @db.Decimal(10, 6)
+  createdAt           DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+  @@index([messageId])
+  @@index([mediaType, createdAt])
+  @@index([success, createdAt])
 }
 
 // Multi-bubble message group. When the AI emits messages: string[]

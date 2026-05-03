@@ -86,6 +86,13 @@ export interface Message {
   voiceNoteUrl?: string | null;
   imageUrl?: string | null;
   hasImage?: boolean;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  transcription?: string | null;
+  imageMetadata?: unknown;
+  mediaProcessedAt?: string | null;
+  mediaProcessingError?: string | null;
+  mediaCostUsd?: string | number | null;
   timestamp?: string;
   sentAt?: string;
   stage?: string | null;
@@ -123,6 +130,15 @@ export interface OverviewStats {
   avgMessagesToBook: number;
   topTrigger: string;
   topTriggerConversion: number;
+  mediaProcessing?: {
+    dailyVolume: number;
+    successRate: number;
+    p50LatencyMs: number;
+    p95LatencyMs: number;
+    totalCostUsd: number;
+    lastHourSuccessRate: number;
+    alert: boolean;
+  };
 }
 
 export interface LeadVolumePoint {

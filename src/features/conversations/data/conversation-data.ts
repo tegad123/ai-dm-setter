@@ -7,6 +7,12 @@ export interface Message {
   voiceNoteUrl?: string;
   imageUrl?: string | null;
   hasImage?: boolean;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  transcription?: string | null;
+  imageMetadata?: unknown;
+  mediaProcessedAt?: string | null;
+  mediaProcessingError?: string | null;
   isHumanOverride?: boolean;
   humanOverrideNote?: string | null;
   // Operator identity for HUMAN messages. Populated from Message.sentByUser

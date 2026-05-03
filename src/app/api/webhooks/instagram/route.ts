@@ -21,10 +21,14 @@ function hasImageAttachment(attachments: unknown): boolean {
     attachments.some((attachment) => {
       const candidate = attachment as {
         type?: unknown;
-        payload?: { url?: unknown } | null;
+        mediaType?: unknown;
+        payload?: { url?: unknown; mediaType?: unknown } | null;
       };
+      const mediaType = String(
+        candidate?.type ?? candidate?.mediaType ?? candidate?.payload?.mediaType
+      ).toLowerCase();
       return (
-        candidate?.type === 'image' &&
+        (mediaType === 'image' || mediaType.startsWith('image/')) &&
         typeof candidate.payload?.url === 'string'
       );
     })
@@ -41,10 +45,14 @@ function hasAudioAttachment(attachments: unknown): boolean {
     attachments.some((attachment) => {
       const candidate = attachment as {
         type?: unknown;
-        payload?: { url?: unknown } | null;
+        mediaType?: unknown;
+        payload?: { url?: unknown; mediaType?: unknown } | null;
       };
+      const mediaType = String(
+        candidate?.type ?? candidate?.mediaType ?? candidate?.payload?.mediaType
+      ).toLowerCase();
       return (
-        candidate?.type === 'audio' &&
+        (mediaType === 'audio' || mediaType.startsWith('audio/')) &&
         typeof candidate.payload?.url === 'string'
       );
     })
@@ -56,10 +64,14 @@ function firstAudioAttachmentUrl(attachments: unknown): string | null {
   for (const attachment of attachments) {
     const candidate = attachment as {
       type?: unknown;
-      payload?: { url?: unknown } | null;
+      mediaType?: unknown;
+      payload?: { url?: unknown; mediaType?: unknown } | null;
     };
+    const mediaType = String(
+      candidate?.type ?? candidate?.mediaType ?? candidate?.payload?.mediaType
+    ).toLowerCase();
     if (
-      candidate?.type === 'audio' &&
+      (mediaType === 'audio' || mediaType.startsWith('audio/')) &&
       typeof candidate.payload?.url === 'string'
     ) {
       return candidate.payload.url;

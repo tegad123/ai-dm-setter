@@ -16,6 +16,10 @@ import {
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
+import {
+  buildImageContextText,
+  buildVoiceContextText
+} from '@/lib/media-processing';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,8 +31,16 @@ export interface ConversationMessage {
   content: string;
   timestamp: Date | string;
   isVoiceNote?: boolean;
+  voiceNoteUrl?: string | null;
   imageUrl?: string | null;
   hasImage?: boolean;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  transcription?: string | null;
+  imageMetadata?: Prisma.JsonValue | null;
+  mediaProcessedAt?: Date | string | null;
+  mediaProcessingError?: string | null;
+  mediaCostUsd?: Prisma.Decimal | number | string | null;
   messageGroupId?: string | null;
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;
@@ -542,16 +554,14 @@ export async function generateReply(
     systemPrompt += '\n\n' + scoringContext;
   }
 
-  // 1b-ii. Voice-note received block (FAILURE B 2026-05-02). When
-  // the most recent LEAD message was an audio attachment, the LLM
-  // sees only the placeholder content "[Voice note]" — without
-  // this directive it tends to either ignore the message or
-  // hallucinate what was said. Force the next reply to acknowledge
-  // it can't hear the audio and ask the lead to type their question
-  // out instead. Only fires when isVoiceNote is true on the last
-  // lead message, so normal text turns are unaffected.
-  if (lastLeadMsg?.isVoiceNote === true) {
-    systemPrompt += `\n\n<voice_note_received>\nThe lead just sent a voice note. You CANNOT hear it — transcription isn't wired up yet, so you have no idea what they said. Do NOT pretend you understood it. Do NOT make up content. Do NOT ignore it silently — that reads as the bot dropping the conversation.\n\nAcknowledge naturally and ask the lead to type the message out instead. Variations to choose from (don't reuse one verbatim):\n  • "couldn't catch the audio bro, what did you say?"\n  • "voice notes don't come through clean on my end bro, what's up?"\n  • "my bad audio isn't loading right rn, type it out real quick"\n\nKeep it casual, short, and apologetic-but-not-grovelling. ONE bubble. Then wait — do not also try to advance the funnel on this turn.\n</voice_note_received>`;
+  // 1b-ii. Voice-note received block. When transcription succeeded, the
+  // context builder injects the actual transcript and this block stays off.
+  // If processing failed, force the warm fallback instead of hallucinating or
+  // using the old "couldn't catch / type it out" wording.
+  const lastLeadWasVoice =
+    lastLeadMsg?.isVoiceNote === true || lastLeadMsg?.mediaType === 'audio';
+  if (lastLeadWasVoice && !lastLeadMsg?.transcription?.trim()) {
+    systemPrompt += `\n\n<voice_note_received>\nThe lead just sent a voice note, but media transcription failed or timed out. You do NOT have the audio content. Do NOT pretend you understood it. Do NOT make up content. Send exactly one warm fallback bubble and stop:\n"yo bro something glitched on my end with the audio, drop me the key points in text and i got you"\n</voice_note_received>`;
   }
 
   // 1c. Promise-tracking: if the last AI turn was an unkept promise
@@ -988,6 +998,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       .slice(-30)
       .map((m) => m.content)
       .join('\n'),
+    mediaContextCorpus: buildMediaContextCorpus(conversationHistory),
     closerNames
   });
 
@@ -1651,6 +1662,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + directive;
         console.warn(
           `[ai-engine] Repeated message structure detected — forcing regen with varied structure (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const transcribedVoiceNoteIgnoredFailed = quality.hardFails.some((f) =>
+        f.includes('r29_transcribed_voice_note_ignored:')
+      );
+      if (transcribedVoiceNoteIgnoredFailed) {
+        const directive = `\n\n===== R29 VOICE NOTE TRANSCRIPTION OVERRIDE =====\nThe lead sent a voice note and the system already transcribed it in the conversation context as [Voice note (transcribed): "..."]. You HAVE the content. Your previous reply acted like you could not hear it or asked the lead to type it out.\n\nRegenerate by responding directly to the transcript. Do NOT say "couldn't catch", "didn't catch", "type it out", "send a text", or "hard to hear". Treat the transcript exactly like a normal lead message.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Transcribed voice note ignored — forcing regen against transcript (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
@@ -2612,6 +2634,28 @@ function formatConversationForLLM(
   return history.map((msg) => {
     // LEAD messages → user role, AI/HUMAN messages → assistant role
     if (msg.sender === 'LEAD') {
+      const isVoiceMessage =
+        msg.isVoiceNote === true || msg.mediaType === 'audio';
+      if (isVoiceMessage) {
+        return {
+          role: 'user' as const,
+          content: buildVoiceContextText({
+            transcription: msg.transcription,
+            mediaProcessedAt: msg.mediaProcessedAt,
+            mediaProcessingError: msg.mediaProcessingError
+          })
+        };
+      }
+
+      if (msg.imageMetadata || msg.mediaType === 'image') {
+        const imageContext = buildImageContextText(msg.imageMetadata);
+        const text =
+          msg.content && !['[Image]', '[Chart shared]'].includes(msg.content)
+            ? `${msg.content}\n${imageContext}`
+            : imageContext;
+        return { role: 'user' as const, content: text };
+      }
+
       if (msg.imageUrl) {
         const text =
           msg.content && !['[Image]', '[Chart shared]'].includes(msg.content)
@@ -2647,6 +2691,29 @@ function formatConversationForLLM(
           : '';
     return { role: 'assistant' as const, content: prefix + msg.content };
   });
+}
+
+function buildMediaContextCorpus(history: ConversationMessage[]): string {
+  return history
+    .filter(
+      (msg) =>
+        msg.sender === 'LEAD' &&
+        (msg.isVoiceNote === true ||
+          msg.mediaType === 'audio' ||
+          msg.mediaType === 'image' ||
+          Boolean(msg.imageMetadata))
+    )
+    .map((msg) => {
+      if (msg.isVoiceNote === true || msg.mediaType === 'audio') {
+        return buildVoiceContextText({
+          transcription: msg.transcription,
+          mediaProcessedAt: msg.mediaProcessedAt,
+          mediaProcessingError: msg.mediaProcessingError
+        });
+      }
+      return buildImageContextText(msg.imageMetadata);
+    })
+    .join('\n');
 }
 
 // ---------------------------------------------------------------------------

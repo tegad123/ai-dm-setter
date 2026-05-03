@@ -22,7 +22,9 @@ export async function GET(request: NextRequest) {
       leadsToday,
       leadsTodayFiltered,
       stageCounts,
-      revenueResult
+      revenueResult,
+      mediaLogsToday,
+      mediaLogsLastHour
     ] = await Promise.all([
       prisma.lead.count({
         where: { accountId: auth.accountId, ...excludeColdPitchTag }
@@ -54,6 +56,17 @@ export async function GET(request: NextRequest) {
       prisma.lead.aggregate({
         where: { accountId: auth.accountId },
         _sum: { revenue: true }
+      }),
+      prisma.mediaProcessingLog.findMany({
+        where: { accountId: auth.accountId, createdAt: { gte: todayStart } },
+        select: { latencyMs: true, success: true, costUsd: true }
+      }),
+      prisma.mediaProcessingLog.findMany({
+        where: {
+          accountId: auth.accountId,
+          createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) }
+        },
+        select: { success: true }
       })
     ]);
 
@@ -75,6 +88,32 @@ export async function GET(request: NextRequest) {
     const closeRate =
       closeDenominator > 0 ? (closed / closeDenominator) * 100 : 0;
     const revenue = revenueResult._sum.revenue || 0;
+    const successfulMediaToday = mediaLogsToday.filter((log) => log.success);
+    const mediaLatencies = mediaLogsToday
+      .map((log) => log.latencyMs)
+      .sort((a, b) => a - b);
+    const mediaSuccessRate =
+      mediaLogsToday.length > 0
+        ? (successfulMediaToday.length / mediaLogsToday.length) * 100
+        : 100;
+    const lastHourSuccessRate =
+      mediaLogsLastHour.length > 0
+        ? (mediaLogsLastHour.filter((log) => log.success).length /
+            mediaLogsLastHour.length) *
+          100
+        : 100;
+    const percentile = (values: number[], p: number) => {
+      if (values.length === 0) return 0;
+      const index = Math.min(
+        values.length - 1,
+        Math.max(0, Math.ceil((p / 100) * values.length) - 1)
+      );
+      return values[index];
+    };
+    const mediaCostUsd = mediaLogsToday.reduce(
+      (sum, log) => sum + Number(log.costUsd ?? 0),
+      0
+    );
 
     return NextResponse.json({
       totalLeads,
@@ -86,7 +125,16 @@ export async function GET(request: NextRequest) {
       callsBooked,
       showRate: Math.round(showRate * 100) / 100,
       closeRate: Math.round(closeRate * 100) / 100,
-      revenue
+      revenue,
+      mediaProcessing: {
+        dailyVolume: mediaLogsToday.length,
+        successRate: Math.round(mediaSuccessRate * 100) / 100,
+        p50LatencyMs: percentile(mediaLatencies, 50),
+        p95LatencyMs: percentile(mediaLatencies, 95),
+        totalCostUsd: Math.round(mediaCostUsd * 1_000_000) / 1_000_000,
+        lastHourSuccessRate: Math.round(lastHourSuccessRate * 100) / 100,
+        alert: mediaLogsLastHour.length > 0 && lastHourSuccessRate < 95
+      }
     });
   } catch (error) {
     if (error instanceof AuthError) {

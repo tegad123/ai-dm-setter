@@ -675,6 +675,12 @@ export interface VoiceQualityOptions {
    * LLM is hallucinating a number the lead never stated.
    */
   priorMessageCorpus?: string;
+  /**
+   * Media placeholders injected into the LLM context. When this contains a
+   * successful voice-note transcription, the reply must answer the content
+   * instead of using the old audio-fallback wording.
+   */
+  mediaContextCorpus?: string;
 }
 
 export function scoreVoiceQuality(
@@ -730,6 +736,19 @@ export function scoreVoiceQuality(
   }
   if (/\u2013/.test(reply)) {
     hardFails.push('en_dash');
+  }
+
+  // R29: once Whisper succeeded, the AI has the voice-note content. The
+  // old fallback language is only allowed when the context explicitly says
+  // transcription failed.
+  if (options?.mediaContextCorpus?.includes('[Voice note (transcribed):')) {
+    const ignoredTranscribedVoiceNoteRe =
+      /(couldn'?t catch|didn'?t catch|type it out|send (a )?text|hard to hear)/i;
+    if (ignoredTranscribedVoiceNoteRe.test(reply)) {
+      hardFails.push(
+        'r29_transcribed_voice_note_ignored: voice note was transcribed in context, but reply used audio-fallback/type-it-out language'
+      );
+    }
   }
 
   // 6. Semicolon

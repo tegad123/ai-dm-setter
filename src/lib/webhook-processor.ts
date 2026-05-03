@@ -37,6 +37,12 @@ import {
   shouldMarkEngagedFromLeadMessage,
   updateLeadStageFromConversation
 } from '@/lib/stage-progression';
+import {
+  enqueueInboundMediaProcessing,
+  extractAttachmentDurationSeconds,
+  findFirstMediaAttachment,
+  type InboundMediaAttachment
+} from '@/lib/media-processing';
 import { randomUUID } from 'crypto';
 
 // ---------------------------------------------------------------------------
@@ -351,12 +357,7 @@ export interface IncomingMessageParams {
   platformMessageId?: string; // Meta's event.message.mid for dedup
 }
 
-export interface IncomingMessageAttachment {
-  type?: string | null;
-  payload?: {
-    url?: string | null;
-  } | null;
-}
+export interface IncomingMessageAttachment extends InboundMediaAttachment {}
 
 export interface ProcessResult {
   leadId: string;
@@ -379,15 +380,7 @@ export interface ProcessResult {
 function extractFirstImageUrl(
   attachments?: IncomingMessageAttachment[]
 ): string | null {
-  if (!Array.isArray(attachments)) return null;
-  for (const attachment of attachments) {
-    if (attachment?.type !== 'image') continue;
-    const url = attachment.payload?.url;
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-      return url;
-    }
-  }
-  return null;
+  return findFirstMediaAttachment(attachments, 'image')?.url ?? null;
 }
 
 // Extract the first audio attachment URL (voice note from IG/FB
@@ -398,15 +391,7 @@ function extractFirstImageUrl(
 function extractFirstAudioUrl(
   attachments?: IncomingMessageAttachment[]
 ): string | null {
-  if (!Array.isArray(attachments)) return null;
-  for (const attachment of attachments) {
-    if (attachment?.type !== 'audio') continue;
-    const url = attachment.payload?.url;
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-      return url;
-    }
-  }
-  return null;
+  return findFirstMediaAttachment(attachments, 'audio')?.url ?? null;
 }
 
 const LEAD_EMAIL_PATTERN = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
@@ -621,8 +606,15 @@ export async function processIncomingMessage(
     triggerType,
     triggerSource
   } = params;
-  const inboundImageUrl = extractFirstImageUrl(attachments);
-  const inboundAudioUrl = extractFirstAudioUrl(attachments);
+  const inboundImageAttachment = findFirstMediaAttachment(attachments, 'image');
+  const inboundAudioAttachment = findFirstMediaAttachment(attachments, 'audio');
+  const inboundImageUrl = inboundImageAttachment?.url ?? null;
+  const inboundAudioUrl = inboundAudioAttachment?.url ?? null;
+  const inboundMediaType = inboundAudioUrl
+    ? 'audio'
+    : inboundImageUrl
+      ? 'image'
+      : null;
   // Voice notes (FAILURE B 2026-05-02): when the lead sends an
   // audio attachment with no text, we used to drop the message at
   // the webhook layer. Accept it here and use a placeholder content
@@ -762,6 +754,19 @@ export async function processIncomingMessage(
   }
 
   const conversationId = lead.conversation!.id;
+  const mediaPersona = inboundMediaType
+    ? ((await prisma.aIPersona.findFirst({
+        where: { accountId, isActive: true },
+        select: { id: true, mediaTranscriptionEnabled: true }
+      })) ??
+      (await prisma.aIPersona.findFirst({
+        where: { accountId },
+        select: { id: true, mediaTranscriptionEnabled: true }
+      })))
+    : null;
+  const shouldProcessInboundMedia =
+    Boolean(mediaPersona?.mediaTranscriptionEnabled) &&
+    inboundMediaType !== null;
 
   // ── Step 1b: Dedup — skip if we already processed this platform message
   if (params.platformMessageId) {
@@ -879,11 +884,13 @@ export async function processIncomingMessage(
   // ── Step 2: Save the incoming message ──────────────────────────
   const now = new Date();
   const persistedImageUrl = inboundImageUrl
-    ? await persistInboundImageUrl({
-        accountId,
-        imageUrl: inboundImageUrl,
-        platformMessageId: params.platformMessageId
-      })
+    ? shouldProcessInboundMedia
+      ? inboundImageUrl
+      : await persistInboundImageUrl({
+          accountId,
+          imageUrl: inboundImageUrl,
+          platformMessageId: params.platformMessageId
+        })
     : null;
   const priorLeadMessageCount = await prisma.message.count({
     where: { conversationId, sender: 'LEAD' }
@@ -897,6 +904,8 @@ export async function processIncomingMessage(
         content: messageText,
         imageUrl: persistedImageUrl,
         hasImage: Boolean(persistedImageUrl),
+        mediaType: inboundMediaType,
+        mediaUrl: shouldProcessInboundMedia ? null : persistedImageUrl,
         // Voice note (FAILURE B 2026-05-02): persist the Meta CDN URL
         // so a future transcription job can read it. isVoiceNote
         // drives the dashboard 🎙️ indicator + the ai-prompt
@@ -925,6 +934,36 @@ export async function processIncomingMessage(
       };
     }
     throw err;
+  }
+
+  // Media processing must complete before any downstream AI generation sees
+  // the turn. The webhook has already persisted the Message row so the media
+  // worker can store under {personaId}/{conversationId}/{messageId}.{ext};
+  // after it returns, re-read the row so broadcasts and generateReply()
+  // receive the transcription / OCR metadata.
+  if (shouldProcessInboundMedia && mediaPersona && inboundMediaType) {
+    const sourceUrl = inboundAudioUrl || inboundImageUrl;
+    if (sourceUrl) {
+      const durationSeconds =
+        inboundMediaType === 'audio'
+          ? extractAttachmentDurationSeconds(inboundAudioAttachment?.attachment)
+          : null;
+      await enqueueInboundMediaProcessing({
+        accountId,
+        personaId: mediaPersona.id,
+        conversationId,
+        messageId: message.id,
+        mediaType: inboundMediaType,
+        sourceUrl,
+        durationSeconds
+      });
+      const processedMessage = await prisma.message.findUnique({
+        where: { id: message.id }
+      });
+      if (processedMessage) {
+        message = processedMessage;
+      }
+    }
   }
 
   if (shouldMarkEngagedFromLeadMessage(lead.stage, priorLeadMessageCount)) {
@@ -1643,9 +1682,15 @@ export async function processIncomingMessage(
     id: message.id,
     conversationId,
     sender: 'LEAD',
-    content: messageText,
+    content: message.content,
     imageUrl: message.imageUrl,
     hasImage: message.hasImage,
+    mediaType: message.mediaType,
+    mediaUrl: message.mediaUrl,
+    transcription: message.transcription,
+    imageMetadata: message.imageMetadata,
+    mediaProcessedAt: message.mediaProcessedAt?.toISOString() ?? null,
+    mediaProcessingError: message.mediaProcessingError,
     timestamp: now.toISOString()
   });
 
@@ -2561,8 +2606,16 @@ export async function scheduleAIReply(
     content: m.content,
     timestamp: m.timestamp,
     isVoiceNote: m.isVoiceNote,
+    voiceNoteUrl: m.voiceNoteUrl,
     imageUrl: m.imageUrl,
     hasImage: m.hasImage,
+    mediaType: m.mediaType,
+    mediaUrl: m.mediaUrl,
+    transcription: m.transcription,
+    imageMetadata: m.imageMetadata,
+    mediaProcessedAt: m.mediaProcessedAt,
+    mediaProcessingError: m.mediaProcessingError,
+    mediaCostUsd: m.mediaCostUsd,
     messageGroupId: m.messageGroupId,
     bubbleIndex: m.bubbleIndex,
     bubbleTotalCount: m.bubbleTotalCount

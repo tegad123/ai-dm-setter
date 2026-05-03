@@ -51,6 +51,12 @@ export function broadcastNewMessage(data: {
   content: string;
   imageUrl?: string | null;
   hasImage?: boolean;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  transcription?: string | null;
+  imageMetadata?: unknown;
+  mediaProcessedAt?: string | null;
+  mediaProcessingError?: string | null;
   humanSource?: 'DASHBOARD' | 'PHONE' | null;
   sentByUser?: { id: string; name: string; email?: string | null } | null;
   platformMessageId?: string | null;
