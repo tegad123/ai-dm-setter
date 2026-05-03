@@ -9,6 +9,8 @@ import {
   containsIncomeGoalQuestion,
   stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
+  detectMetadataLeak,
+  surgicalStripMetadataLeak,
   classifyMessageStructure,
   isUnkeptPromise,
   isValidationOnlyMessage,
@@ -256,6 +258,156 @@ function formatTypeformAnswersForPrompt(
 
 function humanizeApplicationKey(key: string): string {
   return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
+function buildR34MetadataLeakDirective(matchedText?: string | null): string {
+  const matched = matchedText ? `\nMatched leak: "${matchedText}"\n` : '\n';
+  return `\n\n===== R34 METADATA LEAK OVERRIDE =====${matched}Your previous response put internal system metadata inside the lead-facing message body. That can NEVER be visible to the lead.\n\nForbidden in message/message bubbles: stage_confidence:1.0, quality_score:71, confidence:0.8, intent:HOT_LEAD, stage:BOOKING, next_action, script_step, [BOOKING LINK], {{name}}, JSON fragments, debug notes, or any system key:value fields.\n\nRegenerate with ONLY the human-facing conversational text in "message" / "messages". Put stage, confidence, intent, and all structured fields ONLY in the separate JSON fields.\n=====`;
+}
+
+function stripMetadataLeaksFromMessages(messages: string[]): {
+  success: boolean;
+  messages: string[];
+  matchedText: string | null;
+  matchedPattern: string | null;
+} {
+  const strippedMessages: string[] = [];
+  let anyStripped = false;
+  let firstMatchedText: string | null = null;
+  let firstMatchedPattern: string | null = null;
+
+  for (const message of messages) {
+    let current = message;
+    for (let i = 0; i < 5; i++) {
+      const leak = detectMetadataLeak(current);
+      if (!leak.leak || !leak.matchedText) break;
+      anyStripped = true;
+      firstMatchedText ??= leak.matchedText;
+      firstMatchedPattern ??= leak.matchedPattern;
+      const stripped = surgicalStripMetadataLeak(current, leak.matchedText);
+      if (!stripped.success) {
+        return {
+          success: false,
+          messages: [],
+          matchedText: firstMatchedText,
+          matchedPattern: firstMatchedPattern
+        };
+      }
+      current = stripped.content;
+    }
+    if (detectMetadataLeak(current).leak) {
+      return {
+        success: false,
+        messages: [],
+        matchedText: firstMatchedText,
+        matchedPattern: firstMatchedPattern
+      };
+    }
+    strippedMessages.push(current);
+  }
+
+  return {
+    success: anyStripped && strippedMessages.some((m) => m.trim().length > 0),
+    messages: strippedMessages.filter((m) => m.trim().length > 0),
+    matchedText: firstMatchedText,
+    matchedPattern: firstMatchedPattern
+  };
+}
+
+async function recordR34MetadataLeakCatch(params: {
+  accountId: string;
+  conversationId: string | null;
+  attempt: number;
+  matchedText: string | null;
+  matchedPattern: string | null;
+  replyPreview: string;
+  stage: string | null;
+  leadMessage: string | null;
+}) {
+  const failureReason = `r34_metadata_leak: matched "${params.matchedText ?? 'unknown'}" via ${params.matchedPattern ?? 'unknown_pattern'}`;
+  await prisma.voiceQualityFailure
+    .create({
+      data: {
+        accountId: params.accountId,
+        message: params.replyPreview,
+        score: 0,
+        hardFails: [failureReason],
+        attempt: params.attempt,
+        leadMessage: params.leadMessage?.slice(0, 500) || null
+      }
+    })
+    .catch((err) =>
+      console.error('[ai-engine] R34 VoiceQualityFailure log failed:', err)
+    );
+
+  if (params.conversationId) {
+    await prisma.bookingRoutingAudit
+      .create({
+        data: {
+          conversationId: params.conversationId,
+          accountId: params.accountId,
+          routingAllowed: false,
+          regenerationForced: true,
+          blockReason: 'r34_metadata_leak',
+          aiStageReported: params.stage,
+          aiSubStageReported: 'R34_METADATA_LEAK',
+          contentPreview: params.replyPreview.slice(0, 200)
+        }
+      })
+      .catch((err) =>
+        console.error('[ai-engine] R34 BookingRoutingAudit log failed:', err)
+      );
+  }
+
+  await maybeAlertR34Spike(params.accountId).catch((err) =>
+    console.error('[ai-engine] R34 spike alert failed:', err)
+  );
+}
+
+async function maybeAlertR34Spike(accountId: string) {
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const rows = await prisma.voiceQualityFailure.findMany({
+    where: { accountId, createdAt: { gte: hourAgo } },
+    select: { hardFails: true }
+  });
+  const r34Count = rows.filter((row) =>
+    JSON.stringify(row.hardFails).includes('r34_metadata_leak')
+  ).length;
+  if (r34Count <= 5) return;
+
+  const existing = await prisma.notification.findFirst({
+    where: {
+      accountId,
+      type: 'SYSTEM',
+      title: { contains: 'R34 metadata leak guard' },
+      createdAt: { gte: hourAgo }
+    },
+    select: { id: true }
+  });
+  if (existing) return;
+
+  const title = `R34 metadata leak guard fired ${r34Count}x in 1h`;
+  const body = `R34 caught ${r34Count} metadata leak attempt${r34Count === 1 ? '' : 's'} in the last hour. Check the master prompt and recent AI generations for structured fields leaking into message content.`;
+  await prisma.notification
+    .create({
+      data: { accountId, type: 'SYSTEM', title, body }
+    })
+    .catch((err) =>
+      console.error('[ai-engine] R34 spike notification failed:', err)
+    );
+
+  const webhook =
+    process.env.SLACK_WEBHOOK_URL || process.env.OPERATOR_SLACK_WEBHOOK_URL;
+  if (!webhook) return;
+  await fetch(webhook, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: `R34 metadata leak guard fired ${r34Count}x in the last hour on account ${accountId}. Check master prompt and voice gate patterns.`
+    })
+  }).catch((err) =>
+    console.error('[ai-engine] R34 Slack webhook failed:', err)
+  );
 }
 
 export interface GenerateReplyResult {
@@ -637,6 +789,8 @@ At minimum, your JSON must include these fields with valid values:
 - "message": the actual reply you want sent to the lead, written in Daniel's voice (lowercase opener, casual)
 - "stage": one of OPENING | SITUATION_DISCOVERY | GOAL_EMOTIONAL_WHY | URGENCY | SOFT_PITCH_COMMITMENT | FINANCIAL_SCREENING | BOOKING — whichever stage you are ACTUALLY in right now based on the conversation
 - "stage_confidence": a number 0.0–1.0
+
+The "message" field is lead-facing only. Never put structured metadata inside it: no stage_confidence:1.0, quality_score, stage:, intent:, JSON fragments, placeholders, debug notes, or key:value fields. Those belong ONLY in separate JSON fields.
 
 If you catch yourself writing plain text, stop and rewrite as JSON. The entire pipeline breaks when stage is missing — downstream systems rely on it to track funnel progression.`;
 
@@ -1061,7 +1215,110 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     modelUsedFinal = callResult.modelUsed;
     usageTotal = addUsage(usageTotal, callResult.usage);
 
-    parsed = parseAIResponse(callResult.text);
+    try {
+      parsed = parseAIResponse(callResult.text);
+    } catch (err) {
+      if (err instanceof InvalidLLMOutputError) {
+        await recordR34MetadataLeakCatch({
+          accountId,
+          conversationId: activeConversationId,
+          attempt: attempt + 1,
+          matchedText: err.found ?? err.code,
+          matchedPattern: err.code,
+          replyPreview: callResult.text.slice(0, 500),
+          stage: null,
+          leadMessage: lastLeadMsg?.content ?? null
+        });
+
+        if (attempt < MAX_RETRIES) {
+          systemPromptForLLM =
+            baseSystemPrompt +
+            buildR34MetadataLeakDirective(err.found ?? err.code);
+          console.warn(
+            `[ai-engine] R34 parser strict-mode rejection on attempt ${attempt + 1}/${MAX_RETRIES + 1}; forcing regen`
+          );
+          continue;
+        }
+
+        parsed = buildR34BlockedFallbackParsed();
+        finalQualityScore = 0;
+        console.error(
+          `[ai-engine] R34 parser strict-mode exhausted ${MAX_RETRIES + 1} attempts — pausing with safe holding line for convo ${activeConversationId}`
+        );
+        break;
+      }
+      throw err;
+    }
+
+    const parsedMetadataLeak = parsed.parserMetadataLeak;
+    const generatedTextForLeakCheck = parsed.messages.join('\n');
+    const postParseMetadataLeak = detectMetadataLeak(generatedTextForLeakCheck);
+    if (parsedMetadataLeak || postParseMetadataLeak.leak) {
+      const matchedText =
+        parsedMetadataLeak?.matchedText ?? postParseMetadataLeak.matchedText;
+      const matchedPattern =
+        parsedMetadataLeak?.matchedPattern ??
+        postParseMetadataLeak.matchedPattern;
+
+      await recordR34MetadataLeakCatch({
+        accountId,
+        conversationId: activeConversationId,
+        attempt: attempt + 1,
+        matchedText,
+        matchedPattern,
+        replyPreview: generatedTextForLeakCheck.slice(0, 500),
+        stage: parsed.stage || null,
+        leadMessage: lastLeadMsg?.content ?? null
+      });
+
+      const stripped = stripMetadataLeaksFromMessages(parsed.messages);
+      if (stripped.success) {
+        const strippedCandidate = {
+          ...parsed,
+          message: stripped.messages[0] ?? '',
+          messages: stripped.messages,
+          parserMetadataLeak: null
+        };
+        const strippedQuality = scoreVoiceQualityGroup(
+          strippedCandidate.messages,
+          buildVoiceQualityOptions(strippedCandidate.messages.length || 1)
+        );
+        if (
+          strippedQuality.passed &&
+          strippedQuality.hardFails.length === 0 &&
+          !detectMetadataLeak(strippedCandidate.messages.join('\n')).leak
+        ) {
+          parsed = strippedCandidate;
+          console.warn(
+            `[ai-engine] R34 surgical strip succeeded on attempt ${attempt + 1}/${MAX_RETRIES + 1}; continuing through remaining gates`
+          );
+        } else {
+          console.warn(
+            `[ai-engine] R34 surgical strip failed downstream quality gate on attempt ${attempt + 1}/${MAX_RETRIES + 1}: ${strippedQuality.hardFails.join(', ') || 'score'}`
+          );
+          if (attempt < MAX_RETRIES) {
+            systemPromptForLLM =
+              baseSystemPrompt + buildR34MetadataLeakDirective(matchedText);
+            continue;
+          }
+          parsed = buildR34BlockedFallbackParsed();
+          finalQualityScore = strippedQuality.score;
+          break;
+        }
+      } else {
+        console.warn(
+          `[ai-engine] R34 surgical strip could not produce coherent lead-facing copy on attempt ${attempt + 1}/${MAX_RETRIES + 1}`
+        );
+        if (attempt < MAX_RETRIES) {
+          systemPromptForLLM =
+            baseSystemPrompt + buildR34MetadataLeakDirective(matchedText);
+          continue;
+        }
+        parsed = buildR34BlockedFallbackParsed();
+        finalQualityScore = 0;
+        break;
+      }
+    }
 
     // P0 script-step skip prevention. If the LLM draft jumps ahead of the
     // authoritative script step (for example soft-pitching a call before
@@ -2083,7 +2340,58 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           usageTotal = addUsage(usageTotal, naturalCall.usage);
           qualityGateAttempts++;
 
-          const naturalParsed = parseAIResponse(naturalCall.text);
+          let naturalParsed: ParsedAIResponse;
+          try {
+            naturalParsed = parseAIResponse(naturalCall.text);
+          } catch (err) {
+            if (err instanceof InvalidLLMOutputError) {
+              await recordR34MetadataLeakCatch({
+                accountId,
+                conversationId: activeConversationId,
+                attempt: qualityGateAttempts,
+                matchedText: err.found ?? err.code,
+                matchedPattern: err.code,
+                replyPreview: naturalCall.text.slice(0, 500),
+                stage: parsed.stage || null,
+                leadMessage: lastLeadMsg?.content ?? null
+              });
+              naturalParsed = buildR34BlockedFallbackParsed();
+            } else {
+              throw err;
+            }
+          }
+          const naturalLeak = detectMetadataLeak(
+            naturalParsed.messages.join('\n')
+          );
+          if (naturalParsed.parserMetadataLeak || naturalLeak.leak) {
+            await recordR34MetadataLeakCatch({
+              accountId,
+              conversationId: activeConversationId,
+              attempt: qualityGateAttempts,
+              matchedText:
+                naturalParsed.parserMetadataLeak?.matchedText ??
+                naturalLeak.matchedText,
+              matchedPattern:
+                naturalParsed.parserMetadataLeak?.matchedPattern ??
+                naturalLeak.matchedPattern,
+              replyPreview: naturalParsed.messages.join('\n').slice(0, 500),
+              stage: naturalParsed.stage || null,
+              leadMessage: lastLeadMsg?.content ?? null
+            });
+            const strippedNatural = stripMetadataLeaksFromMessages(
+              naturalParsed.messages
+            );
+            if (strippedNatural.success) {
+              naturalParsed = {
+                ...naturalParsed,
+                message: strippedNatural.messages[0] ?? '',
+                messages: strippedNatural.messages,
+                parserMetadataLeak: null
+              };
+            } else {
+              naturalParsed = buildR34BlockedFallbackParsed();
+            }
+          }
           const naturalQuality = scoreVoiceQualityGroup(
             naturalParsed.messages,
             buildVoiceQualityOptions(
@@ -3353,6 +3661,50 @@ interface ParsedAIResponse {
   suggestedTag: string;
   suggestedTags: string[];
   voiceNoteAction: { slot_id: string } | null;
+  parserMetadataLeak?: {
+    matchedPattern: string | null;
+    matchedText: string | null;
+    originalMessages: string[];
+  } | null;
+}
+
+class InvalidLLMOutputError extends Error {
+  code: string;
+  found?: string | null;
+
+  constructor(code: string, found?: string | null) {
+    super(code);
+    this.name = 'InvalidLLMOutputError';
+    this.code = code;
+    this.found = found;
+  }
+}
+
+function buildR34BlockedFallbackParsed(): ParsedAIResponse {
+  const message = 'gimme a sec bro, looking into this';
+  return {
+    format: 'text',
+    message,
+    messages: [message],
+    stage: 'SOFT_EXIT',
+    subStage: null,
+    stageConfidence: 0.5,
+    sentimentScore: 0,
+    experiencePath: null,
+    objectionDetected: null,
+    stallType: 'R34_METADATA_LEAK_BLOCKED',
+    affirmationDetected: false,
+    followUpNumber: null,
+    softExit: false,
+    escalateToHuman: true,
+    leadTimezone: null,
+    selectedSlotIso: null,
+    leadEmail: null,
+    suggestedTag: '',
+    suggestedTags: [],
+    voiceNoteAction: null,
+    parserMetadataLeak: null
+  };
 }
 
 // Multi-bubble constants — enforced at parse time regardless of
@@ -3361,6 +3713,17 @@ interface ParsedAIResponse {
 // validation is the source of truth.
 const MAX_BUBBLES_PER_GROUP = 4;
 const MIN_BUBBLE_CHARS = 2;
+const FORBIDDEN_MESSAGE_METADATA_TERMS = [
+  'stage_confidence',
+  'quality_score',
+  'priority_score',
+  'stage:',
+  'intent:',
+  'next_action',
+  'script_step',
+  'current_stage',
+  'confidence:'
+];
 
 /**
  * Normalise the bubble array extracted from the LLM JSON. Filters
@@ -3440,7 +3803,8 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     leadEmail: null,
     suggestedTag: '',
     suggestedTags: [],
-    voiceNoteAction: null
+    voiceNoteAction: null,
+    parserMetadataLeak: null
   };
 
   try {
@@ -3453,6 +3817,14 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     }
 
     const obj = JSON.parse(jsonStr);
+    if (
+      !(
+        typeof obj.message === 'string' ||
+        (Array.isArray(obj.messages) && obj.messages.length > 0)
+      )
+    ) {
+      throw new InvalidLLMOutputError('missing_message_field');
+    }
 
     // Pick bubbles from either messages[] (multi-bubble persona) or
     // wrap message (single-message). Both paths end with a populated
@@ -3505,6 +3877,26 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       }
     }
     const message = messages[0] ?? fromString;
+    const joinedMessageBody = messages.join('\n');
+    const lowerMessageBody = joinedMessageBody.toLowerCase();
+    const forbiddenTerm = FORBIDDEN_MESSAGE_METADATA_TERMS.find((term) =>
+      lowerMessageBody.includes(term)
+    );
+    const metadataLeak = detectMetadataLeak(joinedMessageBody);
+    const parserMetadataLeak =
+      forbiddenTerm || metadataLeak.leak
+        ? {
+            matchedPattern: metadataLeak.matchedPattern,
+            matchedText: metadataLeak.matchedText ?? forbiddenTerm ?? null,
+            originalMessages: [...messages]
+          }
+        : null;
+    if (parserMetadataLeak) {
+      console.warn(
+        `[ai-engine] parseAIResponse rejected lead-facing metadata in message field. found="${parserMetadataLeak.matchedText ?? forbiddenTerm}" raw first 300 chars:`,
+        raw.slice(0, 300)
+      );
+    }
 
     // Observability for the 2026-04-19 empty-message incident: if the
     // LLM emitted JSON with no usable text anywhere, loudly log the
@@ -3561,9 +3953,17 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       suggestedTags: Array.isArray(obj.suggested_tags)
         ? obj.suggested_tags
         : [],
-      voiceNoteAction: obj.voice_note_action || null
+      voiceNoteAction: obj.voice_note_action || null,
+      parserMetadataLeak
     };
-  } catch {
+  } catch (err) {
+    if (err instanceof InvalidLLMOutputError) {
+      console.warn(
+        `[ai-engine] JSON parse strict-mode rejection: ${err.code}${err.found ? ` (${err.found})` : ''}. First 200 chars:`,
+        raw.slice(0, 200)
+      );
+      throw err;
+    }
     console.warn(
       '[ai-engine] JSON parse failed — LLM returned plain text instead of JSON. Falling back to defaults. First 200 chars:',
       raw.slice(0, 200)

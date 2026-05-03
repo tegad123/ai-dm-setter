@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { detectMetadataLeak } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,11 @@ const UPCOMING_CALL_WINDOW_MS = 48 * 60 * 60 * 1000;
 const RECENT_ACTIVITY_DAYS = 7;
 const RECENT_ACTIVITY_MS = RECENT_ACTIVITY_DAYS * 24 * 60 * 60 * 1000;
 const DELIVERY_FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const HISTORICAL_METADATA_LEAK_DAYS = 60;
+const HISTORICAL_METADATA_LEAK_MS =
+  HISTORICAL_METADATA_LEAK_DAYS * 24 * 60 * 60 * 1000;
+const R34_COUNTER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const R34_ALERT_WINDOW_MS = 60 * 60 * 1000;
 
 export async function GET(request: NextRequest) {
   try {
@@ -82,7 +88,9 @@ export async function GET(request: NextRequest) {
       callUnconfirmedRows,
       callOutcomeNeededRows,
       pendingRecoveryRows,
-      recoveryStatusRows
+      recoveryStatusRows,
+      r34FailureRows,
+      metadataLeakCandidateMessages
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
       // Conversations flagged distressDetected=true within the last
@@ -402,8 +410,102 @@ export async function GET(request: NextRequest) {
           _count: true
         }),
         []
+      ),
+      // ── INFO: R34 metadata leak catches (last 24h) ──────────────
+      safe(
+        prisma.voiceQualityFailure.findMany({
+          where: {
+            accountId,
+            createdAt: { gte: new Date(now.getTime() - R34_COUNTER_WINDOW_MS) }
+          },
+          select: { hardFails: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+          take: 500
+        }),
+        []
+      ),
+      // ── PRIORITY 2.H: historical metadata leak sweep ────────────
+      // Coarse DB filter + precise detector in JS. Report-only; no
+      // historical message mutation here.
+      safe(
+        prisma.message.findMany({
+          where: {
+            sender: 'AI',
+            timestamp: {
+              gte: new Date(now.getTime() - HISTORICAL_METADATA_LEAK_MS)
+            },
+            conversation: {
+              lead: {
+                accountId,
+                tags: { none: { tag: { name: 'cold-pitch' } } }
+              }
+            },
+            OR: [
+              {
+                content: { contains: 'stage_confidence', mode: 'insensitive' }
+              },
+              { content: { contains: 'quality_score', mode: 'insensitive' } },
+              { content: { contains: 'priority_score', mode: 'insensitive' } },
+              { content: { contains: 'current_stage', mode: 'insensitive' } },
+              { content: { contains: 'script_step', mode: 'insensitive' } },
+              { content: { contains: 'next_action', mode: 'insensitive' } },
+              { content: { contains: 'stage:', mode: 'insensitive' } },
+              { content: { contains: 'intent:', mode: 'insensitive' } },
+              { content: { contains: 'sentiment:', mode: 'insensitive' } },
+              { content: { contains: '{{', mode: 'insensitive' } },
+              { content: { contains: '[BOOKING', mode: 'insensitive' } },
+              { content: { contains: '[URL', mode: 'insensitive' } },
+              { content: { contains: '[LINK', mode: 'insensitive' } },
+              { content: { contains: '(debug:', mode: 'insensitive' } },
+              { content: { contains: '(system:', mode: 'insensitive' } },
+              { content: { contains: '(internal:', mode: 'insensitive' } }
+            ]
+          },
+          select: {
+            id: true,
+            conversationId: true,
+            content: true,
+            timestamp: true,
+            conversation: {
+              select: {
+                lead: { select: { id: true, name: true, handle: true } }
+              }
+            }
+          },
+          orderBy: { timestamp: 'desc' },
+          take: 1000
+        }),
+        []
       )
     ]);
+
+    const historicalMetadataLeakMatches = metadataLeakCandidateMessages
+      .map((message) => {
+        const leak = detectMetadataLeak(message.content);
+        if (!leak.leak) return null;
+        return {
+          message,
+          leak
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is {
+          message: (typeof metadataLeakCandidateMessages)[number];
+          leak: ReturnType<typeof detectMetadataLeak>;
+        } => item !== null
+      )
+      .slice(0, 50);
+
+    const r34CatchCount24h = r34FailureRows.filter((row) =>
+      JSON.stringify(row.hardFails).includes('r34_metadata_leak')
+    ).length;
+    const r34CatchCountLastHour = r34FailureRows.filter(
+      (row) =>
+        row.createdAt.getTime() >= now.getTime() - R34_ALERT_WINDOW_MS &&
+        JSON.stringify(row.hardFails).includes('r34_metadata_leak')
+    ).length;
 
     // ── Dismissal state ──────────────────────────────────────────────
     // Collect all conversationIds referenced by action items so we can
@@ -419,6 +521,9 @@ export async function GET(request: NextRequest) {
     callUnconfirmedRows.forEach((c) => referencedConvIds.add(c.id));
     callOutcomeNeededRows.forEach((c) => referencedConvIds.add(c.id));
     pendingRecoveryRows.forEach((r) => referencedConvIds.add(r.conversationId));
+    historicalMetadataLeakMatches.forEach((r) =>
+      referencedConvIds.add(r.message.conversationId)
+    );
     const referencedConvIdList = Array.from(referencedConvIds);
     const [dismissedRows, latestLeadMsgs] = await Promise.all([
       referencedConvIdList.length > 0
@@ -753,6 +858,23 @@ export async function GET(request: NextRequest) {
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
+    const attentionHistoricalMetadataLeaks = historicalMetadataLeakMatches
+      .filter(
+        (r) =>
+          !isDismissed(r.message.conversationId, 'historical_metadata_leak')
+      )
+      .map((r) => ({
+        type: 'historical_metadata_leak' as const,
+        conversationId: r.message.conversationId,
+        leadId: r.message.conversation.lead.id,
+        leadName: r.message.conversation.lead.name,
+        leadHandle: r.message.conversation.lead.handle,
+        messageId: r.message.id,
+        matchedText: r.leak.matchedText,
+        matchedPattern: r.leak.matchedPattern,
+        detectedAt: r.message.timestamp.toISOString()
+      }));
+
     // PRIORITY 2.C — upcoming calls
     const attentionUpcomingCalls = upcomingCallRows
       .filter((c) => !isDismissed(c.id, 'upcoming_call'))
@@ -1040,6 +1162,7 @@ export async function GET(request: NextRequest) {
         ...attentionPendingRecovery,
         ...attentionPaused,
         ...attentionCapital,
+        ...attentionHistoricalMetadataLeaks,
         ...attentionUnverifiedSent,
         ...attentionKeepaliveExhausted,
         ...attentionKeepaliveNoResponse,
@@ -1049,6 +1172,13 @@ export async function GET(request: NextRequest) {
         ...attentionUnreviewed
       ],
       info: [
+        {
+          type: 'r34_catch_counter' as const,
+          windowHours: 24,
+          count: r34CatchCount24h,
+          alertThresholdExceeded: r34CatchCountLastHour > 5,
+          lastHourCount: r34CatchCountLastHour
+        },
         ...infoReadiness,
         {
           type: 'self_recovery_summary' as const,

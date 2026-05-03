@@ -14,6 +14,104 @@ export interface QualityResult {
 
 export const FORBIDDEN_AI_DASH_PATTERN = /[\u2013\u2014]/;
 
+export const METADATA_LEAK_PATTERNS: RegExp[] = [
+  // Specific known leak surfaces from structured LLM output.
+  /stage_confidence\s*[:=]\s*[\d.]+/i,
+  /quality_score\s*[:=]\s*\d+/i,
+  /confidence\s*[:=]\s*[\d.]+/i,
+  /priority_score\s*[:=]\s*\d+/i,
+  /stage\s*[:=]\s*[A-Z_]+/i,
+  /intent\s*[:=]\s*[A-Z_]+/i,
+  /sentiment\s*[:=]\s*[A-Z_]+/i,
+  /next_action\s*[:=]/i,
+  /script_step\s*[:=]/i,
+  /current_stage\s*[:=]/i,
+
+  // Generic field_name:value signatures where the value resembles system data.
+  /\b[a-z_]+_(?:confidence|score|stage|level|count|id|status)\s*[:=]\s*[\w.]+/i,
+  /\b[a-z]+_[a-z_]+\s*[:=]\s*[\w.]+/i,
+
+  // JSON-like fragments and whole-message JSON payloads.
+  /\{[^}]*"[^"]+"\s*:\s*[^}]+\}/,
+  /^\s*\{[\s\S]*\}\s*$/,
+  /\[[\s{]*"[^"]+"\s*:\s*[^\]]+\]/,
+
+  // Variable-style placeholders and script/template leakage.
+  /\[[A-Z][A-Z_\s]+\]/,
+  /\{\{[^}]+\}\}/,
+  /<[A-Z_]+>/,
+
+  // System annotations and URL-encoded structured data fragments.
+  /\(note\s*:\s*[^)]+\)/i,
+  /\(system\s*:\s*[^)]+\)/i,
+  /\(debug\s*:\s*[^)]+\)/i,
+  /\(internal\s*:\s*[^)]+\)/i,
+  /%7B|%7D|%5B|%5D|%22|%3A/i,
+  /```[\s\S]*?(stage_confidence|quality_score|priority_score|current_stage|script_step|next_action)[\s\S]*?```/i,
+
+  // Trailing machine fields appended after otherwise normal copy.
+  /[.!?]\s+[a-z_]+[:=][\w.]+/i
+];
+
+const METADATA_LEAK_FALSE_POSITIVE_GUARDS: RegExp[] = [
+  /^https?:/i,
+  /\d+:\d+\s*(am|pm|cst|est|pst|mst|gmt|utc|ct|et|pt|mt)/i,
+  /^[A-Z][a-z]+:/,
+  /\bratio\s+(is\s+)?\d+\s*:\s*\d+\b/i,
+  /\brisk\s*[:/]\s*reward\b/i
+];
+
+export function detectMetadataLeak(reply: string): {
+  leak: boolean;
+  matchedPattern: string | null;
+  matchedText: string | null;
+} {
+  if (!reply || typeof reply !== 'string') {
+    return { leak: false, matchedPattern: null, matchedText: null };
+  }
+
+  for (const pattern of METADATA_LEAK_PATTERNS) {
+    const match = reply.match(pattern);
+    if (!match) continue;
+    const matchedText = match[0];
+    const isFalsePositive = METADATA_LEAK_FALSE_POSITIVE_GUARDS.some((guard) =>
+      guard.test(matchedText)
+    );
+    if (isFalsePositive) continue;
+    return {
+      leak: true,
+      matchedPattern: pattern.toString(),
+      matchedText
+    };
+  }
+
+  return { leak: false, matchedPattern: null, matchedText: null };
+}
+
+export function surgicalStripMetadataLeak(
+  reply: string,
+  matchedText: string
+): { success: boolean; content: string } {
+  if (!reply || !matchedText) return { success: false, content: '' };
+
+  let stripped = reply.replace(matchedText, '').trim();
+  stripped = stripped
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,!?])/g, '$1')
+    .replace(/[.,]\s*$/, '')
+    .trim();
+
+  if (stripped.length < 10) return { success: false, content: '' };
+  if (stripped.split(/\s+/).filter(Boolean).length < 3) {
+    return { success: false, content: '' };
+  }
+  if (detectMetadataLeak(stripped).leak) {
+    return { success: false, content: '' };
+  }
+
+  return { success: true, content: stripped };
+}
+
 /**
  * Last-line R17 sanitizer for AI delivery paths.
  *
@@ -745,6 +843,16 @@ export function scoreVoiceQuality(
   const lower = reply.toLowerCase();
 
   // ── Hard fail checks ────────────────────────────────────────────
+
+  // R34. Metadata leak guard — internal JSON fields, confidence scores,
+  // placeholders, debug annotations, or structured fragments must never
+  // reach lead-facing copy.
+  const metadataLeak = detectMetadataLeak(reply);
+  if (metadataLeak.leak) {
+    hardFails.push(
+      `r34_metadata_leak: matched "${metadataLeak.matchedText}" via ${metadataLeak.matchedPattern}`
+    );
+  }
 
   // 1. Banned phrases
   for (const phrase of BANNED_PHRASES) {

@@ -17,6 +17,7 @@ import {
   backfillEffectivenessTracking
 } from '@/lib/conversation-state-machine';
 import {
+  detectMetadataLeak,
   detectTypeformFilledNoBookingContext,
   sanitizeDashCharacters,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
@@ -3511,6 +3512,70 @@ async function sendAIReply(
   const joinedAtShip = bubblesForEmptyCheck
     .filter((b): b is string => typeof b === 'string')
     .join(' ');
+
+  // ── Ship-time R34 metadata leak guard (P0) ────────────────────
+  // Parser + voice gates should catch structured metadata leaks before
+  // this point, but delivery must fail closed. Internal fields like
+  // stage_confidence:1.0, quality_score, stage:, intent:, JSON
+  // fragments, or placeholders can never reach Instagram/Facebook.
+  const metadataLeakAtShip = detectMetadataLeak(joinedAtShip);
+  if (metadataLeakAtShip.leak) {
+    console.error(
+      `[webhook-processor] r34_metadata_leak_at_ship for conv ${conversationId} — AI output still contained "${metadataLeakAtShip.matchedText}" after retry loop. Pausing AI, notifying operator, no platform send.`
+    );
+    try {
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { aiActive: false }
+      });
+      broadcastAIStatusChange({ conversationId, aiActive: false });
+      await prisma.voiceQualityFailure
+        .create({
+          data: {
+            accountId: lead.accountId,
+            message: joinedAtShip.slice(0, 1000),
+            score: 0,
+            hardFails: [
+              `r34_metadata_leak_at_ship: matched "${metadataLeakAtShip.matchedText}" via ${metadataLeakAtShip.matchedPattern}`
+            ],
+            attempt: 999,
+            leadMessage: null
+          }
+        })
+        .catch(() => {});
+      const { escalate } = await import('@/lib/escalation-dispatch');
+      const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+      const link = origin
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        : undefined;
+      await escalate({
+        type: 'ai_stuck',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        conversationId,
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        title: 'AI produced internal metadata — human takeover required',
+        body: `${lead.name} (@${lead.handle}): the AI's last generation contained internal metadata (${metadataLeakAtShip.matchedText ?? 'unknown metadata'}) that cannot reach the lead. Send was blocked before delivery. Please review and take over.`,
+        details: `R34 metadata leak at ship: "${metadataLeakAtShip.matchedText ?? 'unknown'}"`,
+        link
+      });
+    } catch (err) {
+      console.error(
+        '[webhook-processor] R34 metadata leak escalation bookkeeping failed (non-fatal):',
+        err
+      );
+    }
+    return;
+  }
 
   // ── Ship-time R24 backstop ────────────────────────────────────
   // R24 runs in ai-engine before send and should regenerate failed-

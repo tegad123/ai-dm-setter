@@ -7,7 +7,10 @@ import {
 } from '@/lib/realtime';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
-import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
+import {
+  detectMetadataLeak,
+  sanitizeDashCharacters
+} from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
@@ -145,6 +148,20 @@ export async function POST(
 
     const messageContent =
       sender === 'AI' ? sanitizeDashCharacters(contentText) : contentText;
+
+    if (sender === 'AI' || sender === 'HUMAN') {
+      const metadataLeak = detectMetadataLeak(messageContent);
+      if (metadataLeak.leak) {
+        return NextResponse.json(
+          {
+            error:
+              'Lead-facing messages cannot contain internal metadata or placeholders',
+            matchedText: metadataLeak.matchedText
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     const now = new Date();
 

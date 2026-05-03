@@ -147,6 +147,17 @@ interface AttentionUnverifiedSent {
   leadHandle: string;
   flaggedAt: string;
 }
+interface AttentionHistoricalMetadataLeak {
+  type: 'historical_metadata_leak';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  messageId: string;
+  matchedText: string | null;
+  matchedPattern: string | null;
+  detectedAt: string;
+}
 // 24h window keepalive fired 6+ hours ago without a lead response.
 // Operator may want to manually reach out before the window closes.
 interface AttentionKeepaliveNoResponse {
@@ -173,6 +184,7 @@ type AttentionItem =
   | AttentionPendingRecovery
   | AttentionPaused
   | AttentionCapital
+  | AttentionHistoricalMetadataLeak
   | AttentionUnverifiedSent
   | AttentionKeepaliveNoResponse
   | AttentionKeepaliveExhausted
@@ -181,10 +193,39 @@ type AttentionItem =
   | AttentionUpcomingCall
   | AttentionUnreviewed;
 
+interface InfoR34CatchCounter {
+  type: 'r34_catch_counter';
+  windowHours: number;
+  count: number;
+  alertThresholdExceeded: boolean;
+  lastHourCount: number;
+}
+
+interface InfoAutosendReady {
+  type: 'autosend_ready';
+  platform: 'INSTAGRAM' | 'FACEBOOK';
+  approvalRate: number;
+  totalEvents: number;
+  approved: number;
+  edited: number;
+  rejected: number;
+}
+
+interface InfoSelfRecoverySummary {
+  type: 'self_recovery_summary';
+  windowDays: number;
+  counts: unknown[];
+}
+
+type InfoItem =
+  | InfoR34CatchCounter
+  | InfoAutosendReady
+  | InfoSelfRecoverySummary;
+
 interface ActionsResponse {
   urgent: UrgentItem[];
   attention: AttentionItem[];
-  info: unknown[];
+  info: InfoItem[];
   generatedAt: string;
 }
 
@@ -288,6 +329,7 @@ type DismissibleActionType =
   | 'pending_auto_recovery'
   | 'ai_paused'
   | 'capital_verification'
+  | 'historical_metadata_leak'
   | 'upcoming_call'
   | 'unverified_sent'
   | 'keepalive_no_response'
@@ -367,6 +409,11 @@ export function ActionRequired() {
 
   const urgentCount = data?.urgent.length ?? 0;
   const attentionCount = data?.attention.length ?? 0;
+  const monitoringItems =
+    data?.info.filter(
+      (item): item is InfoR34CatchCounter => item.type === 'r34_catch_counter'
+    ) ?? [];
+  const monitoringCount = monitoringItems.length;
   const totalCount = urgentCount + attentionCount;
 
   // Border accent — urgent first, then attention, else green.
@@ -423,10 +470,9 @@ export function ActionRequired() {
               />
             ))}
           </div>
-        ) : totalCount === 0 ? (
-          <EmptyState />
         ) : (
           <div>
+            {totalCount === 0 && <EmptyState />}
             {urgentCount > 0 && (
               <>
                 <SectionLabel label='Urgent' count={urgentCount} />
@@ -445,6 +491,12 @@ export function ActionRequired() {
                     renderAttention(item, now, dismissItem)
                   )}
                 </div>
+              </>
+            )}
+            {monitoringCount > 0 && (
+              <>
+                <SectionLabel label='Monitoring' count={monitoringCount} />
+                <div>{monitoringItems.map((item) => renderInfo(item))}</div>
               </>
             )}
           </div>
@@ -642,6 +694,29 @@ function renderAttention(
           }
         />
       );
+    case 'historical_metadata_leak':
+      return (
+        <ActionRow
+          key={`metadata-leak-${item.messageId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconAlertCircle}
+          iconClassName='text-amber-500'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — historical metadata leak detected
+                {item.matchedText ? `: "${item.matchedText}"` : ''}
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.detectedAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'historical_metadata_leak')
+          }
+        />
+      );
     case 'unverified_sent':
       // Fix B / booking-fabrication exhausted retries, shipped best
       // effort. Copy tells the operator to review the reply content,
@@ -810,6 +885,33 @@ function renderAttention(
         />
       );
   }
+}
+
+function renderInfo(item: InfoR34CatchCounter): React.ReactNode {
+  return (
+    <ActionRow
+      key='r34-catch-counter'
+      href='/dashboard/conversations'
+      icon={IconAlertCircle}
+      iconClassName={
+        item.alertThresholdExceeded ? 'text-red-500' : 'text-sky-500'
+      }
+      primary={
+        <span>
+          <span className='font-medium'>R34 catches today</span>
+          <span className='text-muted-foreground'>
+            {' '}
+            — {item.count} metadata leak attempt
+            {item.count === 1 ? '' : 's'} blocked
+            {item.alertThresholdExceeded
+              ? ` (${item.lastHourCount} in the last hour)`
+              : ''}
+          </span>
+        </span>
+      }
+      meta={`${item.windowHours}h`}
+    />
+  );
 }
 
 // Lightweight stub to render a placeholder when the polling happens

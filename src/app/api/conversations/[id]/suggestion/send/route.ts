@@ -37,7 +37,10 @@ import {
   updateLeadStageFromConversation,
   type CapitalOutcome
 } from '@/lib/stage-progression';
-import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
+import {
+  detectMetadataLeak,
+  sanitizeDashCharacters
+} from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
 const CAPITAL_OUTCOMES: ReadonlySet<string> = new Set([
@@ -171,6 +174,21 @@ export async function POST(
     if (bubbles.some(isInternalNoteContent)) {
       return NextResponse.json(
         { error: 'Internal notes cannot be sent to the lead' },
+        { status: 400 }
+      );
+    }
+
+    const metadataLeakBubble = bubbles.find(
+      (bubble) => detectMetadataLeak(bubble).leak
+    );
+    if (metadataLeakBubble) {
+      const metadataLeak = detectMetadataLeak(metadataLeakBubble);
+      return NextResponse.json(
+        {
+          error:
+            'Lead-facing messages cannot contain internal metadata or placeholders',
+          matchedText: metadataLeak.matchedText
+        },
         { status: 400 }
       );
     }

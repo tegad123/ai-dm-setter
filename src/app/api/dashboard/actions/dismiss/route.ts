@@ -25,6 +25,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   'pending_auto_recovery',
   'ai_paused',
   'capital_verification',
+  'historical_metadata_leak',
   'upcoming_call',
   'unverified_sent',
   'keepalive_no_response',
