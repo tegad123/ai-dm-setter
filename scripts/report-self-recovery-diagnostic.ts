@@ -10,6 +10,8 @@
 
 import prisma from '@/lib/prisma';
 import {
+  computeSystemStage,
+  detectMidConversationStepSkip,
   extractCapturedDataPointsForTest,
   isSelfRecoveryTrigger,
   type ScriptHistoryMessage
@@ -43,6 +45,7 @@ async function main() {
           accountId: true,
           name: true,
           handle: true,
+          stage: true,
           account: { select: { slug: true, name: true } }
         }
       },
@@ -55,19 +58,48 @@ async function main() {
     string,
     { minimumCapitalRequired: number | null }
   >();
+  const scriptByAccount = new Map<string, any>();
   for (const accountId of Array.from(
     new Set(conversations.map((c) => c.lead.accountId))
   )) {
-    const persona = await prisma.aIPersona.findFirst({
-      where: { accountId, isActive: true },
-      select: { minimumCapitalRequired: true }
-    });
+    const [persona, script] = await Promise.all([
+      prisma.aIPersona.findFirst({
+        where: { accountId, isActive: true },
+        select: { minimumCapitalRequired: true }
+      }),
+      prisma.script.findFirst({
+        where: { accountId, isActive: true },
+        include: {
+          steps: {
+            orderBy: { stepNumber: 'asc' },
+            include: {
+              actions: {
+                where: { branchId: null },
+                orderBy: { sortOrder: 'asc' },
+                include: { form: { include: { fields: true } } }
+              },
+              branches: {
+                orderBy: { sortOrder: 'asc' },
+                include: {
+                  actions: {
+                    orderBy: { sortOrder: 'asc' },
+                    include: { form: { include: { fields: true } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      })
+    ]);
     personaByAccount.set(accountId, {
       minimumCapitalRequired: persona?.minimumCapitalRequired ?? null
     });
+    scriptByAccount.set(accountId, script);
   }
 
   const counts = new Map<string, number>();
+  const skipCounts = new Map<string, number>();
   const examples: Array<{
     account: string;
     handle: string;
@@ -85,8 +117,6 @@ async function main() {
       stallType: lastAi?.stallType ?? null,
       escalateToHuman: false
     });
-    if (!trigger.triggered) continue;
-
     const persona = personaByAccount.get(conversation.lead.accountId);
     const history: ScriptHistoryMessage[] = conversation.messages.map((m) => ({
       id: m.id,
@@ -101,24 +131,72 @@ async function main() {
       durableAmount: conversation.capitalVerifiedAmount
     });
     const thresholdMet = valueOf<boolean>(points, 'capitalThresholdMet');
-    if (thresholdMet === null) continue;
-
     const accountSlug = conversation.lead.account.slug;
-    counts.set(accountSlug, (counts.get(accountSlug) ?? 0) + 1);
-    if (examples.length < 20) {
-      examples.push({
-        account: accountSlug,
-        handle: conversation.lead.handle,
-        route: thresholdMet ? 'application/call route' : 'downsell route',
-        conversationId: conversation.id
-      });
+
+    if (trigger.triggered && thresholdMet !== null) {
+      counts.set(accountSlug, (counts.get(accountSlug) ?? 0) + 1);
+      if (examples.length < 20) {
+        examples.push({
+          account: accountSlug,
+          handle: conversation.lead.handle,
+          route: thresholdMet ? 'application/call route' : 'downsell route',
+          conversationId: conversation.id
+        });
+      }
+    }
+
+    const script = scriptByAccount.get(conversation.lead.accountId);
+    const systemStage = computeSystemStage(script, points);
+    const skip = detectMidConversationStepSkip({
+      snapshot: {
+        conversationId: conversation.id,
+        leadId: conversation.lead.id,
+        script,
+        currentStep: systemStage.step,
+        currentScriptStep: systemStage.step?.stepNumber ?? 1,
+        systemStage:
+          systemStage.step?.stateKey || systemStage.step?.title || null,
+        capturedDataPoints: points,
+        persona: {
+          minimumCapitalRequired: persona?.minimumCapitalRequired ?? null,
+          capitalVerificationPrompt: null,
+          freeValueLink: null,
+          downsellConfig: null,
+          promptConfig: null
+        },
+        reason: systemStage.reason
+      },
+      history
+    });
+    const qualifiedWithoutCapital =
+      conversation.lead.stage === 'QUALIFIED' && thresholdMet === null;
+    if (skip.skip || qualifiedWithoutCapital) {
+      skipCounts.set(accountSlug, (skipCounts.get(accountSlug) ?? 0) + 1);
+      if (examples.length < 20) {
+        examples.push({
+          account: accountSlug,
+          handle: conversation.lead.handle,
+          route: skip.skip
+            ? `mid-conversation step skip → ${skip.plannedStepKey}`
+            : 'QUALIFIED without capital verification',
+          conversationId: conversation.id
+        });
+      }
     }
   }
 
   console.log('Self-recovery diagnostic report-only scan');
   console.log(`Window: ${LOOKBACK_DAYS} days`);
+  console.log('Stall/escalation recoverable capital routes:');
   console.table(
     Array.from(counts.entries()).map(([account, count]) => ({ account, count }))
+  );
+  console.log('Mid-conversation step skips / qualified-without-capital:');
+  console.table(
+    Array.from(skipCounts.entries()).map(([account, count]) => ({
+      account,
+      count
+    }))
   );
   console.table(examples);
 }

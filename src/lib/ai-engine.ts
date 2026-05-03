@@ -25,9 +25,13 @@ import {
 import {
   applyStageOverride,
   attemptSelfRecovery,
+  attemptStepSkipRecovery,
+  detectAttemptedStepSkip,
   isSelfRecoveryTrigger,
   markSelfRecoveryEventFailed,
   prepareScriptState,
+  validateSoftPitchPrerequisites,
+  type RecoveryResult,
   type ScriptStateSnapshot
 } from '@/lib/script-state-recovery';
 
@@ -871,6 +875,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let qualityGateAttempts = 0;
   let finalQualityScore: number | null = null;
   let qualityGatePassedFirstAttempt = false;
+  let preGenerationRecovery: RecoveryResult | null = null;
 
   // UNQUALIFIED post-exit guard (Kelvin Kelvot 2026-04-24 incident).
   // When lead.stage is already UNQUALIFIED, the AI shouldn't continue
@@ -1057,6 +1062,120 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     usageTotal = addUsage(usageTotal, callResult.usage);
 
     parsed = parseAIResponse(callResult.text);
+
+    // P0 script-step skip prevention. If the LLM draft jumps ahead of the
+    // authoritative script step (for example soft-pitching a call before
+    // capital qualification is complete), replace the draft with a
+    // deterministic bridging recovery before normal quality gates run.
+    if (
+      activeConversationId &&
+      scriptStateSnapshot &&
+      !rescheduleFlow &&
+      !lastLeadMsg?.content?.trimStart().startsWith('OPERATOR NOTE:')
+    ) {
+      const draftMessages =
+        parsed.messages && parsed.messages.length > 0
+          ? parsed.messages
+          : [parsed.message];
+      const skipCheck = detectAttemptedStepSkip({
+        snapshot: scriptStateSnapshot,
+        plannedAction: draftMessages
+      });
+      const softPitchValidation = validateSoftPitchPrerequisites({
+        snapshot: scriptStateSnapshot,
+        action: draftMessages
+      });
+      const shouldRecoverSkip =
+        skipCheck.skip || softPitchValidation.allowed === false;
+
+      if (shouldRecoverSkip) {
+        try {
+          await prisma.bookingRoutingAudit
+            .create({
+              data: {
+                conversationId: activeConversationId,
+                accountId,
+                personaMinimumCapital: capitalThreshold ?? null,
+                routingAllowed: false,
+                regenerationForced: true,
+                blockReason: skipCheck.skip
+                  ? 'script_step_skip_detected'
+                  : 'soft_pitch_prerequisites_missing',
+                aiStageReported: parsed.stage || null,
+                aiSubStageReported: parsed.subStage || null,
+                contentPreview: draftMessages.join('\n').slice(0, 200)
+              }
+            })
+            .catch(() => null);
+
+          const recovery = await attemptStepSkipRecovery({
+            accountId,
+            conversationId: activeConversationId,
+            history: conversationHistory,
+            triggerReason: skipCheck.skip
+              ? 'pre_generation_skip_prevention'
+              : 'soft_pitch_prerequisites_missing',
+            plannedAction: draftMessages,
+            llmEmittedStage: parsed.stage
+          });
+
+          if (recovery.recovered) {
+            const recoveryQuality = scoreVoiceQualityGroup(
+              recovery.messages,
+              buildVoiceQualityOptions(
+                recovery.messages.length || 1,
+                recovery.capitalOutcome === 'failed' ? 'failed' : undefined
+              )
+            );
+            const recoveryPassed =
+              recoveryQuality.passed && recoveryQuality.hardFails.length === 0;
+
+            if (recoveryPassed) {
+              parsed.message = recovery.reply;
+              parsed.messages = recovery.messages;
+              parsed.format = 'text';
+              parsed.stage = recovery.stage;
+              parsed.subStage = recovery.subStage;
+              parsed.stageConfidence = 1;
+              parsed.stallType = null;
+              parsed.softExit = false;
+              parsed.escalateToHuman = false;
+              parsed.voiceNoteAction = null;
+              finalQualityScore = recoveryQuality.score;
+              preGenerationRecovery = recovery;
+              if (attempt === 0) qualityGatePassedFirstAttempt = true;
+              console.warn(
+                `[ai-engine] Script-step skip prevented for convo ${activeConversationId}: ${recovery.reason}`
+              );
+              break;
+            }
+
+            await markSelfRecoveryEventFailed(
+              recovery.eventId,
+              `quality_gate_failed:${recoveryQuality.hardFails.join(',') || 'score'}`
+            );
+            parsed.escalateToHuman = true;
+            parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
+            console.warn(
+              `[ai-engine] Script-step skip recovery rejected by voice gate for convo ${activeConversationId}: ${recoveryQuality.hardFails.join(', ') || 'score'}`
+            );
+            break;
+          }
+
+          parsed.escalateToHuman = true;
+          parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
+          console.warn(
+            `[ai-engine] Script-step skip detected but recovery failed for convo ${activeConversationId}: ${recovery.reason}`
+          );
+          break;
+        } catch (err) {
+          console.error(
+            '[ai-engine] Script-step skip prevention failed (non-fatal):',
+            err
+          );
+        }
+      }
+    }
 
     // 5. Voice quality gate — runs per-bubble via scoreVoiceQualityGroup.
     // For single-message responses (flag-off persona), parsed.messages is
@@ -2338,6 +2457,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let selfRecoveryEventId: string | null = null;
   let selfRecoveryReason: string | null = null;
   let selfRecoveryCapitalOutcome: CapitalOutcome | null = null;
+  if (preGenerationRecovery?.recovered) {
+    selfRecovered = true;
+    selfRecoveryEventId = preGenerationRecovery.eventId;
+    selfRecoveryReason = preGenerationRecovery.reason;
+    selfRecoveryCapitalOutcome = preGenerationRecovery.capitalOutcome;
+    if (
+      scriptStateSnapshot &&
+      (preGenerationRecovery.systemStage ||
+        preGenerationRecovery.currentScriptStep)
+    ) {
+      scriptStateSnapshot = {
+        ...scriptStateSnapshot,
+        systemStage: preGenerationRecovery.systemStage,
+        currentScriptStep:
+          preGenerationRecovery.currentScriptStep ??
+          scriptStateSnapshot.currentScriptStep
+      };
+    }
+  }
 
   // Martin/Chileshe class fix: if the LLM is about to stall or escalate,
   // consult the script state machine first. Deterministic recovery output

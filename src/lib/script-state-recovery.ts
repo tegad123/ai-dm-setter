@@ -22,7 +22,7 @@ export interface CapturedDataPoint<T = unknown> {
 
 export type CapturedDataPoints = Record<string, CapturedDataPoint | undefined>;
 
-type ScriptWithRecovery = Prisma.ScriptGetPayload<{
+export type ScriptWithRecovery = Prisma.ScriptGetPayload<{
   include: {
     steps: {
       include: {
@@ -37,7 +37,7 @@ type ScriptWithRecovery = Prisma.ScriptGetPayload<{
   };
 }>;
 
-type ScriptStepWithRecovery = ScriptWithRecovery['steps'][number];
+export type ScriptStepWithRecovery = ScriptWithRecovery['steps'][number];
 
 type PersonaForRecovery = {
   minimumCapitalRequired: number | null;
@@ -80,6 +80,17 @@ export interface RecoveryResult {
   currentScriptStep: number | null;
 }
 
+export interface ScriptStepSkipCheck {
+  skip: boolean;
+  plannedStep: ScriptStepWithRecovery | null;
+  plannedStepNumber: number | null;
+  plannedStepKey: string | null;
+  plannedActionKind: string | null;
+  missingSteps: ScriptStepWithRecovery[];
+  recoveryStep: ScriptStepWithRecovery | null;
+  reason: string | null;
+}
+
 const HIGH_CONFIDENCE = 'HIGH';
 const RECOVERY_SUCCESS_STATUSES = [
   'SUCCEEDED',
@@ -116,6 +127,12 @@ function pointValue<T = unknown>(
 function pointIsHigh(points: CapturedDataPoints, key: string): boolean {
   const point = points[key];
   return isCapturedDataPoint(point) && point.confidence === HIGH_CONFIDENCE;
+}
+
+function pointIsPresent(points: CapturedDataPoints, key: string): boolean {
+  const point = points[key];
+  if (!isCapturedDataPoint(point)) return false;
+  return point.confidence === HIGH_CONFIDENCE && point.value !== null;
 }
 
 function setPoint<T>(
@@ -629,6 +646,337 @@ export function computeSystemStage(
   };
 }
 
+const STEP_INFERENCE_PATTERNS: Record<string, RegExp[]> = {
+  SOFT_PITCH: [
+    /(quick\s+)?call with (my right hand|anthony)/i,
+    /break (it|that) down/i,
+    /game ?plan/i,
+    /would you be (open|down) (to|for)/i,
+    /\bhop on (a )?(quick )?(call|chat)\b/i,
+    /\bjump on (a )?(quick )?(call|chat)\b/i
+  ],
+  APPLICATION_SEND: [
+    /typeform|form\.typeform/i,
+    /fill (this|it) out/i,
+    /\bapplication\b/i
+  ],
+  CAPITAL_QUALIFICATION: [
+    /capital situation/i,
+    /(have|got).{0,20}(set aside|liquid)/i,
+    /at least.{0,10}(usd|\$)/i,
+    /\bcapital\b.{0,25}\b(markets|trading|mentorship|education)\b/i
+  ],
+  DOWNSELL_DELIVERY: [
+    /whop\.com/i,
+    /session liquidity/i,
+    /self.?paced/i,
+    /\bcourse link\b/i
+  ],
+  BOOKING_CONFIRM: [
+    /\bbooking\b/i,
+    /(monday|tuesday|wednesday|thursday|friday|saturday|sunday).{0,30}(am|pm)/i,
+    /\bscheduled\b/i
+  ]
+};
+
+function normalizedStepKey(step: ScriptStepWithRecovery | null | undefined) {
+  const raw = step?.stateKey || step?.title || '';
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function stepMatchesAnyKey(
+  step: ScriptStepWithRecovery,
+  keys: string[]
+): boolean {
+  const key = normalizedStepKey(step);
+  const title = step.title.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return keys.some(
+    (candidate) => key === candidate || title.includes(candidate)
+  );
+}
+
+function findStepForActionKind(
+  script: ScriptWithRecovery | null,
+  kind: string
+): ScriptStepWithRecovery | null {
+  const steps = script?.steps ?? [];
+  if (kind === 'CAPITAL_QUALIFICATION') {
+    return (
+      steps.find((step) =>
+        stepMatchesAnyKey(step, [
+          'CAPITAL_QUALIFICATION',
+          'FINANCIAL_SCREENING'
+        ])
+      ) ??
+      steps.find((step) =>
+        /capital/i.test(step.canonicalQuestion || step.title || '')
+      ) ??
+      null
+    );
+  }
+
+  if (kind === 'APPLICATION_SEND') {
+    return (
+      steps.find((step) => step.artifactField === 'applicationFormUrl') ??
+      steps.find((step) =>
+        stepMatchesAnyKey(step, ['SEND_APPLICATION_LINK'])
+      ) ??
+      null
+    );
+  }
+
+  if (kind === 'DOWNSELL_DELIVERY') {
+    return (
+      steps.find((step) => step.artifactField === 'downsellUrl') ??
+      steps.find((step) => stepMatchesAnyKey(step, ['FUNDING_OR_DOWNSELL'])) ??
+      null
+    );
+  }
+
+  if (kind === 'BOOKING_CONFIRM') {
+    return (
+      steps.find((step) =>
+        stepMatchesAnyKey(step, ['CONFIRM_BOOKING', 'BOOKING_CONFIRM'])
+      ) ??
+      steps.find((step) => /booking/i.test(step.title)) ??
+      null
+    );
+  }
+
+  if (kind === 'SOFT_PITCH') {
+    return (
+      steps.find((step) =>
+        stepMatchesAnyKey(step, [
+          'SOFT_PITCH',
+          'SOFT_PITCH_COMMITMENT',
+          'CALL_PITCH'
+        ])
+      ) ??
+      // Some parsed scripts do not have an explicit soft-pitch step yet.
+      // Treat the application/call handoff as the planned forward step so
+      // capital qualification still blocks an early call pitch.
+      findStepForActionKind(script, 'APPLICATION_SEND')
+    );
+  }
+
+  return null;
+}
+
+export function inferStepFromAction(params: {
+  script: ScriptWithRecovery | null;
+  action: string | string[] | null | undefined;
+}): {
+  step: ScriptStepWithRecovery;
+  stepNumber: number;
+  stepKey: string;
+  actionKind: string;
+} | null {
+  const text = Array.isArray(params.action)
+    ? params.action.join('\n')
+    : params.action || '';
+  if (!text.trim()) return null;
+
+  for (const [kind, patterns] of Object.entries(STEP_INFERENCE_PATTERNS)) {
+    if (!patterns.some((pattern) => pattern.test(text))) continue;
+    const step = findStepForActionKind(params.script, kind);
+    if (!step) continue;
+    return {
+      step,
+      stepNumber: step.stepNumber,
+      stepKey: kind === 'SOFT_PITCH' ? 'SOFT_PITCH' : normalizedStepKey(step),
+      actionKind: kind
+    };
+  }
+
+  return null;
+}
+
+function stepRequiresRecovery(step: ScriptStepWithRecovery): boolean {
+  const actionType = inferActionType(step);
+  return actionType === 'ASK_QUESTION' || actionType === 'ROUTE_DECISION';
+}
+
+export function collectPrerequisiteDataPointsBeforeStep(params: {
+  script: ScriptWithRecovery | null;
+  targetStepNumber: number;
+}): string[] {
+  const fields = new Set<string>();
+  const steps = (params.script?.steps ?? []).filter(
+    (step) => step.stepNumber < params.targetStepNumber
+  );
+
+  for (const step of steps) {
+    const required = Array.isArray(step.requiredDataPoints)
+      ? step.requiredDataPoints
+      : [];
+    for (const field of required) {
+      if (typeof field === 'string' && field.trim()) fields.add(field.trim());
+    }
+
+    const rule = ruleRecord(step);
+    const ruleFields = Array.isArray(rule.fields) ? rule.fields : [];
+    for (const field of ruleFields) {
+      if (typeof field === 'string' && field.trim()) fields.add(field.trim());
+    }
+  }
+
+  return Array.from(fields);
+}
+
+export function validateStepPrerequisites(params: {
+  snapshot: ScriptStateSnapshot | null;
+  targetStepNumber: number | null | undefined;
+}): { allowed: boolean; missingPrerequisites: string[] } {
+  const snapshot = params.snapshot;
+  if (!snapshot || !params.targetStepNumber) {
+    return { allowed: true, missingPrerequisites: [] };
+  }
+
+  const prerequisites = collectPrerequisiteDataPointsBeforeStep({
+    script: snapshot.script,
+    targetStepNumber: params.targetStepNumber
+  });
+  const missing = prerequisites.filter((field) => {
+    if (field === 'verifiedCapitalUsd') {
+      return (
+        !pointIsPresent(snapshot.capturedDataPoints, 'verifiedCapitalUsd') &&
+        pointValue<boolean>(
+          snapshot.capturedDataPoints,
+          'capitalThresholdMet'
+        ) !== true
+      );
+    }
+    return !pointIsPresent(snapshot.capturedDataPoints, field);
+  });
+
+  return { allowed: missing.length === 0, missingPrerequisites: missing };
+}
+
+export function validateSoftPitchPrerequisites(params: {
+  snapshot: ScriptStateSnapshot | null;
+  action: string | string[] | null | undefined;
+}): { allowed: boolean; missingPrerequisites: string[] } {
+  const inferred = inferStepFromAction({
+    script: params.snapshot?.script ?? null,
+    action: params.action
+  });
+  if (!inferred || inferred.actionKind !== 'SOFT_PITCH') {
+    return { allowed: true, missingPrerequisites: [] };
+  }
+  return validateStepPrerequisites({
+    snapshot: params.snapshot,
+    targetStepNumber: inferred.stepNumber
+  });
+}
+
+export function detectAttemptedStepSkip(params: {
+  snapshot: ScriptStateSnapshot | null;
+  plannedAction: string | string[] | null | undefined;
+}): ScriptStepSkipCheck {
+  const snapshot = params.snapshot;
+  const currentStep = snapshot?.currentStep ?? null;
+  const inferred = inferStepFromAction({
+    script: snapshot?.script ?? null,
+    action: params.plannedAction
+  });
+  if (!snapshot?.script || !currentStep || !inferred) {
+    return {
+      skip: false,
+      plannedStep: inferred?.step ?? null,
+      plannedStepNumber: inferred?.stepNumber ?? null,
+      plannedStepKey: inferred?.stepKey ?? null,
+      plannedActionKind: inferred?.actionKind ?? null,
+      missingSteps: [],
+      recoveryStep: null,
+      reason: null
+    };
+  }
+
+  const plannedStepNumber = inferred.stepNumber;
+  if (plannedStepNumber <= currentStep.stepNumber) {
+    return {
+      skip: false,
+      plannedStep: inferred.step,
+      plannedStepNumber,
+      plannedStepKey: inferred.stepKey,
+      plannedActionKind: inferred.actionKind,
+      missingSteps: [],
+      recoveryStep: null,
+      reason: null
+    };
+  }
+
+  const candidateMissing = [
+    currentStep,
+    ...snapshot.script.steps.filter(
+      (step) =>
+        step.stepNumber > currentStep.stepNumber &&
+        step.stepNumber < plannedStepNumber
+    )
+  ].filter((step) => !isStepComplete(step, snapshot.capturedDataPoints));
+
+  const missingSteps = candidateMissing.length
+    ? candidateMissing
+    : [currentStep];
+  const recoveryStep =
+    missingSteps.find((step) => stepRequiresRecovery(step)) ?? missingSteps[0];
+
+  return {
+    skip: true,
+    plannedStep: inferred.step,
+    plannedStepNumber,
+    plannedStepKey: inferred.stepKey,
+    plannedActionKind: inferred.actionKind,
+    missingSteps,
+    recoveryStep,
+    reason: `planned_${inferred.stepKey}_before_${normalizedStepKey(recoveryStep)}`
+  };
+}
+
+export function detectMidConversationStepSkip(params: {
+  snapshot: ScriptStateSnapshot | null;
+  history: ScriptHistoryMessage[];
+}): ScriptStepSkipCheck {
+  const snapshot = params.snapshot;
+  const currentStepNumber = snapshot?.currentStep?.stepNumber ?? null;
+  if (!snapshot?.script || !currentStepNumber) {
+    return detectAttemptedStepSkip({ snapshot, plannedAction: null });
+  }
+
+  const setterMessages = sortedHistory(params.history).filter(
+    (message) => message.sender === 'AI'
+  );
+  let best: ScriptStepSkipCheck | null = null;
+
+  for (const message of setterMessages) {
+    const check = detectAttemptedStepSkip({
+      snapshot,
+      plannedAction: message.content
+    });
+    if (!check.skip || !check.plannedStepNumber) continue;
+    if (!best || check.plannedStepNumber > (best.plannedStepNumber ?? 0)) {
+      best = check;
+    }
+  }
+
+  return (
+    best ?? {
+      skip: false,
+      plannedStep: null,
+      plannedStepNumber: null,
+      plannedStepKey: null,
+      plannedActionKind: null,
+      missingSteps: [],
+      recoveryStep: null,
+      reason: null
+    }
+  );
+}
+
 export async function prepareScriptState(params: {
   accountId: string;
   conversationId: string;
@@ -1133,6 +1481,475 @@ async function createRecoveryEvent(params: {
   });
 }
 
+function jsonStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+async function loadBridgingTemplates(params: {
+  accountId: string;
+  scriptId: string | null;
+  currentStepKey: string;
+  skippedAheadStepKey: string;
+}): Promise<string[]> {
+  const rows = await prisma.bridgingMessageTemplate.findMany({
+    where: {
+      isActive: true,
+      currentStepKey: params.currentStepKey,
+      skippedAheadStepKey: params.skippedAheadStepKey,
+      OR: [
+        { accountId: params.accountId, scriptId: params.scriptId },
+        { accountId: params.accountId, scriptId: null },
+        { accountId: null, scriptId: params.scriptId },
+        { accountId: null, scriptId: null }
+      ]
+    },
+    orderBy: [
+      { accountId: 'desc' },
+      { scriptId: 'desc' },
+      { updatedAt: 'desc' }
+    ]
+  });
+  for (const row of rows) {
+    const templates = jsonStringArray(row.templates);
+    if (templates.length > 0) return templates;
+  }
+  return [];
+}
+
+async function buildBridgingMessages(params: {
+  accountId: string;
+  snapshot: ScriptStateSnapshot;
+  currentStep: ScriptStepWithRecovery;
+  skippedAheadStep: ScriptStepWithRecovery | null;
+  skippedAheadStepKey: string | null;
+}): Promise<string[]> {
+  const currentStepKey = normalizedStepKey(params.currentStep);
+  const skippedAheadStepKey =
+    params.skippedAheadStepKey ||
+    normalizedStepKey(params.skippedAheadStep) ||
+    'UNKNOWN';
+  const templates = await loadBridgingTemplates({
+    accountId: params.accountId,
+    scriptId: params.snapshot.script?.id ?? null,
+    currentStepKey,
+    skippedAheadStepKey
+  });
+  const selected = templates[0]?.trim();
+  if (selected) return normalizeRecoveryMessages([selected]);
+
+  const canonical =
+    params.currentStep.canonicalQuestion ||
+    params.currentStep.actions.find(
+      (action) => action.actionType === 'ask_question'
+    )?.content ||
+    null;
+  return normalizeRecoveryMessages(canonical ? [canonical] : []);
+}
+
+async function distressBypassesRecovery(params: {
+  accountId: string;
+  snapshot: ScriptStateSnapshot;
+  history: ScriptHistoryMessage[];
+  triggerReason: string;
+  llmEmittedStage?: string | null;
+}): Promise<RecoveryResult | null> {
+  const latestLead = [...params.history]
+    .reverse()
+    .find((m) => m.sender === 'LEAD');
+  if (!latestLead) return null;
+  try {
+    const { detectDistress } = await import('@/lib/distress-detector');
+    const distress = detectDistress(latestLead.content);
+    if (!distress.detected) return null;
+    await createRecoveryEvent({
+      accountId: params.accountId,
+      snapshot: params.snapshot,
+      step: params.snapshot.currentStep,
+      triggerReason: params.triggerReason,
+      recoveryAction: null,
+      status: 'FAILED',
+      failureReason: 'distress_bypass',
+      priority: 'HOT',
+      metadata: {
+        distressLabel: distress.label,
+        distressMatch: distress.match
+      },
+      llmEmittedStage: params.llmEmittedStage ?? null
+    }).catch(() => null);
+    return {
+      recovered: false,
+      messages: [],
+      reply: '',
+      stage: '',
+      subStage: null,
+      capitalOutcome: 'not_evaluated',
+      recoveryAction: null,
+      reason: 'distress_bypass',
+      eventId: null,
+      priority: 'HOT',
+      systemStage: params.snapshot.systemStage,
+      currentScriptStep: params.snapshot.currentScriptStep
+    };
+  } catch {
+    return null;
+  }
+}
+
+function priorityForSkipRecovery(
+  history: ScriptHistoryMessage[]
+): RecoveryPriority {
+  const latest = sortedHistory(history).at(-1);
+  const latestMs = latest ? new Date(latest.timestamp).getTime() : 0;
+  const hoursSinceLatest = latestMs
+    ? (Date.now() - latestMs) / (60 * 60 * 1000)
+    : Infinity;
+  return hoursSinceLatest <= 2 ? 'HOT' : 'MEDIUM';
+}
+
+function recoveryStepAlreadyAsked(
+  step: ScriptStepWithRecovery,
+  history: ScriptHistoryMessage[]
+): boolean {
+  if (inferActionType(step) !== 'ASK_QUESTION') return false;
+  const stepKey = normalizedStepKey(step);
+  const canonical = step.canonicalQuestion?.trim().toLowerCase() || '';
+  const setterMessages = sortedHistory(history).filter(
+    (message) => message.sender === 'AI' || message.sender === 'HUMAN'
+  );
+
+  return setterMessages.some((message) => {
+    const content = message.content.trim().toLowerCase();
+    if (!content) return false;
+    if (stepKey === 'CAPITAL_QUALIFICATION') {
+      return containsCapitalQuestion(message.content);
+    }
+    if (canonical && content.includes(canonical.slice(0, 60))) {
+      return true;
+    }
+    return false;
+  });
+}
+
+export async function attemptStepSkipRecovery(params: {
+  accountId: string;
+  conversationId: string;
+  history: ScriptHistoryMessage[];
+  triggerReason: string;
+  plannedAction?: string | string[] | null;
+  llmEmittedStage?: string | null;
+  approvalMode?: boolean;
+}): Promise<RecoveryResult> {
+  const snapshot = await prepareScriptState({
+    accountId: params.accountId,
+    conversationId: params.conversationId,
+    history: params.history
+  });
+
+  const distress = await distressBypassesRecovery({
+    accountId: params.accountId,
+    snapshot,
+    history: params.history,
+    triggerReason: params.triggerReason,
+    llmEmittedStage: params.llmEmittedStage ?? null
+  });
+  if (distress) return distress;
+
+  const skipCheck =
+    params.plannedAction !== undefined
+      ? detectAttemptedStepSkip({
+          snapshot,
+          plannedAction: params.plannedAction
+        })
+      : detectMidConversationStepSkip({
+          snapshot,
+          history: params.history
+        });
+
+  if (
+    !snapshot.script ||
+    !snapshot.currentStep ||
+    !snapshot.leadId ||
+    !skipCheck.skip ||
+    !skipCheck.recoveryStep
+  ) {
+    return {
+      recovered: false,
+      messages: [],
+      reply: '',
+      stage: '',
+      subStage: null,
+      capitalOutcome: 'not_evaluated',
+      recoveryAction: null,
+      reason: skipCheck.reason || 'no_skip_detected_use_normal_recovery',
+      eventId: null,
+      priority: 'LOW',
+      systemStage: snapshot.systemStage,
+      currentScriptStep: snapshot.currentScriptStep
+    };
+  }
+
+  const [conversationCount, stepCount] = await Promise.all([
+    prisma.selfRecoveryEvent.count({
+      where: {
+        conversationId: params.conversationId,
+        status: { in: RECOVERY_SUCCESS_STATUSES }
+      }
+    }),
+    prisma.selfRecoveryEvent.count({
+      where: {
+        conversationId: params.conversationId,
+        stepNumber: skipCheck.recoveryStep.stepNumber,
+        status: { in: RECOVERY_SUCCESS_STATUSES }
+      }
+    })
+  ]);
+  if (conversationCount >= 2 || stepCount >= 1) {
+    const event = await createRecoveryEvent({
+      accountId: params.accountId,
+      snapshot,
+      step: skipCheck.recoveryStep,
+      triggerReason: 'recovery_circuit_breaker',
+      recoveryAction: null,
+      status: 'FAILED',
+      failureReason: 'recovery_circuit_breaker',
+      priority: 'HOT',
+      metadata: {
+        recoveryCountForConversation: conversationCount,
+        recoveryCountForCurrentStep: stepCount,
+        circuitBreakerTriggered: true,
+        plannedStep: skipCheck.plannedStepKey,
+        missingSteps: skipCheck.missingSteps.map(normalizedStepKey)
+      },
+      llmEmittedStage: params.llmEmittedStage ?? null
+    }).catch(() => null);
+    return {
+      recovered: false,
+      messages: [],
+      reply: '',
+      stage: '',
+      subStage: null,
+      capitalOutcome: 'not_evaluated',
+      recoveryAction: null,
+      reason: 'recovery_circuit_breaker',
+      eventId: event?.id ?? null,
+      priority: 'HOT',
+      systemStage: snapshot.systemStage,
+      currentScriptStep: snapshot.currentScriptStep
+    };
+  }
+
+  const actionType = inferActionType(skipCheck.recoveryStep);
+  let messages: string[] = [];
+  let recoveryAction = 'EMIT_BRIDGING_REQUALIFICATION';
+  let artifactField: string | null = null;
+
+  if (recoveryStepAlreadyAsked(skipCheck.recoveryStep, params.history)) {
+    return {
+      recovered: false,
+      messages: [],
+      reply: '',
+      stage: '',
+      subStage: null,
+      capitalOutcome: 'not_evaluated',
+      recoveryAction: null,
+      reason: 'recovery_step_already_asked_wait_for_answer',
+      eventId: null,
+      priority: priorityForSkipRecovery(params.history),
+      systemStage: snapshot.systemStage,
+      currentScriptStep: skipCheck.recoveryStep.stepNumber
+    };
+  }
+
+  if (actionType === 'ASK_QUESTION') {
+    messages = await buildBridgingMessages({
+      accountId: params.accountId,
+      snapshot,
+      currentStep: skipCheck.recoveryStep,
+      skippedAheadStep: skipCheck.plannedStep,
+      skippedAheadStepKey: skipCheck.plannedStepKey
+    });
+  } else {
+    const deterministic = buildDeterministicAction({
+      snapshot,
+      step: skipCheck.recoveryStep
+    });
+    if ('failed' in deterministic) {
+      const event = await createRecoveryEvent({
+        accountId: params.accountId,
+        snapshot,
+        step: skipCheck.recoveryStep,
+        triggerReason: params.triggerReason,
+        recoveryAction: null,
+        status: 'FAILED',
+        failureReason: deterministic.reason,
+        priority: 'HOT',
+        metadata: {
+          plannedStep: skipCheck.plannedStepKey,
+          missingSteps: skipCheck.missingSteps.map(normalizedStepKey)
+        },
+        llmEmittedStage: params.llmEmittedStage ?? null
+      }).catch(() => null);
+      return {
+        recovered: false,
+        messages: [],
+        reply: '',
+        stage: '',
+        subStage: null,
+        capitalOutcome: 'not_evaluated',
+        recoveryAction: null,
+        reason: deterministic.reason,
+        eventId: event?.id ?? null,
+        priority: 'HOT',
+        systemStage: snapshot.systemStage,
+        currentScriptStep: snapshot.currentScriptStep
+      };
+    }
+    messages = deterministic.messages;
+    recoveryAction = deterministic.actionType;
+    artifactField = deterministic.artifactField;
+  }
+
+  const normalizedMessages = normalizeRecoveryMessages(messages);
+  if (normalizedMessages.length === 0) {
+    const event = await createRecoveryEvent({
+      accountId: params.accountId,
+      snapshot,
+      step: skipCheck.recoveryStep,
+      triggerReason: params.triggerReason,
+      recoveryAction: null,
+      status: 'FAILED',
+      failureReason: 'bridging_message_empty',
+      priority: 'HOT',
+      metadata: {
+        plannedStep: skipCheck.plannedStepKey,
+        missingSteps: skipCheck.missingSteps.map(normalizedStepKey)
+      },
+      llmEmittedStage: params.llmEmittedStage ?? null
+    }).catch(() => null);
+    return {
+      recovered: false,
+      messages: [],
+      reply: '',
+      stage: '',
+      subStage: null,
+      capitalOutcome: 'not_evaluated',
+      recoveryAction: null,
+      reason: 'bridging_message_empty',
+      eventId: event?.id ?? null,
+      priority: 'HOT',
+      systemStage: snapshot.systemStage,
+      currentScriptStep: snapshot.currentScriptStep
+    };
+  }
+
+  const priority = priorityForSkipRecovery(params.history);
+  const stageInfo = stageForRecovery(
+    artifactField,
+    actionType,
+    snapshot.capturedDataPoints
+  );
+  const event = await createRecoveryEvent({
+    accountId: params.accountId,
+    snapshot,
+    step: skipCheck.recoveryStep,
+    triggerReason: params.triggerReason,
+    recoveryAction,
+    status: params.approvalMode ? 'PENDING_APPROVAL' : 'SUCCEEDED',
+    priority,
+    generatedMessages: normalizedMessages,
+    metadata: {
+      recoveryCountForConversation: conversationCount + 1,
+      recoveryCountForCurrentStep: stepCount + 1,
+      circuitBreakerTriggered: false,
+      plannedStep: skipCheck.plannedStepKey,
+      plannedStepNumber: skipCheck.plannedStepNumber,
+      plannedActionKind: skipCheck.plannedActionKind,
+      missingSteps: skipCheck.missingSteps.map(normalizedStepKey),
+      sourceDataPoints: snapshot.capturedDataPoints
+    },
+    llmEmittedStage: params.llmEmittedStage ?? null
+  });
+
+  if (params.approvalMode) {
+    await prisma.aISuggestion
+      .create({
+        data: {
+          conversationId: params.conversationId,
+          accountId: params.accountId,
+          responseText: normalizedMessages[0] || '',
+          messageBubbles:
+            normalizedMessages.length > 1
+              ? (normalizedMessages as Prisma.InputJsonValue)
+              : undefined,
+          bubbleCount: normalizedMessages.length || 1,
+          retrievalTier: null,
+          qualityGateAttempts: 1,
+          qualityGateScore: null,
+          qualityGatePassedFirstAttempt: true,
+          intentClassification: 'mid_conversation_requalification',
+          intentConfidence: null,
+          leadStageSnapshot: null,
+          leadTypeSnapshot: null,
+          aiStageReported: stageInfo.stage,
+          aiSubStageReported: stageInfo.subStage,
+          capitalOutcome: stageInfo.capitalOutcome,
+          generatedDuringTrainingPhase: false,
+          modelUsed: 'script-step-skip-recovery'
+        }
+      })
+      .catch((err) =>
+        console.error(
+          '[script-state] skip-recovery AISuggestion create failed:',
+          err
+        )
+      );
+  } else {
+    await prisma.conversation
+      .update({
+        where: { id: params.conversationId },
+        data: { selfRecoveryCount: { increment: 1 } }
+      })
+      .catch((err) =>
+        console.error('[script-state] selfRecoveryCount update failed:', err)
+      );
+  }
+
+  return {
+    recovered: true,
+    messages: normalizedMessages,
+    reply: normalizedMessages[0] || '',
+    stage: stageInfo.stage,
+    subStage: stageInfo.subStage,
+    capitalOutcome: stageInfo.capitalOutcome,
+    recoveryAction,
+    reason: `Mid-conversation skip detected: attempted ${skipCheck.plannedStepKey} before completing ${normalizedStepKey(skipCheck.recoveryStep)}`,
+    eventId: event.id,
+    priority,
+    systemStage: snapshot.systemStage,
+    currentScriptStep: skipCheck.recoveryStep.stepNumber
+  };
+}
+
+export async function attemptMidConversationRequalification(params: {
+  accountId: string;
+  conversationId: string;
+  history: ScriptHistoryMessage[];
+  triggerReason?: string;
+  llmEmittedStage?: string | null;
+  approvalMode?: boolean;
+}): Promise<RecoveryResult> {
+  return attemptStepSkipRecovery({
+    accountId: params.accountId,
+    conversationId: params.conversationId,
+    history: params.history,
+    triggerReason: params.triggerReason || 'mid_conversation_requalification',
+    llmEmittedStage: params.llmEmittedStage ?? null,
+    approvalMode: params.approvalMode
+  });
+}
+
 export async function markSelfRecoveryEventFailed(
   eventId: string | null | undefined,
   failureReason: string
@@ -1475,6 +2292,22 @@ export async function applyStageOverride(params: {
       finalStage: 'UNQUALIFIED',
       capitalOutcome: 'failed',
       reason: 'capital_below_threshold_explicit'
+    };
+  }
+
+  if (
+    /^(QUALIFIED|BOOKED|BOOKING|CALL_PROPOSED|SEND_APPLICATION_LINK)$/i.test(
+      llmStage || params.currentStage || ''
+    ) &&
+    verifiedCapital === null
+  ) {
+    return {
+      finalStage: 'QUALIFYING',
+      capitalOutcome:
+        params.capitalOutcome === 'passed'
+          ? 'not_evaluated'
+          : params.capitalOutcome,
+      reason: 'cannot_be_qualified_without_capital_verification'
     };
   }
 

@@ -9,8 +9,11 @@
 
 import prisma from '@/lib/prisma';
 import {
+  attemptMidConversationRequalification,
   attemptSelfRecovery,
+  detectMidConversationStepSkip,
   isSelfRecoveryTrigger,
+  prepareScriptState,
   type ScriptHistoryMessage
 } from '@/lib/script-state-recovery';
 
@@ -18,6 +21,7 @@ const LOOKBACK_DAYS = Number(process.env.RECOVERY_SWEEP_LOOKBACK_DAYS || 7);
 const HUMAN_PICKUP_GRACE_HOURS = Number(
   process.env.RECOVERY_SWEEP_HUMAN_GRACE_HOURS || 4
 );
+const TARGET_HANDLE = process.env.RECOVERY_SWEEP_HANDLE?.replace(/^@/, '');
 
 async function main() {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
@@ -29,19 +33,60 @@ async function main() {
     where: {
       lastMessageAt: { gte: since },
       distressDetected: false,
-      messages: {
-        some: {
-          sender: 'AI',
-          timestamp: { gte: since },
-          content: {
-            contains: 'double-check',
-            mode: 'insensitive'
+      ...(TARGET_HANDLE
+        ? { lead: { handle: { equals: TARGET_HANDLE, mode: 'insensitive' } } }
+        : {}),
+      OR: [
+        {
+          messages: {
+            some: {
+              sender: 'AI',
+              timestamp: { gte: since },
+              content: {
+                contains: 'double-check',
+                mode: 'insensitive'
+              }
+            }
+          }
+        },
+        { lead: { stage: { in: ['QUALIFIED', 'CALL_PROPOSED'] } } },
+        {
+          messages: {
+            some: {
+              sender: 'AI',
+              timestamp: { gte: since },
+              OR: [
+                {
+                  content: {
+                    contains: 'call with anthony',
+                    mode: 'insensitive'
+                  }
+                },
+                { content: { contains: 'quick call', mode: 'insensitive' } },
+                { content: { contains: 'gameplan', mode: 'insensitive' } },
+                { content: { contains: 'game plan', mode: 'insensitive' } },
+                {
+                  content: {
+                    contains: 'would you be open',
+                    mode: 'insensitive'
+                  }
+                }
+              ]
+            }
           }
         }
-      }
+      ]
     },
     include: {
-      lead: { select: { id: true, accountId: true, name: true, handle: true } },
+      lead: {
+        select: {
+          id: true,
+          accountId: true,
+          name: true,
+          handle: true,
+          stage: true
+        }
+      },
       messages: { orderBy: { timestamp: 'asc' } }
     },
     take: 200
@@ -69,10 +114,6 @@ async function main() {
       escalateToHuman: false,
       stallType: lastAi?.stallType ?? null
     });
-    if (!trigger.triggered) {
-      skipped++;
-      continue;
-    }
 
     const existingPending = await prisma.selfRecoveryEvent.findFirst({
       where: {
@@ -93,14 +134,48 @@ async function main() {
       timestamp: m.timestamp
     }));
 
-    const recovery = await attemptSelfRecovery({
-      accountId: conversation.lead.accountId,
-      conversationId: conversation.id,
-      history,
-      triggerReason: `sweep_${trigger.reason || 'stall_message_detected'}`,
-      llmEmittedStage: lastAi?.stage ?? null,
-      approvalMode: true
-    });
+    let recovery:
+      | Awaited<ReturnType<typeof attemptSelfRecovery>>
+      | Awaited<ReturnType<typeof attemptMidConversationRequalification>>;
+
+    if (trigger.triggered) {
+      recovery = await attemptSelfRecovery({
+        accountId: conversation.lead.accountId,
+        conversationId: conversation.id,
+        history,
+        triggerReason: `sweep_${trigger.reason || 'stall_message_detected'}`,
+        llmEmittedStage: lastAi?.stage ?? null,
+        approvalMode: true
+      });
+    } else {
+      const snapshot = await prepareScriptState({
+        accountId: conversation.lead.accountId,
+        conversationId: conversation.id,
+        history
+      });
+      const skip = detectMidConversationStepSkip({ snapshot, history });
+      const hasCapital =
+        snapshot.capturedDataPoints.verifiedCapitalUsd?.confidence === 'HIGH' ||
+        snapshot.capturedDataPoints.capitalThresholdMet?.value === true;
+      if (
+        !skip.skip &&
+        (conversation.lead.stage !== 'QUALIFIED' || hasCapital)
+      ) {
+        skipped++;
+        continue;
+      }
+
+      recovery = await attemptMidConversationRequalification({
+        accountId: conversation.lead.accountId,
+        conversationId: conversation.id,
+        history,
+        triggerReason: skip.skip
+          ? 'sweep_mid_conversation_step_skip'
+          : 'sweep_stage_qualified_without_capital',
+        llmEmittedStage: lastAi?.stage ?? null,
+        approvalMode: true
+      });
+    }
 
     if (recovery.recovered) {
       created++;

@@ -567,7 +567,11 @@ function renderAttention(
   onDismiss: (convId: string, type: DismissibleActionType) => void
 ): React.ReactNode {
   switch (item.type) {
-    case 'pending_auto_recovery':
+    case 'pending_auto_recovery': {
+      const isMidConversationRecovery =
+        /mid_conversation|step_skip|qualified_without_capital/i.test(
+          item.triggerReason
+        ) || item.recoveryAction === 'EMIT_BRIDGING_REQUALIFICATION';
       return (
         <ActionRow
           key={`recovery-${item.eventId}`}
@@ -581,7 +585,10 @@ function renderAttention(
               <span className='font-medium'>{item.leadName}</span>
               <span className='text-muted-foreground'>
                 {' '}
-                — pending self-recovery approval
+                —{' '}
+                {isMidConversationRecovery
+                  ? 'pending mid-conversation recovery'
+                  : 'pending self-recovery approval'}
                 {item.recoveryAction ? ` (${item.recoveryAction})` : ''}
               </span>
             </span>
@@ -592,6 +599,7 @@ function renderAttention(
           }
         />
       );
+    }
     case 'ai_paused':
       return (
         <ActionRow

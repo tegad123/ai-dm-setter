@@ -6,10 +6,12 @@
 
 import assert from 'node:assert/strict';
 import {
+  detectAttemptedStepSkip,
   evaluateRoutingCondition,
   extractCapturedDataPointsForTest,
   hasExplicitCapitalConstraintSignal,
-  isStepComplete
+  isStepComplete,
+  validateSoftPitchPrerequisites
 } from '@/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
 
@@ -126,6 +128,117 @@ function run() {
     isStepComplete(step, uncertainPoints),
     false,
     'LOW/MEDIUM confidence does not complete the step'
+  );
+
+  const script = {
+    id: 'script_test',
+    steps: [
+      {
+        stepNumber: 8,
+        title: 'Capital Qualification',
+        stateKey: 'CAPITAL_QUALIFICATION',
+        recoveryActionType: 'ASK_QUESTION',
+        canonicalQuestion:
+          'what capital do you have set aside for the markets right now?',
+        artifactField: null,
+        completionRule: {
+          type: 'data_captured',
+          fields: ['verifiedCapitalUsd']
+        },
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [],
+        branches: []
+      },
+      {
+        stepNumber: 9,
+        title: 'Route Based on Capital',
+        stateKey: 'ROUTE_BY_CAPITAL',
+        recoveryActionType: 'ROUTE_DECISION',
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: {
+          type: 'route_decision',
+          field: 'verifiedCapitalUsd'
+        },
+        requiredDataPoints: null,
+        routingRules: {
+          field: 'verifiedCapitalUsd',
+          branches: [
+            {
+              condition: 'value >= minimumCapitalRequired',
+              nextStep: 10
+            }
+          ]
+        },
+        actions: [],
+        branches: []
+      },
+      {
+        stepNumber: 10,
+        title: 'Send Application Link',
+        stateKey: 'SEND_APPLICATION_LINK',
+        recoveryActionType: 'DELIVER_ARTIFACT',
+        canonicalQuestion: null,
+        artifactField: 'applicationFormUrl',
+        completionRule: {
+          type: 'artifact_delivered',
+          field: 'applicationFormUrl'
+        },
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [],
+        branches: []
+      }
+    ]
+  } as any;
+  const missingCapitalSnapshot = {
+    conversationId: 'conv_skip',
+    leadId: 'lead_skip',
+    script,
+    currentStep: script.steps[0],
+    currentScriptStep: 8,
+    systemStage: 'CAPITAL_QUALIFICATION',
+    capturedDataPoints: {},
+    persona: null,
+    reason: 'first_incomplete_step'
+  };
+  const skip = detectAttemptedStepSkip({
+    snapshot: missingCapitalSnapshot,
+    plannedAction: 'would you be open to a quick call with anthony?'
+  });
+  assert.equal(skip.skip, true, 'soft pitch before capital is detected');
+  assert.equal(
+    skip.recoveryStep?.stateKey,
+    'CAPITAL_QUALIFICATION',
+    'skip recovery targets missed capital step'
+  );
+
+  const blockedSoftPitch = validateSoftPitchPrerequisites({
+    snapshot: missingCapitalSnapshot,
+    action: 'would you be open to a quick call with anthony?'
+  });
+  assert.equal(
+    blockedSoftPitch.allowed,
+    false,
+    'soft pitch is blocked when capital prerequisite is missing'
+  );
+  assert.deepEqual(
+    blockedSoftPitch.missingPrerequisites,
+    ['verifiedCapitalUsd'],
+    'missing prerequisite is derived from script completion rules'
+  );
+  const capitalMetSnapshot = {
+    ...missingCapitalSnapshot,
+    capturedDataPoints: martinPoints
+  };
+  assert.equal(
+    validateSoftPitchPrerequisites({
+      snapshot: capitalMetSnapshot,
+      action: 'would you be open to a quick call with anthony?'
+    }).allowed,
+    true,
+    'soft pitch is allowed after high-confidence capital capture'
   );
 
   const recoveryQuality = scoreVoiceQualityGroup([

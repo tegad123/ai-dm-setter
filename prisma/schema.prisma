@@ -319,29 +319,30 @@ model Account {
   updatedAt DateTime @updatedAt
 
   // Relations
-  users                   User[]
-  leads                   Lead[]
-  notifications           Notification[]
-  personas                AIPersona[]
-  trainingExamples        TrainingExample[]
-  trainingUploads         TrainingUpload[]
-  trainingConversations   TrainingConversation[]
-  personaBreakdowns       PersonaBreakdown[]
-  integrations            IntegrationCredential[]
-  tags                    Tag[]
-  teamNotes               TeamNote[]
-  contentAttributions     ContentAttribution[]
-  voiceNoteSlots          VoiceNoteSlot[]
-  voiceNoteLibrary        VoiceNoteLibraryItem[]
-  voiceNoteTimingSettings VoiceNoteTimingSettings?
-  scriptSlots             ScriptSlot[]
-  scripts                 Script[]
-  trainingAnalyses        TrainingDataAnalysis[]
-  aiSuggestions           AISuggestion[]
-  inboundQualifications   InboundQualification[]
-  trainingEvents          TrainingEvent[]
-  mediaProcessingLogs     MediaProcessingLog[]
-  selfRecoveryEvents      SelfRecoveryEvent[]
+  users                    User[]
+  leads                    Lead[]
+  notifications            Notification[]
+  personas                 AIPersona[]
+  trainingExamples         TrainingExample[]
+  trainingUploads          TrainingUpload[]
+  trainingConversations    TrainingConversation[]
+  personaBreakdowns        PersonaBreakdown[]
+  integrations             IntegrationCredential[]
+  tags                     Tag[]
+  teamNotes                TeamNote[]
+  contentAttributions      ContentAttribution[]
+  voiceNoteSlots           VoiceNoteSlot[]
+  voiceNoteLibrary         VoiceNoteLibraryItem[]
+  voiceNoteTimingSettings  VoiceNoteTimingSettings?
+  scriptSlots              ScriptSlot[]
+  scripts                  Script[]
+  bridgingMessageTemplates BridgingMessageTemplate[]
+  trainingAnalyses         TrainingDataAnalysis[]
+  aiSuggestions            AISuggestion[]
+  inboundQualifications    InboundQualification[]
+  trainingEvents           TrainingEvent[]
+  mediaProcessingLogs      MediaProcessingLog[]
+  selfRecoveryEvents       SelfRecoveryEvent[]
 
   // ── Phase 1 super-admin dashboard (2026-04-28) ────────────────
   // Plan billing status (separate from `plan` enum; lifecycle state).
@@ -1722,10 +1723,11 @@ model Script {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
-  account       Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  steps         ScriptStep[]
-  forms         ScriptForm[]
-  leadPositions LeadScriptPosition[]
+  account                  Account                   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  steps                    ScriptStep[]
+  forms                    ScriptForm[]
+  leadPositions            LeadScriptPosition[]
+  bridgingMessageTemplates BridgingMessageTemplate[]
 
   @@index([accountId])
   @@index([accountId, isActive])
@@ -1793,6 +1795,25 @@ model SelfRecoveryEvent {
   @@index([leadId, createdAt(sort: Desc)])
   @@index([status, priority, createdAt])
   @@index([scriptStepId])
+}
+
+model BridgingMessageTemplate {
+  id                  String   @id @default(cuid())
+  accountId           String?
+  scriptId            String?
+  currentStepKey      String
+  skippedAheadStepKey String
+  templates           Json
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  account Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  script  Script?  @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, currentStepKey, skippedAheadStepKey])
+  @@index([scriptId, currentStepKey, skippedAheadStepKey])
+  @@index([currentStepKey, skippedAheadStepKey, isActive])
 }
 
 model ScriptBranch {
