@@ -2622,6 +2622,7 @@ export async function scheduleAIReply(
   try {
     result = await generateReply(
       accountId,
+      conversation.personaId,
       formattedMessages,
       leadContext,
       scoringContext

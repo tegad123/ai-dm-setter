@@ -86,6 +86,25 @@ export async function POST(
       return NextResponse.json({ error: 'Account not found' }, { status: 404 });
     }
 
+    // Onboarding test runs against the account's active persona. There's
+    // no Conversation row yet (the scenarios are synthetic in-memory
+    // turns), so this is the legitimate "active persona" selection
+    // case — not the F3.2 anti-pattern that fires per-turn at runtime.
+    const onboardingPersona = await prisma.aIPersona.findFirst({
+      where: { accountId, isActive: true },
+      select: { id: true },
+      orderBy: { updatedAt: 'desc' }
+    });
+    if (!onboardingPersona) {
+      return NextResponse.json(
+        {
+          error:
+            'No active AIPersona for this account — provision and activate one before running onboarding tests.'
+        },
+        { status: 400 }
+      );
+    }
+
     const results: Array<{
       id: string;
       label: string;
@@ -102,6 +121,7 @@ export async function POST(
       try {
         const result = await generateReply(
           accountId,
+          onboardingPersona.id,
           [
             {
               id: `synthetic-${scenario.id}`,

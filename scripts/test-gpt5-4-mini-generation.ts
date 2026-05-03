@@ -42,6 +42,7 @@ function assert(cond: unknown, label: string, detail?: string) {
 async function withTestAccount<T>(
   run: (ctx: {
     accountId: string;
+    personaId: string;
     leadId: string;
     conversationId: string;
   }) => Promise<T>
@@ -88,6 +89,7 @@ async function withTestAccount<T>(
   try {
     return await run({
       accountId: account.id,
+      personaId: persona.id,
       leadId: lead.id,
       conversationId: conversation.id
     });
@@ -171,12 +173,13 @@ async function main() {
   }
 
   try {
-    await withTestAccount(async ({ accountId, conversationId }) => {
+    await withTestAccount(async ({ accountId, personaId, conversationId }) => {
       const leadCtx = makeLeadContext(`Lead-${accountId.slice(-4)}`);
 
       const history1 = await buildHistory(conversationId);
       const r1 = await generateReply(
         accountId,
+        personaId,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         history1 as any,
         leadCtx
@@ -248,6 +251,7 @@ async function main() {
       const history2 = await buildHistory(conversationId);
       const r2 = await generateReply(
         accountId,
+        personaId,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         history2 as any,
         leadCtx

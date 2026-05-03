@@ -486,12 +486,21 @@ export interface GenerateReplyResult {
 /**
  * Generate an AI reply for a conversation.
  *
- * @param accountId - The account ID (for persona + credential lookup)
- * @param conversationHistory - Full ordered message history
- * @param leadContext - Lead metadata for prompt personalization
+ * @param accountId - The account ID (for credential lookup + account-scoped fields).
+ * @param personaId - The AIPersona that owns this conversation. **Required**
+ *   (audit F3.1). Every caller must source this from `Conversation.personaId`
+ *   on the live conversation, the operator's UI selection, or a test fixture
+ *   that explicitly creates a persona. The engine no longer guesses the
+ *   active persona via `findFirst({accountId, isActive})` — guessing was
+ *   non-deterministic for multi-persona accounts and the root of multiple
+ *   cross-persona context-bleed findings (audit F3.2 closes the read sites
+ *   in the next phase).
+ * @param conversationHistory - Full ordered message history.
+ * @param leadContext - Lead metadata for prompt personalization.
  */
 export async function generateReply(
   accountId: string,
+  personaId: string,
   conversationHistory: ConversationMessage[],
   leadContext: LeadContext,
   scoringContext?: string
@@ -606,6 +615,32 @@ export async function generateReply(
       capitalOutcome: 'not_evaluated',
       typeformFilledNoBooking: true
     };
+  }
+
+  // F3.1 cross-account FK guard. The personaId parameter locks this
+  // turn to the AIPersona that owns Conversation.personaId. F3.2 will
+  // replace every internal findFirst({accountId, isActive}) read with
+  // findUnique({id: personaId}). Until then, eagerly verify the
+  // persona exists AND belongs to accountId so any caller bug surfaces
+  // here instead of later as a cross-persona context bleed.
+  // Placed AFTER the early-exit safety nets (distress, typeform-no-
+  // booking) so synthetic in-memory tests that exit early don't need
+  // a real persona row.
+  {
+    const personaCheck = await prisma.aIPersona.findUnique({
+      where: { id: personaId },
+      select: { accountId: true }
+    });
+    if (!personaCheck) {
+      throw new Error(
+        `[ai-engine] generateReply: AIPersona ${personaId} not found (caller passed accountId=${accountId})`
+      );
+    }
+    if (personaCheck.accountId !== accountId) {
+      throw new Error(
+        `[ai-engine] generateReply: persona ${personaId} belongs to account ${personaCheck.accountId} but generation was called with accountId=${accountId}. Cross-account call rejected.`
+      );
+    }
   }
 
   // 0b. Retrieve few-shot examples from training data (non-fatal)
