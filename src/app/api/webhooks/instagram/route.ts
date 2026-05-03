@@ -199,71 +199,30 @@ async function processInstagramEvents(payload: any): Promise<void> {
           .join(' | ')}`
     );
 
+    // F6.1: Strict account resolution. The previous three fallback
+    // branches (env var → first-account; no creds → first-account;
+    // single-account-by-default) were safe in the cofounder-dogfooding
+    // era but become a cross-tenant leak the moment a second paying
+    // customer onboards. Webhook events for an unknown entry ID must
+    // be rejected (skipped + alerted), not routed to "the oldest
+    // account by createdAt".
     let accountId: string;
-
     if (matchedCred) {
       accountId = matchedCred.accountId;
     } else {
-      // Fallback 1: match via env var
-      const envPageId =
-        process.env.INSTAGRAM_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
-      if (envPageId && envPageId === entryId) {
-        const firstAccount = await prisma.account.findFirst({
-          orderBy: { createdAt: 'asc' },
-          select: { id: true }
-        });
-        if (!firstAccount) {
-          console.warn(`[instagram-webhook] No accounts in DB, skipping entry`);
-          continue;
-        }
-        accountId = firstAccount.id;
-        console.log(
-          `[instagram-webhook] Matched entryId=${entryId} via env var → account=${accountId}`
-        );
-      } else if (allCredentials.length === 0) {
-        // Fallback 2: No credentials at all — use the first account if one exists.
-        // This handles setups where OAuth hasn't been completed yet but the
-        // webhook is already configured in Meta's dashboard.
-        const firstAccount = await prisma.account.findFirst({
-          orderBy: { createdAt: 'asc' },
-          select: { id: true }
-        });
-        if (!firstAccount) {
-          console.warn(`[instagram-webhook] No accounts in DB, skipping entry`);
-          continue;
-        }
-        accountId = firstAccount.id;
-        console.warn(
-          `[instagram-webhook] No credentials found at all — falling back to first account=${accountId} for entryId=${entryId}`
-        );
-      } else {
-        // Fallback 3: Single-account setup — if there's only one distinct account
-        // across all credentials, use it. The entryId mismatch is likely due to
-        // the Instagram Business Account ID not being stored during OAuth.
-        const uniqueAccountIds = Array.from(
-          new Set(allCredentials.map((c) => c.accountId))
-        );
-        if (uniqueAccountIds.length === 1) {
-          accountId = uniqueAccountIds[0];
-          console.warn(
-            `[instagram-webhook] entryId=${entryId} didn't match any stored IDs, ` +
-              `but only one account exists — using account=${accountId}. ` +
-              `Consider re-connecting Instagram to fix the ID mismatch.`
-          );
-        } else {
-          console.error(
-            `[instagram-webhook] No IntegrationCredential found for entryId=${entryId}. ` +
-              `Multiple accounts exist (${uniqueAccountIds.length}), cannot guess which one. ` +
-              `Stored credentials: ${allCredentials
-                .map((c) => {
-                  const m = c.metadata as any;
-                  return `account=${c.accountId} ${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`;
-                })
-                .join(' | ')}`
-          );
-          continue;
-        }
-      }
+      console.error(
+        `[instagram-webhook] REJECTED entryId=${entryId} — no IntegrationCredential matched. ` +
+          `${allCredentials.length} credentials checked. ` +
+          `Stored: ${allCredentials
+            .map((c) => {
+              const m = c.metadata as any;
+              return `account=${c.accountId} ${c.provider}:pageId=${m?.pageId},igUserId=${m?.igUserId},igAcct=${m?.instagramAccountId}`;
+            })
+            .join(' | ')}. ` +
+          `Operator action: re-connect Instagram for the affected account, ` +
+          `or check that Meta is sending events to the correct webhook URL.`
+      );
+      continue;
     }
 
     // ── Gate: skip if no active INSTAGRAM credential for this account ────
