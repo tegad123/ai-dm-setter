@@ -1879,27 +1879,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       // incident). When the LLM emits "[COURSE PAYMENT LINK]" /
       // "[WHOP LINK]" / "[CHECKOUT LINK]" / similar, the gate
       // hard-fails. Generic regen tends to either re-emit the
-      // placeholder OR generate a fake-looking URL. Override gives
-      // the LLM the EXACT Whop checkout URL to paste verbatim.
-      //
-      // URL pulled from the persona's freeValueLink config when
-      // present (operator-controlled), falls back to the daetradez
-      // production URL surfaced in the spec. We don't want to
-      // hardcode account-specific URLs in the engine, so the lookup
-      // happens above in the persona-load path; here we just inject
-      // whichever resolved.
+      // placeholder OR generate a fake-looking URL. Override forces
+      // the LLM to use only configured URLs from the prompt, never an
+      // account-specific fallback baked into application code.
       const courseLinkLeaked = quality.hardFails.some((f) =>
         f.includes('course_link_placeholder_leaked:')
       );
       if (courseLinkLeaked) {
-        // Pull the persona-configured course / payment URL. Schema
-        // doesn't have a dedicated field yet — for now, we use the
-        // operator-provided fallback baked into the directive. The
-        // operator can override via the script's Available Links
-        // section, which is already in the prompt above.
-        const COURSE_URL_FALLBACK =
-          'https://whop.com/checkout/17xvsu5mtr2luz7SrD-UXYx-Rx1U-Q8lg-IBn57oRarBX6/';
-        const courseLinkOverride = `\n\n===== COURSE / PAYMENT LINK PLACEHOLDER LEAK =====\nYour previous reply contained a literal placeholder like "[COURSE PAYMENT LINK]" / "[WHOP LINK]" / "[CHECKOUT LINK]" / "[PAYMENT LINK]" instead of the actual URL. The lead would have seen the raw brackets in their messaging app, not a clickable link.\n\nOn this regen:\n  1. Use the EXACT course / payment URL from the script's "Available Links & URLs" section above. If the script lists one, paste it verbatim.\n  2. If no course URL is listed in the script, the production fallback for this account is:\n       ${COURSE_URL_FALLBACK}\n     Use that exact URL — do not modify it.\n  3. NEVER ship square-bracketed placeholders like [LINK], [URL], [COURSE LINK], [PAYMENT LINK], [WHOP LINK], [CHECKOUT LINK], [BOOKING LINK]. They render literally to the lead.\n  4. The URL is the delivery; the framing words around it are optional. Drop the URL inline or on its own line.\n=====`;
+        const courseLinkOverride = `\n\n===== COURSE / PAYMENT LINK PLACEHOLDER LEAK =====\nYour previous reply contained a literal placeholder like "[COURSE PAYMENT LINK]" / "[WHOP LINK]" / "[CHECKOUT LINK]" / "[PAYMENT LINK]" instead of the actual URL. The lead would have seen the raw brackets in their messaging app, not a clickable link.\n\nOn this regen:\n  1. Use the EXACT course / payment URL from the script's "Available Links & URLs" section above only if a verified URL is listed there. Paste it verbatim.\n  2. If no verified course/payment URL is listed in the script, DO NOT send a course/payment URL. Continue the qualification flow or route to the configured free-value fallback instead.\n  3. NEVER ship square-bracketed placeholders like [LINK], [URL], [COURSE LINK], [PAYMENT LINK], [WHOP LINK], [CHECKOUT LINK], [BOOKING LINK]. They render literally to the lead.\n  4. The URL is the delivery only when it is configured. Never invent or use a fallback checkout URL from memory.\n=====`;
         systemPromptForLLM = baseSystemPrompt + courseLinkOverride;
         console.warn(
           `[ai-engine] Course/payment link placeholder leak detected — forcing regen with real URL (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -5098,6 +5085,10 @@ async function persistR24VerificationState(
     !result.blocked &&
     (result.reason === 'confirmed_amount' ||
       result.reason === 'confirmed_affirmative');
+  const explicitlyUnqualified =
+    result.blocked && result.reason === 'answer_below_threshold';
+  if (!qualified && !explicitlyUnqualified) return;
+
   const status = qualified ? 'VERIFIED_QUALIFIED' : 'VERIFIED_UNQUALIFIED';
   const data: Prisma.ConversationUpdateManyMutationInput = {
     capitalVerificationStatus: status,
@@ -5108,7 +5099,10 @@ async function persistR24VerificationState(
             ? { capitalVerifiedAmount: result.parsedAmount }
             : {})
         }
-      : {})
+      : {
+          capitalVerifiedAt: new Date(),
+          capitalVerifiedAmount: result.parsedAmount ?? 0
+        })
   };
 
   try {

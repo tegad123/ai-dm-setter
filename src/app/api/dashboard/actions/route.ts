@@ -90,6 +90,9 @@ export async function GET(request: NextRequest) {
       pendingRecoveryRows,
       recoveryStatusRows,
       r34FailureRows,
+      silentStopRows,
+      silentStopStatusRows,
+      recentSilentStopRows,
       metadataLeakCandidateMessages
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
@@ -424,6 +427,59 @@ export async function GET(request: NextRequest) {
         }),
         []
       ),
+      // ── INFO: silent-stop heartbeat events ──────────────────────
+      safe(
+        prisma.silentStopEvent.findMany({
+          where: {
+            detectedAt: {
+              gte: new Date(now.getTime() - R34_COUNTER_WINDOW_MS)
+            },
+            conversation: { lead: { accountId } }
+          },
+          select: {
+            recoveryStatus: true,
+            detectedAt: true
+          },
+          orderBy: { detectedAt: 'desc' },
+          take: 500
+        }),
+        []
+      ),
+      safe(
+        prisma.silentStopEvent.groupBy({
+          by: ['recoveryStatus', 'detectedReason'],
+          where: {
+            detectedAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) },
+            conversation: { lead: { accountId } }
+          },
+          _count: true
+        }),
+        []
+      ),
+      safe(
+        prisma.silentStopEvent.findMany({
+          where: {
+            detectedAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) },
+            conversation: { lead: { accountId } }
+          },
+          select: {
+            id: true,
+            detectedAt: true,
+            detectedReason: true,
+            recoveryAction: true,
+            recoveryStatus: true,
+            conversation: {
+              select: {
+                id: true,
+                lead: { select: { id: true, name: true, handle: true } }
+              }
+            }
+          },
+          orderBy: { detectedAt: 'desc' },
+          take: 10
+        }),
+        []
+      ),
       // ── PRIORITY 2.H: historical metadata leak sweep ────────────
       // Coarse DB filter + precise detector in JS. Report-only; no
       // historical message mutation here.
@@ -505,6 +561,19 @@ export async function GET(request: NextRequest) {
       (row) =>
         row.createdAt.getTime() >= now.getTime() - R34_ALERT_WINDOW_MS &&
         JSON.stringify(row.hardFails).includes('r34_metadata_leak')
+    ).length;
+    const silentStopCount24h = silentStopRows.length;
+    const silentStopAutoRecovered24h = silentStopRows.filter(
+      (row) => row.recoveryStatus === 'AUTO_TRIGGERED'
+    ).length;
+    const silentStopOperatorReview24h = silentStopRows.filter(
+      (row) => row.recoveryStatus === 'OPERATOR_REVIEW'
+    ).length;
+    const silentStopFailed24h = silentStopRows.filter(
+      (row) => row.recoveryStatus === 'FAILED'
+    ).length;
+    const silentStopLastHourCount = silentStopRows.filter(
+      (row) => row.detectedAt.getTime() >= now.getTime() - R34_ALERT_WINDOW_MS
     ).length;
 
     // ── Dismissal state ──────────────────────────────────────────────
@@ -1187,6 +1256,32 @@ export async function GET(request: NextRequest) {
             status: row.status,
             triggerReason: row.triggerReason,
             count: row._count
+          }))
+        },
+        {
+          type: 'silent_stop_summary' as const,
+          windowHours: 24,
+          detected: silentStopCount24h,
+          autoRecovered: silentStopAutoRecovered24h,
+          operatorReview: silentStopOperatorReview24h,
+          failed: silentStopFailed24h,
+          alertThresholdExceeded: silentStopLastHourCount > 5,
+          lastHourCount: silentStopLastHourCount,
+          counts: silentStopStatusRows.map((row) => ({
+            recoveryStatus: row.recoveryStatus,
+            detectedReason: row.detectedReason,
+            count: row._count
+          })),
+          recent: recentSilentStopRows.map((row) => ({
+            eventId: row.id,
+            conversationId: row.conversation.id,
+            leadId: row.conversation.lead.id,
+            leadName: row.conversation.lead.name,
+            leadHandle: row.conversation.lead.handle,
+            detectedAt: row.detectedAt.toISOString(),
+            detectedReason: row.detectedReason,
+            recoveryAction: row.recoveryAction,
+            recoveryStatus: row.recoveryStatus
           }))
         }
       ],

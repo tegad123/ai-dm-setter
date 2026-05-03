@@ -1,5 +1,6 @@
 import type { LeadStage, Platform } from '@prisma/client';
 import { transitionLeadStage } from '@/lib/lead-stage';
+import prisma from '@/lib/prisma';
 
 export type CapitalOutcome =
   | 'passed'
@@ -80,6 +81,44 @@ function isFinancialStage(stage: string | null): boolean {
     stage === 'FINANCIAL' ||
     stage === 'CAPITAL_QUALIFICATION'
   );
+}
+
+function capturedPointValue(points: unknown, key: string): unknown {
+  if (!points || typeof points !== 'object') return null;
+  const raw = (points as Record<string, unknown>)[key];
+  if (!raw || typeof raw !== 'object') return raw ?? null;
+  if ('value' in raw) return (raw as { value?: unknown }).value ?? null;
+  return raw;
+}
+
+async function isPrematureUnqualifiedLead(leadId: string): Promise<boolean> {
+  const lead = await prisma.lead
+    .findUnique({
+      where: { id: leadId },
+      select: {
+        conversation: {
+          select: {
+            capitalVerificationStatus: true,
+            capturedDataPoints: true
+          }
+        }
+      }
+    })
+    .catch(() => null);
+  const conversation = lead?.conversation;
+  if (!conversation) return false;
+  if (conversation.capitalVerificationStatus === 'VERIFIED_UNQUALIFIED') {
+    return false;
+  }
+  const thresholdMet = capturedPointValue(
+    conversation.capturedDataPoints,
+    'capitalThresholdMet'
+  );
+  const verifiedCapital = capturedPointValue(
+    conversation.capturedDataPoints,
+    'verifiedCapitalUsd'
+  );
+  return thresholdMet !== false && verifiedCapital !== 0;
 }
 
 export function resolvePlatformAwayMode(
@@ -168,10 +207,18 @@ export async function updateLeadStageFromConversation(
     capitalOutcome === 'passed' &&
     currentStage === 'UNQUALIFIED' &&
     (newStage === 'QUALIFIED' || newStage === 'CALL_PROPOSED');
+  const prematureUnqualifiedRevives =
+    currentStage === 'UNQUALIFIED' &&
+    capitalOutcome !== 'failed' &&
+    (newStage === 'ENGAGED' ||
+      newStage === 'QUALIFYING' ||
+      newStage === 'QUALIFIED') &&
+    (await isPrematureUnqualifiedLead(leadId));
 
   if (
     (newPriority > currentPriority && currentPriority < 10) ||
-    capitalPassedRevivesUnqualified
+    capitalPassedRevivesUnqualified ||
+    prematureUnqualifiedRevives
   ) {
     await transitionLeadStage(
       leadId,

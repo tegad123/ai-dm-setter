@@ -998,6 +998,16 @@ model Conversation {
   stageMismatchCount Int     @default(0)
   selfRecoveryCount  Int     @default(0)
 
+  // ── Silent-stop heartbeat recovery ─────────────────────────────
+  // Set when the latest lead reply is expected to receive an AI turn.
+  // The heartbeat cron scans this state so gate failures, exceptions, or
+  // dead-end classifiers cannot leave a live conversation dark forever.
+  awaitingAiResponse       Boolean   @default(false)
+  awaitingSince            DateTime?
+  silentStopCount          Int       @default(0)
+  lastSilentStopAt         DateTime?
+  silentStopRecoveredCount Int       @default(0)
+
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on
   // this conversation and the lead's first messages identified them
@@ -1065,10 +1075,13 @@ model Conversation {
   scheduledMessages    ScheduledMessage[]
   trainingEvents       TrainingEvent[]
   selfRecoveryEvents   SelfRecoveryEvent[]
+  silentStopEvents     SilentStopEvent[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
   @@index([outcome])
+  @@index([awaitingAiResponse, awaitingSince])
+  @@index([lastSilentStopAt])
   @@index([scheduledCallAt])
   @@index([source, manyChatFiredAt])
   @@index([typeformSubmittedAt])
@@ -1795,6 +1808,33 @@ model SelfRecoveryEvent {
   @@index([leadId, createdAt(sort: Desc)])
   @@index([status, priority, createdAt])
   @@index([scriptStepId])
+}
+
+model SilentStopEvent {
+  id                String   @id @default(cuid())
+  conversationId    String
+  detectedAt        DateTime @default(now())
+  lastLeadMessageAt DateTime
+  silenceDurationMs Int
+
+  // Diagnosis
+  detectedReason    String
+  lastGateViolation String?
+  lastRegenAttempts Int?
+
+  // Recovery
+  recoveryAttempted   Boolean   @default(false)
+  recoveryAction      String?
+  recoveryMessageSent String?   @db.Text
+  recoveryStatus      String    @default("PENDING")
+  triggeredAt         DateTime?
+  resolvedAt          DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([recoveryStatus])
+  @@index([detectedAt])
 }
 
 model BridgingMessageTemplate {

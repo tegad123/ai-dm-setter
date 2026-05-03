@@ -371,7 +371,11 @@ export async function POST(
     // Bump conversation + broadcast.
     const updated = await prisma.conversation.update({
       where: { id: conversationId },
-      data: { lastMessageAt: nowForAction },
+      data: {
+        lastMessageAt: nowForAction,
+        awaitingAiResponse: false,
+        awaitingSince: null
+      },
       select: {
         id: true,
         leadId: true,

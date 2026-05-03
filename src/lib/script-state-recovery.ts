@@ -278,6 +278,8 @@ export function hasExplicitCapitalConstraintSignal(text: string): boolean {
       text
     ) ||
     /\b(lack of|no)\s+capital\b/i.test(text) ||
+    /\bdon'?t\s+have\s+(any\s+)?capital\b/i.test(text) ||
+    /\bneed\s+(to\s+(get|raise|build)\s+)?capital\s+first\b/i.test(text) ||
     /\bcapital\b.{0,20}\bknowledge\b/i.test(text)
   );
 }
@@ -402,10 +404,30 @@ function extractCapitalDataPoints(params: {
       'durable_capital_state'
     );
   } else if (durableStatus === 'VERIFIED_UNQUALIFIED') {
+    const hasExplicitUnqualifiedCapitalSignal = messages.some(
+      (message) =>
+        message.sender === 'LEAD' &&
+        (hasExplicitCapitalConstraintSignal(message.content) ||
+          /\b(no|zero|none)\s+(money|funds|cash|budget)\b/i.test(
+            message.content
+          ) ||
+          /\b(can'?t|cannot)\s+afford\b/i.test(message.content) ||
+          /\bdon'?t\s+have\s+(any\s+)?(money|funds|cash|budget)\b/i.test(
+            message.content
+          ))
+    );
+
+    if (durableAmount === null && !hasExplicitUnqualifiedCapitalSignal) {
+      delete points.verifiedCapitalUsd;
+      delete points.capitalThresholdMet;
+      delete points.capitalAnswerType;
+      return;
+    }
+
     setPoint(
       points,
       'verifiedCapitalUsd',
-      0,
+      durableAmount ?? 0,
       'HIGH',
       null,
       'durable_capital_state'
@@ -462,57 +484,131 @@ function allScriptActions(script: ScriptWithRecovery | null) {
   ]);
 }
 
+type ScriptActionForArtifact = ReturnType<typeof allScriptActions>[number];
+
+function actionArtifactText(action: ScriptActionForArtifact): string {
+  const fieldText =
+    action.form?.fields
+      ?.map((field) => field.fieldValue || field.fieldLabel || '')
+      .filter(Boolean)
+      .join(' ') || '';
+  return [action.content, action.linkUrl, action.linkLabel, fieldText]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function actionUrls(action: ScriptActionForArtifact): string[] {
+  return [
+    firstUrl(action.linkUrl),
+    firstUrl(action.content),
+    ...(action.form?.fields?.map((field) => firstUrl(field.fieldValue)) ?? [])
+  ].filter(Boolean) as string[];
+}
+
+function scoreScriptArtifactUrl(
+  artifactField: string | null | undefined,
+  action: ScriptActionForArtifact,
+  url: string
+): number {
+  const text = actionArtifactText(action);
+  const lowerUrl = url.toLowerCase();
+
+  if (artifactField === 'applicationFormUrl') {
+    if (
+      /typeform|application|form/.test(text) ||
+      /typeform|form/.test(lowerUrl)
+    ) {
+      return 100;
+    }
+    return -1;
+  }
+
+  if (artifactField === 'downsellUrl') {
+    if (/youtube|youtu\.be|typeform|zoom|thank-you|homework/.test(lowerUrl)) {
+      return -1;
+    }
+    if (
+      /course|whop|checkout|payment|purchase|module|self.?paced|session liquidity model/.test(
+        text
+      ) ||
+      /whop|checkout/.test(lowerUrl)
+    ) {
+      return 100;
+    }
+    return -1;
+  }
+
+  if (artifactField === 'fallbackContentUrl') {
+    if (/whop|checkout|typeform|zoom/.test(lowerUrl)) return -1;
+    if (/youtube|youtu\.be|video|bootcamp|free/.test(text + ' ' + lowerUrl)) {
+      return 100;
+    }
+    return -1;
+  }
+
+  if (artifactField === 'homeworkUrl') {
+    if (
+      /homework|pre.?call|thank-you-confirmation/.test(text + ' ' + lowerUrl)
+    ) {
+      return 100;
+    }
+    return -1;
+  }
+
+  return 1;
+}
+
+function resolveScriptArtifactUrl(params: {
+  artifactField: string | null | undefined;
+  step: ScriptStepWithRecovery | null;
+  script: ScriptWithRecovery | null;
+}): string | null {
+  const stepActions = params.step
+    ? [
+        ...params.step.actions,
+        ...params.step.branches.flatMap((branch) => branch.actions)
+      ]
+    : [];
+  const seen = new Set<string>();
+  const actions = [...stepActions, ...allScriptActions(params.script)].filter(
+    (action) => {
+      if (seen.has(action.id)) return false;
+      seen.add(action.id);
+      return true;
+    }
+  );
+
+  const candidates = actions.flatMap((action) =>
+    actionUrls(action).map((url) => ({
+      url,
+      score: scoreScriptArtifactUrl(params.artifactField, action, url),
+      sortOrder: action.sortOrder
+    }))
+  );
+
+  return (
+    candidates
+      .filter((candidate) => candidate.score > 0)
+      .sort((a, b) => b.score - a.score || a.sortOrder - b.sortOrder)[0]?.url ??
+    null
+  );
+}
+
 function resolveArtifactUrl(params: {
   artifactField: string | null | undefined;
   step: ScriptStepWithRecovery | null;
   script: ScriptWithRecovery | null;
   persona: PersonaForRecovery | null;
 }): string | null {
-  const { artifactField, step, script, persona } = params;
-  const promptConfig = parseJsonObject(persona?.promptConfig);
-  const downsellConfig = parseJsonObject(persona?.downsellConfig);
-
-  if (artifactField === 'applicationFormUrl') {
-    const configured =
-      promptConfig.typeformUrl ||
-      promptConfig.applicationFormUrl ||
-      promptConfig.applicationUrl ||
-      promptConfig.bookingUrl;
-    if (typeof configured === 'string' && firstUrl(configured)) {
-      return firstUrl(configured);
-    }
-  }
-
-  if (artifactField === 'downsellUrl') {
-    const configured =
-      downsellConfig.link ||
-      downsellConfig.url ||
-      downsellConfig.checkoutUrl ||
-      promptConfig.downsellUrl;
-    if (typeof configured === 'string' && firstUrl(configured)) {
-      return firstUrl(configured);
-    }
-  }
-
-  if (artifactField === 'fallbackContentUrl' && persona?.freeValueLink) {
-    return firstUrl(persona.freeValueLink);
-  }
-
-  const candidateActions = step
-    ? [...step.actions, ...step.branches.flatMap((b) => b.actions)]
-    : allScriptActions(script);
-  for (const action of candidateActions) {
-    const direct = firstUrl(action.linkUrl);
-    if (direct) return direct;
-    const contentUrl = firstUrl(action.content);
-    if (contentUrl) return contentUrl;
-    const fieldUrl = action.form?.fields
-      ?.map((field) => firstUrl(field.fieldValue))
-      .find(Boolean);
-    if (fieldUrl) return fieldUrl;
-  }
-
-  return null;
+  // Artifact delivery must use account-script records only. Persona config
+  // and seed scripts may contain placeholders or stale URLs; the active
+  // Script/ScriptAction rows are the operator-controlled source of truth.
+  return resolveScriptArtifactUrl({
+    artifactField: params.artifactField,
+    step: params.step,
+    script: params.script
+  });
 }
 
 function extractArtifactDeliveryDataPoints(
@@ -1178,7 +1274,7 @@ function buildTemplateMessages(artifactField: string | null, url: string) {
   }
   if (artifactField === 'downsellUrl') {
     return [
-      `bet bro, here's the course link: ${url}`,
+      `bet bro, here's the link: ${url}`,
       'go through it at your own pace and build the base first'
     ];
   }
@@ -2293,6 +2389,69 @@ export async function applyStageOverride(params: {
       capitalOutcome: 'failed',
       reason: 'capital_below_threshold_explicit'
     };
+  }
+
+  if (/^(UNQUALIFIED|NOT_QUALIFIED)$/i.test(llmStage || params.currentStage)) {
+    const capitalAnswered = verifiedCapital !== null || thresholdMet !== null;
+    const convo = await prisma.conversation
+      .findUnique({
+        where: { id: params.conversationId },
+        select: {
+          outcome: true,
+          lead: { select: { accountId: true } },
+          messages: {
+            orderBy: { timestamp: 'desc' },
+            take: 30,
+            select: { sender: true, content: true }
+          }
+        }
+      })
+      .catch(() => null);
+    const capitalAsked =
+      convo?.messages.some(
+        (message) =>
+          (message.sender === 'AI' || message.sender === 'HUMAN') &&
+          containsCapitalQuestion(message.content)
+      ) ?? false;
+
+    if (!capitalAsked || !capitalAnswered) {
+      console.warn(
+        `[script-state-recovery] PREMATURE_UNQUALIFIED_BLOCKED for ${params.conversationId}: stage=${llmStage || params.currentStage}, capitalAsked=${capitalAsked}, capitalAnswered=${capitalAnswered}`
+      );
+      if (convo?.outcome === 'UNQUALIFIED_REDIRECT') {
+        await prisma.conversation
+          .update({
+            where: { id: params.conversationId },
+            data: { outcome: 'ONGOING' }
+          })
+          .catch(() => null);
+      }
+      if (convo?.lead?.accountId) {
+        await prisma.bookingRoutingAudit
+          .create({
+            data: {
+              accountId: convo.lead.accountId,
+              conversationId: params.conversationId,
+              personaMinimumCapital: null,
+              routingAllowed: false,
+              regenerationForced: true,
+              blockReason: 'PREMATURE_UNQUALIFIED_BLOCKED',
+              aiStageReported: llmStage || params.currentStage,
+              aiSubStageReported: null,
+              contentPreview: `capitalAsked=${capitalAsked}; capitalAnswered=${capitalAnswered}`
+            }
+          })
+          .catch(() => null);
+      }
+      return {
+        finalStage: 'QUALIFYING',
+        capitalOutcome:
+          params.capitalOutcome === 'failed'
+            ? 'not_evaluated'
+            : params.capitalOutcome,
+        reason: 'cannot_unqualify_without_capital_qualification'
+      };
+    }
   }
 
   if (

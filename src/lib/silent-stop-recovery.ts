@@ -1,0 +1,670 @@
+import prisma from '@/lib/prisma';
+import { escalate } from '@/lib/escalation-dispatch';
+import { broadcastAIStatusChange, broadcastNotification } from '@/lib/realtime';
+import { detectDistress } from '@/lib/distress-detector';
+import { attemptSelfRecovery } from '@/lib/script-state-recovery';
+import type { ScriptHistoryMessage } from '@/lib/script-state-recovery';
+import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
+import { processScheduledReply } from '@/lib/webhook-processor';
+
+const SILENCE_THRESHOLD_MS = 5 * 60 * 1000;
+const DETECTION_DEDUP_MS = 60 * 1000;
+const MAX_HEARTBEAT_BATCH = 25;
+const SPIKE_WINDOW_MS = 60 * 60 * 1000;
+const RECOVERY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+interface Diagnosis {
+  reason:
+    | 'gate_rejection_no_fallback'
+    | 'regen_exhaustion'
+    | 'exception_thrown'
+    | 'token_limit_hit'
+    | 'no_generation_log_found'
+    | 'scheduled_reply_failed'
+    | 'unknown';
+  lastGateViolation: string | null;
+  regenAttempts: number;
+}
+
+interface SafetyResult {
+  safe: boolean;
+  reason: string | null;
+}
+
+interface RecoveryDraft {
+  success: boolean;
+  action: string;
+  messages: string[];
+  stage: string;
+  subStage: string | null;
+  capitalOutcome:
+    | 'passed'
+    | 'failed'
+    | 'hedging'
+    | 'ambiguous'
+    | 'not_asked'
+    | 'not_evaluated';
+  reason: string;
+}
+
+export interface SilentStopHeartbeatResult {
+  scanned: number;
+  detected: number;
+  autoTriggered: number;
+  operatorReview: number;
+  failed: number;
+}
+
+type StalledConversation = Awaited<
+  ReturnType<typeof fetchStalledConversations>
+>[number];
+
+function historyFromMessages(
+  messages: Array<{
+    id: string;
+    sender: string;
+    content: string;
+    timestamp: Date;
+  }>
+): ScriptHistoryMessage[] {
+  return messages
+    .slice()
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    .map((message) => ({
+      id: message.id,
+      sender: message.sender,
+      content: message.content,
+      timestamp: message.timestamp
+    }));
+}
+
+function latestLeadMessage(conversation: StalledConversation) {
+  return conversation.messages
+    .slice()
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .find((message) => message.sender === 'LEAD');
+}
+
+function containsExplicitHumanRequest(messages: { content: string }[]) {
+  const text = messages.map((message) => message.content).join('\n');
+  return /\b(human|real person|person|operator|someone else|manager|admin)\b.{0,40}\b(help|reply|respond|talk|speak|handle)\b/i.test(
+    text
+  );
+}
+
+function containsOffScriptQuestion(messages: { content: string }[]) {
+  const text = messages.map((message) => message.content).join('\n');
+  return (
+    /\b(refund|lawsuit|legal|taxes|medical|visa|immigration|guarantee|contract)\b/i.test(
+      text
+    ) || /\?$/.test(text.trim())
+  );
+}
+
+function classifyContextualPattern(text: string): string | null {
+  const lower = text.trim().toLowerCase();
+  if (
+    /^(it could be|maybe|i think so|kind of|kinda|sometimes|i guess|both)\b/i.test(
+      lower
+    )
+  ) {
+    return 'hedging_answer';
+  }
+  if (
+    /(lord'?s|god'?s|faith|trust(ing)? the (process|timing)|blessing|amen)\b/i.test(
+      lower
+    )
+  ) {
+    return 'religious_framing';
+  }
+  if (
+    /(figure it out|see what happens|just want to|some day|someday|eventually)\b/i.test(
+      lower
+    )
+  ) {
+    return 'vague_motivation';
+  }
+  return null;
+}
+
+export function buildContextualSilentStopReEngagementForTest(text: string) {
+  return buildContextualReEngagement(text);
+}
+
+function buildContextualReEngagement(text: string): RecoveryDraft | null {
+  const pattern = classifyContextualPattern(text);
+
+  if (pattern === 'religious_framing') {
+    return {
+      success: true,
+      action: 'faith_respectful_capital_bridge',
+      messages: [
+        'respect bro, faith and patience are real',
+        "but while we wait on the timing, what's your capital situation looking like for the markets right now? just so i can point you to something that fits where you're at"
+      ],
+      stage: 'FINANCIAL_SCREENING',
+      subStage: 'CAPITAL_QUALIFICATION',
+      capitalOutcome: 'not_asked',
+      reason: 'religious_framing_bridge'
+    };
+  }
+
+  if (pattern === 'hedging_answer') {
+    return {
+      success: true,
+      action: 'capital_bridge',
+      messages: [
+        'fair enough bro. shifting gears, what we working with capital-wise on the markets side? just wanna make sure i steer you right'
+      ],
+      stage: 'FINANCIAL_SCREENING',
+      subStage: 'CAPITAL_QUALIFICATION',
+      capitalOutcome: 'not_asked',
+      reason: 'hedging_answer_bridge'
+    };
+  }
+
+  if (pattern === 'vague_motivation') {
+    return {
+      success: true,
+      action: 'specificity_push',
+      messages: [
+        "real quick bro, what's your capital situation like for the markets right now? just so i know where you're at"
+      ],
+      stage: 'FINANCIAL_SCREENING',
+      subStage: 'CAPITAL_QUALIFICATION',
+      capitalOutcome: 'not_asked',
+      reason: 'vague_motivation_bridge'
+    };
+  }
+
+  return null;
+}
+
+function buildSoftClose(): RecoveryDraft {
+  return {
+    success: true,
+    action: 'soft_close',
+    messages: [
+      "yo bro you still around? wanna make sure i don't leave you hanging"
+    ],
+    stage: 'QUALIFYING',
+    subStage: null,
+    capitalOutcome: 'not_evaluated',
+    reason: 'fallback_soft_close'
+  };
+}
+
+function buildStoredGeneratedResult(draft: RecoveryDraft, eventId: string) {
+  return {
+    reply: draft.messages[0] || '',
+    messages: draft.messages,
+    stage: draft.stage,
+    subStage: draft.subStage,
+    stageConfidence: 1,
+    sentimentScore: 0,
+    experiencePath: null,
+    objectionDetected: null,
+    stallType: null,
+    affirmationDetected: false,
+    followUpNumber: null,
+    softExit: false,
+    escalateToHuman: false,
+    leadTimezone: null,
+    selectedSlotIso: null,
+    leadEmail: null,
+    shouldVoiceNote: false,
+    voiceNoteAction: null,
+    suggestedTag: '',
+    suggestedTags: [],
+    suggestedDelay: 0,
+    systemPromptVersion: 'silent-stop-recovery-v1',
+    suggestionId: null,
+    capitalOutcome: draft.capitalOutcome,
+    selfRecovered: true,
+    selfRecoveryEventId: eventId,
+    selfRecoveryReason: draft.reason,
+    systemStage: draft.stage,
+    currentScriptStep: null
+  };
+}
+
+async function fetchStalledConversations(now = new Date()) {
+  const threshold = new Date(now.getTime() - SILENCE_THRESHOLD_MS);
+  const dedupCutoff = new Date(now.getTime() - DETECTION_DEDUP_MS);
+
+  return prisma.conversation.findMany({
+    where: {
+      aiActive: true,
+      awaitingAiResponse: true,
+      awaitingSince: { lt: threshold },
+      OR: [
+        { lastSilentStopAt: null },
+        { lastSilentStopAt: { lt: dedupCutoff } }
+      ]
+    },
+    include: {
+      lead: true,
+      messages: {
+        orderBy: { timestamp: 'desc' },
+        take: 40,
+        select: {
+          id: true,
+          sender: true,
+          content: true,
+          timestamp: true
+        }
+      }
+    },
+    orderBy: { awaitingSince: 'asc' },
+    take: MAX_HEARTBEAT_BATCH
+  });
+}
+
+async function diagnoseStopReason(
+  conversation: StalledConversation,
+  lastLeadAt: Date
+): Promise<Diagnosis> {
+  const scheduled = await prisma.scheduledReply.findFirst({
+    where: { conversationId: conversation.id },
+    orderBy: { createdAt: 'desc' },
+    select: { status: true, attempts: true, lastError: true }
+  });
+
+  if (scheduled?.status === 'FAILED') {
+    return {
+      reason: 'scheduled_reply_failed',
+      lastGateViolation: scheduled.lastError,
+      regenAttempts: scheduled.attempts
+    };
+  }
+
+  const latestFailure = await prisma.voiceQualityFailure.findFirst({
+    where: {
+      accountId: conversation.lead.accountId,
+      createdAt: { gte: lastLeadAt }
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { hardFails: true, attempt: true }
+  });
+
+  if (latestFailure) {
+    const hardFails = JSON.stringify(latestFailure.hardFails);
+    return {
+      reason:
+        latestFailure.attempt >= 3
+          ? 'regen_exhaustion'
+          : 'gate_rejection_no_fallback',
+      lastGateViolation: hardFails.slice(0, 500),
+      regenAttempts: latestFailure.attempt
+    };
+  }
+
+  if (!scheduled) {
+    return {
+      reason: 'no_generation_log_found',
+      lastGateViolation: null,
+      regenAttempts: 0
+    };
+  }
+
+  return {
+    reason: 'unknown',
+    lastGateViolation: scheduled.lastError,
+    regenAttempts: scheduled.attempts
+  };
+}
+
+async function checkAutoTriggerSafety(
+  conversation: StalledConversation
+): Promise<SafetyResult> {
+  const recent = conversation.messages.slice(0, 10);
+  if (
+    conversation.distressDetected ||
+    recent.some((message) => detectDistress(message.content).detected)
+  ) {
+    return { safe: false, reason: 'distress_detected_requires_human' };
+  }
+
+  if (containsExplicitHumanRequest(conversation.messages.slice(0, 3))) {
+    return { safe: false, reason: 'lead_requested_human' };
+  }
+
+  if (conversation.silentStopCount >= 2) {
+    return { safe: false, reason: 'repeated_silent_stops_pattern_failure' };
+  }
+
+  if (
+    conversation.silentStopCount > 0 &&
+    containsOffScriptQuestion(conversation.messages.slice(0, 3))
+  ) {
+    return { safe: false, reason: 'off_script_question_unhandled' };
+  }
+
+  return { safe: true, reason: null };
+}
+
+async function triggerAiSelfRecovery(
+  conversation: StalledConversation,
+  diagnosis: Diagnosis
+): Promise<RecoveryDraft> {
+  const history = historyFromMessages(conversation.messages);
+  const lastLead = latestLeadMessage(conversation);
+  const contextual = lastLead
+    ? buildContextualReEngagement(lastLead.content)
+    : null;
+  const stateMachineRecovery = await attemptSelfRecovery({
+    accountId: conversation.lead.accountId,
+    conversationId: conversation.id,
+    history,
+    triggerReason: `silent_stop_${diagnosis.reason}`,
+    approvalMode: false
+  }).catch((err) => {
+    console.error('[silent-stop] state-machine recovery failed:', err);
+    return null;
+  });
+
+  if (stateMachineRecovery?.recovered) {
+    if (
+      contextual &&
+      (stateMachineRecovery.recoveryAction === 'ASK_QUESTION' ||
+        stateMachineRecovery.capitalOutcome === 'not_asked')
+    ) {
+      return contextual;
+    }
+    return {
+      success: true,
+      action: stateMachineRecovery.recoveryAction || 'state_machine_advance',
+      messages: stateMachineRecovery.messages,
+      stage: stateMachineRecovery.stage || 'QUALIFYING',
+      subStage: stateMachineRecovery.subStage,
+      capitalOutcome: stateMachineRecovery.capitalOutcome,
+      reason: stateMachineRecovery.reason
+    };
+  }
+
+  if (contextual) return contextual;
+
+  return buildSoftClose();
+}
+
+async function routeToOperatorReview(params: {
+  conversation: StalledConversation;
+  eventId: string;
+  reason: string;
+}) {
+  const { conversation, eventId, reason } = params;
+  await prisma.silentStopEvent.update({
+    where: { id: eventId },
+    data: {
+      recoveryStatus: 'OPERATOR_REVIEW',
+      recoveryAction: 'escalation',
+      recoveryAttempted: false,
+      triggeredAt: new Date()
+    }
+  });
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      aiActive: false,
+      awaitingAiResponse: false,
+      awaitingSince: null,
+      silentStopCount: { increment: 1 },
+      lastSilentStopAt: new Date()
+    }
+  });
+  broadcastAIStatusChange({ conversationId: conversation.id, aiActive: false });
+  const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+  const link = origin
+    ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversation.id}`
+    : undefined;
+  await escalate({
+    type: 'ai_stuck',
+    accountId: conversation.lead.accountId,
+    leadId: conversation.lead.id,
+    conversationId: conversation.id,
+    leadName: conversation.lead.name,
+    leadHandle: conversation.lead.handle,
+    title: 'Silent stop needs operator review',
+    body: `${conversation.lead.name} (@${conversation.lead.handle}) went silent after a lead reply. Auto-trigger was blocked: ${reason}.`,
+    details: `SilentStopEvent ${eventId}: ${reason}`,
+    link
+  }).catch((err) =>
+    console.error('[silent-stop] operator escalation failed:', err)
+  );
+}
+
+async function maybeAlertSilentStopSpike(accountId: string) {
+  const now = Date.now();
+  const recentEvents = await prisma.silentStopEvent.findMany({
+    where: {
+      detectedAt: { gte: new Date(now - SPIKE_WINDOW_MS) },
+      conversation: { lead: { accountId } }
+    },
+    select: { id: true }
+  });
+  if (recentEvents.length <= 5) return;
+
+  const existing = await prisma.notification.findFirst({
+    where: {
+      accountId,
+      title: { contains: 'Silent stops spike' },
+      createdAt: { gte: new Date(now - SPIKE_WINDOW_MS) }
+    },
+    select: { id: true }
+  });
+  if (existing) return;
+
+  const title = `Silent stops spike: ${recentEvents.length} in 1h`;
+  const body =
+    'Silent-stop heartbeat detected more than 5 stalled AI responses in the last hour. Check recent gate failures, tokens, and webhook logs.';
+  await prisma.notification
+    .create({
+      data: { accountId, type: 'SYSTEM', title, body }
+    })
+    .catch((err) =>
+      console.error('[silent-stop] spike notification failed:', err)
+    );
+  broadcastNotification({ accountId, type: 'SYSTEM', title });
+
+  if (process.env.SLACK_WEBHOOK_URL) {
+    await fetch(process.env.SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `${title}: ${body}` })
+    }).catch((err) =>
+      console.error('[silent-stop] spike Slack alert failed:', err)
+    );
+  }
+}
+
+async function maybeAlertLowRecoveryRate(accountId: string) {
+  const windowStart = new Date(Date.now() - RECOVERY_RATE_WINDOW_MS);
+  const events = await prisma.silentStopEvent.findMany({
+    where: {
+      detectedAt: { gte: windowStart },
+      recoveryAttempted: true,
+      conversation: { lead: { accountId } }
+    },
+    select: { recoveryStatus: true }
+  });
+  if (events.length < 5) return;
+  const successes = events.filter(
+    (event) => event.recoveryStatus === 'AUTO_TRIGGERED'
+  ).length;
+  const successRate = successes / events.length;
+  if (successRate >= 0.7) return;
+
+  const existing = await prisma.notification.findFirst({
+    where: {
+      accountId,
+      title: { contains: 'Silent stop recovery rate low' },
+      createdAt: { gte: windowStart }
+    },
+    select: { id: true }
+  });
+  if (existing) return;
+
+  const title = 'Silent stop recovery rate low';
+  const body = `Silent-stop auto-recovery success is ${Math.round(successRate * 100)}% over the last 24h (${successes}/${events.length}). Review failed recoveries before they cool off leads.`;
+  await prisma.notification
+    .create({
+      data: { accountId, type: 'SYSTEM', title, body }
+    })
+    .catch((err) =>
+      console.error('[silent-stop] low recovery notification failed:', err)
+    );
+  broadcastNotification({ accountId, type: 'SYSTEM', title });
+
+  if (process.env.SLACK_WEBHOOK_URL) {
+    await fetch(process.env.SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: `${title}: ${body}` })
+    }).catch((err) =>
+      console.error('[silent-stop] low recovery Slack alert failed:', err)
+    );
+  }
+}
+
+export async function handleSilentStop(
+  conversation: StalledConversation
+): Promise<'AUTO_TRIGGERED' | 'OPERATOR_REVIEW' | 'FAILED' | 'SKIPPED'> {
+  const lastLead = latestLeadMessage(conversation);
+  if (!lastLead) return 'SKIPPED';
+
+  const now = new Date();
+  const diagnosis = await diagnoseStopReason(conversation, lastLead.timestamp);
+  const event = await prisma.silentStopEvent.create({
+    data: {
+      conversationId: conversation.id,
+      detectedAt: now,
+      lastLeadMessageAt: lastLead.timestamp,
+      silenceDurationMs: now.getTime() - lastLead.timestamp.getTime(),
+      detectedReason: diagnosis.reason,
+      lastGateViolation: diagnosis.lastGateViolation,
+      lastRegenAttempts: diagnosis.regenAttempts,
+      recoveryStatus: 'PENDING'
+    }
+  });
+
+  const safety = await checkAutoTriggerSafety(conversation);
+  if (!safety.safe) {
+    await routeToOperatorReview({
+      conversation,
+      eventId: event.id,
+      reason: safety.reason || 'unsafe_for_auto_trigger'
+    });
+    return 'OPERATOR_REVIEW';
+  }
+
+  const draft = await triggerAiSelfRecovery(conversation, diagnosis);
+  const quality = scoreVoiceQualityGroup(draft.messages);
+  if (!quality.passed) {
+    await prisma.silentStopEvent.update({
+      where: { id: event.id },
+      data: {
+        recoveryAttempted: true,
+        recoveryAction: draft.action,
+        recoveryMessageSent: draft.messages.join('\n'),
+        recoveryStatus: 'FAILED',
+        triggeredAt: new Date()
+      }
+    });
+    await routeToOperatorReview({
+      conversation,
+      eventId: event.id,
+      reason: `recovery_quality_gate_failed:${quality.hardFails.join(',')}`
+    });
+    return 'FAILED';
+  }
+
+  await prisma.silentStopEvent.update({
+    where: { id: event.id },
+    data: {
+      recoveryAttempted: true,
+      recoveryAction: draft.action,
+      recoveryMessageSent: draft.messages.join('\n'),
+      recoveryStatus: 'AUTO_TRIGGERED',
+      triggeredAt: new Date()
+    }
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      silentStopCount: { increment: 1 },
+      silentStopRecoveredCount: { increment: 1 },
+      lastSilentStopAt: new Date()
+    }
+  });
+
+  try {
+    await processScheduledReply(conversation.id, conversation.lead.accountId, {
+      generatedResult: buildStoredGeneratedResult(draft, event.id),
+      createdAt: new Date(),
+      messageType: 'silent_stop_recovery'
+    });
+
+    const latest = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, sender: { not: 'SYSTEM' } },
+      orderBy: { timestamp: 'desc' },
+      select: { sender: true }
+    });
+    if (latest?.sender === 'LEAD') {
+      throw new Error('silent_stop_recovery_no_message_sent');
+    }
+
+    await prisma.silentStopEvent.update({
+      where: { id: event.id },
+      data: { resolvedAt: new Date() }
+    });
+    return 'AUTO_TRIGGERED';
+  } catch (err) {
+    console.error('[silent-stop] auto-trigger send failed:', err);
+    await prisma.silentStopEvent.update({
+      where: { id: event.id },
+      data: {
+        recoveryStatus: 'FAILED',
+        recoveryAction: draft.action,
+        recoveryMessageSent: draft.messages.join('\n')
+      }
+    });
+    await routeToOperatorReview({
+      conversation,
+      eventId: event.id,
+      reason: err instanceof Error ? err.message : 'auto_trigger_failed'
+    });
+    return 'FAILED';
+  }
+}
+
+export async function silentStopHeartbeat(): Promise<SilentStopHeartbeatResult> {
+  const stalled = await fetchStalledConversations();
+  const result: SilentStopHeartbeatResult = {
+    scanned: stalled.length,
+    detected: 0,
+    autoTriggered: 0,
+    operatorReview: 0,
+    failed: 0
+  };
+  const accountIds = new Set<string>();
+
+  for (const conversation of stalled) {
+    accountIds.add(conversation.lead.accountId);
+    const status = await handleSilentStop(conversation);
+    if (status === 'SKIPPED') continue;
+    result.detected++;
+    if (status === 'AUTO_TRIGGERED') result.autoTriggered++;
+    if (status === 'OPERATOR_REVIEW') result.operatorReview++;
+    if (status === 'FAILED') result.failed++;
+  }
+
+  await Promise.all(
+    Array.from(accountIds).map(async (accountId) => {
+      await maybeAlertSilentStopSpike(accountId);
+      await maybeAlertLowRecoveryRate(accountId);
+    })
+  );
+
+  return result;
+}

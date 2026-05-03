@@ -218,7 +218,6 @@ const DAE_PROMPT_CONFIG = {
   // AVAILABLE SLOTS block, never a hardcoded URL. R16 forbids fabricating
   // any URL not listed here.
   assetLinks: {
-    courseLink: 'https://daetradez.com/course',
     freeValueLink: 'https://youtube.com/daetradez-bootcamp',
     videoLinks: [
       { label: 'Free bootcamp', url: 'https://youtube.com/daetradez-bootcamp' },
@@ -321,7 +320,7 @@ const DAE_FINANCIAL_WATERFALL = [
     label: 'LEVEL 4 — LOW-TICKET PITCH',
     question: `All 3 levels failed. Fire the low-ticket pitch sequence from lowTicketPitchScripts.`,
     passAction:
-      'If accepted: send course link. If declined: soft exit with free value.'
+      'If accepted: send the course link from the active account ScriptAction. If declined: soft exit with free value.'
   }
 ];
 
@@ -436,7 +435,7 @@ const DAE_KNOWLEDGE_ASSETS = [
   {
     key: 'course',
     title: '$497 Self-Paced Course',
-    content: `Same framework as the main program, self-paced, no live coaching: https://daetradez.com/course`,
+    content: `Same framework as the main program, self-paced, no live coaching. The checkout URL must come from the active account ScriptAction, not this seed file.`,
     deployTrigger:
       'Fired in FINANCIAL_SCREENING Level 4 when waterfall exhausts.'
   },
@@ -494,7 +493,7 @@ const DAE_DOWNSELL_CONFIG = {
   productName: 'DAE Self-Paced Course',
   price: 497,
   pitchMessage: `we got a self-paced version of the same framework for $497. grind through it, make some money, come back when you're ready for the full program.`,
-  link: 'https://daetradez.com/course'
+  linkSource: 'active_account_script_action'
 };
 
 // ---------------------------------------------------------------------------

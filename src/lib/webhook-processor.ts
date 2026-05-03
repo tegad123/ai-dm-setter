@@ -190,8 +190,9 @@ async function alertMetaTokenInvalidated(params: {
 
 /**
  * Build the set of URLs the AI is allowed to send for a given account.
- * Pulls from the persona's promptConfig (assetLinks, bookingLink,
- * calendarLink, freeValueLink) and from the persona's freeValueLink column.
+ * Pulls from the active account script records. Prompt/persona config can
+ * contain placeholders or old seed data; ScriptAction/ScriptSlot rows are the
+ * operator-controlled source of truth for deliverable URLs.
  *
  * Anything NOT in this set is considered hallucinated and will be stripped
  * from the AI's reply before delivery.
@@ -199,55 +200,6 @@ async function alertMetaTokenInvalidated(params: {
 async function getAllowedUrls(accountId: string): Promise<Set<string>> {
   const allowed = new Set<string>();
   try {
-    const persona = await prisma.aIPersona.findFirst({
-      where: { accountId, isActive: true },
-      orderBy: { updatedAt: 'desc' }
-    });
-    if (!persona) return allowed;
-
-    if (persona.freeValueLink && /^https?:\/\//i.test(persona.freeValueLink)) {
-      allowed.add(persona.freeValueLink.trim());
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pc = (persona.promptConfig as any) || {};
-    const candidates: unknown[] = [
-      pc.typeformUrl,
-      pc.bookingLink,
-      pc.calendarLink,
-      pc.freeValueLink,
-      pc.courseLink,
-      pc.assetLinks?.typeformUrl,
-      pc.assetLinks?.bookingLink,
-      pc.assetLinks?.courseLink,
-      pc.assetLinks?.freeValueLink
-    ];
-    for (const c of candidates) {
-      if (typeof c === 'string' && /^https?:\/\//i.test(c)) {
-        allowed.add(c.trim());
-      }
-    }
-    if (Array.isArray(pc.assetLinks?.videoLinks)) {
-      for (const v of pc.assetLinks.videoLinks) {
-        const url = (v &&
-          typeof v === 'object' &&
-          (v as { url?: unknown }).url) as unknown;
-        if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-          allowed.add(url.trim());
-        }
-      }
-    }
-    if (Array.isArray(pc.knowledgeAssets)) {
-      for (const k of pc.knowledgeAssets) {
-        const content =
-          k && typeof k === 'object' && (k as { content?: unknown }).content;
-        if (typeof content === 'string') {
-          const matches = content.match(/https?:\/\/[^\s)]+/g);
-          if (matches) for (const m of matches) allowed.add(m.trim());
-        }
-      }
-    }
-
     // Sprint 3: Add link slot URLs from ScriptSlots (legacy)
     const linkSlots = await prisma.scriptSlot.findMany({
       where: {
@@ -1016,6 +968,8 @@ export async function processIncomingMessage(
     data: {
       lastMessageAt: now,
       unreadCount: { increment: 1 },
+      awaitingAiResponse: lead.conversation!.aiActive,
+      awaitingSince: lead.conversation!.aiActive ? now : null,
       ...(detectedEmail ? { leadEmail: detectedEmail } : {})
     }
   });
@@ -1055,6 +1009,8 @@ export async function processIncomingMessage(
           where: { id: conversationId },
           data: {
             aiActive: false,
+            awaitingAiResponse: false,
+            awaitingSince: null,
             distressDetected: true,
             distressDetectedAt: now,
             distressMessageId: message.id
@@ -1238,7 +1194,11 @@ export async function processIncomingMessage(
         );
         await prisma.conversation.update({
           where: { id: conversationId },
-          data: { outcome: 'SPAM' }
+          data: {
+            outcome: 'SPAM',
+            awaitingAiResponse: false,
+            awaitingSince: null
+          }
         });
         try {
           await applyAutoTags(accountId, lead.id, [COLD_PITCH_TAG_NAME], 1.0);
@@ -1378,6 +1338,8 @@ export async function processIncomingMessage(
           where: { id: conversationId },
           data: {
             aiActive: false,
+            awaitingAiResponse: false,
+            awaitingSince: null,
             schedulingConflict: true,
             schedulingConflictAt: now,
             schedulingConflictMessageId: message.id,
@@ -1644,6 +1606,17 @@ export async function processIncomingMessage(
       messageText
     });
     if (confirmation.handled) {
+      await prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: { awaitingAiResponse: false, awaitingSince: null }
+        })
+        .catch((err) =>
+          console.error(
+            '[webhook-processor] call-confirmation awaiting clear failed:',
+            err
+          )
+        );
       broadcastNewMessage({
         id: message.id,
         conversationId,
@@ -1774,6 +1747,12 @@ export async function scheduleAIReply(
         'sched.step0a.noLeadToReplyTo',
         `latest msg is ${latestMsg.sender} (${Math.round(ageMs / 1000)}s ago) — nothing new to reply to, skipping`
       );
+      await prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: { awaitingAiResponse: false, awaitingSince: null }
+        })
+        .catch(() => null);
       return;
     }
 
@@ -1819,6 +1798,12 @@ export async function scheduleAIReply(
           'sched.step0a.closeDetected',
           `skipping AI reply — ${check.reason}`
         );
+        await prisma.conversation
+          .update({
+            where: { id: conversationId },
+            data: { awaitingAiResponse: false, awaitingSince: null }
+          })
+          .catch(() => null);
         return;
       }
     }
@@ -2640,6 +2625,19 @@ export async function scheduleAIReply(
       `[webhook-processor] AI generation failed for ${conversationId}:`,
       err
     );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: {
+          awaitingAiResponse: true,
+          awaitingSince:
+            conversation.awaitingSince ??
+            latestLeadMessage?.timestamp ??
+            new Date(),
+          lastSilentStopAt: new Date()
+        }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -2792,6 +2790,12 @@ export async function scheduleAIReply(
     console.log(
       `[webhook-processor] AI suggestion generated for ${conversationId} (not auto-sending)`
     );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -3283,6 +3287,8 @@ async function sendAIReply(
         where: { id: conversationId },
         data: {
           aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null,
           distressDetected: true,
           distressDetectedAt: new Date(),
           distressMessageId: latestLead?.id ?? null
@@ -3402,6 +3408,12 @@ async function sendAIReply(
       stage: result.stage,
       confidence: result.stageConfidence
     });
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -3424,6 +3436,12 @@ async function sendAIReply(
     console.log(
       `[webhook-processor] Double-fire guard: latest msg is ${latestMsgInConvo.sender} (${Math.round(ageMs / 1000)}s ago) for ${conversationId} — discarding duplicate reply`
     );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -3441,6 +3459,12 @@ async function sendAIReply(
     console.log(
       `[webhook-processor] Human message detected during AI generation, discarding AI reply for ${conversationId}`
     );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -3480,7 +3504,11 @@ async function sendAIReply(
       }
       await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false }
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -3534,7 +3562,11 @@ async function sendAIReply(
       }
       await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false }
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
       await prisma.voiceQualityFailure
@@ -3600,7 +3632,11 @@ async function sendAIReply(
         }
         await prisma.conversation.update({
           where: { id: conversationId },
-          data: { aiActive: false }
+          data: {
+            aiActive: false,
+            awaitingAiResponse: false,
+            awaitingSince: null
+          }
         });
         broadcastAIStatusChange({ conversationId, aiActive: false });
         const { escalate } = await import('@/lib/escalation-dispatch');
@@ -3664,7 +3700,11 @@ async function sendAIReply(
       }
       await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false }
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -3735,7 +3775,11 @@ async function sendAIReply(
       }
       await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false }
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -3833,6 +3877,12 @@ async function sendAIReply(
         })
         .catch(() => {});
     }
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 
@@ -3922,7 +3972,11 @@ async function sendAIReply(
   // Update conversation
   await prisma.conversation.update({
     where: { id: conversationId },
-    data: { lastMessageAt: now }
+    data: {
+      lastMessageAt: now,
+      awaitingAiResponse: false,
+      awaitingSince: null
+    }
   });
 
   // ── Persist any booking-stage fields the AI extracted ──────────
@@ -3980,6 +4034,8 @@ async function sendAIReply(
       data: {
         outcome: 'UNQUALIFIED_REDIRECT',
         aiActive: false,
+        awaitingAiResponse: false,
+        awaitingSince: null,
         typeformFilledNoBooking: true,
         typeformFilledNoBookingAt: latestLead?.timestamp ?? now,
         typeformFilledNoBookingMessageId: latestLead?.id ?? null
@@ -4025,7 +4081,12 @@ async function sendAIReply(
   if (result.softExit && !result.typeformFilledNoBooking) {
     await prisma.conversation.update({
       where: { id: conversationId },
-      data: { outcome: 'SOFT_EXIT', aiActive: false }
+      data: {
+        outcome: 'SOFT_EXIT',
+        aiActive: false,
+        awaitingAiResponse: false,
+        awaitingSince: null
+      }
     });
     console.log(
       `[webhook-processor] Soft exit triggered for ${conversationId}`
@@ -4041,7 +4102,11 @@ async function sendAIReply(
     try {
       await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false }
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
       });
       broadcastAIStatusChange({ conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -4254,7 +4319,11 @@ async function sendAIReply(
             );
             await prisma.conversation.update({
               where: { id: conversationId },
-              data: { aiActive: false }
+              data: {
+                aiActive: false,
+                awaitingAiResponse: false,
+                awaitingSince: null
+              }
             });
             await prisma.notification.create({
               data: {
@@ -4762,7 +4831,11 @@ export async function processAdminMessage(
       // distress, scheduling-conflict, manual operator pause).
       const updated = await prisma.conversation.update({
         where: { id: conversationId },
-        data: { aiActive: false },
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        },
         select: { aiActive: true }
       });
       autoPausedFromConsecutivePhone = true;
@@ -5208,6 +5281,8 @@ async function handleTypeformFilledNoBookingScreenOut(
     where: { id: p.conversationId },
     data: {
       aiActive: false,
+      awaitingAiResponse: false,
+      awaitingSince: null,
       outcome: 'UNQUALIFIED_REDIRECT',
       typeformFilledNoBooking: true,
       typeformFilledNoBookingAt: p.inboundAt,
@@ -5467,6 +5542,12 @@ async function deliverStoredReply(
     console.log(
       `[webhook-processor] deliverStoredReply: AI paused for ${conversationId} — skipping`
     );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
     return;
   }
 

@@ -217,10 +217,34 @@ interface InfoSelfRecoverySummary {
   counts: unknown[];
 }
 
+interface InfoSilentStopSummary {
+  type: 'silent_stop_summary';
+  windowHours: number;
+  detected: number;
+  autoRecovered: number;
+  operatorReview: number;
+  failed: number;
+  alertThresholdExceeded: boolean;
+  lastHourCount: number;
+  counts: unknown[];
+  recent: Array<{
+    eventId: string;
+    conversationId: string;
+    leadId: string;
+    leadName: string;
+    leadHandle: string;
+    detectedAt: string;
+    detectedReason: string;
+    recoveryAction: string | null;
+    recoveryStatus: string;
+  }>;
+}
+
 type InfoItem =
   | InfoR34CatchCounter
   | InfoAutosendReady
-  | InfoSelfRecoverySummary;
+  | InfoSelfRecoverySummary
+  | InfoSilentStopSummary;
 
 interface ActionsResponse {
   urgent: UrgentItem[];
@@ -411,7 +435,8 @@ export function ActionRequired() {
   const attentionCount = data?.attention.length ?? 0;
   const monitoringItems =
     data?.info.filter(
-      (item): item is InfoR34CatchCounter => item.type === 'r34_catch_counter'
+      (item): item is InfoR34CatchCounter | InfoSilentStopSummary =>
+        item.type === 'r34_catch_counter' || item.type === 'silent_stop_summary'
     ) ?? [];
   const monitoringCount = monitoringItems.length;
   const totalCount = urgentCount + attentionCount;
@@ -887,7 +912,36 @@ function renderAttention(
   }
 }
 
-function renderInfo(item: InfoR34CatchCounter): React.ReactNode {
+function renderInfo(
+  item: InfoR34CatchCounter | InfoSilentStopSummary
+): React.ReactNode {
+  if (item.type === 'silent_stop_summary') {
+    return (
+      <ActionRow
+        key='silent-stop-summary'
+        href='/dashboard/conversations'
+        icon={IconClock}
+        iconClassName={
+          item.alertThresholdExceeded ? 'text-red-500' : 'text-emerald-500'
+        }
+        primary={
+          <span>
+            <span className='font-medium'>Silent Stops</span>
+            <span className='text-muted-foreground'>
+              {' '}
+              — {item.detected} detected, {item.autoRecovered} auto-recovered,{' '}
+              {item.operatorReview} review, {item.failed} failed
+              {item.alertThresholdExceeded
+                ? ` (${item.lastHourCount} in the last hour)`
+                : ''}
+            </span>
+          </span>
+        }
+        meta={`${item.windowHours}h`}
+      />
+    );
+  }
+
   return (
     <ActionRow
       key='r34-catch-counter'

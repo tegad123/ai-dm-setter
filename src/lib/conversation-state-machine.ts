@@ -1,4 +1,31 @@
 import prisma from '@/lib/prisma';
+import type { ConversationOutcome } from '@prisma/client';
+
+function capturedPointValue(points: unknown, key: string): unknown {
+  if (!points || typeof points !== 'object') return null;
+  const raw = (points as Record<string, unknown>)[key];
+  if (!raw || typeof raw !== 'object') return raw ?? null;
+  if ('value' in raw) return (raw as { value?: unknown }).value ?? null;
+  return raw;
+}
+
+function hasExplicitCapitalDisqualification(conversation: {
+  capitalVerificationStatus?: string | null;
+  capturedDataPoints?: unknown;
+}): boolean {
+  if (conversation.capitalVerificationStatus === 'VERIFIED_UNQUALIFIED') {
+    return true;
+  }
+  const thresholdMet = capturedPointValue(
+    conversation.capturedDataPoints,
+    'capitalThresholdMet'
+  );
+  const verifiedCapital = capturedPointValue(
+    conversation.capturedDataPoints,
+    'verifiedCapitalUsd'
+  );
+  return thresholdMet === false || verifiedCapital === 0;
+}
 
 // ---------------------------------------------------------------------------
 // Conversation Outcome Transitions
@@ -38,13 +65,19 @@ export async function updateConversationOutcome(
   const currentOutcome = conversation.outcome;
 
   // Don't downgrade terminal outcomes
+  if (['BOOKED', 'SOFT_EXIT'].includes(currentOutcome)) {
+    return currentOutcome;
+  }
+
   if (
-    ['BOOKED', 'UNQUALIFIED_REDIRECT', 'SOFT_EXIT'].includes(currentOutcome)
+    currentOutcome === 'UNQUALIFIED_REDIRECT' &&
+    hasExplicitCapitalDisqualification(conversation)
   ) {
     return currentOutcome;
   }
 
-  let newOutcome = currentOutcome;
+  let newOutcome: ConversationOutcome =
+    currentOutcome === 'UNQUALIFIED_REDIRECT' ? 'ONGOING' : currentOutcome;
 
   // Check for BOOKED — lead stage or booking stage reached
   if (
@@ -55,8 +88,15 @@ export async function updateConversationOutcome(
     newOutcome = 'BOOKED';
   }
   // Check for UNQUALIFIED — lead explicitly unqualified
-  else if (lead.stage === 'UNQUALIFIED') {
+  else if (
+    lead.stage === 'UNQUALIFIED' &&
+    hasExplicitCapitalDisqualification(conversation)
+  ) {
     newOutcome = 'UNQUALIFIED_REDIRECT';
+  } else if (lead.stage === 'UNQUALIFIED') {
+    console.warn(
+      `[state-machine] PREMATURE_UNQUALIFIED_REDIRECT_BLOCKED for ${conversationId}: lead.stage=UNQUALIFIED without explicit below-threshold capital`
+    );
   }
   // Check for LEFT_ON_READ — no lead response after 2+ AI messages
   else if (messages.length >= 2) {

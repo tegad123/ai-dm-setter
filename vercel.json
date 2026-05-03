@@ -13,6 +13,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/silent-stop-heartbeat",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/daily-analysis",
       "schedule": "0 6 * * *"
     },

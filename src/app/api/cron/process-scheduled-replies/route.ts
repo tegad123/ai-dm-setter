@@ -139,6 +139,15 @@ export async function GET(req: NextRequest) {
             lastError: (err?.message || 'Unknown error').slice(0, 500)
           }
         });
+        await prisma.conversation
+          .update({
+            where: { id: reply.conversationId },
+            data: {
+              awaitingAiResponse: true,
+              lastSilentStopAt: new Date()
+            }
+          })
+          .catch(() => null);
         failed++;
       }
     }
