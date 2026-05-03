@@ -187,60 +187,24 @@ async function processFacebookEvents(payload: any): Promise<void> {
       (cred) => (cred.metadata as any)?.pageId === pageId
     );
 
+    // F6.2: Strict account resolution. The previous fallback branches
+    // (env var → first-account; no creds → first-account; single-
+    // account-by-default) routed unknown pageIds to "the oldest
+    // account by createdAt" — safe in the cofounder-dogfooding era,
+    // a cross-tenant leak the moment a second paying customer
+    // onboards. Reject + alert on unknown pageIds; the operator
+    // re-connects Facebook for the affected account.
     let accountId: string;
-
     if (matchedCred) {
       accountId = matchedCred.accountId;
     } else {
-      // Fallback 1: match via env var FACEBOOK_PAGE_ID → use first account in DB
-      const envPageId = process.env.FACEBOOK_PAGE_ID;
-      if (envPageId && envPageId === pageId) {
-        const firstAccount = await prisma.account.findFirst({
-          orderBy: { createdAt: 'asc' },
-          select: { id: true }
-        });
-        if (!firstAccount) {
-          console.warn(`[facebook-webhook] No accounts in DB, skipping entry`);
-          continue;
-        }
-        accountId = firstAccount.id;
-        console.log(
-          `[facebook-webhook] Matched pageId=${pageId} via env var → account=${accountId}`
-        );
-      } else {
-        // Fallback 2: Single-account setup — if only one account has credentials, use it
-        const uniqueAccountIds = Array.from(
-          new Set(metaCredentials.map((c) => c.accountId))
-        );
-        if (uniqueAccountIds.length === 1) {
-          accountId = uniqueAccountIds[0];
-          console.warn(
-            `[facebook-webhook] pageId=${pageId} didn't match stored credentials, ` +
-              `but only one account exists — using account=${accountId}`
-          );
-        } else if (metaCredentials.length === 0) {
-          const firstAccount = await prisma.account.findFirst({
-            orderBy: { createdAt: 'asc' },
-            select: { id: true }
-          });
-          if (!firstAccount) {
-            console.warn(
-              `[facebook-webhook] No accounts in DB, skipping entry`
-            );
-            continue;
-          }
-          accountId = firstAccount.id;
-          console.warn(
-            `[facebook-webhook] No credentials found — falling back to first account=${accountId}`
-          );
-        } else {
-          console.error(
-            `[facebook-webhook] No IntegrationCredential found for pageId=${pageId}, ` +
-              `and multiple accounts exist — cannot determine which account to use`
-          );
-          continue;
-        }
-      }
+      console.error(
+        `[facebook-webhook] REJECTED pageId=${pageId} — no IntegrationCredential matched. ` +
+          `${metaCredentials.length} META credentials checked. ` +
+          `Operator action: re-connect Facebook for the affected account, ` +
+          `or check that Meta is sending events to the correct webhook URL.`
+      );
+      continue;
     }
 
     // ── Gate: skip if no active Meta credential for this account ────
