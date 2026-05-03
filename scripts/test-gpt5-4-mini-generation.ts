@@ -54,13 +54,14 @@ async function withTestAccount<T>(
       aiProvider: 'openai'
     }
   });
-  await prisma.aIPersona.create({
+  const persona = await prisma.aIPersona.create({
     data: {
       accountId: account.id,
       personaName: 'Test',
       fullName: 'Test Owner',
       systemPrompt: 'You are a test persona.'
-    }
+    },
+    select: { id: true }
   });
   const lead = await prisma.lead.create({
     data: {
@@ -74,7 +75,7 @@ async function withTestAccount<T>(
     }
   });
   const conversation = await prisma.conversation.create({
-    data: { leadId: lead.id, aiActive: true }
+    data: { leadId: lead.id, personaId: persona.id, aiActive: true }
   });
   await prisma.message.create({
     data: {

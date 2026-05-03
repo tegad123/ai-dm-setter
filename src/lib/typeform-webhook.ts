@@ -443,6 +443,10 @@ async function createTypeformOnlyLead(params: {
     (params.email
       ? params.email.split('@')[0]
       : `typeform_${params.token.slice(0, 8)}`);
+  const { resolveActivePersonaIdForCreate } = await import(
+    '@/lib/active-persona'
+  );
+  const personaId = await resolveActivePersonaIdForCreate(params.accountId);
   const lead = await prisma.lead.create({
     data: {
       accountId: params.accountId,
@@ -456,6 +460,7 @@ async function createTypeformOnlyLead(params: {
       stage: 'NEW_LEAD',
       conversation: {
         create: {
+          personaId,
           aiActive: false,
           unreadCount: 0,
           leadEmail: params.email
