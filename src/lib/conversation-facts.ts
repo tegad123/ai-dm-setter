@@ -297,6 +297,13 @@ export function countCapitalQuestionAsks(
 const IMPLICIT_NO_CAPITAL_PATTERNS: RegExp[] = [
   // No money baseline
   /\b(broke|nothing\s+(really|man|bro)?|no\s+money|don'?t\s+have\s+(any\s+)?(money|capital|anything|much))\b/i,
+  // Explicit capital blocker. "Capital and lack of knowledge" is a
+  // capital answer, not an invitation to ask R24 again.
+  /\bcapital\b.{0,30}\b(problem|issue|obstacle|holding|stopping|lack|don.?t have)\b/i,
+  /\b(lack of|no)\s+capital\b/i,
+  /\bdon'?t\s+have\s+(any\s+)?capital\b/i,
+  /\bneed\s+(to\s+(get|raise|build)\s+)?capital\s+first\b/i,
+  /\bcapital\b.{0,20}\bknowledge\b/i,
   // Student / school
   /\b(i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school|in\s+(college|university|highschool|high\s+school))\b/i,
   // No job

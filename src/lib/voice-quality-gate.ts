@@ -132,6 +132,9 @@ export const PROMISE_PATTERNS: RegExp[] = [
 const CALL_PITCH_RE =
   /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
 
+const CALL_OR_BOOKING_ADVANCEMENT_RE =
+  /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat)|typeform|application|booking link|book(ing)?\s+(a\s+)?call|send(ing)?\s+(you\s+)?(the\s+)?link\s+(to|for)\s+(apply|book|schedule)|fill\s+(it|this|the form|everything)\s+out|anthony)\b/i;
+
 const SCHEDULING_QUESTION_RE =
   /\b(what|which)\s+(day|time)\s+works|\bwhen\s+(are\s+you\s+free|works|can\s+you\s+hop\s+on)|\bwhen('?s| is)\s+(better|best|good)\s+for\s+you|\bwhat\s+(day|time)\s+are\s+you\s+free|\bwhat'?s\s+(a\s+good\s+time|your\s+schedule)|\bwhat\s+does\s+your\s+schedule\s+look\s+like/i;
 
@@ -183,6 +186,10 @@ const SCHEDULING_CONFLICT_INSTEAD_OF_SCREENOUT_PATTERNS: RegExp[] = [
 
 export function containsCallPitch(text: string): boolean {
   return CALL_PITCH_RE.test(text);
+}
+
+export function containsCallOrBookingAdvancement(text: string): boolean {
+  return CALL_OR_BOOKING_ADVANCEMENT_RE.test(text);
 }
 
 export function containsSchedulingQuestion(text: string): boolean {
@@ -240,6 +247,39 @@ export function detectTypeformFilledNoBookingContext(
 
 export function isTypeformNoBookingSoftExitReply(text: string): boolean {
   return (text || '').trim() === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE.trim();
+}
+
+export function leadGaveLongTimeline(text: string | null | undefined): boolean {
+  if (!text || typeof text !== 'string') return false;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const mentionsExperience =
+    /\b(been|trading|trade|studying|study|experience|markets?|doing\s+this|at\s+it)\b/.test(
+      normalized
+    );
+  const timelineAnchor =
+    /\b(in|within|after|from\s+now|away|timeline|make\s+it\s+happen|ready|start|starting|maybe|probably|give\s+me|next|over)\b/.test(
+      normalized
+    );
+  const rangeTwoThree =
+    /\b(two|2)\s*(?:-|to|or|\/)\s*(three|3)\s*(?:years?|yrs?)\b/.test(
+      normalized
+    );
+  const anchoredYears =
+    /\b(in|within|after|give\s+me|next|over)\s+(two|three|[2-9]|[1-9]\d)\+?\s*(?:years?|yrs?)\b/.test(
+      normalized
+    ) ||
+    /\b(two|three|[2-9]|[1-9]\d)\+?\s*(?:years?|yrs?)\s+(from\s+now|away|out)\b/.test(
+      normalized
+    );
+  const shortAnswer =
+    normalized.length <= 40 &&
+    /\b(two|three|[2-9]|[1-9]\d)\+?\s*(?:years?|yrs?)\b/.test(normalized);
+
+  if (rangeTwoThree || anchoredYears) return true;
+  if (shortAnswer && (!mentionsExperience || timelineAnchor)) return true;
+  return false;
 }
 
 // Casual ack openers that, when they OPEN a single-bubble reply that
@@ -1047,6 +1087,18 @@ export function scoreVoiceQuality(
         'capital_q_after_implicit_no: the lead has already signaled they have no capital (student / no money / unemployed / broke). Asking the capital threshold question now ignores what they said — treat the prior signal as the answer and route to the downsell / free-resource branch instead.'
       );
     }
+  }
+
+  // A 2+ year timeline is a soft disqualifier. The next AI turn must
+  // learn whether the blocker is capital or a low-urgency learning
+  // goal before pitching Anthony / Typeform / booking.
+  if (
+    leadGaveLongTimeline(options?.previousLeadMessage) &&
+    containsCallOrBookingAdvancement(reply)
+  ) {
+    hardFails.push(
+      'long_timeline_call_pitch: lead gave a 2+ year timeline. Do NOT pitch the call yet. First ask what is holding it to 2-3 years and whether it is capital or wanting to learn first.'
+    );
   }
 
   if (
@@ -2273,6 +2325,16 @@ export function scoreVoiceQualityGroup(
   ) {
     hardFails.push(
       '[group] call_pitch_before_capital_verification: call pitch detected before the capital question has been asked and answered'
+    );
+  }
+
+  if (
+    leadGaveLongTimeline(options?.previousLeadMessage) &&
+    containsCallOrBookingAdvancement(joined) &&
+    !hardFails.some((f) => f.includes('long_timeline_call_pitch:'))
+  ) {
+    hardFails.push(
+      '[group] long_timeline_call_pitch: lead gave a 2+ year timeline. Do NOT pitch the call yet. First ask what is holding it to 2-3 years and whether it is capital or wanting to learn first.'
     );
   }
 

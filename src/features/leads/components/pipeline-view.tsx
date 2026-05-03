@@ -23,6 +23,7 @@ import {
   type LeadStage
 } from '@/features/shared/lead-stage-badge';
 import { useLeads } from '@/hooks/use-api';
+import { useRealtime } from '@/hooks/use-realtime';
 import { transitionLeadStage } from '@/lib/api';
 import type { Lead } from '@/lib/api';
 import { toast } from 'sonner';
@@ -233,6 +234,10 @@ export function PipelineView() {
   const { leads, loading, error, refetch } = useLeads({ limit: 500 });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [transitioning, setTransitioning] = useState<Set<string>>(new Set());
+
+  useRealtime('lead:updated', () => {
+    refetch();
+  });
 
   // Group leads by their UPPER_CASE stage key
   const groupedLeads = useMemo(() => {

@@ -645,6 +645,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       minimumCapitalRequired: true,
       capitalVerificationPrompt: true,
       closerName: true,
+      freeValueLink: true,
+      downsellConfig: true,
       // Fix B uses closer names to catch "call with {closerName}" / "chat
       // with {closerName}" phrases at any stage.
       promptConfig: true
@@ -680,6 +682,55 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       })
     : null;
+
+  // R24 early exit: if the lead has explicitly named capital as the
+  // blocker, treat it as the capital answer. Do not ask a verification
+  // question on top of it, and do not let the model pitch a call.
+  if (lastLeadMsg && hasExplicitCapitalConstraintSignal(lastLeadMsg.content)) {
+    if (activeConversationId) {
+      await prisma.conversation
+        .update({
+          where: { id: activeConversationId },
+          data: { capitalVerificationStatus: 'VERIFIED_UNQUALIFIED' }
+        })
+        .catch((err) =>
+          console.error(
+            '[ai-engine] explicit-capital early-exit state update failed (non-fatal):',
+            err
+          )
+        );
+    }
+
+    const reply = buildExplicitCapitalConstraintSoftExit(personaForGate);
+    return {
+      reply,
+      messages: [reply],
+      format: 'text',
+      stage: 'FINANCIAL_SCREENING',
+      subStage: 'LOW_TICKET',
+      stageConfidence: 1,
+      sentimentScore: 0,
+      experiencePath: null,
+      objectionDetected: 'capital_constraint',
+      stallType: null,
+      affirmationDetected: false,
+      followUpNumber: null,
+      softExit: true,
+      escalateToHuman: false,
+      leadTimezone: null,
+      selectedSlotIso: null,
+      leadEmail: null,
+      suggestedTag: 'capital-unqualified',
+      suggestedTags: ['capital-unqualified'],
+      shouldVoiceNote: false,
+      voiceNoteAction: null,
+      qualityScore: 100,
+      suggestedDelay: 0,
+      systemPromptVersion: await getPromptVersion(accountId),
+      suggestionId: null,
+      capitalOutcome: 'failed'
+    };
+  }
 
   // ManyChat outbound-context block. When the conversation originated
   // as a ManyChat handoff, prepend an instruction so the AI doesn't
@@ -881,6 +932,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         /\b(broke|nothing\s+(really|man|bro)?|no\s+money|don'?t\s+have\s+(any\s+)?(money|capital|anything|much))\b/i.test(
           t
         ) ||
+        hasExplicitCapitalConstraintSignal(t) ||
         /\b(i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school|in\s+(college|university|highschool|high\s+school))\b/i.test(
           t
         ) ||
@@ -1123,6 +1175,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     const capitalQuestionOverdueFailed = quality.hardFails.some((f) =>
       f.includes('capital_question_overdue:')
     );
+    const longTimelineCallPitchFailed = quality.hardFails.some((f) =>
+      f.includes('long_timeline_call_pitch:')
+    );
 
     if (
       quality.passed &&
@@ -1131,6 +1186,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       !repeatedQuestionFailed &&
       !homeworkBeforeCallFailed &&
       !prematureExitOnSoftHesitationFailed &&
+      !longTimelineCallPitchFailed &&
       !validationLoopFailed &&
       !overusedValidationPhraseFailed &&
       !r24Blocked &&
@@ -1645,6 +1701,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      if (longTimelineCallPitchFailed) {
+        const timelineProbeOverride = `\n\n===== LONG TIMELINE BEFORE CALL PITCH =====\nThe lead just gave a 2+ year timeline. That is a soft disqualifier unless you learn WHY it is that far out. Do NOT pitch the call yet. Do NOT mention the closer. Ask exactly one probe first: "what's holding it to 2-3 years, is it more the capital side or just want to learn first?"\n\nIf their answer confirms capital is the blocker, route to the downsell / free-resource soft exit. If their answer shows urgency can be compressed and capital is available, then continue toward the call later.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + timelineProbeOverride;
+        console.warn(
+          `[ai-engine] Long timeline call pitch detected — forcing blocker probe (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const closerOrCallInDownsellFailed = quality.hardFails.some((f) =>
         f.includes('closer_or_call_in_downsell:')
       );
@@ -1933,6 +1997,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           "i hear you bro, what's the main concern, is it the amount or just not wanting to put it toward this right now?";
         parsed.messages = [parsed.message];
         parsed.stage = parsed.stage || 'FINANCIAL_SCREENING';
+        parsed.subStage = null;
+        parsed.softExit = false;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (longTimelineCallPitchFailed) {
+        console.warn(
+          `[ai-engine] Long-timeline call-pitch gate exhausted ${MAX_RETRIES + 1} attempts — replacing with timeline blocker probe for convo ${activeConversationId}`
+        );
+        parsed.message =
+          "what's holding it to 2-3 years, is it more the capital side or just want to learn first?";
+        parsed.messages = [parsed.message];
+        parsed.stage = 'URGENCY';
         parsed.subStage = null;
         parsed.softExit = false;
         parsed.escalateToHuman = false;
@@ -2503,7 +2579,11 @@ function formatConversationForLLM(
       return { role: 'user' as const, content: msg.content };
     }
     // Both AI and HUMAN messages are "our side" of the conversation
-    const prefix = msg.sender === 'HUMAN' ? '[Human team member] ' : '';
+    const prefix = isOperatorNoteContent(msg.content)
+      ? '[Internal operator note, not sent to lead] '
+      : msg.sender === 'HUMAN'
+        ? '[Human team member] '
+        : '';
     return { role: 'assistant' as const, content: prefix + msg.content };
   });
 }
@@ -3687,6 +3767,57 @@ interface ParsedLeadAnswer {
     | 'vague_no_number';
 }
 
+// Explicit capital-constraint signals. These are not hedges and do
+// not need a follow-up capital verification question. If the lead says
+// capital is the problem, R24 treats that as "no investable capital
+// right now" and routes to downsell / free resources.
+const EXPLICIT_CAPITAL_CONSTRAINT_PATTERNS: RegExp[] = [
+  /\bcapital\b.{0,30}\b(problem|issue|obstacle|holding|stopping|lack|don.?t have)\b/i,
+  /\b(lack of|no)\s+capital\b/i,
+  /\bdon'?t\s+have\s+(any\s+)?capital\b/i,
+  /\bneed\s+(to\s+(get|raise|build)\s+)?capital\s+first\b/i,
+  /\bcapital\b.{0,20}\bknowledge\b/i
+];
+
+export function hasExplicitCapitalConstraintSignal(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return EXPLICIT_CAPITAL_CONSTRAINT_PATTERNS.some((p) => p.test(text));
+}
+
+function getJsonStringField(value: unknown, key: string): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const raw = record[key];
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function buildExplicitCapitalConstraintSoftExit(
+  persona: {
+    freeValueLink?: string | null;
+    downsellConfig?: Prisma.JsonValue | null;
+    promptConfig?: Prisma.JsonValue | null;
+  } | null
+): string {
+  const downsell = persona?.downsellConfig;
+  const promptConfig = persona?.promptConfig;
+  const downsellPitch = getJsonStringField(downsell, 'pitchMessage');
+  const downsellLink = getJsonStringField(downsell, 'link');
+  const youtubeUrl =
+    persona?.freeValueLink?.trim() ||
+    getJsonStringField(promptConfig, 'youtubeFallbackUrl') ||
+    getJsonStringField(promptConfig, 'freeValueLink');
+
+  if (downsellPitch) {
+    return downsellLink ? `${downsellPitch} ${downsellLink}` : downsellPitch;
+  }
+
+  if (youtubeUrl) {
+    return `love the honesty bro, where you're at right now the best move is to build the knowledge base first. start here for free: ${youtubeUrl}. when you're in a better spot financially hit me up and we'll get you set up properly`;
+  }
+
+  return "love the honesty bro, where you're at right now the best move is to build the knowledge base first. when you're in a better spot financially hit me up and we'll get you set up properly";
+}
+
 // Vague non-answers to a capital question — phrases that DON'T name a
 // number but pretend to. Lead said "starting with a manageable
 // amount" / "saving up" / "working on it" — needs a specific probe.
@@ -3942,6 +4073,7 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     /\b(lost\s+(so\s+much|a\s+lot|everything|it\s+all|my\s+money|my\s+capital|all\s+my\s+(money|capital|funds|savings?))|blew\s+up\s+(my|the)\s+account|wiped\s+(out\s+)?(my|the)\s+account|account'?s?\s+(been\s+)?blown|drained\s+my\s+account)\b/i;
   if (
     noCapital.test(text) ||
+    hasExplicitCapitalConstraintSignal(text) ||
     jobless.test(text) ||
     desperation.test(text) ||
     cantAffordBasics.test(text) ||
@@ -4253,6 +4385,19 @@ async function checkR24Verification(
   }
 
   if (!verificationAskedAt) {
+    const explicitConstraint = await findExplicitCapitalConstraintLeadMessage(
+      conversationId,
+      currentTurnLeadMsg
+    );
+    if (explicitConstraint) {
+      return finalize({
+        blocked: true,
+        reason: 'answer_below_threshold',
+        parsedAmount: 0,
+        verificationAskedAt: null,
+        verificationConfirmedAt: null
+      });
+    }
     return finalize({
       blocked: true,
       reason: 'never_asked',
@@ -4551,4 +4696,66 @@ async function checkR24Verification(
         verificationConfirmedAt: null
       });
   }
+}
+
+async function findExplicitCapitalConstraintLeadMessage(
+  conversationId: string,
+  currentTurnLeadMsg?: {
+    sender?: string;
+    content: string;
+    timestamp: Date | string;
+  }
+): Promise<{ id: string | null; content: string; timestamp: Date } | null> {
+  const leadMsgs = await prisma.message.findMany({
+    where: { conversationId, sender: 'LEAD' },
+    orderBy: { timestamp: 'asc' },
+    select: { id: true, sender: true, content: true, timestamp: true }
+  });
+
+  const candidates: Array<{
+    id: string | null;
+    sender: string;
+    content: string;
+    timestamp: Date;
+  }> = leadMsgs
+    .filter((m) => isLeadCapitalParseCandidate(m))
+    .map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      content: m.content,
+      timestamp: m.timestamp
+    }));
+
+  if (currentTurnLeadMsg) {
+    const overrideTs =
+      currentTurnLeadMsg.timestamp instanceof Date
+        ? currentTurnLeadMsg.timestamp
+        : new Date(currentTurnLeadMsg.timestamp);
+    const overrideCandidate = {
+      sender: currentTurnLeadMsg.sender ?? 'LEAD',
+      content: currentTurnLeadMsg.content
+    };
+    const alreadyInSet = candidates.some(
+      (m) =>
+        m.content === currentTurnLeadMsg.content &&
+        Math.abs(m.timestamp.getTime() - overrideTs.getTime()) < 2000
+    );
+    if (!alreadyInSet && isLeadCapitalParseCandidate(overrideCandidate)) {
+      candidates.push({
+        id: null,
+        sender: overrideCandidate.sender,
+        content: currentTurnLeadMsg.content,
+        timestamp: overrideTs
+      });
+    }
+  }
+
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const msg = candidates[i];
+    if (hasExplicitCapitalConstraintSignal(msg.content)) {
+      return { id: msg.id, content: msg.content, timestamp: msg.timestamp };
+    }
+  }
+
+  return null;
 }

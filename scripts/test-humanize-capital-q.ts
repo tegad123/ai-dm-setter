@@ -12,19 +12,26 @@
 //   TEST 6 — leadHasImplicitNoCapitalSignal coverage
 //   TEST 7 — countRealQuickPhraseUsage coverage
 //   TEST 8 — master prompt now uses open-ended default phrasing
+//   TEST 9 — explicit capital blocker parses as disqualified
+//   TEST 10 — 2+ year timeline blocks immediate call pitch
 
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local', override: true });
 
 import {
   scoreVoiceQualityGroup,
-  scoreVoiceQuality
+  scoreVoiceQuality,
+  leadGaveLongTimeline
 } from '../src/lib/voice-quality-gate';
 import {
   leadHasImplicitNoCapitalSignal,
   countRealQuickPhraseUsage
 } from '../src/lib/conversation-facts';
 import { buildDynamicSystemPrompt } from '../src/lib/ai-prompts';
+import {
+  hasExplicitCapitalConstraintSignal,
+  parseLeadCapitalAnswer
+} from '../src/lib/ai-engine';
 import prisma from '../src/lib/prisma';
 
 let pass = 0;
@@ -170,7 +177,10 @@ async function main() {
     'I got nothing rn',
     'unemployed currently',
     'still in college',
-    "i can't afford that"
+    "i can't afford that",
+    'capital and lack of knowledge is my problem',
+    'lack of capital',
+    "i don't have capital"
   ];
   for (const p of positives) {
     expect(
@@ -260,6 +270,50 @@ async function main() {
       false
     );
   }
+
+  // ── TEST 9: explicit capital blocker parses as disqualified ────
+  console.log('\n[TEST 9] explicit capital blocker');
+  const capitalBlockers = [
+    'capital and lack of knowledge is my problem',
+    "I don't have capital",
+    'capital is my problem',
+    'need capital first',
+    'lack of capital'
+  ];
+  for (const text of capitalBlockers) {
+    expect(
+      `signal positive: "${text}"`,
+      hasExplicitCapitalConstraintSignal(text),
+      true
+    );
+    expect(
+      `parser disqualifies: "${text}"`,
+      parseLeadCapitalAnswer(text).kind,
+      'disqualifier'
+    );
+  }
+
+  // ── TEST 10: 2+ year timeline must be probed first ────────────
+  console.log('\n[TEST 10] 2+ year timeline gate');
+  expect(
+    'detects "maybe in 2-3 years"',
+    leadGaveLongTimeline('maybe in 2-3 years'),
+    true
+  );
+  expect(
+    'does not confuse experience with timeline',
+    leadGaveLongTimeline("I've been trading 2 years"),
+    false
+  );
+  const r10 = scoreVoiceQualityGroup(
+    ["love that bro, let's get you on a quick call with Anthony"],
+    { previousLeadMessage: '2 or 3 years' }
+  );
+  expect(
+    'hard-fails call pitch after 2+ year timeline',
+    r10.hardFails.some((f) => f.includes('long_timeline_call_pitch:')),
+    true
+  );
 
   await prisma.$disconnect();
 

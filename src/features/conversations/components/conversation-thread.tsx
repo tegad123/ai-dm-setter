@@ -446,6 +446,10 @@ export function ConversationThread({
                   const isLead = sender === 'lead';
                   const isAI = sender === 'ai';
                   const isHuman = sender === 'human';
+                  const isOperatorNote =
+                    isHuman &&
+                    msg.content.trimStart().startsWith('OPERATOR NOTE:');
+                  if (isOperatorNote) return null;
                   // Multi-bubble grouping: a message is part of a group
                   // when messageGroupId is set. The previous/next sibling
                   // sharing the same non-null groupId determines whether
