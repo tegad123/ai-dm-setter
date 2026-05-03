@@ -215,15 +215,15 @@ enum TrainingOutcome {
 // ─── Multi-Tenant Models ────────────────────────────────
 
 model Account {
-  id                 String      @id @default(cuid())
-  name               String                          // Business name
-  slug               String      @unique             // URL-safe identifier
-  manyChatWebhookKey String      @unique @default(uuid())
-  logoUrl            String?
-  brandName          String?                         // Display name (optional override)
-  primaryColor       String?     @default("#2563EB") // Brand color
-  onboardingComplete Boolean     @default(false)
-  plan               AccountPlan @default(FREE)
+  id                         String      @id @default(cuid())
+  name                       String // Business name
+  slug                       String      @unique // URL-safe identifier
+  manyChatWebhookKey         String      @unique @default(uuid())
+  logoUrl                    String?
+  brandName                  String? // Display name (optional override)
+  primaryColor               String?     @default("#2563EB") // Brand color
+  onboardingComplete         Boolean     @default(false)
+  plan                       AccountPlan @default(FREE)
   // Per-platform AI Auto-Send toggles. These are the MASTER switch that
   // enables AI auto-reply for an entire platform. Required for any
   // auto-send: the webhook-processor requires BOTH this flag AND the
@@ -235,12 +235,12 @@ model Account {
   // "I want AI to handle new Instagram/Facebook leads from now on"
   // opt-in. Legacy single `awayMode` field is retained for the
   // migration window but no longer read at runtime.
-  awayMode           Boolean     @default(false)     // DEPRECATED — superseded by awayMode{Instagram,Facebook}
-  awayModeEnabledAt  DateTime?                       // DEPRECATED
-  awayModeInstagram           Boolean   @default(false)
-  awayModeInstagramEnabledAt  DateTime?
-  awayModeFacebook            Boolean   @default(false)
-  awayModeFacebookEnabledAt   DateTime?
+  awayMode                   Boolean     @default(false) // DEPRECATED — superseded by awayMode{Instagram,Facebook}
+  awayModeEnabledAt          DateTime? // DEPRECATED
+  awayModeInstagram          Boolean     @default(false)
+  awayModeInstagramEnabledAt DateTime?
+  awayModeFacebook           Boolean     @default(false)
+  awayModeFacebookEnabledAt  DateTime?
 
   // Master switch for the per-conversation suggestion-review banner.
   // When false, the banner never renders for this account regardless
@@ -252,8 +252,8 @@ model Account {
   // UX friction but DO still benefit from the AI's background
   // generation for quick manual-approve-per-convo workflows.
   // Default true so existing accounts keep the pre-flag behaviour.
-  showSuggestionBanner        Boolean   @default(true)
-  ghostThresholdDays Int         @default(7)         // Days of silence before auto-ghost
+  showSuggestionBanner Boolean @default(true)
+  ghostThresholdDays   Int     @default(7) // Days of silence before auto-ghost
 
   // ── Main-generation model routing ─────────────────────────────
   // Per-account override for which provider serves the primary
@@ -263,7 +263,7 @@ model Account {
   // still read OpenAI). Values: 'openai' (gpt-4o-mini default) |
   // 'anthropic' (claude-sonnet-4-6). Default 'openai' so no existing
   // account changes provider without an explicit flip.
-  aiProvider                  String        @default("openai")
+  aiProvider String @default("openai")
 
   // ── Notification preferences ──────────────────────────────────
   // Three groups:
@@ -274,17 +274,17 @@ model Account {
   //   muted in high-volume workspaces.
   //   EMAIL REPORTS — daily / weekly summaries (stub, not yet wired).
   // All default on except the activity-report toggles.
-  notifyOnDistress            Boolean @default(true)  // URGENT
-  notifyOnSchedulingConflict  Boolean @default(true)  // URGENT
-  notifyOnAIStuck             Boolean @default(true)  // URGENT
-  notifyOnHumanOverride       Boolean @default(true)  // ACTIVITY
-  notifyOnCallBooked          Boolean @default(true)  // ACTIVITY
-  notifyOnHotLead             Boolean @default(true)  // ACTIVITY
-  notifyOnBookingLimbo        Boolean @default(true)  // ACTIVITY (24h no-confirm)
-  notifyOnNoShow              Boolean @default(true)  // ACTIVITY
-  notifyOnClosedDeal          Boolean @default(true)  // ACTIVITY
-  emailDailySummary           Boolean @default(true)  // EMAIL REPORTS
-  emailWeeklyReport           Boolean @default(true)  // EMAIL REPORTS
+  notifyOnDistress           Boolean @default(true) // URGENT
+  notifyOnSchedulingConflict Boolean @default(true) // URGENT
+  notifyOnAIStuck            Boolean @default(true) // URGENT
+  notifyOnHumanOverride      Boolean @default(true) // ACTIVITY
+  notifyOnCallBooked         Boolean @default(true) // ACTIVITY
+  notifyOnHotLead            Boolean @default(true) // ACTIVITY
+  notifyOnBookingLimbo       Boolean @default(true) // ACTIVITY (24h no-confirm)
+  notifyOnNoShow             Boolean @default(true) // ACTIVITY
+  notifyOnClosedDeal         Boolean @default(true) // ACTIVITY
+  emailDailySummary          Boolean @default(true) // EMAIL REPORTS
+  emailWeeklyReport          Boolean @default(true) // EMAIL REPORTS
 
   // ── Safety: distress / crisis detection ───────────────────────
   // True by default. Cannot be toggled via the Persona Editor UI —
@@ -294,74 +294,74 @@ model Account {
   // pipeline. Any match pauses AI on the conversation, notifies the
   // operator, and routes the response through a dedicated supportive
   // (non-sales) reply path.
-  distressDetectionEnabled   Boolean       @default(true)
+  distressDetectionEnabled Boolean @default(true)
 
   // ── Closed-Loop Training ──────────────────────────────────
-  trainingPhase              TrainingPhase @default(ONBOARDING)
-  trainingPhaseStartedAt     DateTime      @default(now())
-  trainingPhaseCompletedAt   DateTime?
-  trainingTargetOverrideCount Int          @default(20) // Overrides needed to suggest "training complete"
-  trainingOverrideCount      Int           @default(0)  // Incremented on each human override during onboarding
+  trainingPhase               TrainingPhase @default(ONBOARDING)
+  trainingPhaseStartedAt      DateTime      @default(now())
+  trainingPhaseCompletedAt    DateTime?
+  trainingTargetOverrideCount Int           @default(20) // Overrides needed to suggest "training complete"
+  trainingOverrideCount       Int           @default(0) // Incremented on each human override during onboarding
 
   // ── Global AI Response Timing (applies to all scripts) ────
-  responseDelayMin           Int           @default(300) // Min response delay in seconds (default 5 min)
-  responseDelayMax           Int           @default(600) // Max response delay in seconds (default 10 min)
+  responseDelayMin Int @default(300) // Min response delay in seconds (default 5 min)
+  responseDelayMax Int @default(600) // Max response delay in seconds (default 10 min)
 
   // Debounce: wait this many seconds of silence from the lead before
   // generating. Each new lead message resets the timer. maxDebounceWindow
   // is a hard cap measured from the FIRST message in the current batch so
   // the AI doesn't go silent indefinitely on a chatty lead.
-  debounceWindowSeconds      Int           @default(45)
-  maxDebounceWindowSeconds   Int           @default(120)
+  debounceWindowSeconds    Int @default(45)
+  maxDebounceWindowSeconds Int @default(120)
 
-  createdAt          DateTime    @default(now())
-  updatedAt          DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  users              User[]
-  leads              Lead[]
-  notifications      Notification[]
-  personas           AIPersona[]
-  trainingExamples   TrainingExample[]
-  trainingUploads    TrainingUpload[]
-  trainingConversations TrainingConversation[]
-  personaBreakdowns  PersonaBreakdown[]
-  integrations       IntegrationCredential[]
-  tags               Tag[]
-  teamNotes          TeamNote[]
-  contentAttributions ContentAttribution[]
-  voiceNoteSlots     VoiceNoteSlot[]
-  voiceNoteLibrary   VoiceNoteLibraryItem[]
+  users                   User[]
+  leads                   Lead[]
+  notifications           Notification[]
+  personas                AIPersona[]
+  trainingExamples        TrainingExample[]
+  trainingUploads         TrainingUpload[]
+  trainingConversations   TrainingConversation[]
+  personaBreakdowns       PersonaBreakdown[]
+  integrations            IntegrationCredential[]
+  tags                    Tag[]
+  teamNotes               TeamNote[]
+  contentAttributions     ContentAttribution[]
+  voiceNoteSlots          VoiceNoteSlot[]
+  voiceNoteLibrary        VoiceNoteLibraryItem[]
   voiceNoteTimingSettings VoiceNoteTimingSettings?
-  scriptSlots        ScriptSlot[]
-  scripts            Script[]
-  trainingAnalyses   TrainingDataAnalysis[]
-  aiSuggestions      AISuggestion[]
-  inboundQualifications InboundQualification[]
-  trainingEvents     TrainingEvent[]
+  scriptSlots             ScriptSlot[]
+  scripts                 Script[]
+  trainingAnalyses        TrainingDataAnalysis[]
+  aiSuggestions           AISuggestion[]
+  inboundQualifications   InboundQualification[]
+  trainingEvents          TrainingEvent[]
 
   // ── Phase 1 super-admin dashboard (2026-04-28) ────────────────
   // Plan billing status (separate from `plan` enum; lifecycle state).
   // Default ACTIVE so existing accounts keep working without
   // backfill — new accounts can be flipped to TRIAL on creation.
-  planStatus         PlanStatus          @default(ACTIVE)
-  trialEndsAt        DateTime?
+  planStatus        PlanStatus          @default(ACTIVE)
+  trialEndsAt       DateTime?
   // Cached monthly API spend, refreshed by the health-check job.
   // Computed off AISuggestion.estimatedCostUsd over the trailing
   // 30d window. Decimal so we can show full-precision dollars in
   // the admin table.
-  monthlyApiCostUsd  Decimal             @default(0) @db.Decimal(10, 4)
+  monthlyApiCostUsd Decimal             @default(0) @db.Decimal(10, 4)
   // Coarse health rollup used by the admin overview table. Set by
   // the runHealthChecks helper. UNKNOWN = never run.
-  healthStatus       AccountHealthStatus @default(UNKNOWN)
-  lastHealthCheck    DateTime?
+  healthStatus      AccountHealthStatus @default(UNKNOWN)
+  lastHealthCheck   DateTime?
   // Onboarding wizard step (Phase 2). Pre-seeded so Phase 1 schema
   // doesn't need a follow-up migration when the wizard ships.
-  onboardingStep     Int                 @default(0)
+  onboardingStep    Int                 @default(0)
 
   // Cross-relation to AdminLog so audit rows survive cascade delete
   // of the account.
-  adminLogs          AdminLog[]
+  adminLogs AdminLog[]
 
   @@index([slug])
   @@index([healthStatus])
@@ -376,10 +376,10 @@ model Account {
 // admin endpoints.
 model AdminLog {
   id              String   @id @default(cuid())
-  adminUserId     String                                 // User.id of the SUPER_ADMIN
-  targetAccountId String?                                // Account.id, nullable for system-level actions
-  action          String                                 // e.g. 'impersonate.start', 'account.pause_ai', 'plan.change'
-  metadata        Json?                                  // Free-form per-action context (old/new values, reason, etc.)
+  adminUserId     String // User.id of the SUPER_ADMIN
+  targetAccountId String? // Account.id, nullable for system-level actions
+  action          String // e.g. 'impersonate.start', 'account.pause_ai', 'plan.change'
+  metadata        Json? // Free-form per-action context (old/new values, reason, etc.)
   createdAt       DateTime @default(now())
 
   adminUser     User     @relation("AdminUserLogs", fields: [adminUserId], references: [id], onDelete: Cascade)
@@ -391,30 +391,30 @@ model AdminLog {
 }
 
 model AIPersona {
-  id                       String   @id @default(cuid())
-  accountId                String
-  personaName              String                    // e.g. "Sales Daniel"
-  fullName                 String                    // e.g. "Daniel Elumelu"
-  companyName              String?                   // e.g. "DAE Trading Accelerator"
-  tone                     String?                   // e.g. "casual, direct, friendly"
-  systemPrompt             String   @db.Text         // Main conversation prompt
-  qualificationFlow        Json?                     // JSON array of qualification steps
-  objectionHandling        Json?                     // JSON object for objection responses
-  voiceNoteDecisionPrompt  String?  @db.Text
-  qualityScoringPrompt     String?  @db.Text
-  freeValueLink            String?                   // Bootcamp/resource URL
-  customPhrases            Json?                     // JSON: {"greeting": "yo", "affirmation": "bet"}
-  promptConfig             Json?                     // All template variables: {whatYouSell, adminBio, toneDescription, ...}
-  rawScript                String?  @db.Text          // Full uploaded sales script (plain text)
-  rawScriptFileName        String?                    // Original filename for UI display
-  styleAnalysis            String?  @db.Text          // AI-generated style analysis (markdown)
-  financialWaterfall       Json?                     // [{label, question, threshold?, passAction}]
-  downsellConfig           Json?                     // {productName, price, pitchMessage, link}
-  knowledgeAssets          Json?                     // [{key, title, content, deployTrigger}]
-  proofPoints              Json?                     // [{name, result, deployContext}]
-  noShowProtocol           Json?                     // {firstNoShow, secondNoShow, maxReschedules}
-  preCallSequence          Json?                     // [{timing, message}]
-  closerName               String?                   // Name of closer on calls
+  id                           String    @id @default(cuid())
+  accountId                    String
+  personaName                  String // e.g. "Sales Daniel"
+  fullName                     String // e.g. "Daniel Elumelu"
+  companyName                  String? // e.g. "DAE Trading Accelerator"
+  tone                         String? // e.g. "casual, direct, friendly"
+  systemPrompt                 String    @db.Text // Main conversation prompt
+  qualificationFlow            Json? // JSON array of qualification steps
+  objectionHandling            Json? // JSON object for objection responses
+  voiceNoteDecisionPrompt      String?   @db.Text
+  qualityScoringPrompt         String?   @db.Text
+  freeValueLink                String? // Bootcamp/resource URL
+  customPhrases                Json? // JSON: {"greeting": "yo", "affirmation": "bet"}
+  promptConfig                 Json? // All template variables: {whatYouSell, adminBio, toneDescription, ...}
+  rawScript                    String?   @db.Text // Full uploaded sales script (plain text)
+  rawScriptFileName            String? // Original filename for UI display
+  styleAnalysis                String?   @db.Text // AI-generated style analysis (markdown)
+  financialWaterfall           Json? // [{label, question, threshold?, passAction}]
+  downsellConfig               Json? // {productName, price, pitchMessage, link}
+  knowledgeAssets              Json? // [{key, title, content, deployTrigger}]
+  proofPoints                  Json? // [{name, result, deployContext}]
+  noShowProtocol               Json? // {firstNoShow, secondNoShow, maxReschedules}
+  preCallSequence              Json? // [{timing, message}]
+  closerName                   String? // Name of closer on calls
   // Day-to-day operator-edited context. activeCampaignsContext is free-
   // form text listing the account's current CTAs, content drops, and
   // promotions; the prompt injects it as an <active_campaigns> block so
@@ -422,23 +422,23 @@ model AIPersona {
   // fields track who last edited any persona context and when, so the
   // persona editor UI can show "Last updated 2 days ago by X" and give
   // operators an audit trail without a separate history table.
-  activeCampaignsContext   String?  @db.Text
-  contextUpdatedAt         DateTime?
-  contextUpdatedByUserId   String?
+  activeCampaignsContext       String?   @db.Text
+  contextUpdatedAt             DateTime?
+  contextUpdatedByUserId       String?
   // Capital-verification gate (R24). When set, the AI must verify the
   // lead's capital claim in DM before routing to booking — leads lie on
   // Typeform. If null, verification is skipped (backward compatible).
   // capitalVerificationPrompt is an optional override if the operator
   // wants custom wording; otherwise the default R24 phrasing is used.
-  minimumCapitalRequired   Int?
-  capitalVerificationPrompt String? @db.Text
+  minimumCapitalRequired       Int?
+  capitalVerificationPrompt    String?   @db.Text
   // Scope & Limits (R26). Free-form list of topics the AI should
   // politely decline — career advice, crypto, general investing, etc.
   // Augments the universal R26 "stay in scope" rule with account-specific
   // carveouts so a financial-literacy coach doesn't get false positives
   // on the off-topic regex guard, and a trading coach gets an explicit
   // "do NOT discuss general wealth-building" reinforcement.
-  outOfScopeTopics         String?  @db.Text
+  outOfScopeTopics             String?   @db.Text
   // R27: verified third-party facts the AI is allowed to assert. When a
   // lead asks about things the account owner hasn't personally disclosed
   // to the AI (closer's spoken languages, refund policy, exact offer
@@ -449,7 +449,7 @@ model AIPersona {
   // escalation territory — l.galeza's "Anthony speaks German" fabrication
   // would have been blocked if verifiedDetails said nothing about
   // Anthony's languages.
-  verifiedDetails          String?  @db.Text
+  verifiedDetails              String?   @db.Text
   // Script-restructuring flags. Operators whose scripts ask capital
   // early (before the Typeform / booking handoff) can opt out of the
   // Layer-1 serializer inject (which would otherwise prepend a
@@ -458,25 +458,25 @@ model AIPersona {
   // the soft pitch. Both default to false — existing accounts keep
   // the original prompt-enforced ordering. See the dual-enforcement
   // policy note at the top of ai-prompts.ts for rationale.
-  skipR24ScriptInject         Boolean  @default(false)
-  allowEarlyFinancialScreening Boolean  @default(false)
+  skipR24ScriptInject          Boolean   @default(false)
+  allowEarlyFinancialScreening Boolean   @default(false)
   // Multi-bubble delivery (single-message default preserves current
   // behaviour). When true, the system prompt injects a messages[]
   // schema so the LLM emits 1-4 short DM bubbles per turn, and the
   // delivery pipeline ships each one as a separate send with
   // realistic typing delays between.
-  multiBubbleEnabled          Boolean  @default(false)
-  responseDelayMin         Int      @default(300)     // Min response delay in seconds (default 5 min)
-  responseDelayMax         Int      @default(600)     // Max response delay in seconds (default 10 min)
-  voiceNotesEnabled        Boolean  @default(true)    // Whether voice notes are enabled
-  setupStep                Int      @default(0)       // Onboarding progress (0-8), 8 = all steps complete
-  setupComplete            Boolean  @default(false)   // All setup steps done
-  isActive                 Boolean  @default(false)   // AI goes live only after activation
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  multiBubbleEnabled           Boolean   @default(false)
+  responseDelayMin             Int       @default(300) // Min response delay in seconds (default 5 min)
+  responseDelayMax             Int       @default(600) // Max response delay in seconds (default 10 min)
+  voiceNotesEnabled            Boolean   @default(true) // Whether voice notes are enabled
+  setupStep                    Int       @default(0) // Onboarding progress (0-8), 8 = all steps complete
+  setupComplete                Boolean   @default(false) // All setup steps done
+  isActive                     Boolean   @default(false) // AI goes live only after activation
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
 
   // Relations
-  account               Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account               Account                @relation(fields: [accountId], references: [id], onDelete: Cascade)
   trainingExamples      TrainingExample[]
   trainingUploads       TrainingUpload[]
   trainingConversations TrainingConversation[]
@@ -501,7 +501,7 @@ model PersonaBreakdown {
   methodologySummary       String          @db.Text
   methodologySummaryEdited Boolean         @default(false)
   gaps                     Json?
-  scriptSteps              Json?                     // Array of ScriptStep objects (sequential flow view)
+  scriptSteps              Json? // Array of ScriptStep objects (sequential flow view)
   status                   BreakdownStatus @default(DRAFT)
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
@@ -572,7 +572,7 @@ model VoiceNoteSlot {
   breakdownId       String?
   slotName          String
   description       String              @db.Text
-  triggerCondition  Json                // { natural_language, structured: { step_id, branch_id, action_id } }
+  triggerCondition  Json // { natural_language, structured: { step_id, branch_id, action_id } }
   audioFileUrl      String?
   audioDurationSecs Float?
   uploadedAt        DateTime?
@@ -602,36 +602,36 @@ enum VoiceNoteLibraryStatus {
 }
 
 model VoiceNoteLibraryItem {
-  id                      String                   @id @default(cuid())
-  accountId               String
-  audioFileUrl            String
-  durationSeconds         Float
-  uploadedAt              DateTime                 @default(now())
-  transcript              String?                  @db.Text
-  summary                 String?                  @db.Text
-  useCases                String[]                 @default([])
-  leadTypes               String[]                 @default([])
-  conversationStages      String[]                 @default([])
-  emotionalTone           String?
+  id                       String                   @id @default(cuid())
+  accountId                String
+  audioFileUrl             String
+  durationSeconds          Float
+  uploadedAt               DateTime                 @default(now())
+  transcript               String?                  @db.Text
+  summary                  String?                  @db.Text
+  useCases                 String[]                 @default([])
+  leadTypes                String[]                 @default([])
+  conversationStages       String[]                 @default([])
+  emotionalTone            String?
   triggerConditionsNatural String?                  @db.Text
-  triggers                Json?                    // Structured trigger objects array
-  triggerDescription      String?                  @db.Text
-  legacyTriggerText       String?                  @db.Text
-  boundToScriptStep       String?
-  scriptBindings          Json?                    // Array of { script_id, step_id, branch_id, action_id, bound_at }
-  userLabel               String?
-  userNotes               String?                  @db.Text
-  priority                Int                      @default(0)
-  active                  Boolean                  @default(false)
-  embeddingVector         Json?
-  autoSuggestedTriggers   Json?                    // LLM-generated trigger suggestions stored pre-approval
-  suggestionStatus        TriggerSuggestionStatus? // null = no suggestions yet
-  status                  VoiceNoteLibraryStatus   @default(PROCESSING)
-  errorMessage            String?
-  createdAt               DateTime                 @default(now())
-  lastEditedAt            DateTime                 @updatedAt
+  triggers                 Json? // Structured trigger objects array
+  triggerDescription       String?                  @db.Text
+  legacyTriggerText        String?                  @db.Text
+  boundToScriptStep        String?
+  scriptBindings           Json? // Array of { script_id, step_id, branch_id, action_id, bound_at }
+  userLabel                String?
+  userNotes                String?                  @db.Text
+  priority                 Int                      @default(0)
+  active                   Boolean                  @default(false)
+  embeddingVector          Json?
+  autoSuggestedTriggers    Json? // LLM-generated trigger suggestions stored pre-approval
+  suggestionStatus         TriggerSuggestionStatus? // null = no suggestions yet
+  status                   VoiceNoteLibraryStatus   @default(PROCESSING)
+  errorMessage             String?
+  createdAt                DateTime                 @default(now())
+  lastEditedAt             DateTime                 @updatedAt
 
-  account            Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account            Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
   scriptSlotBindings ScriptSlot[]
   scriptActions      ScriptAction[] @relation("ActionVoiceNote")
 
@@ -643,44 +643,44 @@ model VoiceNoteLibraryItem {
 // ─── Script Slot System (Sprint 3) ─────────────────────
 
 model ScriptSlot {
-  id                String   @id @default(cuid())
-  accountId         String
-  breakdownId       String
-  slotType          String                           // "voice_note" | "link" | "form" | "runtime_judgment" | "text_gap"
-  stepId            String                           // which script step this slot belongs to
-  branchId          String?                          // which branch within the step (null for step-level)
-  actionId          String?                          // which action within the branch (null for step-level)
-  detectedName      String?                          // e.g., "BREAKDOWN", "BOOKING LINK"
-  description       String?  @db.Text                // AI-generated context description
+  id           String  @id @default(cuid())
+  accountId    String
+  breakdownId  String
+  slotType     String // "voice_note" | "link" | "form" | "runtime_judgment" | "text_gap"
+  stepId       String // which script step this slot belongs to
+  branchId     String? // which branch within the step (null for step-level)
+  actionId     String? // which action within the branch (null for step-level)
+  detectedName String? // e.g., "BREAKDOWN", "BOOKING LINK"
+  description  String? @db.Text // AI-generated context description
 
   // Voice note specific
-  suggestedTrigger  Json?                            // AI-suggested structured trigger from script context
-  boundVoiceNoteId  String?                          // FK to VoiceNoteLibraryItem once bound
+  suggestedTrigger Json? // AI-suggested structured trigger from script context
+  boundVoiceNoteId String? // FK to VoiceNoteLibraryItem once bound
 
   // Link specific
-  linkDescription   String?  @db.Text                // AI-generated description of what link should point to
-  url               String?                          // user-provided URL
+  linkDescription String? @db.Text // AI-generated description of what link should point to
+  url             String? // user-provided URL
 
   // Form specific
-  formSchema        Json?                            // { fields: [{ field_id, field_type, label, placeholder, required }] }
-  formValues        Json?                            // user-provided values keyed by field_id
+  formSchema Json? // { fields: [{ field_id, field_type, label, placeholder, required }] }
+  formValues Json? // user-provided values keyed by field_id
 
   // Text gap specific
-  suggestedContent  String?  @db.Text                // AI-generated best-guess content
-  userContent       String?  @db.Text                // user-provided content
+  suggestedContent String? @db.Text // AI-generated best-guess content
+  userContent      String? @db.Text // user-provided content
 
   // Runtime judgment specific
-  instruction       String?  @db.Text                // verbatim instruction from script
-  context           String?  @db.Text                // AI-generated context for what factors to consider
+  instruction String? @db.Text // verbatim instruction from script
+  context     String? @db.Text // AI-generated context for what factors to consider
 
   // Status
-  status            String   @default("unfilled")    // "unfilled" | "filled" | "bound" | "partially_filled" | "complete"
-  orderIndex        Int      @default(0)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  status     String   @default("unfilled") // "unfilled" | "filled" | "bound" | "partially_filled" | "complete"
+  orderIndex Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  account        Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  breakdown      PersonaBreakdown     @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
+  account        Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  breakdown      PersonaBreakdown      @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
   boundVoiceNote VoiceNoteLibraryItem? @relation(fields: [boundVoiceNoteId], references: [id], onDelete: SetNull)
 
   @@index([accountId])
@@ -706,8 +706,8 @@ model TrainingExample {
   accountId     String
   personaId     String
   category      TrainingCategory
-  leadMessage   String           @db.Text  // What the lead said
-  idealResponse String           @db.Text  // How the AI should reply
+  leadMessage   String           @db.Text // What the lead said
+  idealResponse String           @db.Text // How the AI should reply
   notes         String?
   createdAt     DateTime         @default(now())
 
@@ -726,8 +726,8 @@ model TrainingUpload {
   accountId         String
   personaId         String
   fileName          String
-  fileHash          String       // SHA-256 of PDF bytes for dedup
-  blobUrl           String       // placeholder identifier
+  fileHash          String // SHA-256 of PDF bytes for dedup
+  blobUrl           String // placeholder identifier
   pdfBase64         String?      @db.Text // original PDF as base64 for Claude native doc
   rawText           String?      @db.Text
   status            UploadStatus @default(PENDING)
@@ -737,8 +737,8 @@ model TrainingUpload {
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
-  account       Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  persona       AIPersona             @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  account       Account                @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona       AIPersona              @relation(fields: [personaId], references: [id], onDelete: Cascade)
   conversations TrainingConversation[]
 
   @@unique([accountId, fileHash])
@@ -752,24 +752,24 @@ model TrainingConversation {
   personaId          String
   leadIdentifier     String
   outcomeLabel       TrainingOutcome @default(UNKNOWN)
-  contentHash        String          // SHA-256 of normalized message text
+  contentHash        String // SHA-256 of normalized message text
   messageCount       Int             @default(0)
   closerMessageCount Int             @default(0)
   leadMessageCount   Int             @default(0)
   voiceNoteCount     Int             @default(0)
-  startedAt            DateTime?
-  endedAt              DateTime?
-  createdAt            DateTime        @default(now())
+  startedAt          DateTime?
+  endedAt            DateTime?
+  createdAt          DateTime        @default(now())
 
   // Analyzer-populated metadata (written back after LLM classification)
-  leadType             String?         // beginner, intermediate, experienced_no_results, etc.
-  primaryObjectionType String?         // price_objection, skepticism_or_scam_concern, etc.
-  dominantStage        String?         // intro, qualification, objection_handling, etc.
-  analyzedAt           DateTime?       // When metadata was last classified
+  leadType             String? // beginner, intermediate, experienced_no_results, etc.
+  primaryObjectionType String? // price_objection, skepticism_or_scam_concern, etc.
+  dominantStage        String? // intro, qualification, objection_handling, etc.
+  analyzedAt           DateTime? // When metadata was last classified
 
-  upload   TrainingUpload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
-  account  Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  persona  AIPersona        @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  upload   TrainingUpload    @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  account  Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  persona  AIPersona         @relation(fields: [personaId], references: [id], onDelete: Cascade)
   messages TrainingMessage[]
 
   @@unique([accountId, contentHash])
@@ -780,16 +780,16 @@ model TrainingConversation {
 }
 
 model TrainingMessage {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   conversationId  String
-  sender          String   // "CLOSER" | "LEAD"
-  text            String?  @db.Text
+  sender          String // "CLOSER" | "LEAD"
+  text            String?   @db.Text
   timestamp       DateTime?
-  messageType     String   @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
-  stage           String?  // intro, qualification, etc. (populated by analyzer)
-  objectionType   String?  // price_objection, skepticism_or_scam_concern, etc. (populated by analyzer)
+  messageType     String    @default("TEXT") // TEXT, VOICE_NOTE, SYSTEM, REACTION, URL_DROP
+  stage           String? // intro, qualification, etc. (populated by analyzer)
+  objectionType   String? // price_objection, skepticism_or_scam_concern, etc. (populated by analyzer)
   orderIndex      Int
-  embeddingVector Json?    // OpenAI text-embedding-3-small vector (lead messages only)
+  embeddingVector Json? // OpenAI text-embedding-3-small vector (lead messages only)
 
   conversation TrainingConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -800,8 +800,8 @@ model IntegrationCredential {
   id          String              @id @default(cuid())
   accountId   String
   provider    IntegrationProvider
-  credentials Json                // Encrypted: {accessToken, apiKey, etc.}
-  metadata    Json?               // Non-secret config: {pageId, voiceId, calendarId}
+  credentials Json // Encrypted: {accessToken, apiKey, etc.}
+  metadata    Json? // Non-secret config: {pageId, voiceId, calendarId}
   isActive    Boolean             @default(true)
   verifiedAt  DateTime?
   createdAt   DateTime            @default(now())
@@ -825,24 +825,24 @@ model User {
   role            Role     @default(SETTER)
   avatarUrl       String?
   isActive        Boolean  @default(true)
-  commissionRate  Float?   @default(0)      // Percentage (e.g., 10.0 = 10%)
-  totalCommission Float    @default(0)      // Lifetime earned commission
-  avgResponseTime Int?                       // Average response time in seconds
+  commissionRate  Float?   @default(0) // Percentage (e.g., 10.0 = 10%)
+  totalCommission Float    @default(0) // Lifetime earned commission
+  avgResponseTime Int? // Average response time in seconds
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   // Relations
-  account         Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  notifications   Notification[]
-  sentMessages    Message[]       @relation("HumanSender")
-  teamNotes       TeamNote[]
-  leadsHandled    Int             @default(0)
-  callsBooked     Int             @default(0)
-  closeRate       Float?
+  account       Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+  sentMessages  Message[]      @relation("HumanSender")
+  teamNotes     TeamNote[]
+  leadsHandled  Int            @default(0)
+  callsBooked   Int            @default(0)
+  closeRate     Float?
 
   // Phase 1 super-admin: audit log of platform-level actions taken
   // by this user (only populated when role=SUPER_ADMIN).
-  adminLogs       AdminLog[]      @relation("AdminUserLogs")
+  adminLogs AdminLog[] @relation("AdminUserLogs")
 
   @@index([accountId])
   @@index([email])
@@ -850,43 +850,43 @@ model User {
 }
 
 model Lead {
-  id                     String     @id @default(cuid())
-  accountId              String
-  name                   String
-  handle                 String
-  platform               Platform
-  stage                  LeadStage  @default(NEW_LEAD)
-  previousStage          LeadStage?
-  stageEnteredAt         DateTime   @default(now())
-  qualityScore           Int        @default(0)
-  triggerType            TriggerType
-  triggerSource          String?              // Which post/DM triggered entry
-  bookedAt               DateTime?
-  showedUp               Boolean    @default(false)
-  closedAt               DateTime?
-  revenue                Float?
-  platformUserId         String?              // Meta user ID for API calls
-  contentAttributionId   String?              // Which content generated this lead
-  email                  String?              // Email captured directly from lead messages
-  timezone               String?              // IANA timezone e.g. "America/New_York"
-  experience             String?              // "beginner" | "intermediate" | "experienced"
-  incomeLevel            String?              // "low" | "mid" | "high"
-  geography              String?              // "US" | "Europe" | "Other"
+  id                    String      @id @default(cuid())
+  accountId             String
+  name                  String
+  handle                String
+  platform              Platform
+  stage                 LeadStage   @default(NEW_LEAD)
+  previousStage         LeadStage?
+  stageEnteredAt        DateTime    @default(now())
+  qualityScore          Int         @default(0)
+  triggerType           TriggerType
+  triggerSource         String? // Which post/DM triggered entry
+  bookedAt              DateTime?
+  showedUp              Boolean     @default(false)
+  closedAt              DateTime?
+  revenue               Float?
+  platformUserId        String? // Meta user ID for API calls
+  contentAttributionId  String? // Which content generated this lead
+  email                 String? // Email captured directly from lead messages
+  timezone              String? // IANA timezone e.g. "America/New_York"
+  experience            String? // "beginner" | "intermediate" | "experienced"
+  incomeLevel           String? // "low" | "mid" | "high"
+  geography             String? // "US" | "Europe" | "Other"
   // Set true when the geography gate (persona-controlled, opt-in)
   // disqualified this lead before any AI generation fired. Permanent
   // flag — if an operator overrides and re-engages, this stays true so
   // analytics can credit the saved generation cost.
-  geographyDisqualified  Boolean    @default(false)
-  createdAt              DateTime   @default(now())
-  updatedAt              DateTime   @updatedAt
+  geographyDisqualified Boolean     @default(false)
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
 
   // Relations
-  account              Account              @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account              Account               @relation(fields: [accountId], references: [id], onDelete: Cascade)
   conversation         Conversation?
   notifications        Notification[]
   tags                 LeadTag[]
   teamNotes            TeamNote[]
-  contentAttribution   ContentAttribution?  @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
+  contentAttribution   ContentAttribution?   @relation(fields: [contentAttributionId], references: [id], onDelete: SetNull)
   crmOutcomes          CrmOutcome[]
   abTestAssignments    ABTestAssignment[]
   stageTransitions     LeadStageTransition[]
@@ -901,22 +901,22 @@ model Lead {
 }
 
 model Conversation {
-  id              String              @id @default(cuid())
-  leadId          String              @unique
-  aiActive        Boolean             @default(true)
-  unreadCount     Int                 @default(0)
-  priorityScore   Int                 @default(0)       // 0-100, higher = hotter lead
-  lastAIAnalysis  DateTime?                              // When AI last scored this conversation
-  lastMessageAt   DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  id             String    @id @default(cuid())
+  leadId         String    @unique
+  aiActive       Boolean   @default(true)
+  unreadCount    Int       @default(0)
+  priorityScore  Int       @default(0) // 0-100, higher = hotter lead
+  lastAIAnalysis DateTime? // When AI last scored this conversation
+  lastMessageAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   // Self-Optimizing Layer: Outcome + Tracking
-  outcome         ConversationOutcome @default(ONGOING)
-  leadSource      LeadSource?
-  leadIntentTag   LeadIntentTag       @default(NEUTRAL)
-  dataSource      DataSource          @default(LIVE)
-  consentToLog    Boolean             @default(true)
+  outcome       ConversationOutcome @default(ONGOING)
+  leadSource    LeadSource?
+  leadIntentTag LeadIntentTag       @default(NEUTRAL)
+  dataSource    DataSource          @default(LIVE)
+  consentToLog  Boolean             @default(true)
 
   // ── Safety: distress / crisis detection ───────────────────────
   // Set true when the lead's message triggered the distress-detector
@@ -926,9 +926,9 @@ model Conversation {
   // override on resume. distressMessageId points at the Message that
   // triggered detection so the operator's review can jump straight
   // to the right turn.
-  distressDetected     Boolean   @default(false)
-  distressDetectedAt   DateTime?
-  distressMessageId    String?
+  distressDetected   Boolean   @default(false)
+  distressDetectedAt DateTime?
+  distressMessageId  String?
 
   // ── Scheduling conflict ───────────────────────────────────────
   // Set when a lead with a filled Typeform (stage=CALL_PROPOSED)
@@ -938,9 +938,9 @@ model Conversation {
   // Account.notificationEmail. `schedulingConflictPreference` holds
   // any parsed day/time signal the lead gave so the operator can
   // confirm quickly.
-  schedulingConflict          Boolean   @default(false)
-  schedulingConflictAt        DateTime?
-  schedulingConflictMessageId String?
+  schedulingConflict           Boolean   @default(false)
+  schedulingConflictAt         DateTime?
+  schedulingConflictMessageId  String?
   schedulingConflictPreference String?
 
   // ── Typeform screened out ─────────────────────────────────────
@@ -958,21 +958,21 @@ model Conversation {
   // detects a ManyChat subscriber at conversation-creation time —
   // suppresses the AI's opener (ManyChat already sent one) and
   // injects an outbound_context block in the system prompt.
-  source               ConversationSource @default(INBOUND)
-  manyChatOpenerMessage String?   @db.Text
+  source                ConversationSource @default(INBOUND)
+  manyChatOpenerMessage String?            @db.Text
   manyChatTriggerType   String?
-  manyChatCommentText   String?   @db.Text
+  manyChatCommentText   String?            @db.Text
   manyChatFiredAt       DateTime?
 
   // ── Typeform application / booking handoff ─────────────────────
   // Populated by POST /api/webhooks/typeform after signature
   // verification. Lets the AI avoid re-asking application questions
   // and lets managers see form-only leads that need manual review.
-  typeformSubmittedAt       DateTime?
-  typeformResponseToken     String?   @unique
-  typeformCapitalConfirmed  Int?
-  typeformCallScheduledAt   DateTime?
-  typeformAnswers           Json?
+  typeformSubmittedAt      DateTime?
+  typeformResponseToken    String?   @unique
+  typeformCapitalConfirmed Int?
+  typeformCallScheduledAt  DateTime?
+  typeformAnswers          Json?
 
   // ── Durable capital-verification state ────────────────────────
   // R24 should not re-read the whole message history after a lead has
@@ -988,8 +988,8 @@ model Conversation {
   // as based outside the supported regions. The exit message is sent
   // ONCE; AI is paused; no follow-ups are scheduled. geographyCountry
   // stores the detected country name for sidebar display + analytics.
-  geographyGated       Boolean   @default(false)
-  geographyCountry     String?
+  geographyGated   Boolean @default(false)
+  geographyCountry String?
 
   // ── Per-conversation auto-send override ───────────────────────
   // When true, this specific conversation auto-sends even if the
@@ -998,56 +998,56 @@ model Conversation {
   // operator "graduate" an individual lead to AI-autonomous while
   // keeping training-mode intact for everyone else. Evaluated in
   // `shouldAutoSend` as OR alongside `awayModeForPlatform`.
-  autoSendOverride     Boolean   @default(false)
+  autoSendOverride Boolean @default(false)
 
   // Stage reached timestamps (set once, when first reached)
   // Legacy stages (kept for historical data)
-  stageQualificationAt         DateTime?
-  stageVisionBuildingAt        DateTime?
-  stagePainIdentificationAt    DateTime?
-  stageSolutionOfferAt         DateTime?
-  stageCapitalQualificationAt  DateTime?
+  stageQualificationAt        DateTime?
+  stageVisionBuildingAt       DateTime?
+  stagePainIdentificationAt   DateTime?
+  stageSolutionOfferAt        DateTime?
+  stageCapitalQualificationAt DateTime?
   // Current stages (7-stage SOP sequence)
-  stageOpeningAt               DateTime?
-  stageSituationDiscoveryAt    DateTime?
-  stageGoalEmotionalWhyAt      DateTime?
-  stageUrgencyAt               DateTime?
-  stageSoftPitchCommitmentAt   DateTime?
-  stageFinancialScreeningAt    DateTime?
-  stageBookingAt               DateTime?
+  stageOpeningAt              DateTime?
+  stageSituationDiscoveryAt   DateTime?
+  stageGoalEmotionalWhyAt     DateTime?
+  stageUrgencyAt              DateTime?
+  stageSoftPitchCommitmentAt  DateTime?
+  stageFinancialScreeningAt   DateTime?
+  stageBookingAt              DateTime?
 
   // Booking-stage state (populated as the lead answers each question)
-  leadTimezone   String?   // IANA tz, e.g. "America/New_York" or "EST"
-  leadEmail      String?   // Captured during Stage 7 booking info collection
-  leadPhone      String?   // Optional if captured
-  proposedSlots  Json?     // Last set of slots offered to lead: TimeSlot[]
-  selectedSlot   Json?     // Slot lead confirmed: TimeSlot
-  bookingId      String?   // LeadConnector appointment id after successful book
-  bookingUrl     String?   // Fallback link if provider doesn't support server-side booking
+  leadTimezone  String? // IANA tz, e.g. "America/New_York" or "EST"
+  leadEmail     String? // Captured during Stage 7 booking info collection
+  leadPhone     String? // Optional if captured
+  proposedSlots Json? // Last set of slots offered to lead: TimeSlot[]
+  selectedSlot  Json? // Slot lead confirmed: TimeSlot
+  bookingId     String? // LeadConnector appointment id after successful book
+  bookingUrl    String? // Fallback link if provider doesn't support server-side booking
 
   // Call-scheduling state (set by human operator via Call Details UI,
   // or by AI parsing from the lead's message with explicit confirmation).
   // Drives reminder scheduling + sidebar badges. Distinct from the booking
   // fields above: those track the automated Stage-7 flow; these track the
   // actual confirmed call the lead is showing up for.
-  scheduledCallAt          DateTime?
-  scheduledCallTimezone    String?
-  scheduledCallSource      ScheduledCallSource?
-  scheduledCallConfirmed   Boolean   @default(false)
-  scheduledCallNote        String?
-  scheduledCallUpdatedAt   DateTime?
-  scheduledCallUpdatedBy   String?   // User.id — for audit trail
-  callConfirmed            Boolean   @default(false)
-  callConfirmedAt          DateTime?
-  callOutcome              String?   // SHOWED, NO_SHOWED, RESCHEDULED
+  scheduledCallAt        DateTime?
+  scheduledCallTimezone  String?
+  scheduledCallSource    ScheduledCallSource?
+  scheduledCallConfirmed Boolean              @default(false)
+  scheduledCallNote      String?
+  scheduledCallUpdatedAt DateTime?
+  scheduledCallUpdatedBy String? // User.id — for audit trail
+  callConfirmed          Boolean              @default(false)
+  callConfirmedAt        DateTime?
+  callOutcome            String? // SHOWED, NO_SHOWED, RESCHEDULED
 
   // Relations
-  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  messages       Message[]
-  aiSuggestions  AISuggestion[]
+  lead                 Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messages             Message[]
+  aiSuggestions        AISuggestion[]
   inboundQualification InboundQualification?
-  scheduledMessages ScheduledMessage[]
-  trainingEvents TrainingEvent[]
+  scheduledMessages    ScheduledMessage[]
+  trainingEvents       TrainingEvent[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
@@ -1059,39 +1059,39 @@ model Conversation {
 }
 
 model Message {
-  id             String        @id @default(cuid())
-  conversationId String
-  sender         MessageSender
-  content        String
-  isVoiceNote    Boolean       @default(false)
-  voiceNoteUrl   String?
-  imageUrl       String?       // Permanent URL of image sent by lead; Meta CDN fallback may expire
-  hasImage       Boolean       @default(false)
-  sentByUserId      String?                // Only for HUMAN sender
-  platformMessageId String?                // Meta's message ID (event.message.mid) for dedup
-  timestamp         DateTime   @default(now())
+  id                String        @id @default(cuid())
+  conversationId    String
+  sender            MessageSender
+  content           String
+  isVoiceNote       Boolean       @default(false)
+  voiceNoteUrl      String?
+  imageUrl          String? // Permanent URL of image sent by lead; Meta CDN fallback may expire
+  hasImage          Boolean       @default(false)
+  sentByUserId      String? // Only for HUMAN sender
+  platformMessageId String? // Meta's message ID (event.message.mid) for dedup
+  timestamp         DateTime      @default(now())
 
   // Self-Optimizing Layer: Effectiveness Tracking
-  stage                      String?   // Conversation stage from AI response
-  subStage                   String?   // Sub-stage (PATH_A, PATH_B, WATERFALL_L1-L4, etc.)
-  stageConfidence            Float?    // 0-1 confidence in stage classification
-  sentimentScore             Float?    // -1 to 1 lead sentiment (secondary signal)
-  experiencePath             String?   // BEGINNER or EXPERIENCED (lead classification)
-  objectionType              String?   // Detected objection: TRUST, MONEY, TIME, PRIOR_FAILURE, PARTNER
-  stallType                  String?   // Detected stall: TIME_DELAY, MONEY_DELAY, THINKING, PARTNER, GHOST
-  gotResponse                Boolean?  // Back-filled: did lead reply after this AI msg?
-  leadContinuedConversation  Boolean?  // Back-filled: did lead send 2+ more msgs?
-  responseTimeSeconds        Int?      // Back-filled: seconds until lead's next reply
-  followUpAttemptNumber      Int?      // For ghosted lead follow-ups (1, 2, 3)
-  systemPromptVersion        String?   // Semver of prompt used to generate this message
+  stage                     String? // Conversation stage from AI response
+  subStage                  String? // Sub-stage (PATH_A, PATH_B, WATERFALL_L1-L4, etc.)
+  stageConfidence           Float? // 0-1 confidence in stage classification
+  sentimentScore            Float? // -1 to 1 lead sentiment (secondary signal)
+  experiencePath            String? // BEGINNER or EXPERIENCED (lead classification)
+  objectionType             String? // Detected objection: TRUST, MONEY, TIME, PRIOR_FAILURE, PARTNER
+  stallType                 String? // Detected stall: TIME_DELAY, MONEY_DELAY, THINKING, PARTNER, GHOST
+  gotResponse               Boolean? // Back-filled: did lead reply after this AI msg?
+  leadContinuedConversation Boolean? // Back-filled: did lead send 2+ more msgs?
+  responseTimeSeconds       Int? // Back-filled: seconds until lead's next reply
+  followUpAttemptNumber     Int? // For ghosted lead follow-ups (1, 2, 3)
+  systemPromptVersion       String? // Semver of prompt used to generate this message
 
   // ── Closed-Loop Training Fields ────────────────────────────
-  isHumanOverride            Boolean   @default(false) // True when human sent this instead of AI
-  rejectedAISuggestionId     String?                   // FK to AISuggestion the human rejected
-  editedFromSuggestion       Boolean   @default(false) // True if human text was similar to suggestion (>0.7)
-  suggestionId               String?                   // FK to AISuggestion that generated this AI message
-  humanOverrideNote          String?   @db.Text        // Optional 1-line reason from human
-  loggedDuringTrainingPhase  Boolean   @default(false) // Snapshot: was account in ONBOARDING when saved?
+  isHumanOverride           Boolean @default(false) // True when human sent this instead of AI
+  rejectedAISuggestionId    String? // FK to AISuggestion the human rejected
+  editedFromSuggestion      Boolean @default(false) // True if human text was similar to suggestion (>0.7)
+  suggestionId              String? // FK to AISuggestion that generated this AI message
+  humanOverrideNote         String? @db.Text // Optional 1-line reason from human
+  loggedDuringTrainingPhase Boolean @default(false) // Snapshot: was account in ONBOARDING when saved?
 
   // ── Source of HUMAN messages ──────────────────────────────
   // Distinguishes where a HUMAN-sent message originated:
@@ -1101,7 +1101,7 @@ model Message {
   // Null for AI / LEAD senders. Used by the conversation thread UI
   // to label phone-sent messages with a "from phone" badge so
   // operators can tell at a glance where each HUMAN reply came from.
-  humanSource                String?
+  humanSource String?
 
   // ── Multi-Bubble Delivery ──────────────────────────────────
   // Nullable so legacy single-message rows remain unchanged. When
@@ -1110,17 +1110,17 @@ model Message {
   // order within the group, bubbleTotalCount is denormalised for
   // easy queries. Rows with null messageGroupId are single-message
   // (implicit 1-bubble group).
-  messageGroupId             String?
-  bubbleIndex                Int?
-  bubbleTotalCount           Int?
-  intraGroupDelayMs          Int?
+  messageGroupId    String?
+  bubbleIndex       Int?
+  bubbleTotalCount  Int?
+  intraGroupDelayMs Int?
 
   // Relations
-  conversation        Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sentByUser          User?         @relation("HumanSender", fields: [sentByUserId], references: [id])
-  suggestion          AISuggestion? @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
-  rejectedSuggestion  AISuggestion? @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
-  messageGroup        MessageGroup? @relation(fields: [messageGroupId], references: [id], onDelete: SetNull)
+  conversation       Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentByUser         User?         @relation("HumanSender", fields: [sentByUserId], references: [id])
+  suggestion         AISuggestion? @relation("SelectedSuggestion", fields: [suggestionId], references: [id])
+  rejectedSuggestion AISuggestion? @relation("RejectedSuggestion", fields: [rejectedAISuggestionId], references: [id])
+  messageGroup       MessageGroup? @relation(fields: [messageGroupId], references: [id], onDelete: SetNull)
 
   @@unique([conversationId, platformMessageId])
   @@index([conversationId, timestamp])
@@ -1147,8 +1147,8 @@ model MessageGroup {
   failedAt        DateTime?
   deliveryNotes   Json?
 
-  messages        Message[]
-  aiSuggestion    AISuggestion? @relation(fields: [aiSuggestionId], references: [id], onDelete: SetNull)
+  messages     Message[]
+  aiSuggestion AISuggestion? @relation(fields: [aiSuggestionId], references: [id], onDelete: SetNull)
 
   @@index([conversationId, generatedAt(sort: Desc)])
   @@index([aiSuggestionId])
@@ -1157,7 +1157,7 @@ model MessageGroup {
 model Notification {
   id        String           @id @default(cuid())
   accountId String
-  userId    String?                     // null = team-wide
+  userId    String? // null = team-wide
   type      NotificationType
   title     String
   body      String
@@ -1178,13 +1178,13 @@ model Notification {
 // ─── Phase 1: Competitive Feature Models ──────────────
 
 model Tag {
-  id        String    @id @default(cuid())
-  name      String                            // e.g. "HIGH_INTENT", "GHOST_RISK"
-  color     String    @default("#6B7280")     // Hex color for UI badge
-  isAuto    Boolean   @default(false)         // true = AI-generated tag
+  id        String   @id @default(cuid())
+  name      String // e.g. "HIGH_INTENT", "GHOST_RISK"
+  color     String   @default("#6B7280") // Hex color for UI badge
+  isAuto    Boolean  @default(false) // true = AI-generated tag
   accountId String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   account Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -1198,8 +1198,8 @@ model LeadTag {
   id         String   @id @default(cuid())
   leadId     String
   tagId      String
-  appliedBy  String?                          // userId or "AI" for auto-tags
-  confidence Float?                           // AI confidence score (0-1)
+  appliedBy  String? // userId or "AI" for auto-tags
+  confidence Float? // AI confidence score (0-1)
   createdAt  DateTime @default(now())
 
   // Relations
@@ -1231,16 +1231,16 @@ model TeamNote {
 
 model ContentAttribution {
   id          String      @id @default(cuid())
-  contentType ContentType                     // REEL, STORY, POST, LIVE, AD, etc.
-  contentId   String?                         // Platform-specific content ID
-  contentUrl  String?                         // URL to the original content
-  caption     String?     @db.Text            // Caption text (or first portion)
-  platform    Platform                        // INSTAGRAM, FACEBOOK
+  contentType ContentType // REEL, STORY, POST, LIVE, AD, etc.
+  contentId   String? // Platform-specific content ID
+  contentUrl  String? // URL to the original content
+  caption     String?     @db.Text // Caption text (or first portion)
+  platform    Platform // INSTAGRAM, FACEBOOK
   accountId   String
-  leadsCount  Int         @default(0)         // Denormalized count for performance
-  revenue     Float       @default(0)         // Denormalized revenue total
-  callsBooked Int         @default(0)         // Denormalized calls booked count
-  postedAt    DateTime?                       // When the content was posted
+  leadsCount  Int         @default(0) // Denormalized count for performance
+  revenue     Float       @default(0) // Denormalized revenue total
+  callsBooked Int         @default(0) // Denormalized calls booked count
+  postedAt    DateTime? // When the content was posted
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
@@ -1256,34 +1256,34 @@ model ContentAttribution {
 // ─── Self-Optimizing Layer Models ─────────────────────
 
 model PromptVersion {
-  id              String   @id @default(cuid())
-  accountId       String
-  version         String   // Semver: "1.0.0", "1.1.0", etc.
-  promptHash      String   // SHA-256 hash of rendered prompt (minus lead-specific vars)
-  description     String?  // What changed from previous version
-  changeType      String?  // "MAJOR" | "MINOR" | "PATCH"
-  appliedBy       String?  // "ADMIN" | "STAGING_AUTO"
-  optimizationId  String?  // Links to OptimizationSuggestion that triggered this
-  promptContent   String?  @db.Text // Full prompt snapshot for rollback
-  performanceBefore Json?  // {bookingRate, responseRate, avgTimeToBook}
-  performanceAfter  Json?  // Populated after sufficient post-change data
-  createdAt       DateTime @default(now())
+  id                String   @id @default(cuid())
+  accountId         String
+  version           String // Semver: "1.0.0", "1.1.0", etc.
+  promptHash        String // SHA-256 hash of rendered prompt (minus lead-specific vars)
+  description       String? // What changed from previous version
+  changeType        String? // "MAJOR" | "MINOR" | "PATCH"
+  appliedBy         String? // "ADMIN" | "STAGING_AUTO"
+  optimizationId    String? // Links to OptimizationSuggestion that triggered this
+  promptContent     String?  @db.Text // Full prompt snapshot for rollback
+  performanceBefore Json? // {bookingRate, responseRate, avgTimeToBook}
+  performanceAfter  Json? // Populated after sufficient post-change data
+  createdAt         DateTime @default(now())
 
   @@unique([accountId, version])
   @@index([accountId, createdAt])
 }
 
 model CrmOutcome {
-  id         String   @id @default(cuid())
-  accountId  String
-  leadId     String
-  showed     Boolean
-  closed     Boolean  @default(false)
-  dealValue  Float?
+  id          String   @id @default(cuid())
+  accountId   String
+  leadId      String
+  showed      Boolean
+  closed      Boolean  @default(false)
+  dealValue   Float?
   closeReason String? // ENROLLED | NOT_READY | CANT_AFFORD | NO_SHOW | OTHER
-  notes      String?  @db.Text
-  source     String   @default("manual") // "webhook" | "manual"
-  receivedAt DateTime @default(now())
+  notes       String?  @db.Text
+  source      String   @default("manual") // "webhook" | "manual"
+  receivedAt  DateTime @default(now())
 
   // Relations
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -1320,16 +1320,16 @@ model ABTest {
   id               String       @id @default(cuid())
   accountId        String
   testName         String
-  stage            String       // Conversation stage this test applies to
+  stage            String // Conversation stage this test applies to
   variantA         String       @db.Text
   variantB         String       @db.Text
   metric           String       @default("response_rate") // Primary metric to optimize
   sampleSizeTarget Int          @default(50) // Per variant
   countA           Int          @default(0)
   countB           Int          @default(0)
-  resultsA         Json?        // {responseRate, bookingRate, avgMessagesToBook}
-  resultsB         Json?        // {responseRate, bookingRate, avgMessagesToBook}
-  winner           String?      // "A" | "B" | "INCONCLUSIVE"
+  resultsA         Json? // {responseRate, bookingRate, avgMessagesToBook}
+  resultsB         Json? // {responseRate, bookingRate, avgMessagesToBook}
+  winner           String? // "A" | "B" | "INCONCLUSIVE"
   status           ABTestStatus @default(RUNNING)
   createdAt        DateTime     @default(now())
   completedAt      DateTime?
@@ -1344,7 +1344,7 @@ model ABTestAssignment {
   id         String   @id @default(cuid())
   testId     String
   leadId     String
-  variant    String   // "A" | "B"
+  variant    String // "A" | "B"
   assignedAt DateTime @default(now())
 
   // Relations
@@ -1360,11 +1360,11 @@ model OptimizationSuggestion {
   accountId          String
   type               OptimizationType
   reasoning          String             @db.Text
-  currentVersion     String?            // Current prompt version
-  proposedVersion    String?            // Proposed new version
+  currentVersion     String? // Current prompt version
+  proposedVersion    String? // Proposed new version
   proposedChanges    String?            @db.Text // Description of what to change
-  supportingData     Json?              // {sampleSize, confidence, expectedImprovement, segmentBreakdown}
-  stagingTestResults Json?              // {conversationsTested, regressionsDetected, comparisonSummary}
+  supportingData     Json? // {sampleSize, confidence, expectedImprovement, segmentBreakdown}
+  stagingTestResults Json? // {conversationsTested, regressionsDetected, comparisonSummary}
   status             OptimizationStatus @default(PENDING_APPROVAL)
   adminNotes         String?            @db.Text
   createdAt          DateTime           @default(now())
@@ -1377,20 +1377,20 @@ model OptimizationSuggestion {
 // ─── Booking Prediction Models ──────────────────────
 
 model PredictionModel {
-  id              String   @id @default(cuid())
-  accountId       String
-  version         Int      @default(1)
-  modelType       String   @default("logistic_regression") // logistic_regression | gradient_boosted
-  weights         Json     // Model coefficients/weights
-  features        Json     // Feature names and config used
-  trainingSize    Int      // Number of conversations used to train
-  holdoutSize     Int      // Number of conversations in holdout set
-  accuracy        Float    // Accuracy on holdout set (0-1)
-  auc             Float    // AUC-ROC on holdout set (0-1)
-  precision       Float    @default(0)
-  recall          Float    @default(0)
-  isActive        Boolean  @default(true)
-  trainedAt       DateTime @default(now())
+  id           String   @id @default(cuid())
+  accountId    String
+  version      Int      @default(1)
+  modelType    String   @default("logistic_regression") // logistic_regression | gradient_boosted
+  weights      Json // Model coefficients/weights
+  features     Json // Feature names and config used
+  trainingSize Int // Number of conversations used to train
+  holdoutSize  Int // Number of conversations in holdout set
+  accuracy     Float // Accuracy on holdout set (0-1)
+  auc          Float // AUC-ROC on holdout set (0-1)
+  precision    Float    @default(0)
+  recall       Float    @default(0)
+  isActive     Boolean  @default(true)
+  trainedAt    DateTime @default(now())
 
   // Relations
   predictions PredictionLog[]
@@ -1400,14 +1400,14 @@ model PredictionModel {
 }
 
 model PredictionLog {
-  id               String   @id @default(cuid())
-  accountId        String
-  conversationId   String
-  modelId          String
-  predictedProb    Float    // 0-1 booking probability
-  actualOutcome    String?  // BOOKED | LEFT_ON_READ | etc (filled later)
-  features         Json     // Feature values used for this prediction
-  predictedAt      DateTime @default(now())
+  id             String   @id @default(cuid())
+  accountId      String
+  conversationId String
+  modelId        String
+  predictedProb  Float // 0-1 booking probability
+  actualOutcome  String? // BOOKED | LEFT_ON_READ | etc (filled later)
+  features       Json // Feature values used for this prediction
+  predictedAt    DateTime @default(now())
 
   // Relations
   model PredictionModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
@@ -1430,12 +1430,12 @@ model ScheduledReply {
   id              String               @id @default(cuid())
   conversationId  String
   accountId       String
-  scheduledFor    DateTime             // Absolute time when reply should be sent
+  scheduledFor    DateTime // Absolute time when reply should be sent
   status          ScheduledReplyStatus @default(PENDING)
   attempts        Int                  @default(0)
   lastError       String?              @db.Text
-  messageType     String?              // 'text' | 'voice_note' | null (null = legacy pre-generation)
-  generatedResult Json?                // Pre-generated AI result (for VN-aware path)
+  messageType     String? // 'text' | 'voice_note' | null (null = legacy pre-generation)
+  generatedResult Json? // Pre-generated AI result (for VN-aware path)
   createdAt       DateTime             @default(now())
   processedAt     DateTime?
 
@@ -1468,7 +1468,7 @@ enum ScheduledMessageType {
 
 enum ScheduledMessageStatus {
   PENDING
-  FIRING    // optimistic lock between cron pickup and send
+  FIRING // optimistic lock between cron pickup and send
   FIRED
   CANCELLED
   FAILED
@@ -1520,8 +1520,8 @@ model ScheduledMessage {
 model VoiceNoteTimingSettings {
   id        String   @id @default(cuid())
   accountId String   @unique
-  minDelay  Float    @default(10)   // Minimum delay in seconds before sending
-  maxDelay  Float    @default(60)   // Maximum delay in seconds before sending
+  minDelay  Float    @default(10) // Minimum delay in seconds before sending
+  maxDelay  Float    @default(60) // Maximum delay in seconds before sending
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1537,7 +1537,7 @@ model LeadStageTransition {
   leadId         String
   fromStage      LeadStage
   toStage        LeadStage
-  transitionedBy String    // "ai" | "user" | "system"
+  transitionedBy String // "ai" | "user" | "system"
   reason         String?
   createdAt      DateTime  @default(now())
 
@@ -1626,7 +1626,7 @@ model DismissedActionItem {
   id                String   @id @default(cuid())
   accountId         String
   conversationId    String
-  actionType        String   // 'distress' | 'stuck' | 'ai_paused' | 'capital_verification' | 'upcoming_call'
+  actionType        String // 'distress' | 'stuck' | 'ai_paused' | 'capital_verification' | 'upcoming_call'
   dismissedAt       DateTime @default(now())
   dismissedByUserId String?
 
@@ -1662,11 +1662,11 @@ model BookingRoutingAudit {
 }
 
 model Script {
-  id          String   @id @default(cuid())
-  accountId   String
-  name        String
-  description String?  @db.Text
-  isActive    Boolean  @default(false)
+  id                 String           @id @default(cuid())
+  accountId          String
+  name               String
+  description        String?          @db.Text
+  isActive           Boolean          @default(false)
   isDefault          Boolean          @default(false)
   createdVia         ScriptCreatedVia @default(blank)
   originalUploadText String?          @db.Text
@@ -1685,11 +1685,11 @@ model Script {
 }
 
 model ScriptStep {
-  id          String   @id @default(cuid())
-  scriptId    String
-  stepNumber  Int
-  title       String
-  description String?  @db.Text
+  id               String            @id @default(cuid())
+  scriptId         String
+  stepNumber       Int
+  title            String
+  description      String?           @db.Text
   objective        String?           @db.Text
   parserConfidence ParserConfidence?
   userConfirmed    Boolean           @default(false)
@@ -1705,10 +1705,10 @@ model ScriptStep {
 }
 
 model ScriptBranch {
-  id                   String   @id @default(cuid())
+  id                   String            @id @default(cuid())
   stepId               String
   branchLabel          String
-  conditionDescription String?  @db.Text
+  conditionDescription String?           @db.Text
   sortOrder            Int               @default(0)
   parserConfidence     ParserConfidence?
   userConfirmed        Boolean           @default(false)
@@ -1723,23 +1723,23 @@ model ScriptBranch {
 }
 
 model ScriptAction {
-  id           String           @id @default(cuid())
-  stepId       String
-  branchId     String?
-  actionType   ScriptActionType
-  content      String?          @db.Text
-  voiceNoteId  String?
-  bindingMode  VoiceNoteBindingMode   @default(runtime_match)
-  linkUrl      String?
-  linkLabel    String?
-  formId       String?
-  waitDuration Int?
-  sortOrder        Int                @default(0)
+  id               String               @id @default(cuid())
+  stepId           String
+  branchId         String?
+  actionType       ScriptActionType
+  content          String?              @db.Text
+  voiceNoteId      String?
+  bindingMode      VoiceNoteBindingMode @default(runtime_match)
+  linkUrl          String?
+  linkLabel        String?
+  formId           String?
+  waitDuration     Int?
+  sortOrder        Int                  @default(0)
   parserConfidence ParserConfidence?
   parserStatus     ParserActionStatus?
-  userConfirmed    Boolean            @default(false)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  userConfirmed    Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
   step      ScriptStep            @relation(fields: [stepId], references: [id], onDelete: Cascade)
   branch    ScriptBranch?         @relation(fields: [branchId], references: [id], onDelete: Cascade)
@@ -1804,16 +1804,16 @@ model TrainingDataAnalysis {
   id                      String   @id @default(cuid())
   accountId               String
   runAt                   DateTime @default(now())
-  overallScore            Int                      // 0-100 weighted readiness
-  categoryScores          Json                     // { quantity, voice_style, lead_type, stage, outcome, objection }
+  overallScore            Int // 0-100 weighted readiness
+  categoryScores          Json // { quantity, voice_style, lead_type, stage, outcome, objection }
   totalConversations      Int
   totalMessages           Int
-  recommendations         Json                     // [{ category, severity, description, recommendation, evidence }]
+  recommendations         Json // [{ category, severity, description, recommendation, evidence }]
   estimatedCostCents      Int?
   status                  String   @default("complete") // running | complete | failed
   errorMessage            String?  @db.Text
-  analyzedConversationIds Json?                    // string[] — IDs of conversations included in this analysis
-  categoryMetrics         Json?                    // Per-category distributions for incremental merge
+  analyzedConversationIds Json? // string[] — IDs of conversations included in this analysis
+  categoryMetrics         Json? // Per-category distributions for incremental merge
   account                 Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@index([accountId, runAt(sort: Desc)])
@@ -1824,11 +1824,11 @@ model TrainingDataAnalysis {
 model VoiceQualityFailure {
   id          String   @id @default(cuid())
   accountId   String
-  message     String   @db.Text     // The AI message that failed
-  score       Float                 // 0.0–1.0 quality score
-  hardFails   Json                  // string[] of hard fail reasons
-  attempt     Int                   // Which attempt (1, 2, 3)
-  leadMessage String?  @db.Text     // The lead message that triggered this
+  message     String   @db.Text // The AI message that failed
+  score       Float // 0.0–1.0 quality score
+  hardFails   Json // string[] of hard fail reasons
+  attempt     Int // Which attempt (1, 2, 3)
+  leadMessage String?  @db.Text // The lead message that triggered this
   createdAt   DateTime @default(now())
 
   @@index([accountId, createdAt(sort: Desc)])
@@ -1837,33 +1837,36 @@ model VoiceQualityFailure {
 // ─── Closed-Loop Training: AI Suggestion Logging ─────────────────────
 
 model AISuggestion {
-  id                          String   @id @default(cuid())
-  conversationId              String
-  accountId                   String
-  generatedAt                 DateTime @default(now())
+  id             String   @id @default(cuid())
+  conversationId String
+  accountId      String
+  generatedAt    DateTime @default(now())
 
   // Generated response
-  responseText                String   @db.Text
-  retrievalTier               Int?                      // Which few-shot tier produced examples (1, 2, 3)
-  qualityGateAttempts         Int      @default(1)      // How many LLM calls before quality passed
-  qualityGateScore            Float?                    // Final voice quality gate score (0.0–1.0)
+  responseText                  String  @db.Text
+  retrievalTier                 Int? // Which few-shot tier produced examples (1, 2, 3)
+  qualityGateAttempts           Int     @default(1) // How many LLM calls before quality passed
+  qualityGateScore              Float? // Final voice quality gate score (0.0–1.0)
   qualityGatePassedFirstAttempt Boolean @default(false) // True if first attempt passed
 
   // Context snapshot at generation time
-  intentClassification        String?                   // Content intent detected (e.g. "price_objection")
-  intentConfidence            Float?                    // Intent classifier confidence (0.0–1.0)
-  leadStageSnapshot           String?                   // Lead stage at generation (e.g. "QUALIFYING")
-  leadTypeSnapshot            String?                   // Mapped lead type (e.g. "beginner")
+  intentClassification String? // Content intent detected (e.g. "price_objection")
+  intentConfidence     Float? // Intent classifier confidence (0.0–1.0)
+  leadStageSnapshot    String? // Lead stage at generation (e.g. "QUALIFYING")
+  leadTypeSnapshot     String? // Mapped lead type (e.g. "beginner")
+  aiStageReported      String? // AI JSON stage at generation (e.g. "SOFT_PITCH_COMMITMENT")
+  aiSubStageReported   String? // AI JSON sub_stage at generation (e.g. "BOOKING_TZ_ASK")
+  capitalOutcome       String? // R24 result consumed by Lead.stage progression
 
   // Outcome tracking
-  wasSelected                 Boolean  @default(false)  // True if AI auto-sent this response
-  wasRejected                 Boolean  @default(false)  // True if human overrode with a different message
-  wasEdited                   Boolean  @default(false)  // True if human text was similar (>0.7 similarity)
-  finalSentText               String?  @db.Text         // What was actually sent (AI or human text)
-  similarityToFinalSent       Float?                    // Cosine sim between responseText and finalSentText
+  wasSelected           Boolean @default(false) // True if AI auto-sent this response
+  wasRejected           Boolean @default(false) // True if human overrode with a different message
+  wasEdited             Boolean @default(false) // True if human text was similar (>0.7 similarity)
+  finalSentText         String? @db.Text // What was actually sent (AI or human text)
+  similarityToFinalSent Float? // Cosine sim between responseText and finalSentText
 
   // Training phase context
-  generatedDuringTrainingPhase Boolean @default(false)  // Snapshot: was account in ONBOARDING?
+  generatedDuringTrainingPhase Boolean @default(false) // Snapshot: was account in ONBOARDING?
 
   // Model + cost tracking (added 2026-04-24 with Sonnet-4.6 rollout)
   // modelUsed is the final provider/model that produced the shipped
@@ -1872,19 +1875,19 @@ model AISuggestion {
   // was called 3 times before passing, these hold totals for all three.
   // cache_* fields only populate on Anthropic paths with prompt
   // caching active (always on for Sonnet 4.6 path).
-  modelUsed                    String?
-  inputTokens                  Int?
-  outputTokens                 Int?
-  cacheReadTokens              Int?
-  cacheCreationTokens          Int?
+  modelUsed           String?
+  inputTokens         Int?
+  outputTokens        Int?
+  cacheReadTokens     Int?
+  cacheCreationTokens Int?
 
   // Multi-bubble delivery. When the LLM emitted messages[] the full
   // array lives here (ordered). bubbleCount mirrors length. Override
   // detection prefers messageBubbles.join('\n') over responseText
   // when available. Legacy suggestions have messageBubbles=null and
   // bubbleCount=1.
-  messageBubbles              Json?
-  bubbleCount                 Int      @default(1)
+  messageBubbles Json?
+  bubbleCount    Int   @default(1)
 
   // ── Manual-review flow (test-mode platforms where awayMode is OFF) ──
   // When auto-send is disabled for a platform, the AI generates
@@ -1897,19 +1900,19 @@ model AISuggestion {
   // auto-detect for override path). Together these drive the
   // approval-rate metric that gates the "ready to enable auto-send"
   // dashboard prompt.
-  dismissed                   Boolean  @default(false)
-  actionedAt                  DateTime?
-  editedByHuman               Boolean  @default(false)
-  humanEditedContent          String?  @db.Text
-  manuallyApproved            Boolean  @default(false)
+  dismissed          Boolean   @default(false)
+  actionedAt         DateTime?
+  editedByHuman      Boolean   @default(false)
+  humanEditedContent String?   @db.Text
+  manuallyApproved   Boolean   @default(false)
 
   // Relations
-  conversation                Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  account                     Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  selectedByMessages          Message[]       @relation("SelectedSuggestion")
-  rejectedByMessages          Message[]       @relation("RejectedSuggestion")
-  messageGroups               MessageGroup[]
-  trainingEvents              TrainingEvent[]
+  conversation       Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  account            Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  selectedByMessages Message[]       @relation("SelectedSuggestion")
+  rejectedByMessages Message[]       @relation("RejectedSuggestion")
+  messageGroups      MessageGroup[]
+  trainingEvents     TrainingEvent[]
 
   @@index([conversationId, generatedAt(sort: Desc)])
   @@index([accountId, generatedAt(sort: Desc)])
@@ -1929,9 +1932,9 @@ model AISuggestion {
 // platform for the per-platform readiness check.
 
 enum TrainingEventType {
-  APPROVED     // Operator hit Send without changes
-  EDITED       // Operator edited the text before sending
-  REJECTED     // Operator dismissed the suggestion
+  APPROVED // Operator hit Send without changes
+  EDITED // Operator edited the text before sending
+  REJECTED // Operator dismissed the suggestion
 }
 
 model TrainingEvent {
@@ -1963,37 +1966,37 @@ model TrainingEvent {
 // AI doesn't re-ask questions the lead already answered.
 
 model InboundQualification {
-  id                     String   @id @default(cuid())
-  conversationId         String   @unique
-  accountId              String
-  leadId                 String   @unique
-  classifiedAt           DateTime @default(now())
+  id             String   @id @default(cuid())
+  conversationId String   @unique
+  accountId      String
+  leadId         String   @unique
+  classifiedAt   DateTime @default(now())
 
   // Classifier outputs
-  suggestedStartStage    Int                 // 1-7, raw classifier suggestion
-  finalStartStage        Int                 // after skip-cap applied
-  stagesSkipped          Int                 // finalStartStage - 1
-  stageSkipReason        String   @db.Text
-  classifierConfidence   Float    @default(0)
-  capped                 Boolean  @default(false)
+  suggestedStartStage  Int // 1-7, raw classifier suggestion
+  finalStartStage      Int // after skip-cap applied
+  stagesSkipped        Int // finalStartStage - 1
+  stageSkipReason      String  @db.Text
+  classifierConfidence Float   @default(0)
+  capped               Boolean @default(false)
 
   // Extracted data
-  hasExperience          Boolean  @default(false)
-  experienceLevel        String?             // beginner | intermediate | experienced
-  hasPainPoint           Boolean  @default(false)
-  painPointSummary       String?  @db.Text
-  hasGoal                Boolean  @default(false)
-  goalSummary            String?  @db.Text
-  hasUrgency             Boolean  @default(false)
-  urgencySummary         String?  @db.Text
-  hasFinancialInfo       Boolean  @default(false)
-  financialSummary       String?  @db.Text
-  hasExplicitIntent      Boolean  @default(false)
-  intentType             String?             // learn_strategy | join_mentorship | ...
-  isInbound              Boolean  @default(false)
+  hasExperience     Boolean @default(false)
+  experienceLevel   String? // beginner | intermediate | experienced
+  hasPainPoint      Boolean @default(false)
+  painPointSummary  String? @db.Text
+  hasGoal           Boolean @default(false)
+  goalSummary       String? @db.Text
+  hasUrgency        Boolean @default(false)
+  urgencySummary    String? @db.Text
+  hasFinancialInfo  Boolean @default(false)
+  financialSummary  String? @db.Text
+  hasExplicitIntent Boolean @default(false)
+  intentType        String? // learn_strategy | join_mentorship | ...
+  isInbound         Boolean @default(false)
 
   // Raw model response for debugging
-  rawResponse            Json?
+  rawResponse Json?
 
   account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)

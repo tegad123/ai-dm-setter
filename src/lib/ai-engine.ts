@@ -2225,6 +2225,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           intentConfidence: null, // TODO: pipe from classifier in future
           leadStageSnapshot: leadContext.status || null,
           leadTypeSnapshot: leadContext.experience || null,
+          aiStageReported: parsed.stage || null,
+          aiSubStageReported: parsed.subStage || null,
           generatedDuringTrainingPhase: isOnboarding,
           modelUsed: modelUsedFinal,
           inputTokens: usageTotal.inputTokens,
@@ -2283,6 +2285,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       default:
         capitalOutcome = 'not_asked';
     }
+  }
+
+  if (suggestionId) {
+    prisma.aISuggestion
+      .update({
+        where: { id: suggestionId },
+        data: { capitalOutcome }
+      })
+      .catch((err) =>
+        console.error(
+          '[ai-engine] AISuggestion capitalOutcome update failed (non-fatal):',
+          err
+        )
+      );
   }
 
   return {

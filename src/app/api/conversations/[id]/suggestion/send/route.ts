@@ -32,8 +32,22 @@ import {
   broadcastNewMessage,
   broadcastConversationUpdate
 } from '@/lib/realtime';
+import { recordStageTimestamp } from '@/lib/conversation-state-machine';
+import {
+  updateLeadStageFromConversation,
+  type CapitalOutcome
+} from '@/lib/stage-progression';
 import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
+
+const CAPITAL_OUTCOMES: ReadonlySet<string> = new Set([
+  'passed',
+  'failed',
+  'hedging',
+  'ambiguous',
+  'not_asked',
+  'not_evaluated'
+]);
 
 function calcTypingDelayMs(nextChars: number): number {
   const base = 200 + Math.random() * 600; // 200–800ms
@@ -42,6 +56,12 @@ function calcTypingDelayMs(nextChars: number): number {
 }
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function normalizeCapitalOutcome(value: string | null): CapitalOutcome {
+  return CAPITAL_OUTCOMES.has(value ?? '')
+    ? (value as CapitalOutcome)
+    : 'not_evaluated';
+}
 
 export async function POST(
   req: NextRequest,
@@ -80,7 +100,8 @@ export async function POST(
             handle: true,
             platform: true,
             platformUserId: true,
-            accountId: true
+            accountId: true,
+            stage: true
           }
         }
       }
@@ -201,7 +222,12 @@ export async function POST(
                   editedFromSuggestion: true
                 }
               : {}),
-            stage: i === 0 ? (suggestion.leadStageSnapshot ?? null) : null,
+            stage:
+              i === 0
+                ? (suggestion.aiStageReported ??
+                  suggestion.leadStageSnapshot ??
+                  null)
+                : null,
             suggestionId: i === 0 && !isEdited ? suggestion.id : null
           }
         });
@@ -243,6 +269,31 @@ export async function POST(
           { status: 502 }
         );
       }
+    }
+
+    const stageForProgression =
+      suggestion.aiStageReported ?? suggestion.leadStageSnapshot ?? null;
+    const subStageForProgression = suggestion.aiSubStageReported ?? null;
+    const capitalOutcome = normalizeCapitalOutcome(suggestion.capitalOutcome);
+
+    if (stageForProgression) {
+      await recordStageTimestamp(conversationId, stageForProgression).catch(
+        (err) => console.error('[suggestion/send] Stage timestamp error:', err)
+      );
+
+      await updateLeadStageFromConversation(
+        lead.id,
+        lead.stage,
+        stageForProgression,
+        subStageForProgression,
+        capitalOutcome,
+        {
+          transitionedBy: 'ai',
+          reasonPrefix: `suggestion_approval:${isEdited ? 'edited' : 'approved'}`
+        }
+      ).catch((err) =>
+        console.error('[suggestion/send] Lead stage update failed:', err)
+      );
     }
 
     // Mark the suggestion actioned + record training signal. Best-effort

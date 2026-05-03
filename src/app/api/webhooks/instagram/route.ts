@@ -8,6 +8,7 @@ import {
   computeReplyDelaySeconds
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
+import { resolvePlatformAwayMode } from '@/lib/stage-progression';
 
 // Short delays bypass the per-minute cron queue and run inline via after().
 // Anything longer falls back to ScheduledReply + cron pickup so the lambda
@@ -394,7 +395,9 @@ async function processInstagramEvents(payload: any): Promise<void> {
           continue;
         }
 
-        // Check conversation AI toggle AND account-level away mode
+        // Check conversation AI toggle and platform-specific away mode.
+        // Legacy account.awayMode is only a fallback when the platform flag is
+        // null/undefined; an explicit Instagram=false must win.
         const [convo, account] = await Promise.all([
           prisma.conversation.findUnique({
             where: { id: result.conversationId },
@@ -402,10 +405,18 @@ async function processInstagramEvents(payload: any): Promise<void> {
           }),
           prisma.account.findUnique({
             where: { id: accountId },
-            select: { awayMode: true }
+            select: {
+              awayMode: true,
+              awayModeInstagram: true,
+              awayModeFacebook: true
+            }
           })
         ]);
-        if (convo?.aiActive || account?.awayMode) {
+        const awayModeForPlatform = resolvePlatformAwayMode(
+          account,
+          'INSTAGRAM'
+        );
+        if (convo?.aiActive || awayModeForPlatform) {
           // Decide between inline (after()) and queued (cron) execution.
           // The cron runs every minute, so a 30-45s configured delay would
           // typically wait an extra 0-60s for the next tick, making the

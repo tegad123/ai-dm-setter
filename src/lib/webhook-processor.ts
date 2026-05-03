@@ -32,7 +32,11 @@ import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { transitionLeadStage } from '@/lib/lead-stage';
-import type { LeadStage } from '@prisma/client';
+import {
+  resolvePlatformAwayMode,
+  shouldMarkEngagedFromLeadMessage,
+  updateLeadStageFromConversation
+} from '@/lib/stage-progression';
 import { randomUUID } from 'crypto';
 
 // ---------------------------------------------------------------------------
@@ -659,14 +663,13 @@ export async function processIncomingMessage(
     // - Ongoing conversations always start with AI off
     const account = await prisma.account.findUnique({
       where: { id: accountId },
-      select: { awayModeInstagram: true, awayModeFacebook: true }
+      select: {
+        awayMode: true,
+        awayModeInstagram: true,
+        awayModeFacebook: true
+      }
     });
-    const awayModeForPlatform =
-      platform === 'INSTAGRAM'
-        ? (account?.awayModeInstagram ?? false)
-        : platform === 'FACEBOOK'
-          ? (account?.awayModeFacebook ?? false)
-          : false;
+    const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
     const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
 
     // ── ManyChat handoff detection (2026-04-30) ───────────────────
@@ -882,6 +885,9 @@ export async function processIncomingMessage(
         platformMessageId: params.platformMessageId
       })
     : null;
+  const priorLeadMessageCount = await prisma.message.count({
+    where: { conversationId, sender: 'LEAD' }
+  });
   let message;
   try {
     message = await prisma.message.create({
@@ -919,6 +925,20 @@ export async function processIncomingMessage(
       };
     }
     throw err;
+  }
+
+  if (shouldMarkEngagedFromLeadMessage(lead.stage, priorLeadMessageCount)) {
+    try {
+      await transitionLeadStage(
+        lead.id,
+        'ENGAGED',
+        'lead',
+        'lead replied after prior lead message'
+      );
+      lead.stage = 'ENGAGED';
+    } catch (err) {
+      console.error('[webhook-processor] ENGAGED transition failed:', err);
+    }
   }
 
   // ── Step 3: Update conversation metadata ───────────────────────
@@ -1902,14 +1922,13 @@ export async function scheduleAIReply(
   log('sched.step1.findAccount');
   const account = await prisma.account.findUnique({
     where: { id: accountId },
-    select: { awayModeInstagram: true, awayModeFacebook: true }
+    select: {
+      awayMode: true,
+      awayModeInstagram: true,
+      awayModeFacebook: true
+    }
   });
-  const awayModeForPlatform =
-    lead.platform === 'INSTAGRAM'
-      ? (account?.awayModeInstagram ?? false)
-      : lead.platform === 'FACEBOOK'
-        ? (account?.awayModeFacebook ?? false)
-        : false;
+  const awayModeForPlatform = resolvePlatformAwayMode(account, lead.platform);
 
   // Auto-send only when the per-conversation AI toggle is ON AND
   // EITHER the account-level platform away-mode is on OR the
@@ -2875,6 +2894,9 @@ async function deliverBubbleGroup(params: {
 
     // 2. Per-bubble Message row. Metadata written on bubble 0 only —
     // downstream analytics group by AI-turn = one stage-bearing row.
+    // TODO(Sprint 7 / Fix D): real state-machine rows should own stage
+    // progression so every bubble can reference the turn stage without
+    // duplicating nullable Message.stage metadata.
     const bubbleTimestamp = i === 0 ? now : new Date();
     const msg = await prisma.message.create({
       data: {
@@ -5221,139 +5243,6 @@ function getTagColor(tagName: string): string {
     NEEDS_NURTURE: '#8B5CF6'
   };
   return colorMap[tagName] || '#6B7280';
-}
-
-// ---------------------------------------------------------------------------
-// Helper: Update Lead Stage from Conversation Stage
-// ---------------------------------------------------------------------------
-
-async function updateLeadStageFromConversation(
-  leadId: string,
-  currentStage: string,
-  conversationStage: string,
-  subStage: string | null,
-  capitalOutcome:
-    | 'passed'
-    | 'failed'
-    | 'hedging'
-    | 'ambiguous'
-    | 'not_asked'
-    | 'not_evaluated'
-): Promise<void> {
-  // Map AI conversation stages to lead stages (only upgrade, never downgrade
-  // into QUALIFYING/lower — UNQUALIFIED is a separate terminal transition
-  // allowed from any non-terminal).
-  //
-  // CRITICAL: BOOKING conversation stage caps at CALL_PROPOSED, NOT 'BOOKED'.
-  // The 'BOOKED' stage must ONLY be set inside the success branch of
-  // bookUnifiedAppointment() in sendAIReply (search for `lead.stage: 'BOOKED'`).
-  // Setting it here would create a phantom "BOOKED" lead even when the
-  // calendar booking silently failed (e.g. R14 anti-hallucination guard
-  // rejected the AI's slot pick), which is exactly the bug we hit on
-  // 2026-04-08 with conversation cmngzdbbu0002if04jjxlm35i.
-  //
-  // CRITICAL: FINANCIAL_SCREENING is "reached", NOT "passed". The default
-  // mapping lands the lead at QUALIFYING, and ONLY promotes to QUALIFIED
-  // when the R24 capital gate returns `capitalOutcome === 'passed'`. This
-  // fixes the 2026-04-19 MercyAttah incident where a lead who stated
-  // capital below threshold was shown as QUALIFIED in the sidebar badge
-  // because the AI's JSON still labeled the turn's stage=FINANCIAL_SCREENING
-  // while the downsell branch was being delivered.
-  const stageToLeadStage: Record<string, string> = {
-    // New 7-stage SOP sequence
-    OPENING: 'NEW_LEAD',
-    SITUATION_DISCOVERY: 'QUALIFYING',
-    GOAL_EMOTIONAL_WHY: 'QUALIFYING',
-    URGENCY: 'QUALIFYING',
-    SOFT_PITCH_COMMITMENT: 'QUALIFIED',
-    FINANCIAL_SCREENING: 'QUALIFYING', // ← was 'QUALIFIED' — only passing R24 promotes
-    BOOKING: 'CALL_PROPOSED', // ← capped at CALL_PROPOSED — only real booking promotes to BOOKED
-    // Legacy stage names (backward compat)
-    GREETING: 'NEW_LEAD',
-    QUALIFICATION: 'QUALIFYING',
-    VISION_BUILDING: 'QUALIFYING',
-    PAIN_IDENTIFICATION: 'QUALIFYING',
-    SOLUTION_OFFER: 'QUALIFYING',
-    CAPITAL_QUALIFICATION: 'QUALIFYING' // ← was 'QUALIFIED', same reasoning
-  };
-
-  // Default from the stage-name mapping, then override based on R24 /
-  // downsell signals. The override wins because the conversation-stage
-  // name alone can't distinguish reached vs passed vs failed.
-  let newStage: string | undefined = stageToLeadStage[conversationStage];
-
-  // Downsell branch — when the AI routes to the financial waterfall or
-  // the low-ticket offer, that's an explicit disqualification regardless
-  // of R24 state (R25 can detect low-capital signals EARLIER than the
-  // financial stage is reached, and the AI pivots to the downsell flow
-  // directly). Treat any WATERFALL_* or LOW_TICKET sub-stage as a hard
-  // UNQUALIFIED signal.
-  const isDownsellBranch =
-    typeof subStage === 'string' &&
-    (subStage.startsWith('WATERFALL_') || subStage === 'LOW_TICKET');
-  if (isDownsellBranch) {
-    newStage = 'UNQUALIFIED';
-  } else if (capitalOutcome === 'failed') {
-    // R24 gate failed — lead stated capital below threshold OR hit a
-    // disqualifier phrase ("broke", "jobless", "can't afford", etc.).
-    newStage = 'UNQUALIFIED';
-  } else if (
-    conversationStage === 'FINANCIAL_SCREENING' ||
-    conversationStage === 'CAPITAL_QUALIFICATION'
-  ) {
-    if (capitalOutcome === 'passed') {
-      // R24 gate passed — lead confirmed adequate capital, safe to mark
-      // QUALIFIED. Overrides the default QUALIFYING mapping above.
-      newStage = 'QUALIFIED';
-    }
-    // hedging / ambiguous / not_asked / not_evaluated: keep the default
-    // QUALIFYING mapping — the lead reached the capital stage but
-    // hasn't passed it yet. Do NOT promote to QUALIFIED.
-  }
-
-  if (!newStage) return;
-
-  // Stage priority order. Non-terminal stages upgrade monotonically;
-  // terminal side-stages (UNQUALIFIED, GHOSTED, etc.) can transition
-  // from any non-terminal and then lock the lead.
-  const stagePriority: Record<string, number> = {
-    NEW_LEAD: 0,
-    ENGAGED: 1,
-    QUALIFYING: 2,
-    QUALIFIED: 3,
-    CALL_PROPOSED: 4,
-    BOOKED: 5,
-    SHOWED: 6,
-    CLOSED_WON: 7,
-    // Terminal/side stages — once set, don't auto-override
-    CLOSED_LOST: 10,
-    UNQUALIFIED: 10,
-    GHOSTED: 10,
-    NURTURE: 10,
-    NO_SHOWED: 10,
-    RESCHEDULED: 10
-  };
-
-  const currentPriority = stagePriority[currentStage] ?? 0;
-  const newPriority = stagePriority[newStage] ?? 0;
-
-  if (newPriority > currentPriority && currentPriority < 10) {
-    // Route through the sanctioned helper so every stage change gets an
-    // audit row + real-time broadcast. Pre-this-fix, 71/823 daetradez
-    // leads had stages set without any audit row — impossible to tell
-    // "when did this lead become QUALIFYING" from the DB. Steven Petty's
-    // silent CALL_PROPOSED → UNQUALIFIED revert on 2026-04-20 was the
-    // first incident to surface the class.
-    await transitionLeadStage(
-      leadId,
-      newStage as LeadStage,
-      'ai',
-      `auto: conv=${conversationStage}, sub=${subStage ?? 'null'}, capital=${capitalOutcome}${isDownsellBranch ? ', downsell' : ''}`
-    );
-    console.log(
-      `[webhook-processor] Lead ${leadId} stage: ${currentStage} → ${newStage} (conv=${conversationStage}, sub=${subStage ?? 'null'}, capital=${capitalOutcome})`
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
