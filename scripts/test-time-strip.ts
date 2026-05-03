@@ -51,6 +51,21 @@ const cases: Array<{
     input: 'lets do 14:00 your time',
     expectAmount: null
   },
+  {
+    label: '"in 12 hours" → not 12',
+    input: 'I expected it to be in 12 hours so I was already in bed',
+    expectAmount: null
+  },
+  {
+    label: '"2 hours ago" → not 2',
+    input: 'that was like 2 hours ago bro',
+    expectAmount: null
+  },
+  {
+    label: '"12 hours" with $ amount elsewhere keeps real amount',
+    input: 'I have $5,000 but thought the call was in 12 hours',
+    expectAmount: 5000
+  },
   { label: '5k still parses', input: 'got 5k saved', expectAmount: 5000 }
 ];
 

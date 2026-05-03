@@ -88,6 +88,8 @@ export type CapitalOutcome =
   | 'not_asked'
   | 'not_evaluated';
 
+type VoiceGateCapitalOutcome = 'failed' | undefined;
+
 export type ConversationCurrency =
   | 'USD'
   | 'GBP'
@@ -837,6 +839,93 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     verificationConfirmedAt: null
   };
   let r24WasEvaluatedThisTurn = false;
+  let lastR24Override = '';
+
+  const buildVoiceQualityOptions = (
+    candidateMessageCount: number,
+    capitalOutcomeOverride?: VoiceGateCapitalOutcome
+  ) => ({
+    relaxLengthLimit: !!unkeptPattern,
+    conversationMessageCount: conversationHistory.length,
+    leadStage: leadContext.status || undefined,
+    capitalOutcome:
+      capitalOutcomeOverride ??
+      (r24LastResult.reason === 'answer_below_threshold'
+        ? ('failed' as const)
+        : undefined),
+    previousAIMessage: lastAiMsg?.content ?? null,
+    aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
+    currentStage: parsed?.stage || null,
+    incomeGoalAsked,
+    capitalQuestionAsked,
+    capitalVerificationRequired:
+      typeof capitalThreshold === 'number' && capitalThreshold > 0,
+    capitalVerificationSatisfied,
+    previousAIQuestions: priorAIQuestions,
+    previousLeadMessage: lastLeadMsg?.content ?? null,
+    previousLeadHadImage: lastLeadHadImage,
+    leadEmail: leadContext.booking?.leadEmail ?? null,
+    scheduledCallAt: conversationCallState?.scheduledCallAt ?? null,
+    homeworkUrl,
+    priorCapitalQuestionAskCount: countCapitalQuestionAsks(priorAIMessages),
+    priorRealQuickPhraseCount: priorAIMessages.filter((m) =>
+      /\breal\s+quick\b/i.test(m.content || '')
+    ).length,
+    priorValidationOnlyCount,
+    priorFactsBroCount,
+    priorYeahBroCount,
+    leadImplicitlySignaledNoCapital: conversationHistory.some((m) => {
+      if (m.sender !== 'LEAD') return false;
+      const t = m.content || '';
+      return (
+        /\b(broke|nothing\s+(really|man|bro)?|no\s+money|don'?t\s+have\s+(any\s+)?(money|capital|anything|much))\b/i.test(
+          t
+        ) ||
+        /\b(i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school|in\s+(college|university|highschool|high\s+school))\b/i.test(
+          t
+        ) ||
+        /\b(jobless|unemployed|no\s+job|lost\s+my\s+job|between\s+jobs|laid\s+off|no\s+income|no\s+work|out\s+of\s+work)\b/i.test(
+          t
+        ) ||
+        /\b(can'?t\s+(eat|pay\s+rent|pay\s+bills|afford))\b/i.test(t) ||
+        /\b(i\s+(have|got)\s+nothing|got\s+nothing\s+(right\s+now|rn|atm|man|bro))\b/i.test(
+          t
+        )
+      );
+    }),
+    ...(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+      const det =
+        require('@/lib/conversation-detail-extractor') as typeof import('@/lib/conversation-detail-extractor');
+      const recentLead = conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .slice(-2)
+        .map((m) => ({ content: m.content }));
+      const recentLeadDetails = det.extractRecentLeadDetails(recentLead);
+      const recentAi = priorAIMessages.slice(-6);
+      const priorConsecutivePureQuestionCount =
+        det.countConsecutivePureQuestions(recentAi, recentLeadDetails);
+      return {
+        priorConsecutivePureQuestionCount,
+        recentLeadDetails
+      };
+    })(),
+    leadVagueCapitalAnswerInLastReply:
+      capitalQuestionAsked &&
+      Boolean(lastLeadMsg?.content) &&
+      looksLikeVagueCapitalAnswer(lastLeadMsg!.content),
+    leadPreObjectedToCapital: leadHasPreObjectedToCapital(
+      conversationHistory
+        .filter((m) => m.sender === 'LEAD')
+        .slice(-4)
+        .map((m) => m.content)
+    ),
+    priorMessageCorpus: conversationHistory
+      .slice(-30)
+      .map((m) => m.content)
+      .join('\n'),
+    closerNames
+  });
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
@@ -865,121 +954,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // yet for this iteration, so we use the LAST iteration's outcome
     // as capitalOutcome — good enough to gate the signal, since the
     // current-iteration R24 only matters for the PROMOTION step.
-    const quality = scoreVoiceQualityGroup(parsed.messages, {
-      relaxLengthLimit: !!unkeptPattern,
-      conversationMessageCount: conversationHistory.length,
-      leadStage: leadContext.status || undefined,
-      capitalOutcome:
-        r24LastResult.reason === 'answer_below_threshold'
-          ? 'failed'
-          : undefined,
-      // Souljah J 2026-04-25 — feed the previous AI bubble in so the
-      // gate can fire repeated_question (soft -0.4) and
-      // repeated_call_pitch (hardFail) when the LLM forgets the lead's
-      // interjection between turns. Falls back to null when this is
-      // the first AI turn.
-      previousAIMessage: lastAiMsg?.content ?? null,
-      aiMessageCount:
-        priorAIMessagesForPacing.length + (parsed.messages?.length || 1),
-      currentStage: parsed.stage || null,
-      incomeGoalAsked,
-      capitalQuestionAsked,
-      capitalVerificationRequired:
-        typeof capitalThreshold === 'number' && capitalThreshold > 0,
-      capitalVerificationSatisfied,
-      previousAIQuestions: priorAIQuestions,
-      previousLeadMessage: lastLeadMsg?.content ?? null,
-      previousLeadHadImage: lastLeadHadImage,
-      leadEmail: leadContext.booking?.leadEmail ?? null,
-      scheduledCallAt: conversationCallState?.scheduledCallAt ?? null,
-      homeworkUrl,
-      // Rodrigo Moran 2026-04-26 — count prior capital-verification
-      // questions in the AI history so the gate hard-fails a repeat
-      // ask. conversation-facts is the single source of truth for
-      // capital-question shapes, including curly-apostrophe variants.
-      priorCapitalQuestionAskCount: countCapitalQuestionAsks(priorAIMessages),
-      // Rodrigo Moran 2026-04-26 — count prior "real quick" usage so
-      // overuse triggers the soft penalty when the LLM keeps
-      // reaching for the same transition phrase.
-      priorRealQuickPhraseCount: priorAIMessages.filter((m) =>
-        /\breal\s+quick\b/i.test(m.content || '')
-      ).length,
-      priorValidationOnlyCount,
-      priorFactsBroCount,
-      priorYeahBroCount,
-      // Rodrigo Moran 2026-04-26 spec rule 3 — if the lead has
-      // already signaled they have no capital (student / broke /
-      // unemployed / "I got nothing"), the AI must NOT ask the
-      // threshold question on top of it.
-      leadImplicitlySignaledNoCapital: conversationHistory.some((m) => {
-        if (m.sender !== 'LEAD') return false;
-        const t = m.content || '';
-        return (
-          /\b(broke|nothing\s+(really|man|bro)?|no\s+money|don'?t\s+have\s+(any\s+)?(money|capital|anything|much))\b/i.test(
-            t
-          ) ||
-          /\b(i'?m\s+(a\s+|currently\s+a\s+)?student|still\s+in\s+school|in\s+(college|university|highschool|high\s+school))\b/i.test(
-            t
-          ) ||
-          /\b(jobless|unemployed|no\s+job|lost\s+my\s+job|between\s+jobs|laid\s+off|no\s+income|no\s+work|out\s+of\s+work)\b/i.test(
-            t
-          ) ||
-          /\b(can'?t\s+(eat|pay\s+rent|pay\s+bills|afford))\b/i.test(t) ||
-          /\b(i\s+(have|got)\s+nothing|got\s+nothing\s+(right\s+now|rn|atm|man|bro))\b/i.test(
-            t
-          )
-        );
-      }),
-      // Omar Moore 2026-04-27 — count of trailing pure-question AI
-      // turns (ends in `?` AND doesn't acknowledge any specific
-      // lead-side detail) PLUS the extracted recent lead details
-      // for the gate to test the current reply against. The
-      // detector module is the single source of truth for both
-      // the detail patterns and the pure-question definition.
-      ...(() => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-        const det =
-          require('@/lib/conversation-detail-extractor') as typeof import('@/lib/conversation-detail-extractor');
-        const recentLead = conversationHistory
-          .filter((m) => m.sender === 'LEAD')
-          .slice(-2)
-          .map((m) => ({ content: m.content }));
-        const recentLeadDetails = det.extractRecentLeadDetails(recentLead);
-        const recentAi = priorAIMessages.slice(-6);
-        const priorConsecutivePureQuestionCount =
-          det.countConsecutivePureQuestions(recentAi, recentLeadDetails);
-        return {
-          priorConsecutivePureQuestionCount,
-          recentLeadDetails
-        };
-      })(),
-      // Steven Biggam 2026-04-30 — pre-objection + vague-answer
-      // signals. The voice gate's per-bubble check uses these to fire
-      // soft signals when the AI ignores the lead's pre-objection or
-      // their vague capital answer.
-      leadVagueCapitalAnswerInLastReply:
-        capitalQuestionAsked &&
-        Boolean(lastLeadMsg?.content) &&
-        looksLikeVagueCapitalAnswer(lastLeadMsg!.content),
-      leadPreObjectedToCapital: leadHasPreObjectedToCapital(
-        conversationHistory
-          .filter((m) => m.sender === 'LEAD')
-          .slice(-4)
-          .map((m) => m.content)
-      ),
-      // Wout Lngrs 2026-05-01 — corpus of last 30 messages for the
-      // fabricated_capital_figure check. Joining as a single string
-      // keeps the gate side simple (one regex pass) and lets the
-      // reply's "$12" be cross-checked against every prior token.
-      priorMessageCorpus: conversationHistory
-        .slice(-30)
-        .map((m) => m.content)
-        .join('\n'),
-      // 2026-05-02 — closer name list for the
-      // closer_or_call_in_downsell hard fail. Account-agnostic;
-      // gate matches whatever closer is configured for this persona.
-      closerNames
-    });
+    const quality = scoreVoiceQualityGroup(
+      parsed.messages,
+      buildVoiceQualityOptions(parsed.messages?.length || 1)
+    );
     if (rescheduleFlow) {
       const ignoredRescheduleFailures = [
         'income_goal_overdue:',
@@ -1244,6 +1222,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           break;
       }
       const r24Override = `\n\n===== CRITICAL R24 OVERRIDE =====\n${r24Directive}\n=====`;
+      lastR24Override = r24Override;
       systemPromptForLLM = baseSystemPrompt + r24Override;
       console.warn(
         `[ai-engine] R24 gate BLOCKED attempt ${attempt + 1}/${MAX_RETRIES + 1} for convo ${activeConversationId} — reason=${r24LastResult.reason} parsedAmount=${r24LastResult.parsedAmount ?? 'null'} currency=${r24LastResult.parsedCurrency ?? 'null'} usd=${r24LastResult.parsedAmountUsd !== undefined && r24LastResult.parsedAmountUsd !== null ? Math.round(r24LastResult.parsedAmountUsd) : 'null'}`
@@ -1769,18 +1748,80 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // pitch the LLM produced. Replace it with a deterministic safe
         // capital/downsell/clarifier message so the lead never sees
         // "hop on a call" after failing R24.
-        const fallback = buildR24BlockedFallbackMessage(
+        const r24Fallback = buildR24BlockedFallbackMessage(
           r24LastResult.reason,
           capitalThreshold!,
           r24LastResult
         );
-        parsed.message = fallback.message;
-        parsed.messages = [fallback.message];
-        parsed.stage = fallback.stage;
-        parsed.subStage = fallback.subStage;
-        parsed.softExit = false;
-        parsed.escalateToHuman = false;
-        parsed.voiceNoteAction = null;
+        const fallbackQuality = scoreVoiceQualityGroup(
+          [r24Fallback.message],
+          buildVoiceQualityOptions(
+            1,
+            r24LastResult.reason === 'answer_below_threshold'
+              ? 'failed'
+              : undefined
+          )
+        );
+        if (fallbackQuality.passed) {
+          parsed.message = r24Fallback.message;
+          parsed.messages = [r24Fallback.message];
+          parsed.stage = r24Fallback.stage;
+          parsed.subStage = r24Fallback.subStage;
+          parsed.softExit = false;
+          parsed.escalateToHuman = false;
+          parsed.voiceNoteAction = null;
+          finalQualityScore = fallbackQuality.score;
+        } else {
+          console.warn(
+            `[ai-engine] R24 deterministic fallback failed voice gate for convo ${activeConversationId}: ${fallbackQuality.hardFails.join(', ') || 'score'} — generating fresh natural R24 reply`
+          );
+          const naturalR24Prompt =
+            baseSystemPrompt +
+            (lastR24Override ||
+              `\n\n===== CRITICAL R24 OVERRIDE =====\nThe lead has not passed capital verification. Do NOT route to booking. Follow the correct R24 branch naturally.\n=====`) +
+            `\n\n===== R24 FALLBACK VOICE REGEN =====\nThe canned fallback failed the voice-quality gate. Generate ONE fresh, natural text message that follows the R24 override above. Do not use em dashes, en dashes, semicolons, corporate phrasing, or canned template language. Do not pitch a call or send the Typeform. Keep it short and human.\n=====`;
+          const naturalCall = await callLLM(
+            provider,
+            apiKey,
+            model,
+            naturalR24Prompt,
+            messages,
+            fallback
+          );
+          modelUsedFinal = naturalCall.modelUsed;
+          usageTotal = addUsage(usageTotal, naturalCall.usage);
+          qualityGateAttempts++;
+
+          const naturalParsed = parseAIResponse(naturalCall.text);
+          const naturalQuality = scoreVoiceQualityGroup(
+            naturalParsed.messages,
+            buildVoiceQualityOptions(
+              naturalParsed.messages?.length || 1,
+              r24LastResult.reason === 'answer_below_threshold'
+                ? 'failed'
+                : undefined
+            )
+          );
+          const naturalStillRoutesToBooking =
+            isRoutingToBookingHandoff(naturalParsed);
+          if (naturalQuality.passed && !naturalStillRoutesToBooking) {
+            parsed = naturalParsed;
+            finalQualityScore = naturalQuality.score;
+          } else {
+            console.error(
+              `[ai-engine] R24 natural fallback failed voice/safety gate for convo ${activeConversationId}: hardFails=${naturalQuality.hardFails.join(', ') || 'none'} bookingRoute=${naturalStillRoutesToBooking}`
+            );
+            parsed.message =
+              "i don't wanna point you wrong here bro. give me a sec to double-check the right next step.";
+            parsed.messages = [parsed.message];
+            parsed.stage = 'SOFT_EXIT';
+            parsed.subStage = null;
+            parsed.softExit = false;
+            parsed.escalateToHuman = true;
+            parsed.voiceNoteAction = null;
+            finalQualityScore = naturalQuality.score;
+          }
+        }
       } else if (restrictedFundingBlocked) {
         console.error(
           `[ai-engine] Funding-partner geography gate EXHAUSTED ${MAX_RETRIES + 1} attempts — replacing unsafe funding pitch with human handoff for convo ${activeConversationId}`
@@ -2213,6 +2254,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     switch (r24LastResult.reason) {
       case 'confirmed_amount':
       case 'confirmed_affirmative':
+      case 'durable_qualification_state':
         capitalOutcome = 'passed';
         break;
       case 'answer_below_threshold':
@@ -3001,6 +3043,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
 export type R24Reason =
   | 'confirmed_amount' // Lead stated a concrete amount >= threshold
   | 'confirmed_affirmative' // Lead said "yeah" to a threshold-confirming Q (legacy path)
+  | 'durable_qualification_state' // Conversation was already verified in durable state
   | 'never_asked' // No verification Q found in conversation history
   | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet
   | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
@@ -3315,7 +3358,8 @@ async function shouldBlockForCapitalVerification(params: {
   if (
     !r24.blocked &&
     (r24.reason === 'confirmed_amount' ||
-      r24.reason === 'confirmed_affirmative')
+      r24.reason === 'confirmed_affirmative' ||
+      r24.reason === 'durable_qualification_state')
   ) {
     return { blocked: false, reason: 'verified_in_history' };
   }
@@ -3550,6 +3594,9 @@ function detectCurrencyFromTexts(
 const TIME_PATTERNS_TO_EXCLUDE: RegExp[] = [
   /\b\d{1,2}:\d{2}\s*(am|pm)?\b/gi, // "9:30am", "14:00"
   /\b\d{1,2}\s*(am|pm)\b/gi, // "12am", "3 pm"
+  /\bin\s+\d{1,2}\s*hours?\b/gi, // "in 12 hours"
+  /\b\d{1,2}\s*hour\s*ago\b/gi, // "2 hour ago"
+  /\b\d{1,2}\s*hours?\b/gi, // "12 hours", "2 hours"
   /\b\d{1,2}\s*o['’]clock\b/gi // "5 o'clock"
 ];
 
@@ -4039,6 +4086,47 @@ export async function detectConversationCurrencyConfidence(
   return { confidence: 'LOW', currency: null };
 }
 
+async function persistR24VerificationState(
+  conversationId: string,
+  result: R24GateResult
+): Promise<void> {
+  if (result.reason === 'durable_qualification_state') return;
+
+  const qualified =
+    !result.blocked &&
+    (result.reason === 'confirmed_amount' ||
+      result.reason === 'confirmed_affirmative');
+  const status = qualified ? 'VERIFIED_QUALIFIED' : 'VERIFIED_UNQUALIFIED';
+  const data: Prisma.ConversationUpdateManyMutationInput = {
+    capitalVerificationStatus: status,
+    ...(qualified
+      ? {
+          capitalVerifiedAt: new Date(),
+          ...(result.parsedAmount !== null
+            ? { capitalVerifiedAmount: result.parsedAmount }
+            : {})
+        }
+      : {})
+  };
+
+  try {
+    await prisma.conversation.updateMany({
+      where: {
+        id: conversationId,
+        capitalVerificationStatus: {
+          notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
+        }
+      },
+      data
+    });
+  } catch (err) {
+    console.error(
+      '[ai-engine] R24 durable qualification state update failed (non-fatal):',
+      err
+    );
+  }
+}
+
 /**
  * Look through the conversation's AI messages for a prior capital
  * verification question (threshold-confirming OR open-ended), then
@@ -4056,25 +4144,41 @@ async function checkR24Verification(
     timestamp: Date | string;
   }
 ): Promise<R24GateResult> {
-  // Wout Lngrs 2026-04-30 / 2026-05-01: once a call is booked, R24
-  // must NOT re-evaluate. Re-running the gate post-booking risks the
-  // parser hitting a stray number from a later lead message
-  // ("12pm", "5 hrs from now") and routing the lead to the downsell
-  // even though they passed qualification + booked a call. Treat
-  // a confirmed booking as "R24 already passed" — confirmed_affirmative
-  // is the existing pass reason, no new state needed.
+  const finalize = async (result: R24GateResult): Promise<R24GateResult> => {
+    await persistR24VerificationState(conversationId, result);
+    return result;
+  };
+
+  // Durable R24 state is the source of truth. Once a conversation has
+  // qualified, reschedules and later time/logistics chatter must not make
+  // R24 re-scan historical messages.
   const conv = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { scheduledCallAt: true }
+    select: { scheduledCallAt: true, capitalVerificationStatus: true }
   });
-  if (conv?.scheduledCallAt) {
+  if (
+    conv?.capitalVerificationStatus === 'VERIFIED_QUALIFIED' ||
+    conv?.capitalVerificationStatus === 'MANUALLY_OVERRIDDEN'
+  ) {
     return {
+      blocked: false,
+      reason: 'durable_qualification_state',
+      parsedAmount: null,
+      verificationAskedAt: null,
+      verificationConfirmedAt: null
+    };
+  }
+
+  // Legacy defense-in-depth: active confirmed calls still count as passed,
+  // and now also persist durable qualification for future reschedules.
+  if (conv?.scheduledCallAt) {
+    return finalize({
       blocked: false,
       reason: 'confirmed_affirmative',
       parsedAmount: null,
       verificationAskedAt: null,
       verificationConfirmedAt: null
-    };
+    });
   }
 
   const aiMsgs = await prisma.message.findMany({
@@ -4133,13 +4237,13 @@ async function checkR24Verification(
   }
 
   if (!verificationAskedAt) {
-    return {
+    return finalize({
       blocked: true,
       reason: 'never_asked',
       parsedAmount: null,
       verificationAskedAt: null,
       verificationConfirmedAt: null
-    };
+    });
   }
 
   // Collect ALL LEAD messages after the verification Q, not just the
@@ -4210,13 +4314,13 @@ async function checkR24Verification(
   }
   mergedAnswers.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   if (mergedAnswers.length === 0) {
-    return {
+    return finalize({
       blocked: true,
       reason: 'asked_but_no_answer',
       parsedAmount: null,
       verificationAskedAt: verificationAskedAt.id,
       verificationConfirmedAt: null
-    };
+    });
   }
   // Classify each candidate answer; prefer the STRONGEST signal.
   // amount (concrete number) wins everything. When both an affirmative
@@ -4243,13 +4347,13 @@ async function checkR24Verification(
     });
   }
   if (classifications.length === 0) {
-    return {
+    return finalize({
       blocked: true,
       reason: 'asked_but_no_answer',
       parsedAmount: null,
       verificationAskedAt: verificationAskedAt.id,
       verificationConfirmedAt: null
-    };
+    });
   }
   // amount > disqualifier > affirmative > hedging > ambiguous.
   const priority: Record<string, number> = {
@@ -4295,7 +4399,7 @@ async function checkR24Verification(
     (c) => c.cls.kind === 'amount'
   );
   if (totalCapitalQuestionsAsked >= 2 && !hasAnyAmountAnswer) {
-    return {
+    return finalize({
       blocked: true,
       reason: 'answer_below_threshold',
       parsedAmount: null,
@@ -4303,7 +4407,7 @@ async function checkR24Verification(
       parsedAmountUsd: null,
       verificationAskedAt: askedId,
       verificationConfirmedAt: null
-    };
+    });
   }
 
   // ── FIX 2 (Amos Edoja 2026-04-30): Foreign currency, no amount ──
@@ -4318,7 +4422,7 @@ async function checkR24Verification(
       mergedAnswers.map((m) => m.content)
     );
     if (foreignCurrency && foreignCurrency !== 'USD') {
-      return {
+      return finalize({
         blocked: true,
         reason: 'answer_below_threshold',
         parsedAmount: null,
@@ -4326,7 +4430,7 @@ async function checkR24Verification(
         parsedAmountUsd: null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
-      };
+      });
     }
   }
 
@@ -4347,7 +4451,7 @@ async function checkR24Verification(
           mergedAnswers.map((m) => m.content)
         );
         if (conf.confidence === 'LOW') {
-          return {
+          return finalize({
             blocked: true,
             reason: 'answer_currency_unclear',
             parsedAmount: amt,
@@ -4355,13 +4459,13 @@ async function checkR24Verification(
             parsedAmountUsd: null,
             verificationAskedAt: askedId,
             verificationConfirmedAt: null
-          };
+          });
         }
       }
       const parsedCurrency = classification.currency ?? conversationCurrency;
       const compareAmt = convertCapitalAmountToUsd(amt, parsedCurrency);
       if (compareAmt >= threshold) {
-        return {
+        return finalize({
           blocked: false,
           reason: 'confirmed_amount',
           parsedAmount: amt,
@@ -4369,9 +4473,9 @@ async function checkR24Verification(
           parsedAmountUsd: compareAmt,
           verificationAskedAt: askedId,
           verificationConfirmedAt: nextLead.id
-        };
+        });
       }
-      return {
+      return finalize({
         blocked: true,
         reason: 'answer_below_threshold',
         parsedAmount: amt,
@@ -4379,35 +4483,35 @@ async function checkR24Verification(
         parsedAmountUsd: compareAmt,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
-      };
+      });
     }
     case 'affirmative':
-      return {
+      return finalize({
         blocked: false,
         reason: 'confirmed_affirmative',
         parsedAmount: null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: nextLead.id
-      };
+      });
     case 'disqualifier':
-      return {
+      return finalize({
         blocked: true,
         reason: 'answer_below_threshold',
         parsedAmount: 0,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
-      };
+      });
     case 'hedging':
-      return {
+      return finalize({
         blocked: true,
         reason: 'answer_hedging',
         parsedAmount: null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
-      };
+      });
     case 'ambiguous':
     default:
-      return {
+      return finalize({
         blocked: true,
         reason:
           classification.reason === 'vague_no_number'
@@ -4429,6 +4533,6 @@ async function checkR24Verification(
             : null,
         verificationAskedAt: askedId,
         verificationConfirmedAt: null
-      };
+      });
   }
 }

@@ -72,6 +72,13 @@ enum MessageSender {
   HUMAN
 }
 
+enum CapitalVerificationStatus {
+  UNVERIFIED
+  VERIFIED_QUALIFIED
+  VERIFIED_UNQUALIFIED
+  MANUALLY_OVERRIDDEN
+}
+
 enum NotificationType {
   CALL_BOOKED
   HOT_LEAD
@@ -967,6 +974,14 @@ model Conversation {
   typeformCallScheduledAt   DateTime?
   typeformAnswers           Json?
 
+  // ── Durable capital-verification state ────────────────────────
+  // R24 should not re-read the whole message history after a lead has
+  // already qualified. This state survives reschedules, scheduledCallAt
+  // clears, and later scheduling/time chatter.
+  capitalVerificationStatus CapitalVerificationStatus @default(UNVERIFIED)
+  capitalVerifiedAt         DateTime?
+  capitalVerifiedAmount     Int?
+
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on
   // this conversation and the lead's first messages identified them
@@ -1040,6 +1055,7 @@ model Conversation {
   @@index([scheduledCallAt])
   @@index([source, manyChatFiredAt])
   @@index([typeformSubmittedAt])
+  @@index([capitalVerificationStatus])
 }
 
 model Message {

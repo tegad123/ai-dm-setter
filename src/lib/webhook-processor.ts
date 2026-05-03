@@ -1829,6 +1829,8 @@ export async function scheduleAIReply(
       data: {
         aiActive: true,
         autoSendOverride: true,
+        // Rescheduling clears only scheduling state. Durable capital
+        // verification survives; a booked lead is still qualified.
         scheduledCallAt: null,
         scheduledCallTimezone: null,
         scheduledCallSource: null,

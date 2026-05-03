@@ -445,6 +445,8 @@ export async function DELETE(
     await prisma.conversation.update({
       where: { id },
       data: {
+        // Do not clear durable capital verification here. Scheduling state
+        // and qualification state are independent.
         scheduledCallAt: null,
         scheduledCallTimezone: null,
         scheduledCallSource: null,

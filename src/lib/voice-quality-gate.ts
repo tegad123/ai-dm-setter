@@ -1685,7 +1685,7 @@ export function scoreVoiceQuality(
         ? new RegExp(`\\b(${closerNamesEscaped.join('|')})\\b`, 'i')
         : null;
     const CALL_LANGUAGE_RE =
-      /\b(hop\s+on\s+(a\s+)?(quick\s+)?(call|chat)|jump\s+on\s+(a\s+)?(call|chat)|on\s+the\s+call|with\s+the\s+closer|call\s+with\s+[A-Z][a-z]+|book(ing)?\s+(a\s+)?call|the\s+team\s+will\s+reach\s+out)\b/i;
+      /\b(hop\s+on\s+(a\s+)?(quick\s+)?(call|chat)|jump\s+on\s+(a\s+)?(call|chat)|on\s+the\s+call|main\s+call|with\s+the\s+closer|call\s+with\s+[A-Z][a-z]+|book(ing)?\s+(a\s+)?call|the\s+team\s+will\s+reach\s+out)\b/i;
     const PRICING_DEFER_TO_CALL_RE =
       /\b(price|pricing|cost|how\s+much)[^.]{0,80}\b(covered|discussed|broken\s+down|explained|shared)\s+on\s+the\s+call\b/i;
     if (
