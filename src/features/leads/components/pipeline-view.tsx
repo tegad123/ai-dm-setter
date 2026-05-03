@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   DndContext,
@@ -16,6 +16,8 @@ import {
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import { CSS } from '@dnd-kit/utilities';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -27,7 +29,13 @@ import { useRealtime } from '@/hooks/use-realtime';
 import { transitionLeadStage } from '@/lib/api';
 import type { Lead } from '@/lib/api';
 import { toast } from 'sonner';
-import { IconGripVertical, IconClock } from '@tabler/icons-react';
+import {
+  IconChevronRight,
+  IconClock,
+  IconGripVertical,
+  IconSearch,
+  IconX
+} from '@tabler/icons-react';
 
 // ---------------------------------------------------------------------------
 // Stage definitions — order and display names
@@ -69,6 +77,43 @@ function timeInStage(stageEnteredAt?: string): string {
   if (days < 30) return `${days}d`;
   const months = Math.floor(days / 30);
   return `${months}mo`;
+}
+
+function formatRelativeActivity(value?: string | null): string {
+  if (!value) return '--';
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return '--';
+
+  const diffMs = Date.now() - time;
+  if (diffMs < 60_000) return 'just now';
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  if (hours < 48) return 'yesterday';
+
+  const date = new Date(time);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' })
+  });
+}
+
+function getLeadActivityAt(lead: Lead): string | null {
+  return (
+    lead.conversation?.lastMessageAt ??
+    lead.updatedAt ??
+    lead.stageEnteredAt ??
+    lead.createdAt ??
+    null
+  );
+}
+
+function displayHandle(handle?: string | null): string {
+  if (!handle) return '';
+  return handle.startsWith('@') ? handle : `@${handle}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,19 +270,285 @@ function LeadCardOverlay({ lead }: { lead: Lead }) {
   );
 }
 
+function PipelineSearchBar({
+  value,
+  onChange,
+  onClear,
+  inputRef,
+  resultCount,
+  isSearching
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onClear: () => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  resultCount: number;
+  isSearching: boolean;
+}) {
+  return (
+    <div className='border-border bg-background/95 sticky top-0 z-10 border-b px-4 py-3 backdrop-blur'>
+      <div className='flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
+        <div className='relative w-full md:max-w-xl'>
+          <IconSearch className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
+          <Input
+            ref={inputRef}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder='Search leads by handle, name, ID, phone, or email'
+            className='h-10 pr-20 pl-9'
+          />
+          <div className='absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-1'>
+            {value ? (
+              <Button
+                type='button'
+                variant='ghost'
+                size='icon'
+                className='h-7 w-7'
+                onClick={onClear}
+                aria-label='Clear lead search'
+              >
+                <IconX className='h-4 w-4' />
+              </Button>
+            ) : null}
+            <span className='text-muted-foreground hidden rounded border px-1.5 py-0.5 text-[10px] font-medium md:inline'>
+              ⌘K
+            </span>
+          </div>
+        </div>
+        <div className='text-muted-foreground text-xs'>
+          {isSearching
+            ? `${resultCount} result${resultCount === 1 ? '' : 's'} across all stages`
+            : 'Search includes every stage and conversation state'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LeadSearchRow({ lead, onClick }: { lead: Lead; onClick: () => void }) {
+  const activityAt = getLeadActivityAt(lead);
+  const coldOrArchived =
+    lead.stage === 'GHOSTED' ||
+    lead.stage === 'NURTURE' ||
+    lead.stage === 'CLOSED_LOST' ||
+    lead.stage === 'UNQUALIFIED';
+
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      className='bg-card hover:bg-accent/40 grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-md border p-3 text-left transition-colors md:grid-cols-[minmax(220px,1.4fr)_auto_auto_auto]'
+    >
+      <div className='min-w-0'>
+        <div className='flex items-center gap-2'>
+          <p className='text-foreground truncate text-sm font-semibold'>
+            {displayHandle(lead.handle) || lead.name}
+          </p>
+          {coldOrArchived ? (
+            <Badge variant='outline' className='text-[10px]'>
+              cold
+            </Badge>
+          ) : null}
+        </div>
+        <p className='text-muted-foreground mt-0.5 truncate text-xs'>
+          {lead.name}
+        </p>
+        <div className='text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]'>
+          <span>ID {lead.id}</span>
+          {lead.email || lead.conversation?.leadEmail ? (
+            <span>{lead.email ?? lead.conversation?.leadEmail}</span>
+          ) : null}
+          {lead.conversation?.leadPhone ? (
+            <span>{lead.conversation.leadPhone}</span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className='hidden items-center md:flex'>
+        <LeadStageBadge stage={lead.stage.toLowerCase() as LeadStage} />
+      </div>
+
+      <div className='hidden min-w-[150px] flex-col items-start justify-center gap-1 md:flex'>
+        <div className='flex items-center gap-2'>
+          <Badge variant='secondary' className='text-[10px]'>
+            score {lead.qualityScore ?? 0}
+          </Badge>
+          {lead.conversation?.aiActive === false ? (
+            <Badge variant='outline' className='text-[10px]'>
+              AI paused
+            </Badge>
+          ) : null}
+        </div>
+        <p className='text-muted-foreground max-w-[210px] truncate text-[11px]'>
+          {lead.triggerSource || lead.platform.toLowerCase()}
+        </p>
+      </div>
+
+      <div className='flex items-center justify-end gap-2'>
+        <div className='text-right'>
+          <p className='text-muted-foreground text-[11px]'>last activity</p>
+          <p className='text-foreground text-xs font-medium'>
+            {formatRelativeActivity(activityAt)}
+          </p>
+          <div className='mt-1 md:hidden'>
+            <LeadStageBadge stage={lead.stage.toLowerCase() as LeadStage} />
+          </div>
+        </div>
+        <IconChevronRight className='text-muted-foreground h-4 w-4' />
+      </div>
+    </button>
+  );
+}
+
+function PipelineSearchResults({
+  query,
+  leads,
+  latestLeads,
+  loading,
+  onOpenLead
+}: {
+  query: string;
+  leads: Lead[];
+  latestLeads: Lead[];
+  loading: boolean;
+  onOpenLead: (leadId: string) => void;
+}) {
+  if (loading) {
+    return (
+      <div className='space-y-2 p-4'>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <Skeleton key={index} className='h-[92px] w-full rounded-md' />
+        ))}
+      </div>
+    );
+  }
+
+  if (leads.length > 0) {
+    return (
+      <div className='space-y-2 p-4'>
+        {leads.map((lead) => (
+          <LeadSearchRow
+            key={lead.id}
+            lead={lead}
+            onClick={() => onOpenLead(lead.id)}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  const withoutAt = query.trim().replace(/^@+/, '');
+
+  return (
+    <div className='space-y-4 p-4'>
+      <div className='rounded-md border border-dashed p-6'>
+        <p className='text-foreground text-sm font-semibold'>
+          No leads found matching "{query}"
+        </p>
+        <div className='text-muted-foreground mt-2 space-y-1 text-sm'>
+          {query.trim().startsWith('@') ? (
+            <p>Try searching without the @ symbol: "{withoutAt}"</p>
+          ) : null}
+          <p>Archived, cold, and unqualified leads are included in search.</p>
+        </div>
+      </div>
+
+      {latestLeads.length > 0 ? (
+        <div>
+          <p className='text-muted-foreground mb-2 text-xs font-medium'>
+            Last 5 leads added
+          </p>
+          <div className='space-y-2'>
+            {latestLeads.slice(0, 5).map((lead) => (
+              <LeadSearchRow
+                key={lead.id}
+                lead={lead}
+                onClick={() => onOpenLead(lead.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // PipelineView — main export
 // ---------------------------------------------------------------------------
 
 export function PipelineView() {
   const router = useRouter();
-  const { leads, loading, error, refetch } = useLeads({ limit: 500 });
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const isSearching = debouncedSearch.trim().length > 0;
+  const { leads, loading, error, refetch } = useLeads({
+    limit: isSearching ? 50 : 500,
+    search: isSearching ? debouncedSearch.trim() : undefined
+  });
+  const { leads: latestLeads, refetch: refetchLatestLeads } = useLeads({
+    limit: 5
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [transitioning, setTransitioning] = useState<Set<string>>(new Set());
 
   useRealtime('lead:updated', () => {
     refetch();
+    refetchLatestLeads();
   });
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const initial = (query.get('q') ?? query.get('search') ?? '').trim();
+    if (!initial) return;
+    setSearchInput(initial);
+    setDebouncedSearch(initial);
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(searchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (debouncedSearch.trim()) {
+      params.set('q', debouncedSearch.trim());
+    } else {
+      params.delete('q');
+      params.delete('search');
+    }
+    const qs = params.toString();
+    const nextUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+    window.history.replaceState(null, '', nextUrl);
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        return;
+      }
+
+      if (
+        event.key === 'Escape' &&
+        (searchInput || document.activeElement === inputRef.current)
+      ) {
+        event.preventDefault();
+        setSearchInput('');
+        setDebouncedSearch('');
+        inputRef.current?.blur();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [searchInput]);
 
   // Group leads by their UPPER_CASE stage key
   const groupedLeads = useMemo(() => {
@@ -324,30 +635,6 @@ export function PipelineView() {
     setActiveId(null);
   }, []);
 
-  // Loading state
-  if (loading) {
-    return (
-      <div className='flex w-max gap-4 p-4'>
-        {PIPELINE_STAGES.slice(0, 6).map((s) => (
-          <div
-            key={s.key}
-            className='bg-muted/40 flex w-[260px] min-w-[260px] flex-col rounded-lg border p-3'
-          >
-            <div className='mb-3 flex items-center justify-between'>
-              <Skeleton className='h-4 w-24' />
-              <Skeleton className='h-5 w-8 rounded-full' />
-            </div>
-            <div className='space-y-2'>
-              <Skeleton className='h-[100px] w-full rounded-md' />
-              <Skeleton className='h-[100px] w-full rounded-md' />
-              <Skeleton className='h-[100px] w-full rounded-md' />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
   if (error) {
     return (
       <div className='flex items-center justify-center py-12'>
@@ -359,43 +646,89 @@ export function PipelineView() {
   }
 
   return (
-    <div
-      className='overflow-x-auto'
-      style={{ maxHeight: 'calc(100dvh - 180px)' }}
-    >
-      <DndContext
-        sensors={sensors}
-        modifiers={[restrictToWindowEdges]}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-      >
-        <div className='flex w-max gap-4 pb-4'>
-          {PIPELINE_STAGES.map((stage) => {
-            const columnLeads = groupedLeads[stage.key] ?? [];
-            return (
-              <DroppableColumn
-                key={stage.key}
-                stageKey={stage.key}
-                label={stage.label}
-                count={columnLeads.length}
-              >
-                {columnLeads.map((lead) => (
-                  <DraggableCard
-                    key={lead.id}
-                    lead={lead}
-                    onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
-                  />
-                ))}
-              </DroppableColumn>
-            );
-          })}
-        </div>
+    <div className='overflow-hidden rounded-lg border'>
+      <PipelineSearchBar
+        value={searchInput}
+        onChange={setSearchInput}
+        onClear={() => {
+          setSearchInput('');
+          setDebouncedSearch('');
+          inputRef.current?.focus();
+        }}
+        inputRef={inputRef}
+        resultCount={leads.length}
+        isSearching={isSearching}
+      />
 
-        <DragOverlay dropAnimation={null}>
-          {activeLead ? <LeadCardOverlay lead={activeLead} /> : null}
-        </DragOverlay>
-      </DndContext>
+      {isSearching ? (
+        <PipelineSearchResults
+          query={debouncedSearch}
+          leads={leads}
+          latestLeads={latestLeads}
+          loading={loading}
+          onOpenLead={(leadId) => router.push(`/dashboard/leads/${leadId}`)}
+        />
+      ) : loading ? (
+        <div className='flex w-max gap-4 p-4'>
+          {PIPELINE_STAGES.slice(0, 6).map((s) => (
+            <div
+              key={s.key}
+              className='bg-muted/40 flex w-[260px] min-w-[260px] flex-col rounded-lg border p-3'
+            >
+              <div className='mb-3 flex items-center justify-between'>
+                <Skeleton className='h-4 w-24' />
+                <Skeleton className='h-5 w-8 rounded-full' />
+              </div>
+              <div className='space-y-2'>
+                <Skeleton className='h-[100px] w-full rounded-md' />
+                <Skeleton className='h-[100px] w-full rounded-md' />
+                <Skeleton className='h-[100px] w-full rounded-md' />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          className='overflow-x-auto p-4'
+          style={{ maxHeight: 'calc(100dvh - 250px)' }}
+        >
+          <DndContext
+            sensors={sensors}
+            modifiers={[restrictToWindowEdges]}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
+            <div className='flex w-max gap-4 pb-4'>
+              {PIPELINE_STAGES.map((stage) => {
+                const columnLeads = groupedLeads[stage.key] ?? [];
+                return (
+                  <DroppableColumn
+                    key={stage.key}
+                    stageKey={stage.key}
+                    label={stage.label}
+                    count={columnLeads.length}
+                  >
+                    {columnLeads.map((lead) => (
+                      <DraggableCard
+                        key={lead.id}
+                        lead={lead}
+                        onClick={() =>
+                          router.push(`/dashboard/leads/${lead.id}`)
+                        }
+                      />
+                    ))}
+                  </DroppableColumn>
+                );
+              })}
+            </div>
+
+            <DragOverlay dropAnimation={null}>
+              {activeLead ? <LeadCardOverlay lead={activeLead} /> : null}
+            </DragOverlay>
+          </DndContext>
+        </div>
+      )}
     </div>
   );
 }

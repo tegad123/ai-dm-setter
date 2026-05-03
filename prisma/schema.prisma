@@ -898,6 +898,8 @@ model Lead {
 
   @@index([accountId, stage])
   @@index([accountId, platform])
+  @@index([accountId, handle])
+  @@index([accountId, name])
   @@index([accountId, email])
   @@index([accountId, createdAt])
   @@index([contentAttributionId])
@@ -1059,6 +1061,8 @@ model Conversation {
   @@index([source, manyChatFiredAt])
   @@index([typeformSubmittedAt])
   @@index([capitalVerificationStatus])
+  @@index([leadPhone])
+  @@index([leadEmail])
 }
 
 model Message {

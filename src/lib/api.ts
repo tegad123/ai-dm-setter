@@ -49,9 +49,20 @@ export interface Lead {
   qualityScore: number;
   triggerType: string;
   triggerSource?: string | null;
+  platformUserId?: string | null;
+  email?: string | null;
   createdAt: string;
   updatedAt: string;
-  conversation?: { id: string; aiActive: boolean; unreadCount: number } | null;
+  conversation?: {
+    id: string;
+    aiActive: boolean;
+    unreadCount: number;
+    lastMessageAt?: string | null;
+    outcome?: string | null;
+    source?: string | null;
+    leadEmail?: string | null;
+    leadPhone?: string | null;
+  } | null;
   tags?: Array<{ tag: { id: string; name: string; color: string } }>;
 }
 

@@ -1,7 +1,7 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
-import { LeadStage, Platform } from '@prisma/client';
+import { LeadStage, Platform, Prisma } from '@prisma/client';
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,18 +10,22 @@ export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
     const stage = searchParams.get('stage') as LeadStage | null;
     const platform = searchParams.get('platform') as Platform | null;
-    const search = searchParams.get('search');
+    const search = (
+      searchParams.get('search') ?? searchParams.get('q')
+    )?.trim();
+    const handleSearch = search?.replace(/^@+/, '') ?? '';
     const tag = searchParams.get('tag'); // Filter by tag name
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+    const maxLimit = search ? 50 : 100;
     const limit = Math.max(
       1,
-      Math.min(100, parseInt(searchParams.get('limit') || '20', 10))
+      Math.min(maxLimit, parseInt(searchParams.get('limit') || '20', 10))
     );
     const skip = (page - 1) * limit;
 
-    const where: Record<string, unknown> = { accountId: auth.accountId };
+    const where: Prisma.LeadWhereInput = { accountId: auth.accountId };
 
-    if (stage) {
+    if (stage && !search) {
       where.stage = stage;
     }
     if (platform) {
@@ -29,8 +33,21 @@ export async function GET(req: NextRequest) {
     }
     if (search) {
       where.OR = [
+        { id: { equals: search } },
+        { platformUserId: { contains: search, mode: 'insensitive' } },
         { name: { contains: search, mode: 'insensitive' } },
-        { handle: { contains: search, mode: 'insensitive' } }
+        { handle: { contains: handleSearch || search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        {
+          conversation: {
+            is: { leadPhone: { contains: search, mode: 'insensitive' } }
+          }
+        },
+        {
+          conversation: {
+            is: { leadEmail: { contains: search, mode: 'insensitive' } }
+          }
+        }
       ];
     }
     if (tag) {
@@ -44,7 +61,16 @@ export async function GET(req: NextRequest) {
         where,
         include: {
           conversation: {
-            select: { id: true, aiActive: true, unreadCount: true }
+            select: {
+              id: true,
+              aiActive: true,
+              unreadCount: true,
+              lastMessageAt: true,
+              outcome: true,
+              source: true,
+              leadEmail: true,
+              leadPhone: true
+            }
           },
           tags: {
             include: {
@@ -52,7 +78,9 @@ export async function GET(req: NextRequest) {
             }
           }
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: search
+          ? [{ conversation: { lastMessageAt: 'desc' } }, { updatedAt: 'desc' }]
+          : { createdAt: 'desc' },
         skip,
         take: limit
       }),

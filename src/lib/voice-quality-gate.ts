@@ -456,6 +456,47 @@ const BANNED_EMOJIS = [
   '💪' // without skin tone — Daniel uses 💪🏿 specifically
 ];
 
+const CALL_LOGISTICS_PATTERNS = [
+  /\bquiet (spot|area|place|environment|room)\b/i,
+  /make sure you('?re| are) in a/i,
+  /be ready (for|with|by)/i,
+  /come (prepared|ready)/i,
+  /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+\d/i,
+  /\d+\s*(am|pm)\s+(cst|est|pst|mst|gmt|utc|ct|et|pt|mt)\b/i,
+  /see (the )?gameplan (clearly|properly)/i,
+  /so you can (actually )?see/i
+];
+
+const ACK_ONLY_PATTERNS = [
+  /^(sounds?\s+good|ok(ay)?|got it|cool|bet|word|aight|alright|sure|yes( that works)?|yep|yeah|nice|perfect)(\s+(bro|g|man|fam))?[\s.!?]*$/i,
+  /^(👍|🤝|💪|💪🏿|🤝🏿)[\s.!?]*$/i
+];
+
+const SETTER_SENDERS = new Set(['AI', 'HUMAN', 'AI_SETTER', 'HUMAN_SETTER']);
+
+export function containsCallLogisticsContent(
+  text: string | null | undefined
+): boolean {
+  if (!text) return false;
+  return CALL_LOGISTICS_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+export function isAcknowledgmentOnlyLeadMessage(
+  text: string | null | undefined
+): boolean {
+  if (!text) return false;
+  return ACK_ONLY_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export function callLogisticsAlreadyDeliveredInRecentHistory(
+  messages: Array<{ sender?: string | null; content?: string | null }>
+): boolean {
+  return messages
+    .slice(-8)
+    .filter((message) => SETTER_SENDERS.has(String(message.sender)))
+    .some((message) => containsCallLogisticsContent(message.content));
+}
+
 // ---------------------------------------------------------------------------
 // Main scoring function
 // ---------------------------------------------------------------------------
@@ -681,6 +722,17 @@ export interface VoiceQualityOptions {
    * instead of using the old audio-fallback wording.
    */
   mediaContextCorpus?: string;
+  /**
+   * R30 — true when AI or a human setter already delivered call logistics
+   * (quiet spot, prep, day/time confirmation) in recent conversation history.
+   */
+  callLogisticsAlreadyDelivered?: boolean;
+  /**
+   * R30 — true when the most recent lead message was only an acknowledgment
+   * like "sounds good" / "ok" / "got it". Any logistics after this is a
+   * duplicate reminder, not useful conversation.
+   */
+  lastLeadMessageWasAcknowledgmentOnly?: boolean;
 }
 
 export function scoreVoiceQuality(
@@ -2492,6 +2544,24 @@ export function scoreVoiceQualityGroup(
   ) {
     hardFails.push(
       '[group] long_timeline_call_pitch: lead gave a 2+ year timeline. Do NOT pitch the call yet. First ask what is holding it to 2-3 years and whether it is capital or wanting to learn first.'
+    );
+  }
+
+  const generatedContainsCallLogistics = containsCallLogisticsContent(joined);
+  if (
+    generatedContainsCallLogistics &&
+    options?.callLogisticsAlreadyDelivered === true
+  ) {
+    hardFails.push(
+      '[group] r30_logistics_redelivery: call logistics were already delivered by AI or a human setter in recent history. Do not repeat quiet-spot, prep, day, or time reminders.'
+    );
+  }
+  if (
+    generatedContainsCallLogistics &&
+    options?.lastLeadMessageWasAcknowledgmentOnly === true
+  ) {
+    hardFails.push(
+      '[group] r30_logistics_after_acknowledgment: lead just acknowledged with a short reply. Respond with a brief closer only, no reminders or logistics.'
     );
   }
 

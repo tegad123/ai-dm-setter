@@ -13,6 +13,8 @@ import {
   isUnkeptPromise,
   isValidationOnlyMessage,
   detectTypeformFilledNoBookingContext,
+  callLogisticsAlreadyDeliveredInRecentHistory,
+  isAcknowledgmentOnlyLeadMessage,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
@@ -999,6 +1001,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       .map((m) => m.content)
       .join('\n'),
     mediaContextCorpus: buildMediaContextCorpus(conversationHistory),
+    callLogisticsAlreadyDelivered:
+      callLogisticsAlreadyDeliveredInRecentHistory(conversationHistory),
+    lastLeadMessageWasAcknowledgmentOnly: isAcknowledgmentOnlyLeadMessage(
+      lastLeadMsg?.content
+    ),
     closerNames
   });
 
@@ -1673,6 +1680,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + directive;
         console.warn(
           `[ai-engine] Transcribed voice note ignored — forcing regen against transcript (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const logisticsRedeliveryFailed = quality.hardFails.some((f) =>
+        f.includes('r30_logistics_redelivery:')
+      );
+      if (logisticsRedeliveryFailed) {
+        const directive = `\n\n===== R30 CALL LOGISTICS ALREADY DELIVERED =====\nCall logistics (quiet spot, day, time, prep) have already been delivered in this conversation. Do NOT repeat them. The lead is past that point.\n\nGenerate a brief response, max 2 short bubbles, that moves the conversation forward without re-stating logistics. If there is nothing new to add, acknowledge briefly and close.\n\nExamples:\n  messages: ["bet 💪🏿 see you then"]\n  messages: ["🤝🏿 talk soon"]\n  messages: ["fire bro, you're set"]\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] R30 logistics redelivery detected — forcing regen without repeated logistics (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const logisticsAfterAckFailed = quality.hardFails.some((f) =>
+        f.includes('r30_logistics_after_acknowledgment:')
+      );
+      if (logisticsAfterAckFailed) {
+        const directive = `\n\n===== R30 LEAD ACKNOWLEDGED =====\nThe lead just acknowledged ("sounds good", "ok", "got it", etc.). Respond with a brief closer only: max 1 short bubble under 10 words, optional emoji.\n\nDo NOT add reminders, logistics, prep instructions, quiet-spot language, day/time confirmations, or call instructions.\n\nExamples:\n  messages: ["bet bro 💪🏿"]\n  messages: ["🤝🏿 see you then"]\n  messages: ["fire, you're set"]\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] R30 logistics after acknowledgment detected — forcing brief closer (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
