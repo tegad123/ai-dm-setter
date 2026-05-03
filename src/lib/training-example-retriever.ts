@@ -27,6 +27,15 @@ export interface FewShotExample {
 
 export interface RetrievalContext {
   accountId: string;
+  /**
+   * Audit F3.3 — the AIPersona that owns this conversation. Required.
+   * TrainingConversation rows are persona-scoped at the schema level
+   * (each row has personaId NOT NULL); the retrieval queries used to
+   * filter only by accountId, which let one persona's hand-curated
+   * training examples appear in another persona's prompt context.
+   * Caller threads this from generateReply's personaId param.
+   */
+  personaId: string;
   currentLeadMessage: string;
   leadStage?: string; // From lead.stage (LeadStage enum: NEW_LEAD, QUALIFYING, etc.)
   leadExperience?: string; // From lead.experience (beginner, intermediate, experienced)
@@ -248,6 +257,8 @@ export async function retrieveFewShotExamples(
           ...baseWhere,
           conversation: {
             accountId: context.accountId,
+            // F3.3: scope to the calling persona only.
+            personaId: context.personaId,
             outcomeLabel: { notIn: ['HARD_NO', 'UNKNOWN'] },
             leadType: mappedLeadType,
             dominantStage: mappedStage
@@ -288,6 +299,8 @@ export async function retrieveFewShotExamples(
             ...baseWhere,
             conversation: {
               accountId: context.accountId,
+              // F3.3: scope to the calling persona only.
+              personaId: context.personaId,
               outcomeLabel: { notIn: ['HARD_NO', 'UNKNOWN'] },
               OR: orConditions
             }
@@ -321,6 +334,8 @@ export async function retrieveFewShotExamples(
           ...baseWhere,
           conversation: {
             accountId: context.accountId,
+            // F3.3: scope to the calling persona only.
+            personaId: context.personaId,
             outcomeLabel: { notIn: ['HARD_NO', 'UNKNOWN'] }
           }
         },
