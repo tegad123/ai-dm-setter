@@ -80,7 +80,9 @@ export async function GET(request: NextRequest) {
       unreviewedCount,
       keepaliveRows,
       callUnconfirmedRows,
-      callOutcomeNeededRows
+      callOutcomeNeededRows,
+      pendingRecoveryRows,
+      recoveryStatusRows
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
       // Conversations flagged distressDetected=true within the last
@@ -365,6 +367,41 @@ export async function GET(request: NextRequest) {
           take: 50
         }),
         []
+      ),
+      // ── PRIORITY 2.G: Pending self-recovery approvals ────────────
+      safe(
+        prisma.selfRecoveryEvent.findMany({
+          where: {
+            accountId,
+            status: 'PENDING_APPROVAL',
+            createdAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) }
+          },
+          select: {
+            id: true,
+            conversationId: true,
+            leadId: true,
+            triggerReason: true,
+            recoveryAction: true,
+            priority: true,
+            generatedMessages: true,
+            createdAt: true,
+            lead: { select: { id: true, name: true, handle: true } }
+          },
+          orderBy: [{ priority: 'asc' }, { createdAt: 'desc' }],
+          take: 30
+        }),
+        []
+      ),
+      safe(
+        prisma.selfRecoveryEvent.groupBy({
+          by: ['status', 'triggerReason'],
+          where: {
+            accountId,
+            createdAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) }
+          },
+          _count: true
+        }),
+        []
       )
     ]);
 
@@ -381,6 +418,7 @@ export async function GET(request: NextRequest) {
     upcomingCallRows.forEach((c) => referencedConvIds.add(c.id));
     callUnconfirmedRows.forEach((c) => referencedConvIds.add(c.id));
     callOutcomeNeededRows.forEach((c) => referencedConvIds.add(c.id));
+    pendingRecoveryRows.forEach((r) => referencedConvIds.add(r.conversationId));
     const referencedConvIdList = Array.from(referencedConvIds);
     const [dismissedRows, latestLeadMsgs] = await Promise.all([
       referencedConvIdList.length > 0
@@ -753,6 +791,33 @@ export async function GET(request: NextRequest) {
         callTimezone: c.scheduledCallTimezone ?? null
       }));
 
+    const recoveryPriorityRank: Record<string, number> = {
+      HOT: 0,
+      MEDIUM: 1,
+      LOW: 2
+    };
+    const attentionPendingRecovery = pendingRecoveryRows
+      .filter((r) => !isDismissed(r.conversationId, 'pending_auto_recovery'))
+      .sort(
+        (a, b) =>
+          (recoveryPriorityRank[a.priority] ?? 3) -
+            (recoveryPriorityRank[b.priority] ?? 3) ||
+          b.createdAt.getTime() - a.createdAt.getTime()
+      )
+      .map((r) => ({
+        type: 'pending_auto_recovery' as const,
+        eventId: r.id,
+        conversationId: r.conversationId,
+        leadId: r.leadId,
+        leadName: r.lead.name,
+        leadHandle: r.lead.handle,
+        triggerReason: r.triggerReason,
+        recoveryAction: r.recoveryAction,
+        priority: r.priority,
+        generatedMessages: r.generatedMessages,
+        createdAt: r.createdAt.toISOString()
+      }));
+
     // PRIORITY 2.D — unreviewed count
     const attentionUnreviewed =
       unreviewedCount > 0
@@ -972,6 +1037,7 @@ export async function GET(request: NextRequest) {
         ...urgentDeliveryFailures
       ],
       attention: [
+        ...attentionPendingRecovery,
         ...attentionPaused,
         ...attentionCapital,
         ...attentionUnverifiedSent,
@@ -982,7 +1048,18 @@ export async function GET(request: NextRequest) {
         ...attentionUpcomingCalls,
         ...attentionUnreviewed
       ],
-      info: infoReadiness,
+      info: [
+        ...infoReadiness,
+        {
+          type: 'self_recovery_summary' as const,
+          windowDays: RECENT_ACTIVITY_DAYS,
+          counts: recoveryStatusRows.map((row) => ({
+            status: row.status,
+            triggerReason: row.triggerReason,
+            count: row._count
+          }))
+        }
+      ],
       generatedAt: now.toISOString()
     });
   } catch (err) {

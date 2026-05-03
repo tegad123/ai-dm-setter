@@ -341,6 +341,7 @@ model Account {
   inboundQualifications   InboundQualification[]
   trainingEvents          TrainingEvent[]
   mediaProcessingLogs     MediaProcessingLog[]
+  selfRecoveryEvents      SelfRecoveryEvent[]
 
   // ── Phase 1 super-admin dashboard (2026-04-28) ────────────────
   // Plan billing status (separate from `plan` enum; lifecycle state).
@@ -895,6 +896,7 @@ model Lead {
   stageTransitions     LeadStageTransition[]
   scriptPositions      LeadScriptPosition[]
   inboundQualification InboundQualification?
+  selfRecoveryEvents   SelfRecoveryEvent[]
 
   @@index([accountId, stage])
   @@index([accountId, platform])
@@ -987,6 +989,14 @@ model Conversation {
   capitalVerifiedAt         DateTime?
   capitalVerifiedAmount     Int?
 
+  // ── Script-stage self-recovery ─────────────────────────────────
+  currentScriptStep  Int     @default(1)
+  capturedDataPoints Json    @default("{}")
+  systemStage        String?
+  llmEmittedStage    String?
+  stageMismatchCount Int     @default(0)
+  selfRecoveryCount  Int     @default(0)
+
   // ── Geography gate ────────────────────────────────────────────
   // Set when the persona-level geographyGate.enabled flag fired on
   // this conversation and the lead's first messages identified them
@@ -1053,6 +1063,7 @@ model Conversation {
   inboundQualification InboundQualification?
   scheduledMessages    ScheduledMessage[]
   trainingEvents       TrainingEvent[]
+  selfRecoveryEvents   SelfRecoveryEvent[]
 
   @@index([lastMessageAt])
   @@index([priorityScore])
@@ -1721,23 +1732,67 @@ model Script {
 }
 
 model ScriptStep {
-  id               String            @id @default(cuid())
-  scriptId         String
-  stepNumber       Int
-  title            String
-  description      String?           @db.Text
-  objective        String?           @db.Text
-  parserConfidence ParserConfidence?
-  userConfirmed    Boolean           @default(false)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                 String            @id @default(cuid())
+  scriptId           String
+  stepNumber         Int
+  title              String
+  description        String?           @db.Text
+  objective          String?           @db.Text
+  stateKey           String?
+  requiredDataPoints Json?
+  recoveryActionType String?
+  canonicalQuestion  String?           @db.Text
+  artifactField      String?
+  routingRules       Json?
+  completionRule     Json?
+  parserConfidence   ParserConfidence?
+  userConfirmed      Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
-  script        Script               @relation(fields: [scriptId], references: [id], onDelete: Cascade)
-  branches      ScriptBranch[]
-  actions       ScriptAction[]
-  leadPositions LeadScriptPosition[]
+  script             Script               @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  branches           ScriptBranch[]
+  actions            ScriptAction[]
+  leadPositions      LeadScriptPosition[]
+  selfRecoveryEvents SelfRecoveryEvent[]
 
   @@index([scriptId, stepNumber])
+  @@index([scriptId, stateKey])
+}
+
+model SelfRecoveryEvent {
+  id                String    @id @default(cuid())
+  accountId         String
+  conversationId    String
+  leadId            String
+  scriptId          String?
+  scriptStepId      String?
+  stepNumber        Int?
+  triggerReason     String
+  recoveryAction    String?
+  status            String    @default("SUCCEEDED")
+  failureReason     String?
+  priority          String    @default("MEDIUM")
+  generatedMessages Json?
+  metadata          Json?
+  llmEmittedStage   String?
+  systemStage       String?
+  approvedAt        DateTime?
+  approvedByUserId  String?
+  sentAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  scriptStep   ScriptStep?  @relation(fields: [scriptStepId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([leadId, createdAt(sort: Desc)])
+  @@index([status, priority, createdAt])
+  @@index([scriptStepId])
 }
 
 model ScriptBranch {

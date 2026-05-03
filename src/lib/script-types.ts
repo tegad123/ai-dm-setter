@@ -100,6 +100,13 @@ export interface ScriptStep {
   title: string;
   description: string | null;
   objective: string | null;
+  stateKey?: string | null;
+  requiredDataPoints?: unknown;
+  recoveryActionType?: string | null;
+  canonicalQuestion?: string | null;
+  artifactField?: string | null;
+  routingRules?: unknown;
+  completionRule?: unknown;
   parserConfidence?: ParserConfidence | null;
   userConfirmed?: boolean;
   branches: ScriptBranch[];

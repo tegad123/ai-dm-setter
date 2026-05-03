@@ -15,6 +15,7 @@ import {
   IconHeart,
   IconCash,
   IconChecklist,
+  IconSparkles,
   IconX
 } from '@tabler/icons-react';
 
@@ -121,6 +122,19 @@ interface AttentionUnreviewed {
   type: 'unreviewed';
   count: number;
 }
+interface AttentionPendingRecovery {
+  type: 'pending_auto_recovery';
+  eventId: string;
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  triggerReason: string;
+  recoveryAction: string | null;
+  priority: string;
+  generatedMessages: unknown;
+  createdAt: string;
+}
 // Fix B / booking-fabrication gate exhausted retries and shipped the
 // last response as-is. AI stayed active, lead got a reply. Operator
 // reviews during their daily check to confirm the response was
@@ -156,6 +170,7 @@ interface AttentionKeepaliveExhausted {
   callAt: string | null;
 }
 type AttentionItem =
+  | AttentionPendingRecovery
   | AttentionPaused
   | AttentionCapital
   | AttentionUnverifiedSent
@@ -270,6 +285,7 @@ type DismissibleActionType =
   | 'distress'
   | 'stuck'
   | 'scheduling_conflict'
+  | 'pending_auto_recovery'
   | 'ai_paused'
   | 'capital_verification'
   | 'upcoming_call'
@@ -551,6 +567,31 @@ function renderAttention(
   onDismiss: (convId: string, type: DismissibleActionType) => void
 ): React.ReactNode {
   switch (item.type) {
+    case 'pending_auto_recovery':
+      return (
+        <ActionRow
+          key={`recovery-${item.eventId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconSparkles}
+          iconClassName={
+            item.priority === 'HOT' ? 'text-red-500' : 'text-amber-500'
+          }
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — pending self-recovery approval
+                {item.recoveryAction ? ` (${item.recoveryAction})` : ''}
+              </span>
+            </span>
+          }
+          meta={relativeTime(item.createdAt, now)}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'pending_auto_recovery')
+          }
+        />
+      );
     case 'ai_paused':
       return (
         <ActionRow

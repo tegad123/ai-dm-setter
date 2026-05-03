@@ -3245,6 +3245,12 @@ async function sendAIReply(
     distressLabel?: string | null;
     // Typeform screen-out safety net from ai-engine direct generation.
     typeformFilledNoBooking?: boolean;
+    selfRecovered?: boolean;
+    selfRecoveryEventId?: string | null;
+    selfRecoveryReason?: string | null;
+    systemStage?: string | null;
+    currentScriptStep?: number | null;
+    stageOverrideReason?: string | null;
   }
 ): Promise<void> {
   // Delivery-path R17 backstop. scheduleAIReply normally sanitizes right after

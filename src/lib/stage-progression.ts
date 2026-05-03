@@ -39,6 +39,11 @@ const STAGE_TO_LEAD_STAGE: Record<string, LeadStage> = {
   PAIN_IDENTIFICATION: 'QUALIFYING',
   SOLUTION_OFFER: 'QUALIFYING',
   CAPITAL_QUALIFICATION: 'QUALIFYING',
+  ROUTE_BY_CAPITAL: 'QUALIFYING',
+  SEND_APPLICATION_LINK: 'CALL_PROPOSED',
+  FUNDING_OR_DOWNSELL: 'UNQUALIFIED',
+  VERIFY_HOMEWORK_DELIVERY: 'CALL_PROPOSED',
+  CALL_REMINDERS: 'CALL_PROPOSED',
   NEW_LEAD: 'ENGAGED',
   ENGAGED: 'ENGAGED',
   QUALIFYING: 'QUALIFYING',
@@ -159,7 +164,15 @@ export async function updateLeadStageFromConversation(
   const currentPriority = STAGE_PRIORITY[currentStage as LeadStage] ?? 0;
   const newPriority = STAGE_PRIORITY[newStage] ?? 0;
 
-  if (newPriority > currentPriority && currentPriority < 10) {
+  const capitalPassedRevivesUnqualified =
+    capitalOutcome === 'passed' &&
+    currentStage === 'UNQUALIFIED' &&
+    (newStage === 'QUALIFIED' || newStage === 'CALL_PROPOSED');
+
+  if (
+    (newPriority > currentPriority && currentPriority < 10) ||
+    capitalPassedRevivesUnqualified
+  ) {
     await transitionLeadStage(
       leadId,
       newStage,

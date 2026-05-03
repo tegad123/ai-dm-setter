@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 const ALLOWED_ACTION_TYPES = new Set([
   'distress',
   'stuck',
+  'pending_auto_recovery',
   'ai_paused',
   'capital_verification',
   'upcoming_call',

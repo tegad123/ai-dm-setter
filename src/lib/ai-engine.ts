@@ -22,6 +22,14 @@ import {
   buildImageContextText,
   buildVoiceContextText
 } from '@/lib/media-processing';
+import {
+  applyStageOverride,
+  attemptSelfRecovery,
+  isSelfRecoveryTrigger,
+  markSelfRecoveryEventFailed,
+  prepareScriptState,
+  type ScriptStateSnapshot
+} from '@/lib/script-state-recovery';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -305,6 +313,13 @@ export interface GenerateReplyResult {
   distressLabel?: string | null;
   /** Typeform was filled but no booking slot was selected. Expected screen-out path. */
   typeformFilledNoBooking?: boolean;
+  /** Script-state recovery metadata, when deterministic recovery/override ran. */
+  selfRecovered?: boolean;
+  selfRecoveryEventId?: string | null;
+  selfRecoveryReason?: string | null;
+  systemStage?: string | null;
+  currentScriptStep?: number | null;
+  stageOverrideReason?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +719,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       })
     : null;
+
+  // Script-state self-recovery pre-pass. This persists confidence-scored
+  // captured data points and the authoritative current script step before
+  // the LLM gets a chance to stall or mislabel its stage.
+  let scriptStateSnapshot: ScriptStateSnapshot | null = null;
+  if (activeConversationId) {
+    try {
+      scriptStateSnapshot = await prepareScriptState({
+        accountId,
+        conversationId: activeConversationId,
+        history: conversationHistory
+      });
+    } catch (err) {
+      console.error(
+        '[ai-engine] script-state pre-pass failed (non-fatal):',
+        err
+      );
+    }
+  }
 
   // R24 early exit: if the lead has explicitly named capital as the
   // blocker, treat it as the capital answer. Do not ask a verification
@@ -2300,6 +2334,96 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     throw new Error('Failed to generate AI response');
   }
 
+  let selfRecovered = false;
+  let selfRecoveryEventId: string | null = null;
+  let selfRecoveryReason: string | null = null;
+  let selfRecoveryCapitalOutcome: CapitalOutcome | null = null;
+
+  // Martin/Chileshe class fix: if the LLM is about to stall or escalate,
+  // consult the script state machine first. Deterministic recovery output
+  // still has to pass the same voice-quality gate before it can ship.
+  const recoveryTrigger = isSelfRecoveryTrigger({
+    escalateToHuman: parsed.escalateToHuman,
+    stallType: parsed.stallType,
+    message: parsed.message,
+    messages: parsed.messages
+  });
+  if (
+    activeConversationId &&
+    !rescheduleFlow &&
+    recoveryTrigger.triggered &&
+    !lastLeadMsg?.content?.trimStart().startsWith('OPERATOR NOTE:')
+  ) {
+    try {
+      const recovery = await attemptSelfRecovery({
+        accountId,
+        conversationId: activeConversationId,
+        history: conversationHistory,
+        triggerReason: recoveryTrigger.reason || 'unknown_recovery_trigger',
+        llmEmittedStage: parsed.stage
+      });
+
+      if (recovery.recovered) {
+        const recoveryQuality = scoreVoiceQualityGroup(
+          recovery.messages,
+          buildVoiceQualityOptions(
+            recovery.messages.length || 1,
+            recovery.capitalOutcome === 'failed' ? 'failed' : undefined
+          )
+        );
+        const recoveryPassed =
+          recoveryQuality.passed && recoveryQuality.hardFails.length === 0;
+
+        if (recoveryPassed) {
+          parsed.message = recovery.reply;
+          parsed.messages = recovery.messages;
+          parsed.format = 'text';
+          parsed.stage = recovery.stage;
+          parsed.subStage = recovery.subStage;
+          parsed.stageConfidence = 1;
+          parsed.stallType = null;
+          parsed.softExit = false;
+          parsed.escalateToHuman = false;
+          parsed.voiceNoteAction = null;
+          finalQualityScore = recoveryQuality.score;
+          selfRecovered = true;
+          selfRecoveryEventId = recovery.eventId;
+          selfRecoveryReason = recovery.reason;
+          selfRecoveryCapitalOutcome = recovery.capitalOutcome;
+          if (
+            scriptStateSnapshot &&
+            (recovery.systemStage || recovery.currentScriptStep)
+          ) {
+            scriptStateSnapshot = {
+              ...scriptStateSnapshot,
+              systemStage: recovery.systemStage,
+              currentScriptStep:
+                recovery.currentScriptStep ??
+                scriptStateSnapshot?.currentScriptStep ??
+                1
+            };
+          }
+          console.log(
+            `[ai-engine] Self-recovery succeeded for convo ${activeConversationId}: ${recovery.reason}`
+          );
+        } else {
+          await markSelfRecoveryEventFailed(
+            recovery.eventId,
+            `quality_gate_failed:${recoveryQuality.hardFails.join(',') || 'score'}`
+          );
+          console.warn(
+            `[ai-engine] Self-recovery rejected by voice gate for convo ${activeConversationId}: ${recoveryQuality.hardFails.join(', ') || 'score'}`
+          );
+        }
+      } else if (recovery.reason === 'recovery_circuit_breaker') {
+        parsed.escalateToHuman = true;
+        parsed.stallType = 'RECOVERY_CIRCUIT_BREAKER';
+      }
+    } catch (err) {
+      console.error('[ai-engine] Self-recovery failed (non-fatal):', err);
+    }
+  }
+
   // 6. Get response delay from the account (global setting, set on Scripts page).
   // voiceNotesEnabled still lives on the persona for now.
   const account = await prisma.account.findUnique({
@@ -2400,7 +2524,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // consumer treats that as "no signal" and falls back to the
   // stage-name mapping.
   let capitalOutcome: CapitalOutcome;
-  if (!r24WasEvaluatedThisTurn) {
+  if (selfRecoveryCapitalOutcome) {
+    capitalOutcome = selfRecoveryCapitalOutcome;
+  } else if (!r24WasEvaluatedThisTurn) {
     capitalOutcome = 'not_evaluated';
   } else {
     switch (r24LastResult.reason) {
@@ -2437,11 +2563,38 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
   }
 
+  let stageOverrideReason: string | null = null;
+  if (activeConversationId) {
+    try {
+      const override = await applyStageOverride({
+        conversationId: activeConversationId,
+        llmEmittedStage: parsed.stage,
+        currentStage: parsed.stage,
+        capitalOutcome,
+        snapshot: scriptStateSnapshot
+      });
+      if (override.reason) {
+        stageOverrideReason = override.reason;
+        parsed.stage = override.finalStage;
+        capitalOutcome = override.capitalOutcome;
+        console.log(
+          `[ai-engine] Stage override applied for convo ${activeConversationId}: ${override.reason} -> ${override.finalStage}`
+        );
+      }
+    } catch (err) {
+      console.error('[ai-engine] Stage override failed (non-fatal):', err);
+    }
+  }
+
   if (suggestionId) {
     prisma.aISuggestion
       .update({
         where: { id: suggestionId },
-        data: { capitalOutcome }
+        data: {
+          capitalOutcome,
+          aiStageReported: parsed.stage || null,
+          aiSubStageReported: parsed.subStage || null
+        }
       })
       .catch((err) =>
         console.error(
@@ -2480,7 +2633,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     capitalOutcome,
     typeformFilledNoBooking:
       parsed.subStage === 'TYPEFORM_NO_BOOKING' &&
-      parsed.message === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
+      parsed.message === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
+    selfRecovered,
+    selfRecoveryEventId,
+    selfRecoveryReason,
+    systemStage: scriptStateSnapshot?.systemStage ?? null,
+    currentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
+    stageOverrideReason
   };
 }
 
