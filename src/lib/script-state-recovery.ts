@@ -848,6 +848,19 @@ function actionContentMessages(
   artifactField: string | null,
   url: string | null
 ): string[] {
+  // Recovery artifact delivery is deterministic. Script steps can contain
+  // multiple branch actions for later states ("filled it out", "link issue"),
+  // so flattening all branch actions would duplicate URLs or send the wrong
+  // branch. Use one clean artifact template for known delivery fields.
+  if (
+    url &&
+    (artifactField === 'applicationFormUrl' ||
+      artifactField === 'downsellUrl' ||
+      artifactField === 'fallbackContentUrl')
+  ) {
+    return buildTemplateMessages(artifactField, url);
+  }
+
   const actions = [
     ...step.actions,
     ...step.branches.flatMap((branch) => branch.actions)
