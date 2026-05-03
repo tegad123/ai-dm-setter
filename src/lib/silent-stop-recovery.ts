@@ -117,6 +117,20 @@ function classifyContextualPattern(text: string): string | null {
   ) {
     return 'religious_framing';
   }
+  // Jefferson @namejeffe 2026-05-03 — positive volunteered disclosure.
+  // Lead self-reports forward motion (paper trade account, started
+  // reading, in progress on a prop firm, etc.) without being asked.
+  // The existing patterns don't catch this and the AI freezes instead
+  // of bridging to capital. More specific than `vague_motivation`, so
+  // place it before that branch but after the more-specific
+  // hedging/religious patterns.
+  if (
+    /\b(already|been|started|in progress|just\s+(got|started|did))\b.{0,80}\b(account|setup|trading|practice|paper|prop|funded|reading|learning|studying|grinding)\b/i.test(
+      lower
+    )
+  ) {
+    return 'positive_volunteered_disclosure';
+  }
   if (
     /(figure it out|see what happens|just want to|some day|someday|eventually)\b/i.test(
       lower
@@ -174,6 +188,28 @@ function buildContextualReEngagement(text: string): RecoveryDraft | null {
       subStage: 'CAPITAL_QUALIFICATION',
       capitalOutcome: 'not_asked',
       reason: 'vague_motivation_bridge'
+    };
+  }
+
+  if (pattern === 'positive_volunteered_disclosure') {
+    // First introduction of templated-with-randomness in this module.
+    // Three near-equivalent acknowledge-and-bridge variants so the
+    // template doesn't get pattern-detected by leads who see it more
+    // than once across re-tests / repeat conversations.
+    const templates = [
+      "that's fire bro 🔥 love that you're already moving on it. real quick, what's your capital situation looking like for the markets right now? just so i can point you to something that fits where you're at",
+      "respect bro 💪🏿 that's exactly the energy that separates serious from talkers. before we go deeper, what we working with capital-wise on the markets side?",
+      "bet bro that's wassup, you're already ahead of most. what's the capital situation though? just wanna make sure i steer you right"
+    ];
+    const message = templates[Math.floor(Math.random() * templates.length)];
+    return {
+      success: true,
+      action: 'positive_disclosure_capital_bridge',
+      messages: [message],
+      stage: 'FINANCIAL_SCREENING',
+      subStage: 'CAPITAL_QUALIFICATION',
+      capitalOutcome: 'not_asked',
+      reason: 'positive_disclosure_bridge'
     };
   }
 

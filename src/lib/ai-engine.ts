@@ -17,6 +17,7 @@ import {
   detectTypeformFilledNoBookingContext,
   callLogisticsAlreadyDeliveredInRecentHistory,
   isAcknowledgmentOnlyLeadMessage,
+  getUnacknowledgedLeadBurst,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
@@ -1199,7 +1200,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     lastLeadMessageWasAcknowledgmentOnly: isAcknowledgmentOnlyLeadMessage(
       lastLeadMsg?.content
     ),
-    closerNames
+    closerNames,
+    // R37 burst extension (Jefferson @namejeffe 2026-05-03). Pass the
+    // full history; the gate's getUnacknowledgedLeadBurst walks
+    // backward from the end and stops at the first AI/HUMAN turn.
+    conversationHistory: conversationHistory.map((m) => ({
+      sender: m.sender,
+      content: m.content
+    }))
   });
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -2000,6 +2008,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         console.warn(
           `[ai-engine] Ignored personal question detected — forcing regen with first-person answer (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
+      }
+
+      // R37 burst extension (Jefferson @namejeffe 2026-05-03).
+      // Lead sent ≥ 2 consecutive messages — at least one a question or
+      // reflective/emotional disclosure — and this turn's reply
+      // addressed none of it. Override quotes the burst and forces the
+      // LLM into the acknowledge-then-advance shape (one short ack
+      // beat + one short forward question, no more).
+      const burstIgnored = quality.hardFails.some((f) =>
+        f.includes('r37_burst_ignored:')
+      );
+      if (burstIgnored) {
+        const burst = getUnacknowledgedLeadBurst(conversationHistory);
+        const closerNameLabel =
+          (typeof promptConfigForGate?.callHandoff?.closerName === 'string' &&
+            promptConfigForGate.callHandoff.closerName) ||
+          personaForGate?.closerName ||
+          'the call partner';
+        const burstQuoted = burst.messages
+          .map((m) => `  - "${m.content.slice(0, 200)}"`)
+          .join('\n');
+        const directive = `\n\n===== UNACKNOWLEDGED LEAD BURST =====\nThe lead just sent multiple messages in a row that your previous reply did not address. Their messages:\n\n${burstQuoted}\n\nRegenerate so your reply:\n  1. First acknowledges what they shared — emotionally if it's reflective ("damn bro that takes self awareness", "respect, that's real"), directly if it's a question.\n  2. THEN advances the script (one short follow-up question or pivot, no more).\n\nDo not paraphrase their messages back to them. Do not "answer" reflective questions literally — defer depth to ${closerNameLabel} on the call. Acknowledgment + advance, two beats max.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] R37 burst ignored — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1}). burstSize=${burst.messages.length} hasQ=${burst.hasQuestion} hasReflect=${burst.hasReflectiveContent}`
+        );
+        if (attempt === MAX_RETRIES) {
+          console.error(
+            `[ai-engine] R37 burst EXHAUSTED — shipping reply with burst-ignored hardFail still set (convo=${activeConversationId ?? 'unknown'}, burstSize=${burst.messages.length})`
+          );
+        }
       }
 
       // Scripted question sequence directive (Omar Moore 2026-04-27).

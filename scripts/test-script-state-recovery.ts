@@ -14,6 +14,7 @@ import {
   validateSoftPitchPrerequisites
 } from '@/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
+import { buildContextualSilentStopReEngagementForTest } from '@/lib/silent-stop-recovery';
 
 function point<T = unknown>(points: Record<string, any>, key: string) {
   return points[key] as
@@ -250,6 +251,100 @@ function run() {
     0,
     `deterministic recovery message has no hard voice-gate failures: ${recoveryQuality.hardFails.join(', ')}`
   );
+
+  // ── R39 positive_volunteered_disclosure (Jefferson @namejeffe 2026-05-03) ──
+  // Lead self-reports forward motion ("Im already on a paper trade
+  // account so part 1 of the plan in progress"). Today the AI freezes
+  // for 17+ minutes because none of the existing R39 patterns match.
+  // The new bridge must classify the pattern and return one of three
+  // capital-bridge templates.
+  const jeffersonPositiveDisclosure =
+    'Im already on a paper trade account so part 1 of the plan in progress';
+  const positiveDraft = buildContextualSilentStopReEngagementForTest(
+    jeffersonPositiveDisclosure
+  );
+  assert.ok(
+    positiveDraft,
+    'R39: positive_volunteered_disclosure returns a draft (not null)'
+  );
+  assert.equal(
+    positiveDraft?.action,
+    'positive_disclosure_capital_bridge',
+    'R39: bridge action tag'
+  );
+  assert.equal(
+    positiveDraft?.reason,
+    'positive_disclosure_bridge',
+    'R39: reason tag'
+  );
+  assert.equal(positiveDraft?.stage, 'FINANCIAL_SCREENING', 'R39: stage');
+  assert.equal(
+    positiveDraft?.subStage,
+    'CAPITAL_QUALIFICATION',
+    'R39: subStage'
+  );
+  assert.equal(
+    positiveDraft?.capitalOutcome,
+    'not_asked',
+    'R39: capitalOutcome'
+  );
+  assert.equal(
+    positiveDraft?.messages.length,
+    1,
+    'R39: bridge produces exactly one message'
+  );
+  // The randomized template selection means we can't pin to one
+  // string. Assert the message references "capital" — the load-bearing
+  // bridge content — and the "you're already" / "ahead" / "moving on
+  // it" acknowledgment vocabulary that defines the three variants.
+  const positiveMsg = positiveDraft?.messages[0] ?? '';
+  assert.ok(
+    /capital/i.test(positiveMsg),
+    `R39: bridge message references capital — got: "${positiveMsg.slice(0, 120)}"`
+  );
+  assert.ok(
+    /(already|ahead|wassup|fire|respect)/i.test(positiveMsg),
+    `R39: bridge message acknowledges before bridging — got: "${positiveMsg.slice(0, 120)}"`
+  );
+
+  // Pattern-classifier must place positive_volunteered_disclosure
+  // BEFORE vague_motivation. Probe: a message that contains both
+  // "started reading" (positive disclosure) and "eventually" (vague
+  // motivation) must classify as the positive bridge.
+  const overlap = buildContextualSilentStopReEngagementForTest(
+    'started reading some books eventually want to figure it out'
+  );
+  assert.equal(
+    overlap?.reason,
+    'positive_disclosure_bridge',
+    'R39: positive disclosure wins over overlapping vague_motivation'
+  );
+
+  // Negative case: pure vague-motivation phrasing without disclosure
+  // keywords still classifies as vague_motivation, not the new bridge.
+  const vague = buildContextualSilentStopReEngagementForTest(
+    'just want to eventually figure it out you know'
+  );
+  assert.equal(
+    vague?.reason,
+    'vague_motivation_bridge',
+    'R39: pure vague_motivation regression — new bridge does not over-fire'
+  );
+
+  // Voice-quality regression on every randomized template: each must
+  // pass the gate with zero hard fails so the bridge ships clean.
+  for (let i = 0; i < 12; i++) {
+    const draft = buildContextualSilentStopReEngagementForTest(
+      jeffersonPositiveDisclosure
+    );
+    if (!draft) continue;
+    const q = scoreVoiceQualityGroup(draft.messages);
+    assert.equal(
+      q.hardFails.length,
+      0,
+      `R39 template iter ${i}: voice gate must pass — fails: ${q.hardFails.join(', ')}`
+    );
+  }
 
   console.log('script-state recovery tests passed');
 }

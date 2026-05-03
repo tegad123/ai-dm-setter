@@ -831,6 +831,136 @@ export interface VoiceQualityOptions {
    * duplicate reminder, not useful conversation.
    */
   lastLeadMessageWasAcknowledgmentOnly?: boolean;
+  /**
+   * Jefferson @namejeffe 2026-05-03 (R37 burst extension) — slice of the
+   * conversation that includes at minimum the consecutive LEAD tail
+   * since the last AI/HUMAN turn. The group-level gate walks backward
+   * from the end, collects the burst, and if it has ≥ 2 messages
+   * containing either a question or reflective/emotional disclosure,
+   * fails with `r37_burst_ignored:` unless the reply (a) cites a
+   * topic word from the burst OR (b) opens with an emotional
+   * acknowledgment. Single-message turns flow through the existing
+   * `ignored_personal_question` soft signal unchanged. Pass the full
+   * history when convenient — the extractor stops at the first AI/HUMAN
+   * and ignores the rest.
+   */
+  conversationHistory?: ReadonlyArray<{ sender: string; content: string }>;
+}
+
+// ─── R37 burst extension (Jefferson @namejeffe 2026-05-03) ────────
+//
+// The original R37 (`ignored_personal_question` soft signal at line
+// ~1869) only inspects the immediately-preceding LEAD message. Jefferson
+// sent three substantive messages in a row — two reflective disclosures
+// plus a direct question about behavioural lapses — and the AI advanced
+// the script with a single follow-up that ignored all three.
+//
+// `getUnacknowledgedLeadBurst` walks backward from the end of the
+// history, collects consecutive LEAD messages, and stops at the first
+// AI/HUMAN turn (which counts as "acknowledged-by-prior-reply"). The
+// group-level gate uses the burst to decide whether the current reply
+// must address what the lead just said.
+//
+// `acknowledgesEmotionally` is the safety valve — if the reply uses
+// any of the listed acknowledgment phrases ("respect", "damn bro",
+// "that takes guts"), the gate passes even without an exact topic
+// match. The vocabulary is hardcoded for now; audit F5.1 will move it
+// onto a per-persona field.
+
+const R37_REFLECTIVE_PATTERNS: RegExp[] = [
+  /\b(i feel|im feeling|i'?m feeling)\b/i,
+  /\bsick of\b/i,
+  /\b(hahaha|haha|hehe)\b/i,
+  /\brebuild(ing)?\b/i,
+  /\bstep(ped)? back\b/i,
+  /\bself[-\s]?(flagellation|hate|criticism|doubt|sabotage|aware(ness)?)\b/i,
+  /\b(pressure|burnout|exhausted|drained|frustrated|overwhelmed)\b/i,
+  /\b(grateful|thankful|proud|excited|hopeful|blessed)\b/i,
+  /\bgone be (alright|ok|okay)\b/i,
+  /\btrust(ing)? (the )?(process|lord|god|timing)\b/i,
+  /\bbehavioural? laps(es?|ing)\b/i
+];
+
+const R37_QUESTION_LEADER_RE =
+  /^(what|how|when|where|why|do|does|did|can|could|will|would|is|are|am|have|has|should)\b/i;
+
+const R37_ACK_PATTERNS: RegExp[] = [
+  /\b(damn bro|fair bro|respect|that'?s real|i hear you|i feel that|that takes|that'?s wassup|wassup g|fair enough)\b/i,
+  /\b(props|massive|big move|takes (guts|courage)|self[-\s]?aware(ness)?)\b/i,
+  /\b(rebuild|reset|come back|bounce back|grind through)\b/i
+];
+
+export interface UnacknowledgedLeadBurst {
+  messages: Array<{ sender: string; content: string }>;
+  hasQuestion: boolean;
+  hasReflectiveContent: boolean;
+}
+
+/**
+ * Walk backward from the end of `history`, collecting consecutive LEAD
+ * messages until the first AI/HUMAN turn (or the start of history).
+ * SYSTEM messages are ignored (they don't count as "acknowledged" or
+ * "unacknowledged" — they're internal notes, not lead-facing).
+ *
+ * Returns an empty `messages` array when the latest non-SYSTEM sender
+ * is AI or HUMAN — the reply being scored is the first one after a
+ * setter turn, so no burst exists.
+ */
+export function getUnacknowledgedLeadBurst(
+  history: ReadonlyArray<{ sender: string; content: string }> | undefined
+): UnacknowledgedLeadBurst {
+  const empty: UnacknowledgedLeadBurst = {
+    messages: [],
+    hasQuestion: false,
+    hasReflectiveContent: false
+  };
+  if (!history || history.length === 0) return empty;
+
+  const burst: Array<{ sender: string; content: string }> = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (!m) continue;
+    const sender = String(m.sender || '').toUpperCase();
+    if (sender === 'SYSTEM') continue;
+    if (sender === 'AI' || sender === 'HUMAN') break;
+    if (sender === 'LEAD') {
+      burst.unshift({ sender, content: String(m.content ?? '') });
+      continue;
+    }
+    break;
+  }
+
+  if (burst.length === 0) return empty;
+
+  const hasQuestion = burst.some((m) => {
+    const trimmed = m.content.trim();
+    if (trimmed.length === 0) return false;
+    if (/\?\s*$/.test(trimmed)) return true;
+    return R37_QUESTION_LEADER_RE.test(trimmed);
+  });
+
+  const hasReflectiveContent = burst.some((m) =>
+    R37_REFLECTIVE_PATTERNS.some((p) => p.test(m.content))
+  );
+
+  return { messages: burst, hasQuestion, hasReflectiveContent };
+}
+
+/**
+ * Reply contains acknowledgment language strong enough to count as
+ * "addressed the lead's burst" without requiring an exact topic match.
+ * Matches phrases like "respect bro", "damn that takes guts", "i hear
+ * you", "rebuild" — the vocabulary the spec calls out as the safety
+ * valve so the gate doesn't false-fire on emotional-but-non-topical
+ * acknowledgments.
+ */
+export function acknowledgesEmotionally(reply: string): boolean {
+  if (typeof reply !== 'string' || reply.trim().length === 0) return false;
+  return R37_ACK_PATTERNS.some((p) => p.test(reply));
+}
+
+function escapeRegExpChars(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function scoreVoiceQuality(
@@ -2627,6 +2757,41 @@ export function scoreVoiceQualityGroup(
   const linkPromiseFailure = checkLinkPromiseWithoutUrl(joined);
   if (linkPromiseFailure) {
     hardFails.push(`[group] ${linkPromiseFailure}`);
+  }
+
+  // R37 burst extension (Jefferson @namejeffe 2026-05-03).
+  // Group-level: fires when the lead sent ≥ 2 consecutive messages
+  // (since the last AI/HUMAN turn) AND any of them contains a question
+  // or reflective/emotional content AND the joined reply addresses
+  // none of it (no topic match, no emotional acknowledgment).
+  // Single-message lead turns flow through the existing
+  // `ignored_personal_question` soft signal at line ~1869 unchanged.
+  const r37Burst = getUnacknowledgedLeadBurst(options?.conversationHistory);
+  if (
+    r37Burst.messages.length >= 2 &&
+    (r37Burst.hasQuestion || r37Burst.hasReflectiveContent)
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+    const det =
+      require('./conversation-detail-extractor') as typeof import('./conversation-detail-extractor');
+    const burstText = r37Burst.messages.map((m) => m.content).join(' ');
+    const details = det.extractSpecificDetails(burstText);
+    const replyLower = joined.toLowerCase();
+    const topicAck =
+      details.length > 0 &&
+      details.some((d) => {
+        const tok = String(d.token || '').trim();
+        if (tok.length === 0) return false;
+        return new RegExp(
+          `\\b${escapeRegExpChars(tok.toLowerCase())}\\b`,
+          'i'
+        ).test(replyLower);
+      });
+    if (!topicAck && !acknowledgesEmotionally(joined)) {
+      hardFails.push(
+        `[group] r37_burst_ignored: size=${r37Burst.messages.length} hasQ=${r37Burst.hasQuestion} hasReflect=${r37Burst.hasReflectiveContent}`
+      );
+    }
   }
 
   // Multi-bubble safety: call-pitch language can be split across bubbles
