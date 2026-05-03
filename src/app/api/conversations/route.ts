@@ -110,7 +110,10 @@ export async function GET(request: NextRequest) {
         },
         messages: {
           where: {
-            NOT: { content: { startsWith: 'OPERATOR NOTE:' } }
+            AND: [
+              { sender: { not: 'SYSTEM' } },
+              { NOT: { content: { startsWith: 'OPERATOR NOTE:' } } }
+            ]
           },
           orderBy: { timestamp: 'desc' },
           take: 1,

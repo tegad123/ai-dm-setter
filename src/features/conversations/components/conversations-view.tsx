@@ -117,7 +117,7 @@ export function ConversationsView() {
     const extra = m as any;
     return {
       id: m.id,
-      sender: m.sender as 'ai' | 'lead' | 'human',
+      sender: m.sender.toLowerCase() as 'ai' | 'lead' | 'human' | 'system',
       content: m.content,
       timestamp: m.sentAt || m.timestamp || '',
       isVoiceNote: m.isVoiceNote,

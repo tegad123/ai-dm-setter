@@ -2578,12 +2578,15 @@ function formatConversationForLLM(
       }
       return { role: 'user' as const, content: msg.content };
     }
-    // Both AI and HUMAN messages are "our side" of the conversation
-    const prefix = isOperatorNoteContent(msg.content)
-      ? '[Internal operator note, not sent to lead] '
-      : msg.sender === 'HUMAN'
-        ? '[Human team member] '
-        : '';
+    // AI/HUMAN messages are "our side" of the conversation. SYSTEM
+    // messages are internal operator notes: include them as context for
+    // the model, but clearly mark that they were not sent to the lead.
+    const prefix =
+      msg.sender === 'SYSTEM' || isOperatorNoteContent(msg.content)
+        ? '[Internal operator note, not sent to lead] '
+        : msg.sender === 'HUMAN'
+          ? '[Human team member] '
+          : '';
     return { role: 'assistant' as const, content: prefix + msg.content };
   });
 }

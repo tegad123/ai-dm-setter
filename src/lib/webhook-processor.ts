@@ -1718,7 +1718,7 @@ export async function scheduleAIReply(
   // that's the legitimate "deliver the scheduled one now" path.
   if (!options?.skipDelayQueue) {
     const latestMsg = await prisma.message.findFirst({
-      where: { conversationId },
+      where: { conversationId, sender: { not: 'SYSTEM' } },
       orderBy: { timestamp: 'desc' },
       select: { sender: true, timestamp: true, content: true }
     });
@@ -3352,7 +3352,7 @@ async function sendAIReply(
   // when the AI's debounce fired shortly after a prior reply — same
   // class of bug as Step 0a.
   const latestMsgInConvo = await prisma.message.findFirst({
-    where: { conversationId },
+    where: { conversationId, sender: { not: 'SYSTEM' } },
     orderBy: { timestamp: 'desc' },
     select: { sender: true, timestamp: true }
   });
@@ -3727,6 +3727,7 @@ async function sendAIReply(
     !libraryVN;
 
   let aiMessageId: string;
+  let singleMessageSender: string | null = null;
 
   if (useMultiBubble) {
     // ── Multi-bubble path ────────────────────────────────────────
@@ -3764,6 +3765,7 @@ async function sendAIReply(
       }
     });
     aiMessageId = aiMessage.id;
+    singleMessageSender = aiMessage.sender;
   }
 
   // ── Link AISuggestion as selected ──────────────────────────────
@@ -3992,6 +3994,13 @@ async function sendAIReply(
   // inherently one-turn and never coexist with multi-bubble (see the
   // useMultiBubble check earlier in this function).
   if (!useMultiBubble) {
+    if (singleMessageSender === 'SYSTEM') {
+      console.warn(
+        `[webhook-processor] SYSTEM message reached sendAIReply for ${conversationId}; internal note will not be delivered to Meta`
+      );
+      return;
+    }
+
     broadcastNewMessage({
       id: aiMessageId,
       conversationId,
@@ -4890,7 +4899,10 @@ export async function rescueOrphanAISuggestions(
   let skipped = 0;
   for (const orphan of orphans) {
     const latestMsg = await prisma.message.findFirst({
-      where: { conversationId: orphan.conversationId },
+      where: {
+        conversationId: orphan.conversationId,
+        sender: { not: 'SYSTEM' }
+      },
       orderBy: { timestamp: 'desc' },
       select: { sender: true, timestamp: true }
     });

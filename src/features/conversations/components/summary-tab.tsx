@@ -105,21 +105,24 @@ export function SummaryTab({
   detail,
   createdAt
 }: SummaryTabProps) {
+  const conversationMessages = messages.filter(
+    (m) => m.sender.toLowerCase() !== 'system'
+  );
   // Message stats
-  const totalMessages = messages.length;
-  const leadMessages = messages.filter(
+  const totalMessages = conversationMessages.length;
+  const leadMessages = conversationMessages.filter(
     (m) => m.sender.toLowerCase() === 'lead'
   ).length;
-  const aiMessages = messages.filter(
+  const aiMessages = conversationMessages.filter(
     (m) => m.sender.toLowerCase() === 'ai'
   ).length;
-  const humanMessages = messages.filter(
+  const humanMessages = conversationMessages.filter(
     (m) => m.sender.toLowerCase() === 'human'
   ).length;
 
   // Duration
-  const firstMsg = messages[0];
-  const lastMsg = messages[messages.length - 1];
+  const firstMsg = conversationMessages[0];
+  const lastMsg = conversationMessages[conversationMessages.length - 1];
   const duration =
     firstMsg && lastMsg
       ? new Date(lastMsg.timestamp).getTime() -
@@ -127,7 +130,9 @@ export function SummaryTab({
       : 0;
 
   // Average sentiment
-  const sentimentMessages = messages.filter((m) => m.sentimentScore != null);
+  const sentimentMessages = conversationMessages.filter(
+    (m) => m.sentimentScore != null
+  );
   const avgSentiment =
     sentimentMessages.length > 0
       ? sentimentMessages.reduce((sum, m) => sum + (m.sentimentScore ?? 0), 0) /
@@ -135,13 +140,15 @@ export function SummaryTab({
       : null;
 
   // Objections detected
-  const objections = messages
+  const objections = conversationMessages
     .filter((m) => m.objectionType)
     .map((m) => m.objectionType!);
   const uniqueObjections = Array.from(new Set(objections));
 
   // Stalls detected
-  const stalls = messages.filter((m) => m.stallType).map((m) => m.stallType!);
+  const stalls = conversationMessages
+    .filter((m) => m.stallType)
+    .map((m) => m.stallType!);
   const uniqueStalls = Array.from(new Set(stalls));
 
   // Stage progression
@@ -150,7 +157,9 @@ export function SummaryTab({
     : [];
 
   // Current stage from latest message
-  const latestStageMsg = [...messages].reverse().find((m) => m.stage);
+  const latestStageMsg = [...conversationMessages]
+    .reverse()
+    .find((m) => m.stage);
 
   return (
     <ScrollArea className='min-h-0 flex-1 overflow-hidden'>

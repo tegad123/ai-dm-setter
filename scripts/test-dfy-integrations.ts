@@ -48,6 +48,9 @@ async function run() {
   const manualMessagesRoute = src(
     'src/app/api/conversations/[id]/messages/route.ts'
   );
+  const conversationThread = src(
+    'src/features/conversations/components/conversation-thread.tsx'
+  );
   const suggestionSendRoute = src(
     'src/app/api/conversations/[id]/suggestion/send/route.ts'
   );
@@ -245,11 +248,20 @@ async function run() {
 
   record(
     'Bug TEST 1 - SYSTEM/operator-note messages are not parsed for capital',
-    /if \(message\.sender !== 'LEAD'\) continue;/.test(aiEngine) &&
+    /enum MessageSender \{[\s\S]*SYSTEM/.test(schema) &&
+      /if \(message\.sender !== 'LEAD'\) continue;/.test(aiEngine) &&
       /message\.content\.trimStart\(\)\.startsWith\('OPERATOR NOTE:'\)/.test(
         aiEngine
       ) &&
       /isLeadCapitalParseCandidate/.test(aiEngine)
+  );
+
+  record(
+    'Bug TEST 1b - SYSTEM notes render internally and cannot be delivered',
+    /sender === 'system'/.test(conversationThread) &&
+      /Internal Note/.test(conversationThread) &&
+      /sender === 'SYSTEM'/.test(manualMessagesRoute) &&
+      /Internal notes cannot be sent to the lead/.test(suggestionSendRoute)
   );
 
   record(

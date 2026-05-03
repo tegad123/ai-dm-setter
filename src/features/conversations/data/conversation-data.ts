@@ -1,6 +1,6 @@
 export interface Message {
   id: string;
-  sender: 'ai' | 'lead' | 'human';
+  sender: 'ai' | 'lead' | 'human' | 'system';
   content: string;
   timestamp: string;
   isVoiceNote?: boolean;

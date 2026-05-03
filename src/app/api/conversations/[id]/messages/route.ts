@@ -121,12 +121,6 @@ export async function POST(
       followUpAttemptNumber
     } = body;
 
-    // Normalize sender to match Prisma enum (HUMAN, AI, LEAD)
-    const sender = (rawSender as string).toUpperCase() as
-      | 'HUMAN'
-      | 'AI'
-      | 'LEAD';
-
     if (!content) {
       return NextResponse.json(
         { error: 'Content is required' },
@@ -134,6 +128,21 @@ export async function POST(
       );
     }
     const contentText = typeof content === 'string' ? content : String(content);
+
+    const requestedSender = String(rawSender).toUpperCase();
+    if (!['HUMAN', 'AI', 'LEAD', 'SYSTEM'].includes(requestedSender)) {
+      return NextResponse.json({ error: 'Invalid sender' }, { status: 400 });
+    }
+
+    // Normalize sender to match Prisma enum. OPERATOR NOTE payloads are
+    // internal context even when callers accidentally/default-send them as
+    // HUMAN, so fail closed into SYSTEM.
+    const sender = (
+      contentText.trimStart().startsWith('OPERATOR NOTE:')
+        ? 'SYSTEM'
+        : requestedSender
+    ) as 'HUMAN' | 'AI' | 'LEAD' | 'SYSTEM';
+
     const messageContent =
       sender === 'AI' ? sanitizeDashCharacters(contentText) : contentText;
 
@@ -239,9 +248,10 @@ export async function POST(
     });
 
     // If human override, pause AI and update lastMessageAt
-    const updateData: { lastMessageAt: Date; aiActive?: boolean } = {
-      lastMessageAt: now
-    };
+    const updateData: { lastMessageAt?: Date; aiActive?: boolean } = {};
+    if (sender !== 'SYSTEM') {
+      updateData.lastMessageAt = now;
+    }
     if (sender === 'HUMAN') {
       updateData.aiActive = false;
       // Cancel any pending debounced AI reply — the human just took over.
@@ -279,17 +289,29 @@ export async function POST(
       }
     }
 
-    const updatedConvo = await prisma.conversation.update({
-      where: { id },
-      data: updateData,
-      select: {
-        id: true,
-        leadId: true,
-        aiActive: true,
-        unreadCount: true,
-        lastMessageAt: true
-      }
-    });
+    const updatedConvo =
+      Object.keys(updateData).length > 0
+        ? await prisma.conversation.update({
+            where: { id },
+            data: updateData,
+            select: {
+              id: true,
+              leadId: true,
+              aiActive: true,
+              unreadCount: true,
+              lastMessageAt: true
+            }
+          })
+        : await prisma.conversation.findUniqueOrThrow({
+            where: { id },
+            select: {
+              id: true,
+              leadId: true,
+              aiActive: true,
+              unreadCount: true,
+              lastMessageAt: true
+            }
+          });
 
     // Broadcast real-time events
     const humanSource =
@@ -310,13 +332,15 @@ export async function POST(
       timestamp: message.timestamp.toISOString()
     });
 
-    broadcastConversationUpdate({
-      id: updatedConvo.id,
-      leadId: updatedConvo.leadId,
-      aiActive: updatedConvo.aiActive,
-      unreadCount: updatedConvo.unreadCount,
-      lastMessageAt: updatedConvo.lastMessageAt?.toISOString()
-    });
+    if (sender !== 'SYSTEM') {
+      broadcastConversationUpdate({
+        id: updatedConvo.id,
+        leadId: updatedConvo.leadId,
+        aiActive: updatedConvo.aiActive,
+        unreadCount: updatedConvo.unreadCount,
+        lastMessageAt: updatedConvo.lastMessageAt?.toISOString()
+      });
+    }
 
     if (sender === 'HUMAN') {
       broadcastAIStatusChange({ conversationId: id, aiActive: false });
@@ -333,6 +357,13 @@ export async function POST(
     // patching, the echo doesn't find a match and saves as a DUPLICATE
     // HUMAN message (Daniel reported seeing his manual sends with
     // incorrect/missing attribution — the dup was part of this).
+    if (sender === 'SYSTEM') {
+      // Internal notes are dashboard-only context. Never deliver them
+      // to Instagram/Facebook, even if a caller tries to create one via
+      // the normal message endpoint.
+      return NextResponse.json(message, { status: 201 });
+    }
+
     if (sender === 'HUMAN' || sender === 'AI') {
       prisma.lead
         .findUnique({

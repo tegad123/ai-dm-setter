@@ -63,6 +63,10 @@ function normalizeCapitalOutcome(value: string | null): CapitalOutcome {
     : 'not_evaluated';
 }
 
+function isInternalNoteContent(text: string): boolean {
+  return text.trimStart().startsWith('OPERATOR NOTE:');
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -160,6 +164,13 @@ export async function POST(
     if (bubbles.length === 0 || bubbles.every((b) => !b.trim())) {
       return NextResponse.json(
         { error: 'Empty content cannot be sent' },
+        { status: 400 }
+      );
+    }
+
+    if (bubbles.some(isInternalNoteContent)) {
+      return NextResponse.json(
+        { error: 'Internal notes cannot be sent to the lead' },
         { status: 400 }
       );
     }

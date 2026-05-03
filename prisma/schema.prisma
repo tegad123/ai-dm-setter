@@ -70,6 +70,7 @@ enum MessageSender {
   AI
   LEAD
   HUMAN
+  SYSTEM
 }
 
 enum CapitalVerificationStatus {

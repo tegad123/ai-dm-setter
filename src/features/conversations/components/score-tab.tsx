@@ -179,12 +179,17 @@ export function ScoreTab({
   messages,
   detail
 }: ScoreTabProps) {
+  const conversationMessages = messages.filter(
+    (m) => m.sender.toLowerCase() !== 'system'
+  );
   // Compute engagement metrics
-  const totalMessages = messages.length;
-  const leadMessages = messages.filter(
+  const totalMessages = conversationMessages.length;
+  const leadMessages = conversationMessages.filter(
     (m) => m.sender.toLowerCase() === 'lead'
   );
-  const aiMessages = messages.filter((m) => m.sender.toLowerCase() === 'ai');
+  const aiMessages = conversationMessages.filter(
+    (m) => m.sender.toLowerCase() === 'ai'
+  );
 
   // Response rate: how often lead responds to AI messages
   const aiMsgsWithResponse = aiMessages.filter((m) => m.gotResponse != null);
@@ -201,7 +206,7 @@ export function ScoreTab({
         : 0;
 
   // Average response time
-  const responseTimes = messages
+  const responseTimes = conversationMessages
     .filter((m) => m.responseTimeSeconds != null && m.responseTimeSeconds > 0)
     .map((m) => m.responseTimeSeconds!);
   const avgResponseTime =
@@ -210,7 +215,9 @@ export function ScoreTab({
       : null;
 
   // Average sentiment
-  const sentimentMsgs = messages.filter((m) => m.sentimentScore != null);
+  const sentimentMsgs = conversationMessages.filter(
+    (m) => m.sentimentScore != null
+  );
   const avgSentiment =
     sentimentMsgs.length > 0
       ? sentimentMsgs.reduce((sum, m) => sum + (m.sentimentScore ?? 0), 0) /
@@ -236,8 +243,10 @@ export function ScoreTab({
   const stageProgress = (stagesReached / 7) * 100;
 
   // Objection count (risk factor)
-  const objectionCount = messages.filter((m) => m.objectionType).length;
-  const stallCount = messages.filter((m) => m.stallType).length;
+  const objectionCount = conversationMessages.filter(
+    (m) => m.objectionType
+  ).length;
+  const stallCount = conversationMessages.filter((m) => m.stallType).length;
 
   // Risk level
   const riskFactors: string[] = [];

@@ -446,10 +446,36 @@ export function ConversationThread({
                   const isLead = sender === 'lead';
                   const isAI = sender === 'ai';
                   const isHuman = sender === 'human';
-                  const isOperatorNote =
-                    isHuman &&
-                    msg.content.trimStart().startsWith('OPERATOR NOTE:');
-                  if (isOperatorNote) return null;
+                  const isSystem = sender === 'system';
+                  if (isSystem) {
+                    return (
+                      <div
+                        key={msg.id}
+                        className={cn(
+                          'flex justify-start',
+                          idx === 0 ? '' : 'mt-4'
+                        )}
+                      >
+                        <div className='max-w-[78%] rounded-md border border-amber-200 bg-amber-50/90 px-3 py-2 text-left text-amber-950 shadow-sm dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100'>
+                          <div className='text-[10px] font-semibold tracking-wide text-amber-700 uppercase dark:text-amber-300'>
+                            ⚙️ Internal Note
+                          </div>
+                          <p className='mt-1 text-xs leading-relaxed whitespace-pre-wrap'>
+                            {msg.content}
+                          </p>
+                          <p className='mt-1 text-[10px] text-amber-700/70 dark:text-amber-300/70'>
+                            {new Date(msg.timestamp).toLocaleTimeString(
+                              'en-US',
+                              {
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              }
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
                   // Multi-bubble grouping: a message is part of a group
                   // when messageGroupId is set. The previous/next sibling
                   // sharing the same non-null groupId determines whether
