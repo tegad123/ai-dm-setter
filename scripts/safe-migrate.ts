@@ -53,6 +53,20 @@ async function countConvosFor(accountId: string): Promise<number | null> {
 }
 
 async function main() {
+  // Skip cleanly when DATABASE_URL is unset. Vercel Preview deploys
+  // run the build without DB credentials by default — the canary count
+  // guard is meaningful only when there's a real DB to query, and the
+  // production build (where DATABASE_URL is set) still gets full
+  // protection. Without this guard the build crashes on every Preview
+  // deploy at the first prisma.account.findFirst call, blocking PR
+  // previews entirely.
+  if (!process.env.DATABASE_URL) {
+    console.warn(
+      '[safe-migrate] DATABASE_URL is unset — skipping migration + count guard. This is expected on Vercel Preview deploys without DB credentials. Production builds (with DATABASE_URL set) still run the full check.'
+    );
+    return;
+  }
+
   const canary = await findCanaryAccountId();
   if (!canary) {
     console.warn(
