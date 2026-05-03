@@ -2562,7 +2562,10 @@ export async function scheduleAIReply(
     timestamp: m.timestamp,
     isVoiceNote: m.isVoiceNote,
     imageUrl: m.imageUrl,
-    hasImage: m.hasImage
+    hasImage: m.hasImage,
+    messageGroupId: m.messageGroupId,
+    bubbleIndex: m.bubbleIndex,
+    bubbleTotalCount: m.bubbleTotalCount
   }));
 
   let result;

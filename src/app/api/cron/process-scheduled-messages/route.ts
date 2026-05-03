@@ -346,7 +346,10 @@ async function fireScheduledMessage(
       role: m.sender === 'LEAD' ? ('user' as const) : ('assistant' as const),
       content: m.content,
       sender: m.sender,
-      timestamp: m.timestamp.toISOString()
+      timestamp: m.timestamp.toISOString(),
+      messageGroupId: m.messageGroupId,
+      bubbleIndex: m.bubbleIndex,
+      bubbleTotalCount: m.bubbleTotalCount
     }));
 
     const result = await generateReply(

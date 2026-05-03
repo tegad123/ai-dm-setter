@@ -14,6 +14,10 @@
 //   TEST 8 — master prompt now uses open-ended default phrasing
 //   TEST 9 — explicit capital blocker parses as disqualified
 //   TEST 10 — 2+ year timeline blocks immediate call pitch
+//   TEST 11 — repeated opener hard-fails
+//   TEST 12 — opener repeat window blocks third "gotchu bro"
+//   TEST 13 — repeated message structure hard-fails on third turn
+//   TEST 14 — "gotchu bro" allowed again after opener window clears
 
 import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local', override: true });
@@ -21,7 +25,8 @@ loadEnv({ path: '.env.local', override: true });
 import {
   scoreVoiceQualityGroup,
   scoreVoiceQuality,
-  leadGaveLongTimeline
+  leadGaveLongTimeline,
+  classifyMessageStructure
 } from '../src/lib/voice-quality-gate';
 import {
   leadHasImplicitNoCapitalSignal,
@@ -265,6 +270,16 @@ async function main() {
       true
     );
     expect(
+      'prompt includes message structure variation rule',
+      prompt.includes('VARY YOUR MESSAGE STRUCTURE'),
+      true
+    );
+    expect(
+      'prompt limits "gotchu bro" frequency',
+      prompt.includes('Limit this to once every 4-5 AI messages'),
+      true
+    );
+    expect(
       'prompt no longer contains the legacy "just to confirm — you got at least" default',
       prompt.includes('sick bro, just to confirm — you got at least'),
       false
@@ -313,6 +328,115 @@ async function main() {
     'hard-fails call pitch after 2+ year timeline',
     r10.hardFails.some((f) => f.includes('long_timeline_call_pitch:')),
     true
+  );
+
+  // ── TEST 11: repeated opener hard-fails ───────────────────────
+  console.log('\n[TEST 11] repeated opener gate');
+  const r11 = scoreVoiceQualityGroup(
+    ["gotchu bro, what part's throwing you off the most?"],
+    { recentAIMessages: ["gotchu bro, that's normal fr"] }
+  );
+  expect(
+    'hard-fails when consecutive AI turns start with "gotchu bro"',
+    r11.hardFails.some((f) => f.includes('repeated_opener:')),
+    true
+  );
+  const r11b = scoreVoiceQualityGroup(
+    ["yo bro, what part's throwing you off the most?"],
+    { recentAIMessages: ["gotchu bro, that's normal fr"] }
+  );
+  expect(
+    'different opener passes repeated_opener gate',
+    r11b.hardFails.some((f) => f.includes('repeated_opener:')),
+    false
+  );
+
+  // ── TEST 12: repeat window blocks third gotchu ────────────────
+  console.log('\n[TEST 12] repeat opener window');
+  const r12 = scoreVoiceQualityGroup(
+    ["gotchu bro, what's the main blocker right now?"],
+    {
+      recentAIMessages: [
+        "gotchu bro, that's normal fr",
+        'damn bro, uni plus youtube is a lot',
+        'makes sense, what do you do for work rn?'
+      ]
+    }
+  );
+  expect(
+    'hard-fails when same opener appears in last 3 AI turns',
+    r12.hardFails.some((f) => f.includes('repeated_opener:')),
+    true
+  );
+
+  // ── TEST 13: repeated structure third turn hard-fails ─────────
+  console.log('\n[TEST 13] repeated message structure');
+  expect(
+    'classifies short reaction / question split',
+    classifyMessageStructure([
+      'gotchu bro, that makes sense',
+      'what do you do for work rn?'
+    ]),
+    'two_short_reaction_question'
+  );
+  const r13 = scoreVoiceQualityGroup(
+    ['ahh that makes sense bro', 'what do you do for work rn?'],
+    {
+      priorMessageStructures: [
+        'two_short_reaction_question',
+        'two_short_reaction_question'
+      ]
+    }
+  );
+  expect(
+    'hard-fails third identical two-bubble structure',
+    r13.hardFails.some((f) => f.includes('repeated_message_structure:')),
+    true
+  );
+  const r13b = scoreVoiceQualityGroup(['what do you do for work rn?'], {
+    priorMessageStructures: [
+      'two_short_reaction_question',
+      'two_short_reaction_question'
+    ]
+  });
+  expect(
+    'different structure avoids repeated_message_structure hard fail',
+    r13b.hardFails.some((f) => f.includes('repeated_message_structure:')),
+    false
+  );
+  const r13c = scoreVoiceQualityGroup(
+    ['damn bro, that makes sense', 'what do you do for work rn?'],
+    {
+      priorMessageStructures: [
+        'two_short_reaction_question',
+        'single_question',
+        'two_short_reaction_question',
+        'two_longer_empathy_question'
+      ]
+    }
+  );
+  expect(
+    'hard-fails third use of same structure inside 5-turn window',
+    r13c.hardFails.some((f) => f.includes('repeated_message_structure:')),
+    true
+  );
+
+  // ── TEST 14: gotchu frequency window can clear ────────────────
+  console.log('\n[TEST 14] gotchu opener window clears');
+  const r14 = scoreVoiceQualityGroup(
+    ["gotchu bro, what's been holding you back the most?"],
+    {
+      recentAIMessages: [
+        "yo bro, that's real",
+        'damn bro, uni plus youtube is a lot',
+        'makes sense, what do you do for work rn?'
+      ]
+    }
+  );
+  expect(
+    '"gotchu bro" allowed when absent from the recent opener window',
+    r14.hardFails.some((f) => f.includes('repeated_opener:')),
+    false
   );
 
   await prisma.$disconnect();

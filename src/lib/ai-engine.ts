@@ -9,6 +9,7 @@ import {
   containsIncomeGoalQuestion,
   stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
+  classifyMessageStructure,
   isUnkeptPromise,
   isValidationOnlyMessage,
   detectTypeformFilledNoBookingContext,
@@ -28,6 +29,9 @@ export interface ConversationMessage {
   isVoiceNote?: boolean;
   imageUrl?: string | null;
   hasImage?: boolean;
+  messageGroupId?: string | null;
+  bubbleIndex?: number | null;
+  bubbleTotalCount?: number | null;
 }
 
 function isOperatorNoteContent(content: string | null | undefined): boolean {
@@ -465,6 +469,12 @@ export async function generateReply(
   const priorAIMessages = conversationHistory
     .filter((m) => m.sender === 'AI')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  const priorAITurns = groupAIMessagesIntoTurns(conversationHistory);
+  const lastAiTurn =
+    priorAITurns.length > 0 ? priorAITurns[priorAITurns.length - 1] : null;
+  const priorMessageStructures = priorAITurns.map((turn) =>
+    classifyMessageStructure(turn.messages)
+  );
   const priorValidationOnlyCount = (() => {
     let count = 0;
     for (let i = priorAIMessages.length - 1; i >= 0; i--) {
@@ -904,7 +914,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       (r24LastResult.reason === 'answer_below_threshold'
         ? ('failed' as const)
         : undefined),
-    previousAIMessage: lastAiMsg?.content ?? null,
+    previousAIMessage: lastAiTurn?.content ?? lastAiMsg?.content ?? null,
+    recentAIMessages: priorAITurns.slice(-3).map((turn) => turn.content),
+    priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
@@ -1620,6 +1632,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const repeatedOpenerFailed = quality.hardFails.some((f) =>
+        f.includes('repeated_opener:')
+      );
+      if (repeatedOpenerFailed) {
+        const directive = `\n\n===== REPEATED OPENER =====\nYour last message started with the same opener. Vary your response — skip the acknowledgment entirely or use a completely different opening. Options: react directly to what they said, start with the question, use a different expression.\n\nDo NOT start this retry with gotchu, gotchu bro, facts, facts bro, bet bro, or makes sense bro if that opener appeared recently. Use a different expression like "damn bro", "that's real", "yo", "ahh", "nah fr tho", "that's actually", "bro", or no opener at all.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Repeated opener detected — forcing regen with varied opener (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const repeatedStructureFailed = quality.hardFails.some((f) =>
+        f.includes('repeated_message_structure:')
+      );
+      if (repeatedStructureFailed) {
+        const directive = `\n\n===== REPEATED MESSAGE STRUCTURE =====\nYou used the same bubble structure three turns in a row. Vary the structure now.\n\nAllowed structures to rotate between:\nA) Single bubble — acknowledgment + question in one message\nB) Two bubbles — short reaction / question\nC) Two bubbles — longer empathy / question\nD) Single bubble — just the question, no acknowledgment\nE) Three bubbles — react / dig deeper / question\n\nIf the recent pattern was short reaction bubble + question bubble, use A, C, or D on this retry. Do not repeat the same shape again.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Repeated message structure detected — forcing regen with varied structure (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       // Image-limitation persona leak directive. If the model says
       // "can't see images" it breaks the human setter illusion. Force
       // the next attempt to answer like a normal person whose image
@@ -1717,17 +1751,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + downsellCallOverride;
         console.warn(
           `[ai-engine] Closer/call mention in downsell context — forcing regen with downsell-only override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
-        );
-      }
-
-      const ackQuestionSameBubbleFailed =
-        quality.softSignals.acknowledgment_and_question_in_same_bubble !==
-        undefined;
-      if (ackQuestionSameBubbleFailed) {
-        const ackQuestionOverride = `\n\n===== SPLIT ACK FROM QUESTION =====\nYour previous reply jammed an acknowledgment AND a question into one bubble. Split them into the messages[] array.\n\nWRONG:\n  messages: ["damn bro that's a real grind. how long you been at it?"]\n\nRIGHT:\n  messages: [\n    "damn bro, that's a real grind",\n    "how long you been at it?"\n  ]\n\nRule: ack in bubble 1, question in bubble 2. Never both in the same string.\n=====`;
-        systemPromptForLLM = baseSystemPrompt + ackQuestionOverride;
-        console.warn(
-          `[ai-engine] Concatenated ack+question detected — forcing regen with split directive (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
@@ -2524,6 +2547,41 @@ function isBotDetectionQuestion(text: string): boolean {
   return /\b(are\s+you\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+this\s+(a\s+)?(bot|robot|ai|automated|auto[-\s]?reply|programmed)|is\s+(this|that)\s+(automated|programmed|a\s+bot|a\s+robot|ai)|auto[-\s]?reply|programmed\s+(response|reply)|am\s+i\s+talking\s+to\s+(a\s+)?(bot|robot|ai)|real\s+person)\b/i.test(
     text
   );
+}
+
+type AITurnForQuality = {
+  messageGroupId: string | null;
+  messages: string[];
+  content: string;
+  timestamp: Date | string;
+};
+
+function groupAIMessagesIntoTurns(
+  history: ConversationMessage[]
+): AITurnForQuality[] {
+  const turns: AITurnForQuality[] = [];
+
+  for (const msg of history) {
+    if (msg.sender !== 'AI') continue;
+
+    const groupId = msg.messageGroupId ?? null;
+    const previousTurn = turns[turns.length - 1];
+    if (groupId && previousTurn?.messageGroupId === groupId) {
+      previousTurn.messages.push(msg.content);
+      previousTurn.content = previousTurn.messages.join(' ');
+      previousTurn.timestamp = msg.timestamp;
+      continue;
+    }
+
+    turns.push({
+      messageGroupId: groupId,
+      messages: [msg.content],
+      content: msg.content,
+      timestamp: msg.timestamp
+    });
+  }
+
+  return turns;
 }
 
 function hasCapitalVerificationQuestionAndAnswer(

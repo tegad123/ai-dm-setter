@@ -46,6 +46,10 @@ const DANIEL_VOCAB = new Set([
   'ahaha',
   'ahh',
   'damn',
+  'real',
+  'makes',
+  'sense',
+  'actually',
   'fr',
   'tbh',
   'ye',
@@ -147,6 +151,47 @@ const CALL_ACCEPTANCE_RE =
 const VALIDATION_PHRASE_RE =
   /\b(facts bro|gotchu bro|yeah bro|bet bro|love that bro|fasho bro)\b/i;
 const VALIDATION_THOUSAND_RE = /^\s*1000\b/i;
+
+type RepeatOpenerPattern = {
+  id: string;
+  label: string;
+  pattern: RegExp;
+};
+
+export type RepeatOpenerMatch = {
+  id: string;
+  label: string;
+  match: string;
+};
+
+export const REPEAT_OPENER_PATTERNS: RepeatOpenerPattern[] = [
+  {
+    id: 'gotchu',
+    label: 'gotchu bro',
+    pattern: /^\s*["'“”‘’]?\s*gotchu\s+bro\b/i
+  },
+  { id: 'gotchu', label: 'gotchu', pattern: /^\s*["'“”‘’]?\s*gotchu\b/i },
+  {
+    id: 'facts',
+    label: 'facts bro',
+    pattern: /^\s*["'“”‘’]?\s*facts\s+bro\b/i
+  },
+  { id: 'facts', label: 'facts', pattern: /^\s*["'“”‘’]?\s*facts\b/i },
+  { id: 'bet', label: 'bet bro', pattern: /^\s*["'“”‘’]?\s*bet\s+bro\b/i },
+  {
+    id: 'makes_sense_bro',
+    label: 'makes sense bro',
+    pattern: /^\s*["'“”‘’]?\s*makes\s+sense\s+bro\b/i
+  }
+];
+
+export type MessageStructure =
+  | 'single_ack_question'
+  | 'two_short_reaction_question'
+  | 'two_longer_empathy_question'
+  | 'single_question'
+  | 'three_react_dig_question'
+  | 'other';
 
 export const TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE =
   "no worries bro, the team will review your application and reach out directly if it's a good fit 🙏🏿";
@@ -283,18 +328,16 @@ export function leadGaveLongTimeline(text: string | null | undefined): boolean {
 }
 
 // Casual ack openers that, when they OPEN a single-bubble reply that
-// also ends in `?`, indicate the model jammed an ack and a question
-// into one bubble instead of splitting. Mirrors the parser-side list
-// in ai-engine.ts. Conservative — only short opener tokens we never
-// use mid-thought.
+// also ends in `?`, classify the turn as acknowledgment + question.
+// That structure is allowed now; the classifier uses it for cadence
+// rotation instead of forcing every ack/question pair into two bubbles.
 const CONCATENATED_ACK_QUESTION_RE =
   /^(that'?s|gotchu|gotcha|love that|fasho|damn|bet|sick|respect|facts?|fire|yo|yeah|appreciate|ah|aight|word|nice|solid|dope|aw|oh|hey|hell yeah|hella|big bro|bro)\b[^?]*[.!,]\s+\w[^?]*\?$/i;
 
 /**
- * True when a single bubble looks like an acknowledgment-then-question
- * jammed together — opens with a casual ack phrase and ends in `?` with
- * a sentence boundary (period, exclamation, or comma) between. Used as
- * a backstop when the parser's auto-split missed a concatenation case.
+ * True when a single bubble looks like acknowledgment-then-question:
+ * opens with a casual ack phrase and ends in `?` with a sentence
+ * boundary (period, exclamation, or comma) between.
  */
 export function looksLikeConcatenatedAckQuestion(s: string): boolean {
   if (!s || typeof s !== 'string') return false;
@@ -302,6 +345,63 @@ export function looksLikeConcatenatedAckQuestion(s: string): boolean {
   if (!trimmed.endsWith('?')) return false;
   if (trimmed.length < 30) return false; // legit short single thought
   return CONCATENATED_ACK_QUESTION_RE.test(trimmed);
+}
+
+export function detectRepeatOpener(text: string): RepeatOpenerMatch | null {
+  if (!text || typeof text !== 'string') return null;
+  for (const opener of REPEAT_OPENER_PATTERNS) {
+    const match = text.match(opener.pattern);
+    if (match) {
+      return {
+        id: opener.id,
+        label: opener.label,
+        match: match[0].trim()
+      };
+    }
+  }
+  return null;
+}
+
+function sentenceCount(text: string): number {
+  return text.split(/[.!?]+/).filter((part) => part.trim().length > 0).length;
+}
+
+export function classifyMessageStructure(messages: string[]): MessageStructure {
+  const cleaned = messages
+    .map((message) => (message || '').trim())
+    .filter(Boolean);
+  if (cleaned.length === 0) return 'other';
+
+  const hasQuestion = (message: string) => /\?/.test(message);
+
+  if (cleaned.length === 1) {
+    const only = cleaned[0];
+    if (!hasQuestion(only)) return 'other';
+    if (looksLikeConcatenatedAckQuestion(only)) {
+      return 'single_ack_question';
+    }
+    return 'single_question';
+  }
+
+  if (cleaned.length === 2) {
+    const [first, second] = cleaned;
+    if (!hasQuestion(second)) return 'other';
+    if (first.length <= 80 && sentenceCount(first) <= 1) {
+      return 'two_short_reaction_question';
+    }
+    return 'two_longer_empathy_question';
+  }
+
+  if (
+    cleaned.length >= 3 &&
+    cleaned.some(hasQuestion) &&
+    !hasQuestion(cleaned[0]) &&
+    !hasQuestion(cleaned[1])
+  ) {
+    return 'three_react_dig_question';
+  }
+
+  return 'other';
 }
 
 export function isCallAcceptance(text: string): boolean {
@@ -423,6 +523,19 @@ export interface VoiceQualityOptions {
    * sending the first message); the checks no-op in that case.
    */
   previousAIMessage?: string | null;
+  /**
+   * Last few AI turns joined into one string per turn. Used by
+   * repeated_opener to stop "gotchu bro" / "facts bro" / similar
+   * openers from appearing back-to-back or repeatedly inside a short
+   * window. Pass grouped turns rather than raw bubbles when available.
+   */
+  recentAIMessages?: string[];
+  /**
+   * Structure classifications for recent AI turns. The group gate uses
+   * this to block the third identical shape in a row, e.g. short ack
+   * bubble + question bubble every single turn.
+   */
+  priorMessageStructures?: MessageStructure[];
   /**
    * Prior AI questions from the wider conversation history. Used as a
    * backstop for repeated_question when the duplicate ask is not the
@@ -1000,6 +1113,31 @@ export function scoreVoiceQuality(
     if (prevHasPitch && currHasPitch) {
       hardFails.push(
         "repeated_call_pitch: previous AI turn already pitched the call AND this turn pitches again. Acknowledge the lead's interim response before pitching twice in a row."
+      );
+    }
+  }
+
+  // 9h-ii. Repeated opener guard (daetradez 2026-05-03).
+  // "gotchu bro" was showing up as the default opener in consecutive
+  // turns, making otherwise-human bubbles read robotic as a sequence.
+  // Compare the current opener against the last 3 AI turns and force a
+  // retry when the same opener family appears again.
+  const currentOpener = detectRepeatOpener(reply);
+  if (currentOpener) {
+    const recentAIMessages =
+      options?.recentAIMessages && options.recentAIMessages.length > 0
+        ? options.recentAIMessages
+        : options?.previousAIMessage
+          ? [options.previousAIMessage]
+          : [];
+    const repeatedFrom = recentAIMessages
+      .slice(-3)
+      .map((message) => detectRepeatOpener(message))
+      .find((opener) => opener?.id === currentOpener.id);
+
+    if (repeatedFrom) {
+      hardFails.push(
+        `repeated_opener: current reply starts with "${currentOpener.match}" and a recent AI turn started with "${repeatedFrom.match}". Your last message started with the same opener. Vary your response — skip the acknowledgment entirely or use a completely different opening. Options: react directly to what they said, start with the question, use a different expression.`
       );
     }
   }
@@ -2349,19 +2487,27 @@ export function scoreVoiceQualityGroup(
   const joinedQuality = scoreVoiceQuality(joined, options);
   const softSignals = joinedQuality.softSignals;
   const score = joinedQuality.score;
+  const currentStructure = classifyMessageStructure(messages);
+  const recentStructures = (options?.priorMessageStructures ?? []).slice(-4);
+  const lastTwoStructures = recentStructures.slice(-2);
+  const recentSameStructureCount = recentStructures.filter(
+    (structure) => structure === currentStructure
+  ).length;
 
-  // Acknowledgment + question jammed into one bubble (daetradez
-  // 2026-04-28). Fires only when messages.length === 1 — a legitimate
-  // 2-bubble split where bubble 0 is the ack and bubble 1 is the
-  // question won't trigger this, since the parser already split it.
-  // Backstops the parser auto-split for cases where the regex didn't
-  // catch (no newline AND no period/exclamation between ack and
-  // question — e.g. comma-only).
-  if (messages.length === 1) {
-    const only = messages[0];
-    if (looksLikeConcatenatedAckQuestion(only)) {
-      softSignals.acknowledgment_and_question_in_same_bubble = -0.4;
-    }
+  if (
+    currentStructure !== 'other' &&
+    ((lastTwoStructures.length >= 2 &&
+      lastTwoStructures.every((structure) => structure === currentStructure)) ||
+      recentSameStructureCount >= 2)
+  ) {
+    hardFails.push(
+      `[group] repeated_message_structure: recent AI turns already overused ${currentStructure}. Vary your message structure — use a single bubble, a longer empathy split, a direct question, or a three-bubble react/dig/question turn instead of repeating the same shape.`
+    );
+  } else if (
+    currentStructure !== 'other' &&
+    lastTwoStructures[lastTwoStructures.length - 1] === currentStructure
+  ) {
+    softSignals.repeated_message_structure = -0.15;
   }
 
   return {
