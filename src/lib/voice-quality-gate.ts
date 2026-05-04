@@ -2620,6 +2620,20 @@ export function containsIncomeGoalQuestion(text: string): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+export function containsUrgencyQuestion(text: string): boolean {
+  const patterns: RegExp[] = [
+    /\bhow soon\b/i,
+    /\bby when\b/i,
+    /\b(timeline|time\s*frame|time\s*line)\b/i,
+    /\bwhen are you (trying|tryna|hoping|looking|wanting|planning)\b/i,
+    /\b(trying|tryna|hoping|looking|wanting|planning)\s+to\s+(make|hit)\s+(it|this|that)\s+happen\b/i,
+    /\b(make|hit)\s+(it|this|that)\s+happen\b.*\?$/i,
+    /\bwhat('s| is)\s+(your\s+)?(timeline|timeframe|urgency)\b/i,
+    /\bhow (fast|quick|quickly|soon)\b.*\?/i
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
 function normalizeQuestionStructure(question: string): string {
   return question
     .toLowerCase()

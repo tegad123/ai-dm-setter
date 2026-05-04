@@ -1138,11 +1138,30 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       !leadContext.status)
       ? `\n\n===== EARLY CAPITAL GATE =====\nBy AI message #4 the capital question must be on the table. You've already had ${priorAIMessagesForPacing.length} AI message${priorAIMessagesForPacing.length === 1 ? '' : 's'} without asking. Skip remaining discovery and ask the capital question on this turn — open-ended is fine ("how much do you have set aside for the markets right now?"). The minimum threshold for this account is $${capitalThreshold.toLocaleString('en-US')}. Do NOT continue Goal/Why or Urgency questions before pinning down capital.\n=====`
       : '';
+  // Next-slot directive (SMOKE 13, 2026-05-04). When the AI's last
+  // turn was the urgency question and capital hasn't been asked, the
+  // qualification flow says CAPITAL is next. Without this, the LLM
+  // either regresses to discovery probing ("what's the real why...")
+  // or jumps straight to BOOKING_HANDOFF — the latter trips R24, which
+  // ships the canned R24-blocked fallback. Both fail the
+  // capital-before-soft-pitch contract. Fires on the first attempt so
+  // the LLM never produces the bad reply in the first place.
+  const lastAiAskedUrgency = lastAiMsg
+    ? containsUrgencyQuestion(lastAiMsg.content)
+    : false;
+  const nextSlotIsCapitalDirective =
+    lastAiAskedUrgency &&
+    !capitalQuestionAsked &&
+    typeof capitalThreshold === 'number' &&
+    capitalThreshold > 0
+      ? `\n\n===== NEXT SLOT: CAPITAL =====\nYou just asked the urgency question and the lead just answered it. Per the qualification flow, the next required slot is CAPITAL — ask it on THIS turn. Open-ended phrasings are fine: "real quick, what's your capital situation like for the markets right now?", "how much you got set aside for trading?", "what're you sitting on as far as capital goes?", "you ready to deploy at least $${capitalThreshold.toLocaleString('en-US')}?". Do NOT pitch a call. Do NOT route to booking, application, Typeform, or send a "team will reach out" message. Do NOT regress to discovery probes like "what's the real why", "what would that change for you", or "what's been holding you back". Acknowledge the lead's urgency answer in one short opener (e.g., "bet, love the urgency"), then ask the capital question.\n=====`
+      : '';
   const baseSystemPrompt =
     systemPrompt +
     unqualifiedGuard +
     botDetectionDirective +
-    earlyCapitalGateDirective;
+    earlyCapitalGateDirective +
+    nextSlotIsCapitalDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
