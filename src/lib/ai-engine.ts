@@ -2504,15 +2504,54 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             console.error(
               `[ai-engine] R24 natural fallback failed voice/safety gate for convo ${activeConversationId}: hardFails=${naturalQuality.hardFails.join(', ') || 'none'} bookingRoute=${naturalStillRoutesToBooking}`
             );
-            parsed.message =
-              "i don't wanna point you wrong here bro. give me a sec to double-check the right next step.";
-            parsed.messages = [parsed.message];
-            parsed.stage = 'SOFT_EXIT';
-            parsed.subStage = null;
-            parsed.softExit = false;
-            parsed.escalateToHuman = true;
-            parsed.voiceNoteAction = null;
-            finalQualityScore = naturalQuality.score;
+
+            // ── Outbound-aware soft recovery ────────────────────────
+            // For ManyChat / OUTBOUND conversations in their first few
+            // turns, the R24 fallback is almost always a false positive:
+            // the lead's reply to the cold opener is short ("Yea",
+            // "yes please send it", "ok"), the AI has limited context,
+            // and the booking-route gate flags an over-eager next step.
+            // Hard-escalating (escalateToHuman=true → aiActive flips
+            // false downstream) ghosts the lead the moment they show
+            // intent — exactly the wrong UX for cold outbound where
+            // a quick acknowledgment + discovery beat keeps the
+            // conversation breathing. Multi-tenant policy: when the
+            // conversation is OUTBOUND-sourced AND we're still in the
+            // early phase (< 6 messages, including the opener), ship
+            // a minimal acknowledgment and KEEP aiActive=true. The
+            // operator still sees the audit trail via the diagnostic
+            // log above, but the lead doesn't get cold-paused on a
+            // hair-trigger gate. Non-outbound flows keep the existing
+            // hard-escalate — those cases (deep qualification, R24
+            // hitting after several turns) genuinely need operator
+            // review.
+            const isOutboundSourced =
+              conversationCallState?.source === 'MANYCHAT';
+            const isEarlyTurn = conversationHistory.length < 6;
+            if (isOutboundSourced && isEarlyTurn) {
+              parsed.message =
+                "appreciate that bro 🙏🏿 quick q so i don't waste your time — what made you wanna check this out fr?";
+              parsed.messages = [parsed.message];
+              parsed.stage = 'DISCOVERY';
+              parsed.subStage = null;
+              parsed.softExit = false;
+              parsed.escalateToHuman = false;
+              parsed.voiceNoteAction = null;
+              finalQualityScore = Math.max(naturalQuality.score, 60);
+              console.log(
+                `[ai-engine] R24 soft-recovery applied for OUTBOUND convo ${activeConversationId} (msgCount=${conversationHistory.length}) — aiActive preserved.`
+              );
+            } else {
+              parsed.message =
+                "i don't wanna point you wrong here bro. give me a sec to double-check the right next step.";
+              parsed.messages = [parsed.message];
+              parsed.stage = 'SOFT_EXIT';
+              parsed.subStage = null;
+              parsed.softExit = false;
+              parsed.escalateToHuman = true;
+              parsed.voiceNoteAction = null;
+              finalQualityScore = naturalQuality.score;
+            }
           }
         }
       } else if (restrictedFundingBlocked) {
