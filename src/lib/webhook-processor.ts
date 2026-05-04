@@ -584,16 +584,56 @@ export async function processIncomingMessage(
   );
 
   // ── Step 1: Find or create the lead ────────────────────────────
+  // Match priority:
+  //   1. platformUserId — the IG/FB numeric ID. Stable, unique per
+  //      person on the platform. Always the first attempt.
+  //   2. handle (case-insensitive) — fallback to recover leads created
+  //      by upstream paths that didn't have the numeric ID at the time.
+  //      Specifically: ManyChat handoff (manychat-handoff.ts) stores
+  //      the IG handle as platformUserId because ManyChat's Make
+  //      External Request variable picker doesn't expose the IG numeric
+  //      user ID. When the same lead later DMs back, IG sends the
+  //      numeric ID — that won't match step 1, but step 2 by handle
+  //      catches it. We then upgrade the lead's platformUserId to the
+  //      numeric ID so future webhooks hit step 1 directly.
+  //
+  // Without this fallback, every ManyChat-handoff'd lead splits into
+  // two duplicate Lead rows the moment they reply: one with the
+  // ManyChat opener + outbound_context (handle-as-platformUserId), and
+  // a fresh orphan with the inbound message (numeric platformUserId).
+  // Operator sees the orphan in the dashboard, opener appears nowhere.
   let lead = await prisma.lead.findFirst({
-    where: {
-      accountId,
-      platformUserId,
-      platform
-    },
-    include: {
-      conversation: true
-    }
+    where: { accountId, platformUserId, platform },
+    include: { conversation: true }
   });
+
+  if (!lead && senderHandle) {
+    const byHandle = await prisma.lead.findFirst({
+      where: {
+        accountId,
+        platform,
+        handle: { equals: senderHandle, mode: 'insensitive' }
+      },
+      include: { conversation: true }
+    });
+    if (byHandle) {
+      // Upgrade the lead's platformUserId to the proper numeric ID so
+      // subsequent webhooks match by ID directly (faster, deterministic).
+      // Only overwrite when the existing value isn't already the numeric
+      // ID — avoids needless writes on repeat webhooks.
+      if (byHandle.platformUserId !== platformUserId) {
+        await prisma.lead.update({
+          where: { id: byHandle.id },
+          data: { platformUserId }
+        });
+        console.log(
+          `[webhook-processor] Recovered ManyChat-handoff'd lead by handle @${senderHandle} ` +
+            `— upgraded platformUserId from "${byHandle.platformUserId}" to "${platformUserId}"`
+        );
+      }
+      lead = byHandle;
+    }
+  }
 
   let isNewLead = false;
 
