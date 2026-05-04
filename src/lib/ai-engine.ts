@@ -4888,6 +4888,19 @@ const PERSONAL_CAPITAL_INDICATOR =
 const PLUS_PHRASE =
   /\b(plus|also|on\s+top\s+of|besides|separate\s+from|aside\s+from|in\s+addition\s+to|as\s+well\s+as)\b/i;
 
+// Below-threshold hedge prefix (SMOKE 12, 2026-05-04). Lead says
+// "less than $1000" / "under $500" / "below $200" — they are stating
+// they have BELOW that figure, not that figure exactly. Without this
+// guard the amount-fast-path would extract the number verbatim and
+// the threshold gate would treat the lead as having it (e.g. "Less
+// than $1000, I'm tryna at least start with $1000 or more" was being
+// classified as amount=1000, passing a $1000 threshold). Requires the
+// hedge to sit directly before a numeric token (with optional
+// approximator / currency symbol) so phrases like "less than two
+// hours" or "barely have time" don't trip it.
+const BELOW_THRESHOLD_HEDGE_PATTERN =
+  /\b(less\s+than|under|below|fewer\s+than|barely|not\s+even)\s+(?:about\s+|around\s+|roughly\s+|maybe\s+|like\s+)?(?:\$|us\$|usd\s*|dollars?\s*|€|£|₦|₱|₹)?\s*\d/i;
+
 function capitalNumberNeedsComfortClarification(text: string): boolean {
   const totalSavingsContext =
     /\b((in|from|out\s+of|my|our|total)\s+savings?|savings?\s+(left|total)|all\s+(we|i)\s+(have|got)|everything\s+(we|i)\s+(have|got)|total\s+(savings?|money|funds?)|only\s+(savings?|money|funds?))\b/i;
@@ -5093,7 +5106,19 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   // 2. Amount (numeric parse). Even if the lead also says "kinda" or
   //    includes hedging words, a concrete number beats the hedge —
   //    we'll compare it to threshold later.
+  //    EXCEPTION (SMOKE 12, 2026-05-04): "less than $X" / "under $X" /
+  //    "below $X" / "barely $X" / "not even $X" — the lead is stating
+  //    they have BELOW $X, not $X. Decrement the parsed amount so the
+  //    threshold check at compareAmt >= threshold falls into the
+  //    below_threshold branch instead of confirming.
   if (parsedAmount !== null) {
+    if (BELOW_THRESHOLD_HEDGE_PATTERN.test(text)) {
+      return {
+        kind: 'amount',
+        amount: Math.max(parsedAmount - 1, 0),
+        ...(parsedCurrency ? { currency: parsedCurrency } : {})
+      };
+    }
     return {
       kind: 'amount',
       amount: parsedAmount,
