@@ -2,6 +2,7 @@ import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { buildDynamicSystemPrompt } from '@/lib/ai-prompts';
 import { NextRequest, NextResponse } from 'next/server';
 import { getCredentials } from '@/lib/credential-store';
+import prisma from '@/lib/prisma';
 
 // ---------------------------------------------------------------------------
 // POST — Send a test message to preview how the AI responds
@@ -28,16 +29,36 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build the system prompt with test lead context
-    const systemPrompt = await buildDynamicSystemPrompt(auth.accountId, {
-      leadName: leadName || 'Test Lead',
-      handle: 'testlead',
-      platform: platform || 'INSTAGRAM',
-      status: 'NEW_LEAD', // LeadContext interface still uses 'status' field name for the AI prompt
-      triggerType: triggerType || 'DM',
-      triggerSource: null,
-      qualityScore: 50
+    // Test-message endpoint runs against the account's active persona.
+    // No Conversation row exists for these one-off probes, so this is
+    // the legitimate "active persona" lookup case (parallel to the
+    // onboarding test endpoint), not the F3.2 anti-pattern.
+    const testMessagePersona = await prisma.aIPersona.findFirst({
+      where: { accountId: auth.accountId, isActive: true },
+      select: { id: true },
+      orderBy: { updatedAt: 'desc' }
     });
+    if (!testMessagePersona) {
+      return NextResponse.json(
+        { error: 'No active AIPersona configured for this account' },
+        { status: 400 }
+      );
+    }
+
+    // Build the system prompt with test lead context
+    const systemPrompt = await buildDynamicSystemPrompt(
+      auth.accountId,
+      testMessagePersona.id,
+      {
+        leadName: leadName || 'Test Lead',
+        handle: 'testlead',
+        platform: platform || 'INSTAGRAM',
+        status: 'NEW_LEAD', // LeadContext interface still uses 'status' field name for the AI prompt
+        triggerType: triggerType || 'DM',
+        triggerSource: null,
+        qualityScore: 50
+      }
+    );
 
     // Resolve the user's AI provider credentials
     const openaiCreds = await getCredentials(auth.accountId, 'OPENAI');

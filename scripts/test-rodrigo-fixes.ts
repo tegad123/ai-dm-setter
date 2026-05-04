@@ -120,7 +120,7 @@ async function main() {
   // ── BUG 1D — buildDynamicSystemPrompt prepends block when passed ─
   console.log('\n[BUG 1D] system prompt receives block at top');
   const personaForPrompt = await prisma.aIPersona.findFirst({
-    select: { accountId: true }
+    select: { id: true, accountId: true }
   });
   if (!personaForPrompt) {
     console.error('No aIPersona row found — skipping prompt-block tests.');
@@ -137,6 +137,7 @@ async function main() {
     } as any;
     const promptWith = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext,
       undefined,
       undefined,
@@ -157,6 +158,7 @@ async function main() {
     );
     const promptWithout = await buildDynamicSystemPrompt(
       personaForPrompt.accountId,
+      personaForPrompt.id,
       minimalContext
     );
     expect(

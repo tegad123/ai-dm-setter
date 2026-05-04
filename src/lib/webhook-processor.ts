@@ -715,15 +715,15 @@ export async function processIncomingMessage(
   }
 
   const conversationId = lead.conversation!.id;
+  // F3.2: scope by Conversation.personaId (Phase 1 schema field)
+  // instead of guessing the active persona by accountId. This is the
+  // exact persona generateReply will run against, so the media-
+  // transcription flag matches what the AI will actually consume.
   const mediaPersona = inboundMediaType
-    ? ((await prisma.aIPersona.findFirst({
-        where: { accountId, isActive: true },
+    ? await prisma.aIPersona.findUnique({
+        where: { id: lead.conversation!.personaId },
         select: { id: true, mediaTranscriptionEnabled: true }
-      })) ??
-      (await prisma.aIPersona.findFirst({
-        where: { accountId },
-        select: { id: true, mediaTranscriptionEnabled: true }
-      })))
+      })
     : null;
   const shouldProcessInboundMedia =
     Boolean(mediaPersona?.mediaTranscriptionEnabled) &&
