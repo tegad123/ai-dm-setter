@@ -30,9 +30,11 @@
 -- Prod incident 2026-05-04: first attempt hit error code 57014 at 2min.
 SET LOCAL statement_timeout = '10min';
 
--- 1. Add column nullable
+-- 1. Add column nullable. Idempotent — 20260502192000_backfill_drift may
+-- have already added this column (without the NOT NULL/FK constraints
+-- this migration goes on to add).
 ALTER TABLE "Conversation"
-ADD COLUMN "personaId" TEXT;
+ADD COLUMN IF NOT EXISTS "personaId" TEXT;
 
 -- Pre-compute the per-Lead persona choice into a temp table. This
 -- avoids re-running the JOIN + DISTINCT ON for every Conversation row
@@ -104,12 +106,17 @@ ALTER COLUMN "personaId" SET NOT NULL;
 
 -- 5. FK to AIPersona. Restrict on persona delete keeps conversation
 -- history safe — operator must explicitly archive/migrate first.
-ALTER TABLE "Conversation"
-ADD CONSTRAINT "Conversation_personaId_fkey"
-FOREIGN KEY ("personaId") REFERENCES "AIPersona"("id")
-ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Conversation_personaId_fkey') THEN
+    ALTER TABLE "Conversation"
+    ADD CONSTRAINT "Conversation_personaId_fkey"
+    FOREIGN KEY ("personaId") REFERENCES "AIPersona"("id")
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+  END IF;
+END$$;
 
 -- 6. Index for personaId-scoped queries (per-persona conversation lists,
 -- per-persona allowlist scoping in F2.3, etc.).
-CREATE INDEX "Conversation_personaId_idx"
+CREATE INDEX IF NOT EXISTS "Conversation_personaId_idx"
 ON "Conversation"("personaId");

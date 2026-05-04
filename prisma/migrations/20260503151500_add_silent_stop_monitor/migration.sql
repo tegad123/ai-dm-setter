@@ -2,14 +2,15 @@
 -- Keeps track of lead turns awaiting an AI response and logs every
 -- auto-recovery attempt so stalled conversations cannot die silently.
 
+-- Idempotent: 20260502192000_backfill_drift may have already created these.
 ALTER TABLE "Conversation"
-ADD COLUMN "awaitingAiResponse" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN "awaitingSince" TIMESTAMP(3),
-ADD COLUMN "silentStopCount" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN "lastSilentStopAt" TIMESTAMP(3),
-ADD COLUMN "silentStopRecoveredCount" INTEGER NOT NULL DEFAULT 0;
+ADD COLUMN IF NOT EXISTS "awaitingAiResponse" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "awaitingSince" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "silentStopCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS "lastSilentStopAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "silentStopRecoveredCount" INTEGER NOT NULL DEFAULT 0;
 
-CREATE TABLE "SilentStopEvent" (
+CREATE TABLE IF NOT EXISTS "SilentStopEvent" (
   "id" TEXT NOT NULL,
   "conversationId" TEXT NOT NULL,
   "detectedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -28,10 +29,10 @@ CREATE TABLE "SilentStopEvent" (
   CONSTRAINT "SilentStopEvent_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "Conversation_awaitingAiResponse_awaitingSince_idx"
+CREATE INDEX IF NOT EXISTS "Conversation_awaitingAiResponse_awaitingSince_idx"
 ON "Conversation"("awaitingAiResponse", "awaitingSince");
 
-CREATE INDEX "Conversation_lastSilentStopAt_idx"
+CREATE INDEX IF NOT EXISTS "Conversation_lastSilentStopAt_idx"
 ON "Conversation"("lastSilentStopAt");
 
 -- Seed the heartbeat state for live conversations already dark at deploy
@@ -64,16 +65,21 @@ WHERE c."id" = lm."conversationId"
     'NO_SHOWED'
   );
 
-CREATE INDEX "SilentStopEvent_conversationId_idx"
+CREATE INDEX IF NOT EXISTS "SilentStopEvent_conversationId_idx"
 ON "SilentStopEvent"("conversationId");
 
-CREATE INDEX "SilentStopEvent_recoveryStatus_idx"
+CREATE INDEX IF NOT EXISTS "SilentStopEvent_recoveryStatus_idx"
 ON "SilentStopEvent"("recoveryStatus");
 
-CREATE INDEX "SilentStopEvent_detectedAt_idx"
+CREATE INDEX IF NOT EXISTS "SilentStopEvent_detectedAt_idx"
 ON "SilentStopEvent"("detectedAt");
 
-ALTER TABLE "SilentStopEvent"
-ADD CONSTRAINT "SilentStopEvent_conversationId_fkey"
-FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
-ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'SilentStopEvent_conversationId_fkey') THEN
+    ALTER TABLE "SilentStopEvent"
+    ADD CONSTRAINT "SilentStopEvent_conversationId_fkey"
+    FOREIGN KEY ("conversationId") REFERENCES "Conversation"("id")
+    ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END$$;

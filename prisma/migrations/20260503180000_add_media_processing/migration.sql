@@ -1,17 +1,18 @@
 -- Inbound media processing for voice-note transcription and image OCR.
+-- Idempotent: 20260502192000_backfill_drift may have already created these.
 ALTER TABLE "AIPersona"
-ADD COLUMN "mediaTranscriptionEnabled" BOOLEAN NOT NULL DEFAULT false;
+ADD COLUMN IF NOT EXISTS "mediaTranscriptionEnabled" BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE "Message"
-ADD COLUMN "mediaType" TEXT,
-ADD COLUMN "mediaUrl" TEXT,
-ADD COLUMN "transcription" TEXT,
-ADD COLUMN "imageMetadata" JSONB,
-ADD COLUMN "mediaProcessedAt" TIMESTAMP(3),
-ADD COLUMN "mediaProcessingError" TEXT,
-ADD COLUMN "mediaCostUsd" DECIMAL(10,6);
+ADD COLUMN IF NOT EXISTS "mediaType" TEXT,
+ADD COLUMN IF NOT EXISTS "mediaUrl" TEXT,
+ADD COLUMN IF NOT EXISTS "transcription" TEXT,
+ADD COLUMN IF NOT EXISTS "imageMetadata" JSONB,
+ADD COLUMN IF NOT EXISTS "mediaProcessedAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "mediaProcessingError" TEXT,
+ADD COLUMN IF NOT EXISTS "mediaCostUsd" DECIMAL(10,6);
 
-CREATE TABLE "MediaProcessingLog" (
+CREATE TABLE IF NOT EXISTS "MediaProcessingLog" (
   "id" TEXT NOT NULL,
   "accountId" TEXT NOT NULL,
   "messageId" TEXT NOT NULL,
@@ -26,18 +27,25 @@ CREATE TABLE "MediaProcessingLog" (
   CONSTRAINT "MediaProcessingLog_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "MediaProcessingLog_accountId_createdAt_idx" ON "MediaProcessingLog"("accountId", "createdAt");
-CREATE INDEX "MediaProcessingLog_messageId_idx" ON "MediaProcessingLog"("messageId");
-CREATE INDEX "MediaProcessingLog_mediaType_createdAt_idx" ON "MediaProcessingLog"("mediaType", "createdAt");
-CREATE INDEX "MediaProcessingLog_success_createdAt_idx" ON "MediaProcessingLog"("success", "createdAt");
+CREATE INDEX IF NOT EXISTS "MediaProcessingLog_accountId_createdAt_idx" ON "MediaProcessingLog"("accountId", "createdAt");
+CREATE INDEX IF NOT EXISTS "MediaProcessingLog_messageId_idx" ON "MediaProcessingLog"("messageId");
+CREATE INDEX IF NOT EXISTS "MediaProcessingLog_mediaType_createdAt_idx" ON "MediaProcessingLog"("mediaType", "createdAt");
+CREATE INDEX IF NOT EXISTS "MediaProcessingLog_success_createdAt_idx" ON "MediaProcessingLog"("success", "createdAt");
 
-ALTER TABLE "MediaProcessingLog"
-ADD CONSTRAINT "MediaProcessingLog_accountId_fkey"
-FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'MediaProcessingLog_accountId_fkey') THEN
+    ALTER TABLE "MediaProcessingLog"
+    ADD CONSTRAINT "MediaProcessingLog_accountId_fkey"
+    FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
 
-ALTER TABLE "MediaProcessingLog"
-ADD CONSTRAINT "MediaProcessingLog_messageId_fkey"
-FOREIGN KEY ("messageId") REFERENCES "Message"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'MediaProcessingLog_messageId_fkey') THEN
+    ALTER TABLE "MediaProcessingLog"
+    ADD CONSTRAINT "MediaProcessingLog_messageId_fkey"
+    FOREIGN KEY ("messageId") REFERENCES "Message"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END$$;
 
 -- Enable the pilot only for daetradez; every other persona remains off.
 UPDATE "AIPersona"

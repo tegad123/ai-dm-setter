@@ -1,19 +1,25 @@
 -- Durable R24 qualification state. Qualification must survive scheduling
 -- changes such as reschedules, so the gate does not re-scan old chat history.
 
-CREATE TYPE "CapitalVerificationStatus" AS ENUM (
-  'UNVERIFIED',
-  'VERIFIED_QUALIFIED',
-  'VERIFIED_UNQUALIFIED',
-  'MANUALLY_OVERRIDDEN'
-);
+-- Idempotent: 20260502192000_backfill_drift may have already created these.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'CapitalVerificationStatus') THEN
+    CREATE TYPE "CapitalVerificationStatus" AS ENUM (
+      'UNVERIFIED',
+      'VERIFIED_QUALIFIED',
+      'VERIFIED_UNQUALIFIED',
+      'MANUALLY_OVERRIDDEN'
+    );
+  END IF;
+END$$;
 
 ALTER TABLE "Conversation"
-  ADD COLUMN "capitalVerificationStatus" "CapitalVerificationStatus" NOT NULL DEFAULT 'UNVERIFIED',
-  ADD COLUMN "capitalVerifiedAt" TIMESTAMP(3),
-  ADD COLUMN "capitalVerifiedAmount" INTEGER;
+  ADD COLUMN IF NOT EXISTS "capitalVerificationStatus" "CapitalVerificationStatus" NOT NULL DEFAULT 'UNVERIFIED',
+  ADD COLUMN IF NOT EXISTS "capitalVerifiedAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "capitalVerifiedAmount" INTEGER;
 
-CREATE INDEX "Conversation_capitalVerificationStatus_idx"
+CREATE INDEX IF NOT EXISTS "Conversation_capitalVerificationStatus_idx"
   ON "Conversation"("capitalVerificationStatus");
 
 -- Existing qualified / booked / rescheduleable conversations with at least one

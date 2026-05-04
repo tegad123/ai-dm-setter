@@ -14,4 +14,14 @@
 -- has no effect on Prisma's migration workflow.
 -- ============================================================================
 
-ALTER TABLE "_prisma_migrations" ENABLE ROW LEVEL SECURITY;
+-- Guarded so the migration is a no-op when the _prisma_migrations table
+-- doesn't exist (e.g. inside Prisma's shadow database used by
+-- `prisma migrate diff`).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '_prisma_migrations'
+  ) THEN
+    EXECUTE 'ALTER TABLE "_prisma_migrations" ENABLE ROW LEVEL SECURITY';
+  END IF;
+END$$;
