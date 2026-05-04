@@ -10,6 +10,8 @@
 //   - aiActive            -> true
 //   - awaitingAiResponse  -> true
 //   - awaitingSince       -> last LEAD message timestamp
+//   - silentStopCount     -> 0
+//   - lastSilentStopAt    -> null
 // The next heartbeat tick (every minute) picks them up and routes through
 // the standard recovery flow.
 //
@@ -84,7 +86,9 @@ async function main() {
       data: {
         aiActive: true,
         awaitingAiResponse: true,
-        awaitingSince: lastMsg.timestamp
+        awaitingSince: lastMsg.timestamp,
+        silentStopCount: 0,
+        lastSilentStopAt: null
       }
     });
     flipped += 1;

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildContextualSilentStopReEngagementForTest } from '../src/lib/silent-stop-recovery';
+import {
+  buildContextualSilentStopReEngagementForTest,
+  buildManyChatOpeningRecoveryForTest,
+  isManyChatOpeningHandoffForTest,
+  type StalledConversation
+} from '../src/lib/silent-stop-recovery';
 import { extractCapturedDataPointsForTest } from '../src/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '../src/lib/voice-quality-gate';
 
@@ -109,6 +114,59 @@ assert.ok(
   'faith bridge should move to capital qualification'
 );
 assert.equal(scoreVoiceQualityGroup(faithBridge?.messages ?? []).passed, true);
+
+const manyChatOpeningConversation = {
+  id: 'manychat_opening',
+  source: 'MANYCHAT',
+  manyChatOpenerMessage:
+    'yo bro appreciate the follow, i can send the Session Liquidity Model over',
+  capturedDataPoints: {},
+  silentStopCount: 3,
+  distressDetected: false,
+  lead: {
+    id: 'lead_manychat',
+    accountId: 'account_daniel',
+    name: 'Shukran Azizi',
+    handle: 'shukran_azizi202'
+  },
+  messages: [
+    {
+      id: 'lead_accept',
+      sender: 'LEAD',
+      content: 'Yes send it over!',
+      timestamp: new Date(now.getTime() + 2000)
+    },
+    {
+      id: 'ai_bad_prior',
+      sender: 'AI',
+      content: 'perfect this gonna make you dangerous',
+      timestamp: new Date(now.getTime() + 1000)
+    }
+  ]
+} as unknown as StalledConversation;
+
+assert.equal(
+  isManyChatOpeningHandoffForTest(manyChatOpeningConversation),
+  true,
+  'ManyChat opener accepts with empty discovery data should be treated as opening handoffs'
+);
+const manyChatRecovery = buildManyChatOpeningRecoveryForTest(
+  manyChatOpeningConversation
+);
+const manyChatText = manyChatRecovery.messages.join(' ');
+assert.equal(manyChatRecovery.stage, 'DISCOVERY');
+assert.match(manyChatText, /Session Liquidity Model/i);
+assert.match(manyChatText, /trading background|been at it|pretty new/i);
+assert.doesNotMatch(manyChatText, /capital|budget|set aside|\$\d/i);
+assert.equal(
+  scoreVoiceQualityGroup(manyChatRecovery.messages, {
+    conversationSource: 'MANYCHAT',
+    aiMessageCount: 2,
+    capturedDataPoints: {}
+  }).passed,
+  true,
+  'ManyChat recovery bridge should pass the voice gate'
+);
 
 const prompt = readFileSync(
   join(process.cwd(), 'src/lib/ai-prompts.ts'),

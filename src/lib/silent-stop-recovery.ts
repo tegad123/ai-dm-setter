@@ -55,7 +55,7 @@ export interface SilentStopHeartbeatResult {
   failed: number;
 }
 
-type StalledConversation = Awaited<
+export type StalledConversation = Awaited<
   ReturnType<typeof fetchStalledConversations>
 >[number];
 
@@ -83,6 +83,118 @@ function latestLeadMessage(conversation: StalledConversation) {
     .slice()
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
     .find((message) => message.sender === 'LEAD');
+}
+
+function latestNonSystemMessage(conversation: StalledConversation) {
+  return conversation.messages
+    .slice()
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .find((message) => message.sender !== 'SYSTEM');
+}
+
+function countAiMessages(conversation: StalledConversation): number {
+  return conversation.messages.filter((message) => message.sender === 'AI')
+    .length;
+}
+
+function capturedDataPointsAsRecord(
+  conversation: StalledConversation
+): Record<string, unknown> {
+  const points = conversation.capturedDataPoints;
+  if (!points || typeof points !== 'object' || Array.isArray(points)) {
+    return {};
+  }
+  return points as Record<string, unknown>;
+}
+
+function capturedPointHasValue(
+  points: Record<string, unknown>,
+  key: string
+): boolean {
+  const point = points[key];
+  if (point === null || point === undefined || point === '') return false;
+  if (typeof point === 'object' && !Array.isArray(point) && 'value' in point) {
+    const value = (point as { value?: unknown }).value;
+    return value !== null && value !== undefined && value !== '';
+  }
+  return true;
+}
+
+function isManyChatOpeningHandoff(conversation: StalledConversation): boolean {
+  if (conversation.source !== 'MANYCHAT') return false;
+  if (latestNonSystemMessage(conversation)?.sender !== 'LEAD') return false;
+  if (countAiMessages(conversation) > 3) return false;
+
+  const points = capturedDataPointsAsRecord(conversation);
+  return (
+    !capturedPointHasValue(points, 'workBackground') &&
+    !capturedPointHasValue(points, 'incomeGoal')
+  );
+}
+
+function manyChatOutboundReference(conversation: StalledConversation): string {
+  const opener = conversation.manyChatOpenerMessage?.trim() || '';
+  if (/\bsession\s+liquidity\s+model\b/i.test(opener)) {
+    return 'the Session Liquidity Model';
+  }
+  if (/\bslm\b/i.test(opener)) {
+    return 'the SLM';
+  }
+  if (/\bliquidity\s+model\b/i.test(opener)) {
+    return 'the liquidity model';
+  }
+  if (/\b(breakdown|training|video|resource|course)\b/i.test(opener)) {
+    return 'that breakdown';
+  }
+  return 'that breakdown';
+}
+
+function buildManyChatOpeningRecovery(
+  conversation: StalledConversation
+): RecoveryDraft {
+  const reference = manyChatOutboundReference(conversation);
+  return {
+    success: true,
+    action: 'manychat_opening_discovery_bridge',
+    messages: [
+      `sick, since you wanted ${reference}, what's your trading background right now, been at it for a while or pretty new?`
+    ],
+    stage: 'DISCOVERY',
+    subStage: null,
+    capitalOutcome: 'not_evaluated',
+    reason: 'manychat_opening_discovery_bridge'
+  };
+}
+
+export function buildManyChatOpeningRecoveryForTest(
+  conversation: StalledConversation
+): RecoveryDraft {
+  return buildManyChatOpeningRecovery(conversation);
+}
+
+export function isManyChatOpeningHandoffForTest(
+  conversation: StalledConversation
+): boolean {
+  return isManyChatOpeningHandoff(conversation);
+}
+
+function buildSilentStopVoiceQualityOptions(
+  conversation: StalledConversation,
+  draft: RecoveryDraft
+) {
+  return {
+    conversationSource: conversation.source,
+    aiMessageCount: countAiMessages(conversation) + draft.messages.length,
+    capturedDataPoints: capturedDataPointsAsRecord(conversation)
+  };
+}
+
+function shouldSuppressManyChatOpeningEscalation(
+  conversation: StalledConversation,
+  reason: string
+): boolean {
+  if (!isManyChatOpeningHandoff(conversation)) return false;
+  return !/\b(distress|human|requested_human)\b/i.test(reason);
 }
 
 function containsExplicitHumanRequest(messages: { content: string }[]) {
@@ -365,6 +477,10 @@ async function checkAutoTriggerSafety(
     return { safe: false, reason: 'lead_requested_human' };
   }
 
+  if (isManyChatOpeningHandoff(conversation)) {
+    return { safe: true, reason: null };
+  }
+
   if (conversation.silentStopCount >= 2) {
     return { safe: false, reason: 'repeated_silent_stops_pattern_failure' };
   }
@@ -383,6 +499,10 @@ async function triggerAiSelfRecovery(
   conversation: StalledConversation,
   diagnosis: Diagnosis
 ): Promise<RecoveryDraft> {
+  if (isManyChatOpeningHandoff(conversation)) {
+    return buildManyChatOpeningRecovery(conversation);
+  }
+
   const history = historyFromMessages(conversation.messages);
   const lastLead = latestLeadMessage(conversation);
   const contextual = lastLead
@@ -429,6 +549,35 @@ async function routeToOperatorReview(params: {
   reason: string;
 }) {
   const { conversation, eventId, reason } = params;
+  if (shouldSuppressManyChatOpeningEscalation(conversation, reason)) {
+    await prisma.silentStopEvent.update({
+      where: { id: eventId },
+      data: {
+        recoveryStatus: 'FAILED',
+        recoveryAction: 'manychat_opening_escalation_suppressed',
+        recoveryAttempted: true,
+        triggeredAt: new Date()
+      }
+    });
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        aiActive: true,
+        awaitingAiResponse: false,
+        awaitingSince: null,
+        lastSilentStopAt: new Date()
+      }
+    });
+    broadcastAIStatusChange(conversation.lead.accountId, {
+      conversationId: conversation.id,
+      aiActive: true
+    });
+    console.warn(
+      `[silent-stop] suppressed ManyChat opening escalation for convo ${conversation.id}: ${reason}`
+    );
+    return;
+  }
+
   await prisma.silentStopEvent.update({
     where: { id: eventId },
     data: {
@@ -597,7 +746,10 @@ export async function handleSilentStop(
   }
 
   const draft = await triggerAiSelfRecovery(conversation, diagnosis);
-  const quality = scoreVoiceQualityGroup(draft.messages);
+  const quality = scoreVoiceQualityGroup(
+    draft.messages,
+    buildSilentStopVoiceQualityOptions(conversation, draft)
+  );
   if (!quality.passed) {
     await prisma.silentStopEvent.update({
       where: { id: event.id },
