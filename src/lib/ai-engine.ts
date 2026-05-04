@@ -64,6 +64,7 @@ export interface ConversationMessage {
   messageGroupId?: string | null;
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;
+  systemPromptVersion?: string | null;
 }
 
 function isOperatorNoteContent(content: string | null | undefined): boolean {
@@ -1122,7 +1123,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // guard doesn't get stripped when a more-specific override (R24, Fix B,
   // fabrication, ack-truncation, link-promise, markdown) fires.
   const priorAIMessagesForPacing = conversationHistory.filter(
-    (m) => m.sender === 'AI'
+    (m) => m.sender === 'AI' && m.systemPromptVersion !== 'manychat-automation'
   );
   const priorAIQuestions = extractLastAIQuestions(
     priorAIMessagesForPacing.map((m) => m.content),

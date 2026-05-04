@@ -196,8 +196,9 @@ assert.ok(
   manyChatHandoffSource.includes('looksLikeInstagramRecipientId') &&
     manyChatHandoffSource.includes('manyChatSubscriberId') &&
     manyChatHandoffSource.includes('^\\d{12,}$') &&
+    manyChatHandoffSource.includes('scheduleAi=false') &&
     manyChatHandoffSource.includes('Skipping AI schedule'),
-  'ManyChat handoff must not schedule AI when the payload lacks a Meta recipient id or uses Contact Id'
+  'ManyChat handoff must not schedule AI early unless explicitly configured and must reject Contact Id'
 );
 
 const webhookProcessorSource = readFileSync(
@@ -207,13 +208,21 @@ const webhookProcessorSource = readFileSync(
 assert.ok(
   webhookProcessorSource.includes('canShipToPlatformRecipient') &&
     webhookProcessorSource.includes('^\\d{12,}$') &&
+    webhookProcessorSource.includes('looksLikeManyChatAutomationEcho') &&
+    webhookProcessorSource.includes('manychat-automation') &&
     webhookProcessorSource.includes('unsendableManyChatRecipient'),
-  'webhook processor must skip unsendable ManyChat recipients before generation/delivery'
+  'webhook processor must skip unsendable ManyChat recipients and not treat ManyChat automation as human takeover'
 );
 
 const aiEngineSource = readFileSync(
   join(process.cwd(), 'src/lib/ai-engine.ts'),
   'utf8'
+);
+assert.ok(
+  aiEngineSource.includes(
+    "m.sender === 'AI' && m.systemPromptVersion !== 'manychat-automation'"
+  ),
+  'ManyChat automation messages must not count as QualifyDMs AI pacing turns'
 );
 assert.ok(
   !aiEngineSource.includes('COURSE_URL_FALLBACK'),

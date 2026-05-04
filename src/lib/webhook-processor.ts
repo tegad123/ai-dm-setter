@@ -4698,6 +4698,27 @@ export interface AdminMessageParams {
   platformMessageId?: string;
 }
 
+function looksLikeManyChatAutomationEcho(
+  conversation: {
+    source?: string | null;
+    manyChatOpenerMessage?: string | null;
+  },
+  messageText: string
+): boolean {
+  if (conversation.source !== 'MANYCHAT') return false;
+  const trimmed = messageText.trim();
+  if (!trimmed) return false;
+
+  const opener = conversation.manyChatOpenerMessage?.trim();
+  if (opener && trimmed === opener) return true;
+
+  return [
+    /\bthis\s+is\s+gonna\s+make\s+you\s+dangerous\b/i,
+    /\bminutes?\s+of\s+sauce\b/i,
+    /\bdid\s+you\s+give\s+it\s+a\s+watch\b/i
+  ].some((pattern) => pattern.test(trimmed));
+}
+
 /**
  * Process a message sent by the business/admin (not the lead).
  * Saves it as a HUMAN message, pauses AI, and cancels pending scheduled replies.
@@ -4807,6 +4828,42 @@ export async function processAdminMessage(
     }
     console.log(
       `[webhook-processor] Admin message is echo of own ${recentOwnMessage.sender} message ${recentOwnMessage.id} — skipping duplicate save`
+    );
+    return;
+  }
+
+  if (looksLikeManyChatAutomationEcho(lead.conversation, messageText)) {
+    const message = await prisma.message.create({
+      data: {
+        conversationId,
+        sender: 'AI',
+        content: messageText,
+        timestamp: new Date(),
+        platformMessageId: platformMessageId || null,
+        systemPromptVersion: 'manychat-automation'
+      }
+    });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        aiActive: true,
+        lastMessageAt: message.timestamp
+      }
+    });
+    await prisma.scheduledReply.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    broadcastNewMessage(accountId, {
+      id: message.id,
+      conversationId,
+      sender: 'AI',
+      content: messageText,
+      platformMessageId: platformMessageId || null,
+      timestamp: message.timestamp.toISOString()
+    });
+    console.log(
+      `[webhook-processor] ManyChat automation echo saved as AI for conversation ${conversationId}`
     );
     return;
   }

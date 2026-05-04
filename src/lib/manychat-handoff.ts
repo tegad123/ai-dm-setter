@@ -10,6 +10,15 @@ const MANYCHAT_TRIGGER_TYPES = [
   'other'
 ] as const;
 
+const manyChatBoolean = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return value;
+}, z.boolean());
+
 export const manyChatHandoffSchema = z.object({
   // Coerce to string because ManyChat's variable picker outputs numeric
   // IDs as JSON numbers (not strings) for `user.id` — Zod's z.string()
@@ -37,7 +46,13 @@ export const manyChatHandoffSchema = z.object({
   // the button-click step, this field carries the button label back
   // and we insert it as a LEAD-side Message in the thread so the AI
   // sees it on its next turn.
-  leadResponseText: z.string().min(1).max(2000).optional()
+  leadResponseText: z.string().min(1).max(2000).optional(),
+  // Most ManyChat flows keep running after this External Request
+  // (send the resource, wait, follow up). In that setup the request is
+  // only a context sync and QualifyDMs should wait for the next real
+  // lead DM before AI takes over. Set scheduleAi=true only for flows
+  // where this request is the final handoff point.
+  scheduleAi: manyChatBoolean.optional().default(false)
 });
 
 export type ManyChatHandoffPayload = z.infer<typeof manyChatHandoffSchema>;
@@ -256,11 +271,11 @@ export async function processManyChatHandoff(params: {
 
   // Schedule the AI reply when the lead actually engaged (button click
   // landed as a new LEAD message) and the conversation is AI-eligible.
-  // ManyChat's button-click step is the sequence-completion signal —
-  // without scheduling here, the LEAD message just sits in the thread
-  // and the AI never picks it up because no Instagram webhook ever fires
-  // for a button click (it's internal to ManyChat).
+  // Most flows should leave scheduleAi=false because ManyChat still has
+  // downstream messages to send after the button click. QualifyDMs will
+  // pick up when the lead replies via the normal Instagram webhook.
   if (
+    payload.scheduleAi === true &&
     leadResponseInserted &&
     aiActiveOnConversation &&
     canSendViaInstagramApi
@@ -274,9 +289,17 @@ export async function processManyChatHandoff(params: {
         err
       );
     }
-  } else if (leadResponseInserted && aiActiveOnConversation) {
+  } else if (
+    payload.scheduleAi === true &&
+    leadResponseInserted &&
+    aiActiveOnConversation
+  ) {
     console.warn(
       `[manychat-handoff] Skipping AI schedule for conversation ${conversationId}: ManyChat instagramUserId="${payload.instagramUserId}" is not a Meta recipient ID. AI will resume when an Instagram webhook upgrades the lead by handle.`
+    );
+  } else if (leadResponseInserted) {
+    console.log(
+      `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so QualifyDMs will wait for the lead's next Instagram reply.`
     );
   }
 
@@ -323,6 +346,7 @@ async function ensureOpenerMessage(
       conversationId,
       sender: 'AI',
       content: trimmed,
+      systemPromptVersion: 'manychat-automation',
       timestamp
     }
   });
