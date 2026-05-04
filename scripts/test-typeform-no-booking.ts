@@ -77,8 +77,12 @@ async function main() {
     ),
     true
   );
+  // Both account and persona IDs are unused — this scenario hits the
+  // typeform-screened-out early exit at the top of generateReply,
+  // BEFORE the F3.1 personaId FK guard runs.
   const notYet = await generateReply(
     'unused-account',
+    'unused-persona',
     history('Not yet. I only did the basic'),
     leadContext
   );

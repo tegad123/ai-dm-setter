@@ -354,6 +354,7 @@ async function fireScheduledMessage(
 
     const result = await generateReply(
       lead.accountId,
+      conversation.personaId,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       history as any,
       leadContext,

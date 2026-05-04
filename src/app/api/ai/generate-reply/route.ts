@@ -57,8 +57,13 @@ export async function POST(request: NextRequest) {
       qualityScore: lead.qualityScore
     };
 
-    // Generate the AI reply using account's persona
-    const result = await generateReply(auth.accountId, messages, leadContext);
+    // Generate the AI reply scoped to this conversation's persona.
+    const result = await generateReply(
+      auth.accountId,
+      conversation.personaId,
+      messages,
+      leadContext
+    );
 
     return NextResponse.json({
       reply: result.reply,

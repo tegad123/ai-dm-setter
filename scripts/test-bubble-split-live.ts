@@ -91,6 +91,7 @@ async function main() {
 
     const result = await generateReply(
       daetradez.id,
+      personaId,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       history as any,
       leadCtx

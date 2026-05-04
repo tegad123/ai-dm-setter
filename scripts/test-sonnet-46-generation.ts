@@ -42,6 +42,7 @@ async function withTestAccount<T>(
   aiProvider: 'openai' | 'anthropic',
   run: (ctx: {
     accountId: string;
+    personaId: string;
     leadId: string;
     conversationId: string;
   }) => Promise<T>
@@ -89,6 +90,7 @@ async function withTestAccount<T>(
   try {
     return await run({
       accountId: account.id,
+      personaId: persona.id,
       leadId: lead.id,
       conversationId: conversation.id
     });
@@ -149,13 +151,14 @@ async function testAnthropicPath() {
   console.log('\n── TEST GROUP: anthropic provider, Sonnet 4.6 ──────');
   await withTestAccount(
     'anthropic',
-    async ({ accountId, leadId, conversationId }) => {
+    async ({ accountId, personaId, leadId, conversationId }) => {
       const leadCtx = makeLeadContext(`Lead-${accountId.slice(-4)}`);
 
       // First generation
       const history1 = await buildHistory(conversationId);
       const r1 = await generateReply(
         accountId,
+        personaId,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         history1 as any,
         leadCtx
@@ -212,6 +215,7 @@ async function testAnthropicPath() {
       const history2 = await buildHistory(conversationId);
       const r2 = await generateReply(
         accountId,
+        personaId,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         history2 as any,
         leadCtx
@@ -242,75 +246,83 @@ async function testFallbackPath() {
   // Manually verify fallback logic by calling callLLM via the internals
   // is invasive. Simpler: monkey-patch resolveAIProvider's model via
   // credentials injection. We just POST a bogus model on the creds row.
-  await withTestAccount('anthropic', async ({ accountId, conversationId }) => {
-    // Inject bogus Anthropic creds so the primary path fails + fallback fires.
-    // credential-store expects encrypted model, but the test shortcuts
-    // by writing directly — we use a sentinel model that Anthropic will reject.
-    // Cleanest approach: override via prisma.integrationCredential upsert.
-    const existing = await prisma.integrationCredential.findFirst({
-      where: { accountId, provider: 'ANTHROPIC' }
-    });
-    // Can't write encrypted creds easily from test — skip the fallback
-    // assertion if there isn't a pre-seeded Anthropic credential.
-    if (!existing) {
-      console.log(
-        '  (skipping — no pre-seeded Anthropic cred to corrupt. Fallback logic tested via logs in production.)'
+  await withTestAccount(
+    'anthropic',
+    async ({ accountId, personaId, conversationId }) => {
+      // Inject bogus Anthropic creds so the primary path fails + fallback fires.
+      // credential-store expects encrypted model, but the test shortcuts
+      // by writing directly — we use a sentinel model that Anthropic will reject.
+      // Cleanest approach: override via prisma.integrationCredential upsert.
+      const existing = await prisma.integrationCredential.findFirst({
+        where: { accountId, provider: 'ANTHROPIC' }
+      });
+      // Can't write encrypted creds easily from test — skip the fallback
+      // assertion if there isn't a pre-seeded Anthropic credential.
+      if (!existing) {
+        console.log(
+          '  (skipping — no pre-seeded Anthropic cred to corrupt. Fallback logic tested via logs in production.)'
+        );
+        assert(
+          true,
+          'TEST 4 — fallback path skipped (no Anthropic cred seeded for test account)'
+        );
+        return;
+      }
+      const leadCtx = makeLeadContext('FallbackLead');
+      const history = await buildHistory(conversationId);
+      const r = await generateReply(
+        accountId,
+        personaId,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        history as any,
+        leadCtx
       );
+      const s = await prisma.aISuggestion.findFirst({
+        where: { conversationId },
+        orderBy: { generatedAt: 'desc' }
+      });
+      assert(!!r.reply, 'TEST 4a — fallback still produced a reply');
       assert(
-        true,
-        'TEST 4 — fallback path skipped (no Anthropic cred seeded for test account)'
+        s?.modelUsed === 'gpt-4o-mini-fallback' ||
+          s?.modelUsed === 'claude-sonnet-4-6',
+        'TEST 4b — modelUsed reflects actual path taken',
+        `modelUsed="${s?.modelUsed}"`
       );
-      return;
     }
-    const leadCtx = makeLeadContext('FallbackLead');
-    const history = await buildHistory(conversationId);
-    const r = await generateReply(
-      accountId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      history as any,
-      leadCtx
-    );
-    const s = await prisma.aISuggestion.findFirst({
-      where: { conversationId },
-      orderBy: { generatedAt: 'desc' }
-    });
-    assert(!!r.reply, 'TEST 4a — fallback still produced a reply');
-    assert(
-      s?.modelUsed === 'gpt-4o-mini-fallback' ||
-        s?.modelUsed === 'claude-sonnet-4-6',
-      'TEST 4b — modelUsed reflects actual path taken',
-      `modelUsed="${s?.modelUsed}"`
-    );
-  });
+  );
 }
 
 async function testOpenAIUntouched() {
   console.log('\n── TEST GROUP: non-anthropic account, OpenAI default ──');
-  await withTestAccount('openai', async ({ accountId, conversationId }) => {
-    const leadCtx = makeLeadContext('OpenAILead');
-    const history = await buildHistory(conversationId);
-    const r = await generateReply(
-      accountId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      history as any,
-      leadCtx
-    );
-    assert(!!r.reply, 'TEST 5a — openai default still produces a reply');
-    const s = await prisma.aISuggestion.findFirst({
-      where: { conversationId },
-      orderBy: { generatedAt: 'desc' }
-    });
-    // Production isolation invariant: aiProvider=openai accounts must
-    // NOT route to the new Sonnet 4.6 path. They can still fall
-    // through to env-configured anthropic (older snapshot) when they
-    // have no creds — that's pre-existing behavior unrelated to the
-    // Sonnet 4.6 rollout flag.
-    assert(
-      s?.modelUsed !== 'claude-sonnet-4-6',
-      'TEST 5b — openai-default account does NOT route to Sonnet 4.6',
-      `modelUsed="${s?.modelUsed}"`
-    );
-  });
+  await withTestAccount(
+    'openai',
+    async ({ accountId, personaId, conversationId }) => {
+      const leadCtx = makeLeadContext('OpenAILead');
+      const history = await buildHistory(conversationId);
+      const r = await generateReply(
+        accountId,
+        personaId,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        history as any,
+        leadCtx
+      );
+      assert(!!r.reply, 'TEST 5a — openai default still produces a reply');
+      const s = await prisma.aISuggestion.findFirst({
+        where: { conversationId },
+        orderBy: { generatedAt: 'desc' }
+      });
+      // Production isolation invariant: aiProvider=openai accounts must
+      // NOT route to the new Sonnet 4.6 path. They can still fall
+      // through to env-configured anthropic (older snapshot) when they
+      // have no creds — that's pre-existing behavior unrelated to the
+      // Sonnet 4.6 rollout flag.
+      assert(
+        s?.modelUsed !== 'claude-sonnet-4-6',
+        'TEST 5b — openai-default account does NOT route to Sonnet 4.6',
+        `modelUsed="${s?.modelUsed}"`
+      );
+    }
+  );
 }
 
 async function main() {
