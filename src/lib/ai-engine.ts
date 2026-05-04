@@ -2041,6 +2041,30 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       }
 
+      // R37 acceptance-loopback extension. Strongest signal in the
+      // burst family: lead said yes to an offer and the AI looped back
+      // to a question instead of delivering. Override quotes the
+      // acceptance and the prior promise, then forces a delivery turn.
+      const acceptanceLoopback = quality.hardFails.some((f) =>
+        f.includes('r37_acceptance_loopback:')
+      );
+      if (acceptanceLoopback) {
+        const acceptanceQuote = (lastLeadMsg?.content ?? '')
+          .trim()
+          .slice(0, 80);
+        const promiseQuote = (lastAiMsg?.content ?? '').trim().slice(0, 200);
+        const directive = `\n\n===== ACCEPTANCE — DELIVER, DO NOT RE-ASK =====\nThe lead just explicitly accepted your prior offer:\n  Lead: "${acceptanceQuote}"\n  Your previous turn: "${promiseQuote}"\n\nA "yes / sure / sounds good / let's do it" after an offer is the strongest possible buying signal. Your job on this turn is ONLY to deliver — drop the link, the application URL, the booking flow, the resource — whatever you offered. Do NOT ask another qualifying question. Do NOT loop back to capital, timeline, goals, or any earlier stage. The lead said yes. Closing logic overrides script advancement entirely.\n\nIf the configured URL for what you promised is in the script's "Available Links & URLs" section above, paste it inline now. If no URL is listed, send the deterministic next step (e.g. "bet bro, sending the application now — fill it out and lmk once you're done") so the lead has something concrete to act on.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] R37 acceptance-loopback detected — forcing regen to deliver (attempt ${attempt + 1}/${MAX_RETRIES + 1}). acceptance="${acceptanceQuote}"`
+        );
+        if (attempt === MAX_RETRIES) {
+          console.error(
+            `[ai-engine] R37 acceptance-loopback EXHAUSTED — shipping reply that re-asks instead of delivering (convo=${activeConversationId ?? 'unknown'})`
+          );
+        }
+      }
+
       // Scripted question sequence directive (Omar Moore 2026-04-27).
       // Three+ pure-question turns in a row with no specific
       // acknowledgment. Override tells the LLM to reference a

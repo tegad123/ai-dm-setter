@@ -963,6 +963,110 @@ function escapeRegExpChars(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ─── R37 acceptance detection (extension) ─────────────────────────
+//
+// When the lead explicitly accepts an offer the AI just made ("yes",
+// "sure", "sounds good", "definitely", "let's do it"), the next AI
+// turn MUST deliver the promised artifact (link drop, booking URL,
+// resource share). Looping back to a qualification question after an
+// explicit acceptance is the worst possible signal — the lead said
+// yes and the AI moved the goalposts. Strongest signal in the burst
+// extension; overrides script-advancement logic entirely.
+//
+// The check has THREE conditions, all required:
+//   1. Lead's last message is an explicit acceptance phrase.
+//   2. The AI's previous turn promised an artifact (link, call, URL,
+//      booking, resource).
+//   3. The current AI reply is a pure question (no link, no URL, no
+//      booking confirmation) — i.e. looping back instead of delivering.
+//
+// Hard fails with `r37_acceptance_loopback:` so the regen path can
+// inject a directive that cites the acceptance + the prior promise
+// and forces the AI to deliver.
+
+const R37_ACCEPTANCE_PATTERNS: RegExp[] = [
+  // Bare yes/affirmation — anchored start of trimmed message OR
+  // immediately preceding a comma/period/end-of-text.
+  /^(yes|yea|yeah|yep|yup|y)\b/i,
+  /^(yes\s+(of\s+course|definitely|absolutely|please|sir|bro|man))/i,
+  /^(definitely|absolutely|sure|surely|certainly|of\s+course)\b/i,
+  /^(ok|okay|kk|k)\s*$/i,
+  /^(ok|okay)\s+(bro|man|cool|sounds|sure|let'?s|let\s+me)/i,
+  /^(sounds\s+(good|fire|cool|great|solid))/i,
+  /^(that\s+(works|sounds\s+(good|fire)))/i,
+  /^(let'?s\s+(do\s+it|go|get\s+it))/i,
+  /^(lfg|lfgg+|let'?s\s+f\*?\*?\*?ing\s+go)/i,
+  /^(bet|bet\s+bro|bet\s+man|aight\s+bet)\b/i,
+  /^(100|100\s*%|hundo)/i,
+  /^(i'?m\s+(in|down|game|ready)|down\s+(for\s+it|to))/i,
+  /^(send\s+it|drop\s+it|hit\s+me|gimme|give\s+me)/i,
+  /^(pls|please)\s+(send|do)/i
+];
+
+const R37_AI_PROMISE_PATTERNS: RegExp[] = [
+  // "I'll send you the link" / "sending you the application" — link/URL promise
+  /\b(i'?ll\s+(send|drop|shoot|share|grab)|let\s+me\s+(send|grab|drop)|sending\s+you|here'?s\s+(the\s+)?(link|url|application|form))\b/i,
+  // Call pitch ("wanna hop on a quick call", "let's hop on a call")
+  /\b(wanna\s+hop|let'?s\s+hop|hop\s+on\s+a\s+(quick\s+)?call|jump\s+on\s+a\s+call|get\s+on\s+a\s+call|book\s+(you|a)\s+call|book\s+a\s+(quick\s+)?call|schedule\s+a\s+call)\b/i,
+  // Booking-flow promise ("let's get you booked", "I can lock you in")
+  /\b(get\s+you\s+booked|lock\s+you\s+in|set\s+you\s+up|line\s+you\s+up)\b/i,
+  // Yes/no offer: "you down", "you in", "you with it", "want me to send"
+  /\b(you\s+(down|in|with\s+it|game)|want\s+me\s+to\s+send|wanna\s+(see|check)|ready\s+(to|when))\b\??/i,
+  // Resource drop: "I'll send the bootcamp", "here's the free resource"
+  /\b(send\s+(you\s+)?(the\s+)?(bootcamp|video|course|resource|breakdown|youtube)|free\s+(value|resource|video|content))\b/i,
+  // Direct offer: "wanna check this out"
+  /\b(check\s+this\s+out|peep\s+this|drop\s+the\s+(link|url))\b/i
+];
+
+const R37_DELIVERED_ARTIFACT_RE =
+  /\b(https?:\/\/|\.com\/|here'?s\s+the\s+link|fill\s+(it|this|out)|grab\s+a\s+time|let\s+me\s+(know|lmk)\s+(once|when)|booking\.|calendar\.)/i;
+
+/**
+ * Lead's message reads as an explicit acceptance of an offer the AI
+ * just made. Used by the r37_acceptance_loopback gate. Distinct from
+ * a generic "yes" answer to a yes/no question — when this fires AND
+ * the AI's previous turn was an offer, the AI must deliver, not loop.
+ */
+export function isExplicitAcceptance(text: string): boolean {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  // Long replies that happen to start with "sure"/"yes" are NOT
+  // simple acceptances — the lead is saying more than just yes.
+  // Cap at 30 chars: covers realistic acceptances ("yes of course",
+  // "let's do it bro", "sounds good bro lfg") but excludes
+  // substantive replies like "sure I trade alpha and topstep mostly".
+  if (trimmed.length > 30) return false;
+  return R37_ACCEPTANCE_PATTERNS.some((p) => p.test(trimmed));
+}
+
+/**
+ * The AI's previous-turn message offered or promised an artifact:
+ * a link, a call, a booking, a resource. Used as a precondition for
+ * the r37_acceptance_loopback gate so the check only fires on real
+ * loopback (acceptance follows a promise) and not on bare yes/no
+ * answers to qualification questions.
+ */
+export function aiPromisedArtifact(
+  prevAiText: string | null | undefined
+): boolean {
+  if (typeof prevAiText !== 'string' || prevAiText.trim().length === 0) {
+    return false;
+  }
+  return R37_AI_PROMISE_PATTERNS.some((p) => p.test(prevAiText));
+}
+
+/**
+ * The current AI reply already delivers the promised artifact. URL
+ * present, booking confirmation language, "fill this out" / "grab a
+ * time" — all count as delivery. When this returns true, the
+ * acceptance-loopback gate suppresses (the AI did the right thing).
+ */
+export function replyDeliversArtifact(reply: string): boolean {
+  if (typeof reply !== 'string' || reply.trim().length === 0) return false;
+  return R37_DELIVERED_ARTIFACT_RE.test(reply);
+}
+
 export function scoreVoiceQuality(
   reply: string,
   options?: VoiceQualityOptions
@@ -2792,6 +2896,30 @@ export function scoreVoiceQualityGroup(
         `[group] r37_burst_ignored: size=${r37Burst.messages.length} hasQ=${r37Burst.hasQuestion} hasReflect=${r37Burst.hasReflectiveContent}`
       );
     }
+  }
+
+  // R37 acceptance-loopback extension. Strongest possible signal:
+  // lead said yes to an offer the AI just made, and the AI's reply
+  // is a question instead of the promised artifact. Three conditions
+  // required, all together — keeps the gate from false-firing on
+  // bare-yes answers to qualification questions.
+  //
+  // Source signals:
+  //   - Most recent LEAD message is an explicit acceptance phrase.
+  //   - Most recent AI message before that promised an artifact
+  //     (link, call, booking, resource).
+  //   - The current reply does NOT deliver the artifact (no URL, no
+  //     booking confirmation language).
+  if (
+    options?.previousLeadMessage &&
+    options?.previousAIMessage &&
+    isExplicitAcceptance(options.previousLeadMessage) &&
+    aiPromisedArtifact(options.previousAIMessage) &&
+    !replyDeliversArtifact(joined)
+  ) {
+    hardFails.push(
+      `[group] r37_acceptance_loopback: lead accepted prior offer ("${options.previousLeadMessage.trim().slice(0, 40)}") but reply re-asks instead of delivering`
+    );
   }
 
   // Multi-bubble safety: call-pitch language can be split across bubbles

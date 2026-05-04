@@ -15,7 +15,10 @@ import assert from 'node:assert/strict';
 import {
   scoreVoiceQualityGroup,
   getUnacknowledgedLeadBurst,
-  acknowledgesEmotionally
+  acknowledgesEmotionally,
+  isExplicitAcceptance,
+  aiPromisedArtifact,
+  replyDeliversArtifact
 } from '@/lib/voice-quality-gate';
 
 type Msg = { sender: string; content: string };
@@ -255,6 +258,177 @@ async function main() {
     !fired(multiBubble.hardFails),
     'multi-bubble emotional ack passes (joined-string check)',
     `hardFails=${JSON.stringify(multiBubble.hardFails)}`
+  );
+
+  // ── R37 acceptance-loopback extension ──────────────────────────
+  function firedAcceptance(hardFails: string[]): boolean {
+    return hardFails.some((f) => f.includes('r37_acceptance_loopback:'));
+  }
+
+  console.log('\n[10] isExplicitAcceptance — phrase recognition');
+  const acceptancePositives = [
+    'yes',
+    'yes of course',
+    'definitely',
+    'sure',
+    'sure bro',
+    'ok',
+    'okay',
+    'kk',
+    'sounds good',
+    'sounds fire',
+    "let's do it",
+    "let's go",
+    'lfg',
+    'bet',
+    'bet bro',
+    'aight bet',
+    '100',
+    '100%',
+    "i'm in",
+    "i'm down",
+    'send it',
+    'drop it'
+  ];
+  for (const a of acceptancePositives) {
+    expect(`accepts: "${a}"`, isExplicitAcceptance(a), true);
+  }
+  const acceptanceNegatives = [
+    'yes but I have a question about the strategy first',
+    'yeah I make about 5k a month from my day job',
+    'sure I trade alpha and topstep mostly',
+    'i feel sick of the self flagellation honestly',
+    "what's your timeline?",
+    'ok well actually let me think about it more first'
+  ];
+  for (const n of acceptanceNegatives) {
+    expect(
+      `does NOT accept (substantive): "${n.slice(0, 35)}..."`,
+      isExplicitAcceptance(n),
+      false
+    );
+  }
+
+  console.log('\n[11] aiPromisedArtifact — promise recognition');
+  const promiseSamples = [
+    "I'll send you the link bro",
+    "let's hop on a quick call",
+    'wanna hop on a call this week?',
+    "let's get you booked",
+    'you down for a quick chat?',
+    'want me to send the bootcamp?',
+    "here's the application link",
+    'I can lock you in for thursday',
+    'check this out bro'
+  ];
+  for (const p of promiseSamples) {
+    expect(`promises: "${p.slice(0, 40)}"`, aiPromisedArtifact(p), true);
+  }
+  expect(
+    'no promise on plain qualification Q',
+    aiPromisedArtifact('how long you been trading?'),
+    false
+  );
+  expect('null is false', aiPromisedArtifact(null), false);
+
+  console.log('\n[12] replyDeliversArtifact — delivery recognition');
+  expect(
+    'URL delivery',
+    replyDeliversArtifact(
+      "here's the link bro: https://form.typeform.com/to/AGUtPdmb"
+    ),
+    true
+  );
+  expect(
+    'booking-flow delivery',
+    replyDeliversArtifact("bet bro, fill it out and lmk once you're done"),
+    true
+  );
+  expect(
+    'pure question is NOT delivery',
+    replyDeliversArtifact('how soon are you trying to make this happen?'),
+    false
+  );
+
+  console.log(
+    '\n[13] Acceptance + prior promise + question reply → r37_acceptance_loopback'
+  );
+  const loopback = scoreVoiceQualityGroup(
+    ["sick bro, what's your timeline looking like?"],
+    {
+      previousAIMessage:
+        'wanna hop on a quick call with anthony? he can break down exactly how the program works',
+      previousLeadMessage: 'yes definitely'
+    }
+  );
+  assertOk(
+    firedAcceptance(loopback.hardFails),
+    'looping back after "yes definitely" hard-fails',
+    `hardFails=${JSON.stringify(loopback.hardFails)}`
+  );
+
+  console.log('\n[14] Acceptance + prior promise + delivery reply → PASS');
+  const delivers = scoreVoiceQualityGroup(
+    [
+      "bet bro — here's the link: https://form.typeform.com/to/abc fill it out and lmk"
+    ],
+    {
+      previousAIMessage:
+        "wanna hop on a quick call with anthony? I'll send you the booking link",
+      previousLeadMessage: 'yes definitely'
+    }
+  );
+  assertOk(
+    !firedAcceptance(delivers.hardFails),
+    'delivery reply does NOT fire r37_acceptance_loopback',
+    `hardFails=${JSON.stringify(delivers.hardFails)}`
+  );
+
+  console.log(
+    '\n[15] Acceptance with NO prior offer (bare yes/no answer) → no fire'
+  );
+  const bareYes = scoreVoiceQualityGroup(
+    ['cool, what other firms you tried?'],
+    {
+      previousAIMessage: 'have you traded prop firms before?',
+      previousLeadMessage: 'yes'
+    }
+  );
+  assertOk(
+    !firedAcceptance(bareYes.hardFails),
+    'bare yes to qualification Q does NOT fire (no offer was made)',
+    `hardFails=${JSON.stringify(bareYes.hardFails)}`
+  );
+
+  console.log(
+    '\n[16] Substantive lead reply with "yes" inside → no false-fire'
+  );
+  const substantive = scoreVoiceQualityGroup(['what other firms you tried?'], {
+    previousAIMessage: 'wanna hop on a call?',
+    previousLeadMessage:
+      "yes but I make about 5k a month from my day job and I'm trying to replace it"
+  });
+  assertOk(
+    !firedAcceptance(substantive.hardFails),
+    'substantive reply containing "yes" does NOT fire (length cap on isExplicitAcceptance)',
+    `hardFails=${JSON.stringify(substantive.hardFails)}`
+  );
+
+  console.log('\n[17] All-bubble joined delivery passes the gate');
+  const multiBubbleDeliver = scoreVoiceQualityGroup(
+    [
+      'bet bro lets get it',
+      "here's the link: https://form.typeform.com/to/abc fill it out"
+    ],
+    {
+      previousAIMessage: "let's get you booked — wanna hop on?",
+      previousLeadMessage: "let's do it"
+    }
+  );
+  assertOk(
+    !firedAcceptance(multiBubbleDeliver.hardFails),
+    'multi-bubble delivery (URL in bubble 1) passes the joined check',
+    `hardFails=${JSON.stringify(multiBubbleDeliver.hardFails)}`
   );
 
   console.log(`\n----\nPASS ${pass}  FAIL ${fail}`);
