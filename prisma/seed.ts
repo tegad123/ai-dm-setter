@@ -484,6 +484,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   const convo1 = await prisma.conversation.create({
     data: {
       leadId: leads[0].id,
+      personaId: persona.id,
       aiActive: true,
       unreadCount: 0,
       lastMessageAt: msgTime(convoBase, 5)
@@ -585,6 +586,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   const convo2 = await prisma.conversation.create({
     data: {
       leadId: leads[1].id,
+      personaId: persona.id,
       aiActive: true,
       unreadCount: 1,
       lastMessageAt: msgTime(convoBase, 10)
@@ -652,6 +654,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   const convo3 = await prisma.conversation.create({
     data: {
       leadId: leads[2].id,
+      personaId: persona.id,
       aiActive: true,
       unreadCount: 0,
       lastMessageAt: msgTime(convoBase, 180)
@@ -718,6 +721,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   const convo4 = await prisma.conversation.create({
     data: {
       leadId: leads[3].id,
+      personaId: persona.id,
       aiActive: false, // Human override needed
       unreadCount: 2,
       lastMessageAt: msgTime(convoBase, 30)
@@ -775,6 +779,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
   const convo5 = await prisma.conversation.create({
     data: {
       leadId: leads[4].id,
+      personaId: persona.id,
       aiActive: true,
       unreadCount: 1,
       lastMessageAt: msgTime(convoBase, 15)
@@ -1194,6 +1199,7 @@ Analyze the conversation history and return ONLY a number from 0 to 100.`,
     const convo = await prisma.conversation.create({
       data: {
         leadId: lead.id,
+        personaId: persona.id,
         aiActive: lead.stage !== 'QUALIFYING',
         unreadCount: lead.stage === 'NEW_LEAD' ? 1 : 0,
         lastMessageAt: msgTime(convoBase, (i + 1) * 30)

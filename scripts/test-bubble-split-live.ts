@@ -19,6 +19,7 @@ import { config as loadEnv } from 'dotenv';
 loadEnv({ override: true });
 import prisma from '../src/lib/prisma';
 import { generateReply } from '../src/lib/ai-engine';
+import { resolveActivePersonaIdForCreate } from '../src/lib/active-persona';
 import type { LeadContext } from '../src/lib/ai-prompts';
 
 const TEST_MSG =
@@ -46,8 +47,9 @@ async function main() {
       stage: 'QUALIFYING'
     }
   });
+  const personaId = await resolveActivePersonaIdForCreate(daetradez.id);
   const convo = await prisma.conversation.create({
-    data: { leadId: lead.id, aiActive: true }
+    data: { leadId: lead.id, personaId, aiActive: true }
   });
   const leadMsg = await prisma.message.create({
     data: {

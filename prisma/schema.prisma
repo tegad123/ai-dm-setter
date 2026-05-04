@@ -486,6 +486,7 @@ model AIPersona {
   trainingUploads       TrainingUpload[]
   trainingConversations TrainingConversation[]
   breakdowns            PersonaBreakdown[]
+  conversations         Conversation[]
 
   @@index([accountId, isActive])
 }
@@ -1067,8 +1068,19 @@ model Conversation {
   callConfirmedAt        DateTime?
   callOutcome            String? // SHOWED, NO_SHOWED, RESCHEDULED
 
+  // ── Persona ownership (audit F4.2 — multi-tenant isolation) ───
+  // Which AIPersona owns this conversation. Required: every AI turn
+  // assembles its prompt context from one specific persona, never the
+  // account's "first active" guess. Within a multi-persona account
+  // this field is the only thing that prevents persona A's voice,
+  // training examples, and URLs from bleeding into persona B's reply.
+  // onDelete: Restrict — refuse to delete a persona while it owns
+  // live conversations; operator must migrate or archive first.
+  personaId String
+
   // Relations
   lead                 Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  persona              AIPersona             @relation(fields: [personaId], references: [id], onDelete: Restrict)
   messages             Message[]
   aiSuggestions        AISuggestion[]
   inboundQualification InboundQualification?
@@ -1088,6 +1100,7 @@ model Conversation {
   @@index([capitalVerificationStatus])
   @@index([leadPhone])
   @@index([leadEmail])
+  @@index([personaId])
 }
 
 model Message {

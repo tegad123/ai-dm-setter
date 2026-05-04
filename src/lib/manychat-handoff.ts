@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
+import { resolveActivePersonaIdForCreate } from '@/lib/active-persona';
 
 const MANYCHAT_TRIGGER_TYPES = [
   'new_follower',
@@ -134,9 +135,11 @@ export async function processManyChatHandoff(params: {
   }
 
   if (existingLead) {
+    const personaId = await resolveActivePersonaIdForCreate(account.id);
     const conversation = await prisma.conversation.create({
       data: {
         leadId: existingLead.id,
+        personaId,
         aiActive: account.awayModeInstagram,
         unreadCount: 0,
         source: 'MANYCHAT',
@@ -157,6 +160,7 @@ export async function processManyChatHandoff(params: {
     };
   }
 
+  const newLeadPersonaId = await resolveActivePersonaIdForCreate(account.id);
   const lead = await prisma.lead.create({
     data: {
       accountId: account.id,
@@ -169,6 +173,7 @@ export async function processManyChatHandoff(params: {
       stage: 'NEW_LEAD',
       conversation: {
         create: {
+          personaId: newLeadPersonaId,
           aiActive: account.awayModeInstagram,
           unreadCount: 0,
           source: 'MANYCHAT',

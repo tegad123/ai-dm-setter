@@ -15,6 +15,7 @@ import { config as loadEnv } from 'dotenv';
 loadEnv({ path: '.env.local', override: true });
 
 import prisma from '../src/lib/prisma';
+import { resolveActivePersonaIdForCreate } from '../src/lib/active-persona';
 import {
   detectColdPitch,
   COLD_PITCH_PATTERNS,
@@ -179,6 +180,7 @@ async function main() {
       // Plant the lead + conversation with aiActive=true ahead of time
       // (simulating an account with away mode enabled or a manual
       // operator override).
+      const personaId = await resolveActivePersonaIdForCreate(account.id);
       const lead = await prisma.lead.create({
         data: {
           accountId: account.id,
@@ -188,7 +190,7 @@ async function main() {
           platformUserId: `pu-preserve-${account.id}`,
           stage: 'NEW_LEAD',
           triggerType: 'DM',
-          conversation: { create: { aiActive: true } }
+          conversation: { create: { personaId, aiActive: true } }
         }
       });
       const result = await processIncomingMessage({

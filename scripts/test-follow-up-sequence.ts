@@ -46,6 +46,16 @@ async function withTestConvo<T>(
       slug: `followup-test-${suffix}`
     }
   });
+  const persona = await prisma.aIPersona.create({
+    data: {
+      accountId: account.id,
+      personaName: 'Test Persona',
+      fullName: 'Test',
+      systemPrompt: '',
+      isActive: true
+    },
+    select: { id: true }
+  });
   const lead = await prisma.lead.create({
     data: {
       accountId: account.id,
@@ -59,6 +69,7 @@ async function withTestConvo<T>(
   const conversation = await prisma.conversation.create({
     data: {
       leadId: lead.id,
+      personaId: persona.id,
       aiActive: true
     }
   });

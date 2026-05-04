@@ -100,9 +100,14 @@ export async function POST(req: NextRequest) {
       });
 
       // 2. Create Conversation with dataSource: SEED
+      const { resolveActivePersonaIdForCreate } = await import(
+        '@/lib/active-persona'
+      );
+      const personaId = await resolveActivePersonaIdForCreate(auth.accountId);
       const conversation = await prisma.conversation.create({
         data: {
           leadId: lead.id,
+          personaId,
           outcome: outcome as any,
           leadIntentTag: (leadIntentTag as any) ?? 'NEUTRAL',
           dataSource: 'SEED',

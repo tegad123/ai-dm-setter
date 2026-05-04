@@ -37,6 +37,16 @@ async function main() {
   const account = await prisma.account.create({
     data: { name: stamp, slug: stamp }
   });
+  const persona = await prisma.aIPersona.create({
+    data: {
+      accountId: account.id,
+      personaName: 'Test Persona',
+      fullName: 'Test',
+      systemPrompt: '',
+      isActive: true
+    },
+    select: { id: true }
+  });
   const lead = await prisma.lead.create({
     data: {
       accountId: account.id,
@@ -46,7 +56,7 @@ async function main() {
       platformUserId: `pu-${stamp}`,
       stage: 'NEW_LEAD',
       triggerType: 'DM',
-      conversation: { create: { aiActive: true } }
+      conversation: { create: { personaId: persona.id, aiActive: true } }
     },
     include: { conversation: true }
   });

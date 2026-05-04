@@ -119,6 +119,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { resolveActivePersonaIdForCreate } = await import(
+      '@/lib/active-persona'
+    );
+    const personaId = await resolveActivePersonaIdForCreate(auth.accountId);
     const lead = await prisma.lead.create({
       data: {
         accountId: auth.accountId,
@@ -130,6 +134,7 @@ export async function POST(req: NextRequest) {
         stage: (stage as any) || 'NEW_LEAD',
         conversation: {
           create: {
+            personaId,
             aiActive: true
           }
         }

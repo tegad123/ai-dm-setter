@@ -649,7 +649,15 @@ export async function processIncomingMessage(
       }
     }
 
-    // Create new lead + conversation
+    // Create new lead + conversation. personaId resolution via the
+    // transitional helper preserves current behavior (account's active
+    // persona) — Phase 3 will replace this with the persona the inbound
+    // webhook event was actually sent to.
+    const { resolveActivePersonaIdForCreate } = await import(
+      '@/lib/active-persona'
+    );
+    const newConversationPersonaId =
+      await resolveActivePersonaIdForCreate(accountId);
     lead = await prisma.lead.create({
       data: {
         accountId,
@@ -663,6 +671,7 @@ export async function processIncomingMessage(
         stage: 'NEW_LEAD',
         conversation: {
           create: {
+            personaId: newConversationPersonaId,
             aiActive: shouldEnableAI,
             unreadCount: 1,
             leadEmail: detectedEmail,

@@ -130,6 +130,16 @@ async function main() {
   const account = await prisma.account.create({
     data: { name: stamp, slug: stamp }
   });
+  const persona = await prisma.aIPersona.create({
+    data: {
+      accountId: account.id,
+      personaName: 'Test',
+      fullName: 'Test',
+      systemPrompt: '',
+      isActive: true
+    },
+    select: { id: true }
+  });
   const lead = await prisma.lead.create({
     data: {
       accountId: account.id,
@@ -139,7 +149,7 @@ async function main() {
       platformUserId: `pu-${stamp}`,
       stage: 'NEW_LEAD',
       triggerType: 'DM',
-      conversation: { create: { aiActive: true } }
+      conversation: { create: { personaId: persona.id, aiActive: true } }
     },
     include: { conversation: true }
   });
@@ -159,6 +169,16 @@ async function main() {
   const account2 = await prisma.account.create({
     data: { name: `${stamp}-usd`, slug: `${stamp}-usd` }
   });
+  const persona2 = await prisma.aIPersona.create({
+    data: {
+      accountId: account2.id,
+      personaName: 'Test',
+      fullName: 'Test',
+      systemPrompt: '',
+      isActive: true
+    },
+    select: { id: true }
+  });
   const lead2 = await prisma.lead.create({
     data: {
       accountId: account2.id,
@@ -168,7 +188,7 @@ async function main() {
       platformUserId: `pu-usd-${stamp}`,
       stage: 'NEW_LEAD',
       triggerType: 'DM',
-      conversation: { create: { aiActive: true } }
+      conversation: { create: { personaId: persona2.id, aiActive: true } }
     },
     include: { conversation: true }
   });
