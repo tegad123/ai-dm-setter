@@ -64,8 +64,15 @@ export function cleanInstagramUsername(username: string): string {
   return username.replace(/^@+/, '').trim();
 }
 
-function looksLikeInstagramRecipientId(value: string): boolean {
-  return /^\d+$/.test(value.trim());
+function looksLikeInstagramRecipientId(
+  value: string,
+  manyChatSubscriberId?: string
+): boolean {
+  const trimmed = value.trim();
+  if (manyChatSubscriberId && trimmed === manyChatSubscriberId.trim()) {
+    return false;
+  }
+  return /^\d{12,}$/.test(trimmed);
 }
 
 export async function processManyChatHandoff(params: {
@@ -98,7 +105,8 @@ export async function processManyChatHandoff(params: {
   const handle = cleanInstagramUsername(payload.instagramUsername);
   const leadName = handle || payload.instagramUserId;
   let canSendViaInstagramApi = looksLikeInstagramRecipientId(
-    payload.instagramUserId
+    payload.instagramUserId,
+    payload.manyChatSubscriberId
   );
   const triggerSource =
     payload.triggerType === 'comment'
@@ -136,7 +144,8 @@ export async function processManyChatHandoff(params: {
         ? payload.instagramUserId
         : existingLead.platformUserId;
     canSendViaInstagramApi = looksLikeInstagramRecipientId(
-      platformUserId || ''
+      platformUserId || '',
+      payload.manyChatSubscriberId
     );
     const updated = await prisma.conversation.update({
       where: { id: existingLead.conversation.id },
@@ -171,7 +180,8 @@ export async function processManyChatHandoff(params: {
     aiActiveOnConversation = updated.aiActive;
   } else if (existingLead) {
     canSendViaInstagramApi = looksLikeInstagramRecipientId(
-      existingLead.platformUserId || payload.instagramUserId
+      existingLead.platformUserId || payload.instagramUserId,
+      payload.manyChatSubscriberId
     );
     const personaId = await resolveActivePersonaIdForCreate(account.id);
     const conversation = await prisma.conversation.create({

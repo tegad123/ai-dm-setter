@@ -102,7 +102,7 @@ function canShipToPlatformRecipient(
 ): boolean {
   if (!platformUserId) return false;
   if (platform === 'INSTAGRAM') {
-    return /^\d+$/.test(platformUserId.trim());
+    return /^\d{12,}$/.test(platformUserId.trim());
   }
   return true;
 }

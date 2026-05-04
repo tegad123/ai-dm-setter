@@ -194,8 +194,10 @@ const manyChatHandoffSource = readFileSync(
 );
 assert.ok(
   manyChatHandoffSource.includes('looksLikeInstagramRecipientId') &&
+    manyChatHandoffSource.includes('manyChatSubscriberId') &&
+    manyChatHandoffSource.includes('^\\d{12,}$') &&
     manyChatHandoffSource.includes('Skipping AI schedule'),
-  'ManyChat handoff must not schedule AI when the payload lacks a Meta recipient id'
+  'ManyChat handoff must not schedule AI when the payload lacks a Meta recipient id or uses Contact Id'
 );
 
 const webhookProcessorSource = readFileSync(
@@ -204,6 +206,7 @@ const webhookProcessorSource = readFileSync(
 );
 assert.ok(
   webhookProcessorSource.includes('canShipToPlatformRecipient') &&
+    webhookProcessorSource.includes('^\\d{12,}$') &&
     webhookProcessorSource.includes('unsendableManyChatRecipient'),
   'webhook processor must skip unsendable ManyChat recipients before generation/delivery'
 );

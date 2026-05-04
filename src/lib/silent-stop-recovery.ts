@@ -136,7 +136,7 @@ function hasUsablePlatformRecipient(
   conversation: StalledConversation
 ): boolean {
   if (conversation.lead.platform !== 'INSTAGRAM') return true;
-  return /^\d+$/.test(conversation.lead.platformUserId?.trim() || '');
+  return /^\d{12,}$/.test(conversation.lead.platformUserId?.trim() || '');
 }
 
 function manyChatOutboundReference(conversation: StalledConversation): string {
