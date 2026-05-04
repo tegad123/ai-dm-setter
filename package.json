@@ -23,7 +23,12 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:auth": "tsx tests/e2e/helpers/auth.ts"
+    "test:e2e:auth": "tsx tests/e2e/helpers/auth.ts",
+    "test:conversations": "tsx tests/run-conversation-fixtures.ts",
+    "test:smoke": "tsx tests/integration/smoke-tests.ts",
+    "test:smoke:seed": "tsx tests/integration/seed-test-db.ts",
+    "test:smoke:cleanup": "tsx tests/integration/cleanup-test-db.ts",
+    "db:migrate-test": "tsx tests/integration/migrate-test-db.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

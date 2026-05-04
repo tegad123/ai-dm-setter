@@ -1,0 +1,21 @@
+services:
+  qdms-test-db:
+    image: postgres:16-alpine
+    container_name: qdms-test-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qdms_test
+      POSTGRES_USER: qdms
+      POSTGRES_PASSWORD: qdms
+    ports:
+      - '55432:5432'
+    volumes:
+      - qdms-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U qdms -d qdms_test']
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  qdms-test-data:
