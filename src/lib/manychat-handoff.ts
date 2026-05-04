@@ -27,7 +27,17 @@ export const manyChatHandoffSchema = z.object({
   // handler defaults to server-time `new Date()` (set in
   // processManyChatHandoff below). When present it must still be a
   // valid datetime so we don't ingest gibberish.
-  firedAt: z.string().datetime().optional()
+  firedAt: z.string().datetime().optional(),
+  // Lead's button-click response inside the ManyChat flow (e.g. "Yes,
+  // send it over!" — what they tapped after the opener). Button taps
+  // are internal to ManyChat — they don't fire IG webhooks, so without
+  // this field the conversation in QualifyDMs would show only the
+  // opener and never the lead's first engagement signal. When the
+  // operator wires a SECOND External Request in ManyChat right after
+  // the button-click step, this field carries the button label back
+  // and we insert it as a LEAD-side Message in the thread so the AI
+  // sees it on its next turn.
+  leadResponseText: z.string().min(1).max(2000).optional()
 });
 
 export type ManyChatHandoffPayload = z.infer<typeof manyChatHandoffSchema>;
@@ -139,6 +149,11 @@ export async function processManyChatHandoff(params: {
       }
     });
     await ensureOpenerMessage(updated.id, payload.openerMessage, firedAt);
+    await ensureLeadResponseMessage(
+      updated.id,
+      payload.leadResponseText,
+      firedAt
+    );
     return {
       ok: true,
       duplicate: false,
@@ -166,6 +181,11 @@ export async function processManyChatHandoff(params: {
       select: { id: true }
     });
     await ensureOpenerMessage(conversation.id, payload.openerMessage, firedAt);
+    await ensureLeadResponseMessage(
+      conversation.id,
+      payload.leadResponseText,
+      firedAt
+    );
     return {
       ok: true,
       duplicate: false,
@@ -206,6 +226,11 @@ export async function processManyChatHandoff(params: {
   await ensureOpenerMessage(
     lead.conversation!.id,
     payload.openerMessage,
+    firedAt
+  );
+  await ensureLeadResponseMessage(
+    lead.conversation!.id,
+    payload.leadResponseText,
     firedAt
   );
 
@@ -253,6 +278,44 @@ async function ensureOpenerMessage(
       sender: 'AI',
       content: trimmed,
       timestamp
+    }
+  });
+}
+
+/**
+ * Insert the lead's button-click response (if any) as a LEAD-side
+ * Message. Mirrors `ensureOpenerMessage` but on the inbound side: when
+ * ManyChat fires a follow-up External Request after a button-click
+ * step in the flow, the click label rides through as
+ * `leadResponseText` and we land it as a Message so the AI sees
+ * "lead engaged with X" on its next turn.
+ *
+ * Timestamp is bumped 1s past the opener's `firedAt` so the message
+ * order in the thread reflects opener → click, not click → opener,
+ * even when both External Requests fire within the same JSON payload
+ * (rare but possible when the operator wires both events to a single
+ * action node).
+ *
+ * Idempotent on (conversationId, sender=LEAD, content).
+ */
+async function ensureLeadResponseMessage(
+  conversationId: string,
+  content: string | undefined,
+  openerFiredAt: Date
+): Promise<void> {
+  const trimmed = content?.trim();
+  if (!trimmed) return;
+  const existing = await prisma.message.findFirst({
+    where: { conversationId, sender: 'LEAD', content: trimmed },
+    select: { id: true }
+  });
+  if (existing) return;
+  await prisma.message.create({
+    data: {
+      conversationId,
+      sender: 'LEAD',
+      content: trimmed,
+      timestamp: new Date(openerFiredAt.getTime() + 1000)
     }
   });
 }
