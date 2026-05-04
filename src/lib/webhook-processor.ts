@@ -2030,6 +2030,12 @@ export async function scheduleAIReply(
     triggerType: lead.triggerType,
     triggerSource: lead.triggerSource,
     qualityScore: lead.qualityScore,
+    // Pass-through for per-conversation Typeform deep-linking. The
+    // prompt builder appends `#conversationid=<id>` to the form URL
+    // so when this lead fills it out, the webhook routes the response
+    // back to THIS conversation deterministically — no email / IG-
+    // handle guessing.
+    conversationId: conversationId,
     // Enrichment from conversation + lead metadata
     intentTag: conversation.leadIntentTag || undefined,
     tags: lead.tags.map((lt) => lt.tag.name),

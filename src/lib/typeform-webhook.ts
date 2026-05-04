@@ -44,6 +44,15 @@ interface TypeformPayload {
     token?: string;
     submitted_at?: string;
     answers?: TypeformAnswer[];
+    /**
+     * Typeform "hidden fields" — set per-lead by appending
+     * `#fieldName=value&otherField=…` to the form URL. We use
+     * `conversationid` (lowercase, alphanumeric) as the primary
+     * conversation key so when the AI sends a personalized form
+     * link to a specific lead, the resulting submission routes
+     * back to THAT conversation with no email/IG-handle guessing.
+     */
+    hidden?: Record<string, string | undefined>;
   };
 }
 
@@ -228,14 +237,54 @@ export async function processTypeformWebhook(params: {
     parseDate(payload.form_response.submitted_at) ?? new Date();
   const callScheduledAt = parseDate(parsed.scheduledCallTime ?? null);
 
-  const match = await findMatchingConversation({
-    accountId,
-    instagramUsername:
-      typeof parsed.instagramUsername === 'string'
-        ? parsed.instagramUsername
-        : null,
-    email: typeof parsed.email === 'string' ? parsed.email : null
-  });
+  // Step 1: prefer the `conversationid` hidden field if present. This
+  // is the deterministic per-lead routing path: when the AI sends a
+  // personalized link `…/to/FORM#conversationid=CONVO_ID`, the
+  // submission posts back with that ID in `form_response.hidden`,
+  // letting us match the exact conversation without email/IG
+  // heuristics. We still scope by accountId so a spoofed/leaked ID
+  // from another tenant cannot route into this account.
+  const hidden = payload.form_response.hidden ?? {};
+  const hiddenConvoId =
+    typeof hidden.conversationid === 'string' && hidden.conversationid.trim()
+      ? hidden.conversationid.trim()
+      : null;
+  let directMatch: { id: string; leadId: string } | null = null;
+  if (hiddenConvoId) {
+    const direct = await prisma.conversation.findUnique({
+      where: { id: hiddenConvoId },
+      select: { id: true, leadId: true, lead: { select: { accountId: true } } }
+    });
+    if (direct && direct.lead.accountId === accountId) {
+      directMatch = { id: direct.id, leadId: direct.leadId };
+    } else if (direct) {
+      // Cross-tenant id leak — REFUSE to use it. Log and fall back.
+      console.warn(
+        `[typeform-webhook] hidden conversationid=${hiddenConvoId} ` +
+          `belongs to account ${direct.lead.accountId}, not ${accountId} — ` +
+          `falling back to email/IG match.`
+      );
+    } else {
+      console.warn(
+        `[typeform-webhook] hidden conversationid=${hiddenConvoId} not found ` +
+          `(lead may have been deleted) — falling back to email/IG match.`
+      );
+    }
+  }
+
+  // Step 2: fall back to email/IG-handle heuristic match for inbound
+  // forms not initiated via a personalized AI-sent link (e.g. someone
+  // shares the form URL directly).
+  const match =
+    directMatch ??
+    (await findMatchingConversation({
+      accountId,
+      instagramUsername:
+        typeof parsed.instagramUsername === 'string'
+          ? parsed.instagramUsername
+          : null,
+      email: typeof parsed.email === 'string' ? parsed.email : null
+    }));
 
   const { conversationId, leadId, matched } = match
     ? { conversationId: match.id, leadId: match.leadId, matched: true }

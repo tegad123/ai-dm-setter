@@ -82,6 +82,17 @@ export interface LeadContext {
   triggerType: string;
   triggerSource: string | null;
   qualityScore: number;
+  /**
+   * Conversation ID — passed through so the Typeform `bookingLink` /
+   * `typeformUrl` can be rewritten with `#conversationid=<id>`. Lets
+   * the Typeform webhook route the submission directly back to this
+   * conversation without email/IG-handle guesswork (which fails
+   * when the form is filled out by a different person on a shared
+   * device, or when the lead's email differs from the IG handle).
+   * Optional because synthetic / admin paths sometimes build a
+   * prompt without a real Conversation row.
+   */
+  conversationId?: string;
   // Optional enrichment
   intentTag?: string;
   tags?: string[];
@@ -1081,11 +1092,61 @@ Do NOT repeat or rephrase anything that has already been said.
 // Shared helpers for building supplemental data sections
 // ---------------------------------------------------------------------------
 
+/**
+ * Append a Typeform hidden-field key/value to a form URL using the
+ * `#name=value&other=…` fragment syntax Typeform expects. Idempotent —
+ * if the same `name` is already present in the fragment we replace its
+ * value instead of duplicating. Hidden-field names MUST exactly match
+ * what's configured in Typeform's form Settings → Hidden fields, or the
+ * value is silently dropped on the receive side.
+ *
+ * Why fragment, not query string: Typeform parses hidden fields ONLY
+ * from the URL fragment (`#…`), not query string (`?…`). The query
+ * string would route to the form fine but the values never reach the
+ * webhook payload's `form_response.hidden`.
+ *
+ * Example:
+ *   appendTypeformHiddenField(
+ *     'https://form.typeform.com/to/AGUtPdmb',
+ *     'conversationid',
+ *     'cmoqr1abc'
+ *   )
+ *   → 'https://form.typeform.com/to/AGUtPdmb#conversationid=cmoqr1abc'
+ */
+function appendTypeformHiddenField(
+  url: string,
+  name: string,
+  value: string
+): string {
+  if (!url || !name || !value) return url;
+  const safeName = name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const safeValue = encodeURIComponent(value);
+  const hashIndex = url.indexOf('#');
+  if (hashIndex < 0) {
+    return `${url}#${safeName}=${safeValue}`;
+  }
+  const base = url.slice(0, hashIndex);
+  const fragment = url.slice(hashIndex + 1);
+  const pairs = fragment
+    .split('&')
+    .filter(Boolean)
+    .filter((pair) => pair.split('=')[0]?.toLowerCase() !== safeName);
+  pairs.push(`${safeName}=${safeValue}`);
+  return `${base}#${pairs.join('&')}`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildSupplementalSections(
   p: any,
   trainingExamples: any[],
-  config: any
+  config: any,
+  /**
+   * Conversation ID — appended as the `conversationid` Typeform
+   * hidden field to the booking/typeform URLs. Lets the webhook
+   * route this lead's submission deterministically. Optional
+   * because synthetic / admin prompt builds may have no conversation.
+   */
+  conversationId?: string
 ): string {
   const parts: string[] = [];
 
@@ -1102,15 +1163,41 @@ This page tells leads what to expect on their call and how to prepare. Do NOT se
 
   // Asset links
   const assets = config.assetLinks;
-  const typeformUrl =
+  const rawTypeformUrl =
     typeof config.typeformUrl === 'string' &&
     /^https?:\/\//i.test(config.typeformUrl.trim())
       ? config.typeformUrl.trim()
       : null;
+  // Per-conversation Typeform deep-link: append the conversation ID
+  // as a Typeform "hidden field" so the submission webhook can route
+  // back to THIS conversation deterministically (no email / IG-handle
+  // guessing). The hidden-field name `conversationid` MUST also be
+  // configured on the Typeform form (Settings → Hidden fields). If
+  // there's no conversationId in scope (synthetic prompt builds), we
+  // fall back to the bare URL — webhook will email/IG-match instead.
+  const typeformUrl =
+    rawTypeformUrl && conversationId
+      ? appendTypeformHiddenField(
+          rawTypeformUrl,
+          'conversationid',
+          conversationId
+        )
+      : rawTypeformUrl;
+  const bookingLink =
+    assets &&
+    typeof assets === 'object' &&
+    typeof assets.bookingLink === 'string'
+      ? conversationId
+        ? appendTypeformHiddenField(
+            assets.bookingLink,
+            'conversationid',
+            conversationId
+          )
+        : assets.bookingLink
+      : null;
   if (assets && typeof assets === 'object') {
     const assetParts: string[] = [];
-    if (assets.bookingLink)
-      assetParts.push(`- Booking link: ${assets.bookingLink}`);
+    if (bookingLink) assetParts.push(`- Booking link: ${bookingLink}`);
     if (typeformUrl)
       assetParts.push(`- Typeform / booking URL: ${typeformUrl}`);
     if (assets.freeValueLink || p.freeValueLink)
@@ -1188,7 +1275,8 @@ This page tells leads what to expect on their call and how to prepare. Do NOT se
 function buildScriptFirstTenantData(
   p: any,
   trainingExamples: any[],
-  config: any
+  config: any,
+  conversationId?: string
 ): string {
   const sections: string[] = [];
 
@@ -1204,7 +1292,12 @@ function buildScriptFirstTenantData(
     );
   }
 
-  const supplemental = buildSupplementalSections(p, trainingExamples, config);
+  const supplemental = buildSupplementalSections(
+    p,
+    trainingExamples,
+    config,
+    conversationId
+  );
   if (supplemental) {
     sections.push(`\n### SUPPLEMENTAL DATA\n${supplemental}`);
   }
@@ -1220,7 +1313,8 @@ function buildScriptFirstTenantData(
 function buildLegacyTenantData(
   p: any,
   trainingExamples: any[],
-  config: any
+  config: any,
+  conversationId?: string
 ): string {
   const sections: string[] = [];
 
@@ -1444,7 +1538,9 @@ function buildLegacyTenantData(
     }
   }
   // Supplemental data (shared with script-first path)
-  sections.push(buildSupplementalSections(p, trainingExamples, config));
+  sections.push(
+    buildSupplementalSections(p, trainingExamples, config, conversationId)
+  );
 
   return sections.join('\n');
 }
@@ -2190,7 +2286,8 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     const supplemental = buildSupplementalSections(
       p as any,
       trainingExamples,
-      config
+      config,
+      leadContext.conversationId
     );
     const tenantBlock = supplemental
       ? `${dualBlock}\n\n# SUPPLEMENTAL DATA\n${supplemental}`
@@ -2202,12 +2299,18 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     const scriptBlock = buildScriptFirstTenantData(
       p as any,
       trainingExamples,
-      config
+      config,
+      leadContext.conversationId
     );
     prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, scriptBlock);
   } else {
     // ── LEGACY PATH — assemble from individual fields ───────────────
-    const legacyBlock = buildLegacyTenantData(p, trainingExamples, config);
+    const legacyBlock = buildLegacyTenantData(
+      p,
+      trainingExamples,
+      config,
+      leadContext.conversationId
+    );
     prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, legacyBlock);
   }
 
