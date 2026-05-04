@@ -166,7 +166,7 @@ async function main() {
 
   console.log(
     `\n=== SUMMARY ===\n` +
-      `Accounts processed:      ${byAccount.size}\n` +
+      `Accounts processed:      ${Object.keys(byAccount).length}\n` +
       `IDs discovered via API:  ${totalDiscovered}\n` +
       `Credential rows updated: ${totalUpdated}\n` +
       `Skipped (no META+pageId): ${totalSkipped}\n` +
