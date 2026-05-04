@@ -687,6 +687,18 @@ export interface VoiceQualityOptions {
    * messages in free trading consultation without moving the script.
    */
   aiMessageCount?: number;
+  /**
+   * Conversation origin. MANYCHAT conversations are outbound handoffs:
+   * early lead acceptance means opening engagement, not permission to
+   * skip discovery and ask capital immediately.
+   */
+  conversationSource?: 'INBOUND' | 'MANYCHAT' | 'MANUAL_UPLOAD' | string | null;
+  /**
+   * Script-state captured data points persisted on Conversation. Used by
+   * the ManyChat early-capital guard to verify discovery has actually
+   * happened before allowing any capital question.
+   */
+  capturedDataPoints?: Record<string, unknown> | null;
   /** Current LLM-reported stage for this generated turn. */
   currentStage?: string | null;
   /** Whether any prior AI turn already asked about the lead's income goal. */
@@ -1069,6 +1081,46 @@ export function replyDeliversArtifact(reply: string): boolean {
   return R37_DELIVERED_ARTIFACT_RE.test(reply);
 }
 
+function capturedDataPointHasValue(
+  points: VoiceQualityOptions['capturedDataPoints'],
+  key: string
+): boolean {
+  if (!points || typeof points !== 'object') return false;
+  const point = points[key];
+  if (point === null || point === undefined) return false;
+
+  if (typeof point === 'object' && 'value' in point) {
+    const value = (point as { value?: unknown }).value;
+    return value !== null && value !== undefined && value !== '';
+  }
+
+  return point !== '';
+}
+
+export function shouldBlockManyChatEarlyCapitalQuestion(
+  reply: string,
+  options?: VoiceQualityOptions
+): boolean {
+  if (options?.conversationSource !== 'MANYCHAT') return false;
+  if (
+    typeof options.aiMessageCount !== 'number' ||
+    options.aiMessageCount > 3
+  ) {
+    return false;
+  }
+  if (capturedDataPointHasValue(options.capturedDataPoints, 'workBackground')) {
+    return false;
+  }
+  if (capturedDataPointHasValue(options.capturedDataPoints, 'incomeGoal')) {
+    return false;
+  }
+
+  return containsCapitalQuestion(reply);
+}
+
+const MANYCHAT_EARLY_CAPITAL_HARDFAIL =
+  'manychat_early_capital_question: This lead came from a ManyChat outbound sequence. Discovery has not happened yet. Do NOT ask about capital. Ask about their trading background instead.';
+
 export function scoreVoiceQuality(
   reply: string,
   options?: VoiceQualityOptions
@@ -1079,6 +1131,10 @@ export function scoreVoiceQuality(
   const lower = reply.toLowerCase();
 
   // ── Hard fail checks ────────────────────────────────────────────
+
+  if (shouldBlockManyChatEarlyCapitalQuestion(reply, options)) {
+    hardFails.push(MANYCHAT_EARLY_CAPITAL_HARDFAIL);
+  }
 
   // R34. Metadata leak guard — internal JSON fields, confidence scores,
   // placeholders, debug annotations, or structured fragments must never
@@ -2936,6 +2992,13 @@ export function scoreVoiceQualityGroup(
     hardFails.push(
       `[group] r37_acceptance_loopback: lead accepted prior offer ("${options.previousLeadMessage.trim().slice(0, 40)}") but reply re-asks instead of delivering`
     );
+  }
+
+  if (
+    shouldBlockManyChatEarlyCapitalQuestion(joined, options) &&
+    !hardFails.some((f) => f.includes('manychat_early_capital_question:'))
+  ) {
+    hardFails.push(`[group] ${MANYCHAT_EARLY_CAPITAL_HARDFAIL}`);
   }
 
   // Multi-bubble safety: call-pitch language can be split across bubbles

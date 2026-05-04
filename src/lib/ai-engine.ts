@@ -1054,7 +1054,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             : triggerType === 'new_follower'
               ? `They just followed the account and received this opener: "${opener || 'opener not configured'}"`
               : `They received this outbound DM: "${opener || 'opener not configured'}"`;
-      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted via outbound automation.\n\nTrigger type: ${triggerType}\n${triggerLine}\n\nDo NOT send another opener or greeting.\nThe lead is responding to outreach.\nThey already know who you are.\nStart from ${stepDescriptor} of the script.\n</outbound_context>`;
+      const outboundHookLabel = opener
+        ? `"${opener}"`
+        : `the ${downsellProductName}`;
+      const outboundBridgeReference = opener
+        ? 'that outbound content'
+        : `the ${downsellProductName}`;
+      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted via outbound automation.\n\nTrigger type: ${triggerType}\n${triggerLine}\nOutbound hook to reference: ${outboundHookLabel}\n\nThe outbound opener has already fired.\nThe lead accepting, asking for, or showing interest in the outbound content is NOT soft-pitch acceptance. It is opening engagement.\nRequired stage order: discovery -> goal -> urgency -> soft pitch -> capital.\nDo NOT jump to financial screening. Do NOT ask about capital until discovery/work background and income goal have happened.\nNatural bridge: since they expressed interest in ${outboundHookLabel}, open with a question that connects their interest to their current situation. Start with trading background/current experience/how long they have been trading, then move through goal, urgency, soft pitch, and only then capital.\nReference ${outboundBridgeReference} so the reply does not read as a fresh start.\n\nDo NOT send another opener or greeting.\nThe lead is responding to outreach.\nThey already know who you are.\nConfigured entry-step hint: ${stepDescriptor}. Use this only if it does not skip the required stage order above.\n</outbound_context>`;
       systemPrompt = outboundBlock + '\n' + systemPrompt;
     } catch (mcErr) {
       console.warn(
@@ -1211,6 +1217,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     recentAIMessages: priorAITurns.slice(-3).map((turn) => turn.content),
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
+    conversationSource: conversationCallState?.source ?? null,
+    capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? {},
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
     capitalQuestionAsked,
@@ -1730,6 +1738,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const longTimelineCallPitchFailed = quality.hardFails.some((f) =>
       f.includes('long_timeline_call_pitch:')
+    );
+    const manyChatEarlyCapitalFailed = quality.hardFails.some((f) =>
+      f.includes('manychat_early_capital_question:')
     );
 
     if (
@@ -2400,6 +2411,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] Fabricated image observation detected — forcing regen with image-not-loading framing (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
+
+      if (manyChatEarlyCapitalFailed) {
+        const manyChatOverride = `\n\n===== MANYCHAT OUTBOUND CONTINUATION OVERRIDE =====\nThis lead came from a ManyChat outbound sequence. Discovery has not happened yet. Do NOT ask about capital. Ask about their trading background instead.\n\nThe outbound hook/content was about ${downsellProductName}. The lead accepting or asking for that content is NOT soft-pitch acceptance - it is opening engagement.\n\nFollow this stage order: discovery -> goal -> urgency -> soft pitch -> capital.\n\nNatural bridge: since they expressed interest in ${downsellProductName}, open with a question that connects that interest to their current situation. Ask about trading background, experience, or how long they have been trading. Do not pitch the call, send booking/application language, or ask any capital/budget question on this turn.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + manyChatOverride;
+        console.warn(
+          `[ai-engine] ManyChat early capital question detected - forcing discovery continuation (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
     }
 
     if (repeatedQuestionFailed) {
@@ -2755,6 +2774,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         parsed.stage = 'UNQUALIFIED';
         parsed.subStage = 'TYPEFORM_NO_BOOKING';
         parsed.softExit = true;
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+      } else if (manyChatEarlyCapitalFailed) {
+        console.warn(
+          `[ai-engine] ManyChat early-capital gate exhausted ${MAX_RETRIES + 1} attempts - replacing with discovery question for convo ${activeConversationId}`
+        );
+        parsed.message = `sick, since you wanted the ${downsellProductName}, what's your trading background right now, been at it for a while or pretty new?`;
+        parsed.messages = [parsed.message];
+        parsed.stage = 'DISCOVERY';
+        parsed.subStage = null;
+        parsed.softExit = false;
         parsed.escalateToHuman = false;
         parsed.voiceNoteAction = null;
       } else if (capitalQuestionOverdueFailed) {
