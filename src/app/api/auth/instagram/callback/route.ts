@@ -182,7 +182,43 @@ export async function GET(req: NextRequest) {
     // Step 5: Subscribe to webhook events so Meta forwards DMs.
     // Instagram DM webhooks are delivered via the linked Facebook Page.
     // We need to find the Page that owns this IG account and subscribe it.
-    await subscribeInstagramWebhooks(accessToken, igUserId, state.accountId);
+    // The discovered IG Business Account ID (17841… format) is what Meta
+    // sends as `entry.id` in webhook payloads — it MUST be persisted to
+    // credential metadata so the webhook router can resolve the account.
+    // (See incident 2026-05-04: PR #9 removed the single-account fallback
+    // that masked this lookup gap.)
+    const discoveredIgBusinessAccountId = await subscribeInstagramWebhooks(
+      accessToken,
+      igUserId,
+      state.accountId
+    );
+
+    if (discoveredIgBusinessAccountId) {
+      await saveCredentials(
+        state.accountId,
+        'INSTAGRAM',
+        { accessToken },
+        {
+          igUserId,
+          instagramAccountId: igUserId,
+          igBusinessAccountId: discoveredIgBusinessAccountId,
+          username,
+          name,
+          profilePicture,
+          followersCount: String(followersCount)
+        }
+      );
+      console.log(
+        `[instagram-oauth] Persisted IG Business Account ID ${discoveredIgBusinessAccountId} ` +
+          `for @${username} (igUserId=${igUserId}). Webhook routing will now resolve this account.`
+      );
+    } else {
+      console.warn(
+        `[instagram-oauth] Could not discover IG Business Account ID for @${username} (${igUserId}). ` +
+          `Webhook routing for this account will fail until an operator runs ` +
+          `scripts/set-ig-business-account-id.ts manually with the entry.id from a real webhook.`
+      );
+    }
 
     return NextResponse.redirect(
       `${baseUrl}/dashboard/settings/integrations?connected=instagram&ig=${encodeURIComponent(username)}`
@@ -211,14 +247,18 @@ async function subscribeInstagramWebhooks(
   igAccessToken: string,
   igUserId: string,
   accountId: string
-): Promise<void> {
+): Promise<string | null> {
+  // Returns the discovered IG Business Account ID (the 17841… format Meta
+  // sends in webhook entry.id), or null if no linked page could be found.
   try {
     // Approach 1: Check if this account already has a META credential with a pageId
     const { getCredentials } = await import('@/lib/credential-store');
     const metaCreds = await getCredentials(accountId, 'META');
 
     if (metaCreds) {
-      const metaRecord = await (await import('@/lib/prisma')).default.integrationCredential.findFirst({
+      const metaRecord = await (
+        await import('@/lib/prisma')
+      ).default.integrationCredential.findFirst({
         where: { accountId, provider: 'META', isActive: true },
         select: { metadata: true }
       });
@@ -230,7 +270,30 @@ async function subscribeInstagramWebhooks(
           `[instagram-oauth] Found existing META credential with pageId=${pageId}, subscribing to webhooks`
         );
         await subscribePageToWebhooks(pageId, pageToken);
-        return;
+
+        // Look up the IG Business Account ID linked to this page.
+        try {
+          const pageRes = await fetch(
+            `${FB_GRAPH_API}/${pageId}?fields=instagram_business_account&access_token=${pageToken}`
+          );
+          if (pageRes.ok) {
+            const pageData = await pageRes.json();
+            const igBizId: string | undefined =
+              pageData?.instagram_business_account?.id;
+            if (igBizId) {
+              console.log(
+                `[instagram-oauth] Resolved IG Business Account ID ${igBizId} via existing page`
+              );
+              return igBizId;
+            }
+          }
+        } catch (err) {
+          console.warn(
+            '[instagram-oauth] Failed to resolve IG biz account ID via existing page:',
+            (err as Error).message
+          );
+        }
+        return null;
       }
     }
 
@@ -242,18 +305,32 @@ async function subscribeInstagramWebhooks(
 
       if (pagesRes.ok) {
         const pagesData = await pagesRes.json();
-        const pages = pagesData.data || [];
+        const pages: Array<{
+          id: string;
+          name: string;
+          access_token?: string;
+          instagram_business_account?: { id: string };
+        }> = pagesData.data || [];
 
-        const linkedPage = pages.find(
-          (p: any) => p.instagram_business_account?.id === igUserId
-        ) || pages[0];
+        // The linked page is whichever one has an instagram_business_account.
+        // The previous `find()` matched against igUserId — that's wrong because
+        // igUserId is the 26… App-Scoped ID and instagram_business_account.id
+        // is the 17841… IG Business Account ID. They identify the same IG
+        // account but are different identifiers.
+        const linkedPage =
+          pages.find((p) => Boolean(p.instagram_business_account?.id)) ||
+          pages[0];
 
         if (linkedPage) {
           console.log(
-            `[instagram-oauth] Discovered linked page: ${linkedPage.name} (${linkedPage.id})`
+            `[instagram-oauth] Discovered linked page: ${linkedPage.name} (${linkedPage.id}) ` +
+              `igBizAcct=${linkedPage.instagram_business_account?.id ?? 'none'}`
           );
-          await subscribePageToWebhooks(linkedPage.id, linkedPage.access_token || igAccessToken);
-          return;
+          await subscribePageToWebhooks(
+            linkedPage.id,
+            linkedPage.access_token || igAccessToken
+          );
+          return linkedPage.instagram_business_account?.id ?? null;
         }
       } else {
         const err = await pagesRes.text();
@@ -263,15 +340,20 @@ async function subscribeInstagramWebhooks(
         );
       }
     } catch (err: any) {
-      console.warn('[instagram-oauth] Page discovery error:', err?.message || err);
+      console.warn(
+        '[instagram-oauth] Page discovery error:',
+        err?.message || err
+      );
     }
 
     console.warn(
       `[instagram-oauth] Could not subscribe to webhooks for IG user ${igUserId}. ` +
         `Webhooks must be configured manually in Meta Developer Dashboard, or connect via Meta OAuth (which auto-subscribes).`
     );
+    return null;
   } catch (err) {
     console.error('[instagram-oauth] Webhook subscription error:', err);
+    return null;
   }
 }
 
@@ -296,7 +378,10 @@ async function subscribePageToWebhooks(
 
   if (res.ok) {
     const data = await res.json();
-    console.log(`[instagram-oauth] Subscribed page ${pageId} to webhooks:`, data);
+    console.log(
+      `[instagram-oauth] Subscribed page ${pageId} to webhooks:`,
+      data
+    );
   } else {
     const err = await res.text();
     console.error(
