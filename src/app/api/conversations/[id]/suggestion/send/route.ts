@@ -267,7 +267,7 @@ export async function POST(
             ? msg.humanSource
             : null;
 
-        broadcastNewMessage({
+        broadcastNewMessage(auth.accountId, {
           id: msg.id,
           conversationId,
           sender: msg.sender,
@@ -384,7 +384,7 @@ export async function POST(
         lastMessageAt: true
       }
     });
-    broadcastConversationUpdate({
+    broadcastConversationUpdate(auth.accountId, {
       id: updated.id,
       leadId: updated.leadId,
       aiActive: updated.aiActive,

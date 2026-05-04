@@ -335,7 +335,7 @@ export async function POST(
       message.humanSource === 'DASHBOARD' || message.humanSource === 'PHONE'
         ? message.humanSource
         : null;
-    broadcastNewMessage({
+    broadcastNewMessage(auth.accountId, {
       id: message.id,
       conversationId: id,
       sender: message.sender,
@@ -350,7 +350,7 @@ export async function POST(
     });
 
     if (sender !== 'SYSTEM') {
-      broadcastConversationUpdate({
+      broadcastConversationUpdate(auth.accountId, {
         id: updatedConvo.id,
         leadId: updatedConvo.leadId,
         aiActive: updatedConvo.aiActive,
@@ -360,7 +360,10 @@ export async function POST(
     }
 
     if (sender === 'HUMAN') {
-      broadcastAIStatusChange({ conversationId: id, aiActive: false });
+      broadcastAIStatusChange(auth.accountId, {
+        conversationId: id,
+        aiActive: false
+      });
     }
 
     // Fire-and-forget: send the message to the platform (Facebook/Instagram)

@@ -171,8 +171,7 @@ async function alertMetaTokenInvalidated(params: {
         leadId
       }
     });
-    broadcastNotification({
-      accountId,
+    broadcastNotification(accountId, {
       type: 'SYSTEM',
       title: 'Meta credential invalidated — reconnect required'
     });
@@ -1058,7 +1057,7 @@ export async function processIncomingMessage(
         // before the supportive response arrives). Normal broadcast
         // happens later in Step 6 but we haven't gotten there — do it
         // here explicitly.
-        broadcastNewMessage({
+        broadcastNewMessage(accountId, {
           id: message.id,
           conversationId,
           sender: 'LEAD',
@@ -1067,7 +1066,7 @@ export async function processIncomingMessage(
           hasImage: message.hasImage,
           timestamp: now.toISOString()
         });
-        broadcastConversationUpdate({
+        broadcastConversationUpdate(accountId, {
           id: conversationId,
           leadId: lead.id,
           aiActive: false,
@@ -1119,14 +1118,17 @@ export async function processIncomingMessage(
               );
             }
           }
-          broadcastNewMessage({
+          broadcastNewMessage(accountId, {
             id: supportiveMsg.id,
             conversationId,
             sender: 'AI',
             content: supportiveText,
             timestamp: supportiveMsg.timestamp.toISOString()
           });
-          broadcastAIStatusChange({ conversationId, aiActive: false });
+          broadcastAIStatusChange(accountId, {
+            conversationId,
+            aiActive: false
+          });
         } catch (supErr) {
           console.error(
             '[webhook-processor] Distress supportive-response path failed (non-fatal):',
@@ -1208,7 +1210,7 @@ export async function processIncomingMessage(
             tagErr
           );
         }
-        broadcastNewMessage({
+        broadcastNewMessage(accountId, {
           id: message.id,
           conversationId,
           sender: 'LEAD',
@@ -1217,7 +1219,7 @@ export async function processIncomingMessage(
           hasImage: message.hasImage,
           timestamp: now.toISOString()
         });
-        broadcastConversationUpdate({
+        broadcastConversationUpdate(accountId, {
           id: conversationId,
           leadId: lead.id,
           aiActive: lead.conversation!.aiActive,
@@ -1402,7 +1404,7 @@ export async function processIncomingMessage(
         }
         // Broadcast the inbound + outbound + status flip so the
         // dashboard updates immediately.
-        broadcastNewMessage({
+        broadcastNewMessage(accountId, {
           id: message.id,
           conversationId,
           sender: 'LEAD',
@@ -1411,21 +1413,21 @@ export async function processIncomingMessage(
           hasImage: message.hasImage,
           timestamp: now.toISOString()
         });
-        broadcastNewMessage({
+        broadcastNewMessage(accountId, {
           id: handoffMsg.id,
           conversationId,
           sender: 'AI',
           content: HARD_SCHEDULING_HANDOFF_MESSAGE,
           timestamp: handoffMsg.timestamp.toISOString()
         });
-        broadcastConversationUpdate({
+        broadcastConversationUpdate(accountId, {
           id: conversationId,
           leadId: lead.id,
           aiActive: false,
           unreadCount: (lead.conversation!.unreadCount || 0) + 1,
           lastMessageAt: now.toISOString()
         });
-        broadcastAIStatusChange({ conversationId, aiActive: false });
+        broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
 
         // Escalate to operator: in-app URGENT row + email (gated by
         // notifyOnSchedulingConflict). Same code path the soft
@@ -1617,7 +1619,7 @@ export async function processIncomingMessage(
             err
           )
         );
-      broadcastNewMessage({
+      broadcastNewMessage(accountId, {
         id: message.id,
         conversationId,
         sender: 'LEAD',
@@ -1626,7 +1628,7 @@ export async function processIncomingMessage(
         hasImage: message.hasImage,
         timestamp: now.toISOString()
       });
-      broadcastConversationUpdate({
+      broadcastConversationUpdate(accountId, {
         id: conversationId,
         leadId: lead.id,
         aiActive:
@@ -1652,7 +1654,7 @@ export async function processIncomingMessage(
   }
 
   // ── Step 6: Broadcast real-time events ─────────────────────────
-  broadcastNewMessage({
+  broadcastNewMessage(accountId, {
     id: message.id,
     conversationId,
     sender: 'LEAD',
@@ -1668,7 +1670,7 @@ export async function processIncomingMessage(
     timestamp: now.toISOString()
   });
 
-  broadcastConversationUpdate({
+  broadcastConversationUpdate(accountId, {
     id: conversationId,
     leadId: lead.id,
     aiActive: lead.conversation!.aiActive,
@@ -1911,7 +1913,7 @@ export async function scheduleAIReply(
     conversation.callConfirmedAt = null;
     conversation.callOutcome = null;
     conversation.typeformCallScheduledAt = null;
-    broadcastAIStatusChange({ conversationId, aiActive: true });
+    broadcastAIStatusChange(accountId, { conversationId, aiActive: true });
     log(
       'sched.step1.rescheduleReenabled',
       `AI re-enabled for reschedule flow; autoSendOverride=true; cancelled ${cancelledReminders.count} pending scheduled message(s)`
@@ -2781,7 +2783,7 @@ export async function scheduleAIReply(
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
   if (!shouldAutoSend) {
     // AI is paused — broadcast as a suggestion only, don't save or send
-    broadcastAISuggestion({
+    broadcastAISuggestion(accountId, {
       conversationId,
       suggestedReply: result.reply,
       stage: result.stage,
@@ -3041,8 +3043,7 @@ async function deliverBubbleGroup(params: {
                 leadId: lead.id
               }
             });
-            broadcastNotification({
-              accountId: lead.accountId,
+            broadcastNotification(lead.accountId, {
               type: 'SYSTEM',
               title: 'Multi-bubble delivery failed'
             });
@@ -3059,7 +3060,7 @@ async function deliverBubbleGroup(params: {
 
     // 4. SSE broadcast — include group fields so the dashboard can
     // render in real time without re-fetching.
-    broadcastNewMessage({
+    broadcastNewMessage(lead.accountId, {
       id: msg.id,
       conversationId,
       sender: 'AI',
@@ -3362,7 +3363,7 @@ async function sendAIReply(
             );
           }
         }
-        broadcastNewMessage({
+        broadcastNewMessage(accountId, {
           id: supportiveMsg.id,
           conversationId,
           sender: 'AI',
@@ -3370,7 +3371,7 @@ async function sendAIReply(
           timestamp: supportiveMsg.timestamp.toISOString()
         });
       }
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
     } catch (err) {
       console.error(
         '[webhook-processor] Layer 2 distress handler failed (non-fatal, AI still paused):',
@@ -3402,7 +3403,7 @@ async function sendAIReply(
       `[webhook-processor] AI deactivated during delay for ${conversationId}, skipping send`
     );
     // Still broadcast as suggestion
-    broadcastAISuggestion({
+    broadcastAISuggestion(accountId, {
       conversationId,
       suggestedReply: result.reply,
       stage: result.stage,
@@ -3510,7 +3511,7 @@ async function sendAIReply(
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -3568,7 +3569,7 @@ async function sendAIReply(
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       await prisma.voiceQualityFailure
         .create({
           data: {
@@ -3638,7 +3639,7 @@ async function sendAIReply(
             awaitingSince: null
           }
         });
-        broadcastAIStatusChange({ conversationId, aiActive: false });
+        broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
@@ -3706,7 +3707,7 @@ async function sendAIReply(
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -3781,7 +3782,7 @@ async function sendAIReply(
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -4071,7 +4072,7 @@ async function sendAIReply(
       where: { conversationId, status: 'PENDING' },
       data: { status: 'CANCELLED' }
     });
-    broadcastAIStatusChange({ conversationId, aiActive: false });
+    broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
     console.log(
       `[webhook-processor] Typeform no-booking screen-out finalized for ${conversationId}`
     );
@@ -4108,7 +4109,7 @@ async function sendAIReply(
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange({ conversationId, aiActive: false });
+      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -4193,7 +4194,7 @@ async function sendAIReply(
       return;
     }
 
-    broadcastNewMessage({
+    broadcastNewMessage(accountId, {
       id: aiMessageId,
       conversationId,
       sender: 'AI',
@@ -4463,8 +4464,7 @@ async function sendAIReply(
                   leadId: lead.id
                 }
               });
-              broadcastNotification({
-                accountId: lead.accountId,
+              broadcastNotification(lead.accountId, {
                 type: 'SYSTEM',
                 title: 'Message delivery failed'
               });
@@ -4878,7 +4878,7 @@ export async function processAdminMessage(
   // AI-status-change broadcast is conditional on the consecutive-
   // PHONE auto-pause having flipped the flag (otherwise nothing
   // changed).
-  broadcastNewMessage({
+  broadcastNewMessage(accountId, {
     id: message.id,
     conversationId,
     sender: 'HUMAN',
@@ -4894,7 +4894,7 @@ export async function processAdminMessage(
     humanSource: 'PHONE'
   });
   if (autoPausedFromConsecutivePhone) {
-    broadcastAIStatusChange({ conversationId, aiActive: false });
+    broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
   }
 
   console.log(
@@ -5005,7 +5005,7 @@ export async function handleAIHandoff(
   });
 
   // Broadcast the status change
-  broadcastAIStatusChange({ conversationId, aiActive: true });
+  broadcastAIStatusChange(accountId, { conversationId, aiActive: true });
 
   // Check if the last message was from the lead (needs a reply)
   const lastMessage = await prisma.message.findFirst({
@@ -5371,7 +5371,7 @@ async function handleTypeformFilledNoBookingScreenOut(
     }
   }
 
-  broadcastNewMessage({
+  broadcastNewMessage(p.accountId, {
     id: p.inboundMessageId,
     conversationId: p.conversationId,
     sender: 'LEAD',
@@ -5380,21 +5380,21 @@ async function handleTypeformFilledNoBookingScreenOut(
     hasImage: p.inboundHasImage,
     timestamp: p.inboundAt.toISOString()
   });
-  broadcastNewMessage({
+  broadcastNewMessage(p.accountId, {
     id: exitMsg.id,
     conversationId: p.conversationId,
     sender: 'AI',
     content: TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
     timestamp: exitMsg.timestamp.toISOString()
   });
-  broadcastConversationUpdate({
+  broadcastConversationUpdate(p.accountId, {
     id: p.conversationId,
     leadId: p.leadId,
     aiActive: false,
     unreadCount: p.unreadCount + 1,
     lastMessageAt: p.inboundAt.toISOString()
   });
-  broadcastAIStatusChange({
+  broadcastAIStatusChange(p.accountId, {
     conversationId: p.conversationId,
     aiActive: false
   });

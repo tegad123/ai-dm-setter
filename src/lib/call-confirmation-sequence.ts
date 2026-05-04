@@ -334,7 +334,7 @@ export async function handleCallConfirmationLeadReply(params: {
     bubbles: buildLeadConfirmedBubbles(config)
   });
 
-  broadcastConversationUpdate({
+  broadcastConversationUpdate(conversation.lead.accountId, {
     id: conversationId,
     leadId: conversation.lead.id,
     aiActive: conversation.aiActive,
@@ -557,7 +557,7 @@ async function sendCallSequenceBubbles(params: {
         }
       });
       delivered++;
-      broadcastNewMessage({
+      broadcastNewMessage(conversation.lead.accountId, {
         id: message.id,
         conversationId,
         sender: 'AI',
@@ -598,7 +598,7 @@ async function sendCallSequenceBubbles(params: {
     where: { id: conversationId },
     data: { lastMessageAt: new Date() }
   });
-  broadcastConversationUpdate({
+  broadcastConversationUpdate(conversation.lead.accountId, {
     id: conversationId,
     leadId: conversation.lead.id,
     aiActive: conversation.aiActive,

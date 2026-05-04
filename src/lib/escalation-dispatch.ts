@@ -88,8 +88,7 @@ export async function escalate(input: EscalateInput): Promise<EscalateResult> {
       }
     });
     notificationId = n.id;
-    broadcastNotification({
-      accountId: input.accountId,
+    broadcastNotification(input.accountId, {
       type: 'SYSTEM',
       title: input.title
     });

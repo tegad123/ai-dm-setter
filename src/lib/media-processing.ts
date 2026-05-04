@@ -572,7 +572,7 @@ async function maybeAlertMediaProcessingHealth(
       body
     }
   });
-  broadcastNotification({ accountId, type: 'SYSTEM', title });
+  broadcastNotification(accountId, { type: 'SYSTEM', title });
 }
 
 function calculateWhisperCostUsd(durationSeconds?: number | null): number {

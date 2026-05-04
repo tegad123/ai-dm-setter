@@ -65,7 +65,7 @@ async function fireThrottledAlert(
       body
     }
   });
-  broadcastNotification({ accountId, type: 'SYSTEM', title });
+  broadcastNotification(accountId, { type: 'SYSTEM', title });
   return true;
 }
 

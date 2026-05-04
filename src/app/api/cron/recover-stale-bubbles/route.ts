@@ -205,7 +205,7 @@ export async function GET(req: NextRequest) {
               platformMessageId: messageId
             }
           });
-          broadcastNewMessage({
+          broadcastNewMessage(conv.lead.accountId, {
             id: newMsg.id,
             conversationId: group.conversationId,
             sender: 'AI',
@@ -250,8 +250,7 @@ export async function GET(req: NextRequest) {
               leadId: conv.lead.id
             }
           });
-          broadcastNotification({
-            accountId: conv.lead.accountId,
+          broadcastNotification(conv.lead.accountId, {
             type: 'SYSTEM',
             title: 'Multi-bubble recovery failed'
           });

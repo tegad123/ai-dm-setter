@@ -362,14 +362,14 @@ export async function GET(req: NextRequest) {
           where: { id: conv.id },
           data: { lastMessageAt: now }
         });
-        broadcastNewMessage({
+        broadcastNewMessage(conv.lead.accountId, {
           id: msg.id,
           conversationId: conv.id,
           sender: 'AI',
           content: keepaliveText,
           timestamp: now.toISOString()
         });
-        broadcastConversationUpdate({
+        broadcastConversationUpdate(conv.lead.accountId, {
           id: conv.id,
           leadId: conv.lead.id,
           aiActive: true,

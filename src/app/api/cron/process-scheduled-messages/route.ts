@@ -430,14 +430,14 @@ async function fireScheduledMessage(
     data: { lastMessageAt: now }
   });
 
-  broadcastNewMessage({
+  broadcastNewMessage(lead.accountId, {
     id: saved.id,
     conversationId: conversation.id,
     sender: 'AI',
     content: messageBody,
     timestamp: now.toISOString()
   });
-  broadcastConversationUpdate({
+  broadcastConversationUpdate(lead.accountId, {
     id: conversation.id,
     leadId: lead.id,
     aiActive: true,
