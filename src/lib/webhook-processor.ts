@@ -96,6 +96,17 @@ function isMetaTokenError(err: unknown): boolean {
   );
 }
 
+function canShipToPlatformRecipient(
+  platform: string,
+  platformUserId: string | null | undefined
+): boolean {
+  if (!platformUserId) return false;
+  if (platform === 'INSTAGRAM') {
+    return /^\d+$/.test(platformUserId.trim());
+  }
+  return true;
+}
+
 /**
  * Ship a text message to Meta + classify any error. Does NOT save a
  * Message row — that's the caller's responsibility, to ensure we only
@@ -108,6 +119,11 @@ async function shipTextToMeta(
   text: string
 ): Promise<ShipOutcome> {
   try {
+    if (!canShipToPlatformRecipient(platform, platformUserId)) {
+      throw new Error(
+        `invalid_${platform.toLowerCase()}_recipient_id:${platformUserId}`
+      );
+    }
     if (platform === 'INSTAGRAM') {
       const r = await sendInstagramDM(accountId, platformUserId, text);
       return {
@@ -2064,6 +2080,24 @@ export async function scheduleAIReply(
     'sched.step1.aiActive',
     `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} override=${autoSendOverride} shouldAutoSend=${shouldAutoSend}`
   );
+
+  if (
+    shouldAutoSend &&
+    conversation.source === 'MANYCHAT' &&
+    !canShipToPlatformRecipient(lead.platform, lead.platformUserId)
+  ) {
+    log(
+      'sched.step1.unsendableManyChatRecipient',
+      `platformUserId=${lead.platformUserId || 'null'} — waiting for real Instagram webhook recipient id`
+    );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
+    return;
+  }
 
   if (!shouldAutoSend) {
     console.log(

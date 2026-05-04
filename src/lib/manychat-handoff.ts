@@ -64,6 +64,10 @@ export function cleanInstagramUsername(username: string): string {
   return username.replace(/^@+/, '').trim();
 }
 
+function looksLikeInstagramRecipientId(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
 export async function processManyChatHandoff(params: {
   webhookKey: string | null;
   payload: unknown;
@@ -93,6 +97,9 @@ export async function processManyChatHandoff(params: {
   const firedAt = payload.firedAt ? new Date(payload.firedAt) : new Date();
   const handle = cleanInstagramUsername(payload.instagramUsername);
   const leadName = handle || payload.instagramUserId;
+  let canSendViaInstagramApi = looksLikeInstagramRecipientId(
+    payload.instagramUserId
+  );
   const triggerSource =
     payload.triggerType === 'comment'
       ? payload.postUrl || 'manychat:comment'
@@ -124,6 +131,13 @@ export async function processManyChatHandoff(params: {
   let aiActiveOnConversation = false;
 
   if (existingLead?.conversation) {
+    const platformUserId =
+      canSendViaInstagramApi || !existingLead.platformUserId
+        ? payload.instagramUserId
+        : existingLead.platformUserId;
+    canSendViaInstagramApi = looksLikeInstagramRecipientId(
+      platformUserId || ''
+    );
     const updated = await prisma.conversation.update({
       where: { id: existingLead.conversation.id },
       data: {
@@ -141,7 +155,7 @@ export async function processManyChatHandoff(params: {
       data: {
         handle,
         name: existingLead.name || leadName,
-        platformUserId: payload.instagramUserId,
+        platformUserId,
         triggerType: payload.triggerType === 'comment' ? 'COMMENT' : 'DM',
         triggerSource
       }
@@ -156,6 +170,9 @@ export async function processManyChatHandoff(params: {
     leadId = existingLead.id;
     aiActiveOnConversation = updated.aiActive;
   } else if (existingLead) {
+    canSendViaInstagramApi = looksLikeInstagramRecipientId(
+      existingLead.platformUserId || payload.instagramUserId
+    );
     const personaId = await resolveActivePersonaIdForCreate(account.id);
     const conversation = await prisma.conversation.create({
       data: {
@@ -233,7 +250,11 @@ export async function processManyChatHandoff(params: {
   // without scheduling here, the LEAD message just sits in the thread
   // and the AI never picks it up because no Instagram webhook ever fires
   // for a button click (it's internal to ManyChat).
-  if (leadResponseInserted && aiActiveOnConversation) {
+  if (
+    leadResponseInserted &&
+    aiActiveOnConversation &&
+    canSendViaInstagramApi
+  ) {
     try {
       const { scheduleAIReply } = await import('@/lib/webhook-processor');
       await scheduleAIReply(conversationId, account.id);
@@ -243,6 +264,10 @@ export async function processManyChatHandoff(params: {
         err
       );
     }
+  } else if (leadResponseInserted && aiActiveOnConversation) {
+    console.warn(
+      `[manychat-handoff] Skipping AI schedule for conversation ${conversationId}: ManyChat instagramUserId="${payload.instagramUserId}" is not a Meta recipient ID. AI will resume when an Instagram webhook upgrades the lead by handle.`
+    );
   }
 
   return {

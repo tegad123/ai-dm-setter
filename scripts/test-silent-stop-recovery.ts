@@ -188,6 +188,26 @@ assert.ok(
   'artifact recovery must use script-level URLs as source of truth'
 );
 
+const manyChatHandoffSource = readFileSync(
+  join(process.cwd(), 'src/lib/manychat-handoff.ts'),
+  'utf8'
+);
+assert.ok(
+  manyChatHandoffSource.includes('looksLikeInstagramRecipientId') &&
+    manyChatHandoffSource.includes('Skipping AI schedule'),
+  'ManyChat handoff must not schedule AI when the payload lacks a Meta recipient id'
+);
+
+const webhookProcessorSource = readFileSync(
+  join(process.cwd(), 'src/lib/webhook-processor.ts'),
+  'utf8'
+);
+assert.ok(
+  webhookProcessorSource.includes('canShipToPlatformRecipient') &&
+    webhookProcessorSource.includes('unsendableManyChatRecipient'),
+  'webhook processor must skip unsendable ManyChat recipients before generation/delivery'
+);
+
 const aiEngineSource = readFileSync(
   join(process.cwd(), 'src/lib/ai-engine.ts'),
   'utf8'

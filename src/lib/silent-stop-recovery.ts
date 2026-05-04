@@ -132,6 +132,13 @@ function isManyChatOpeningHandoff(conversation: StalledConversation): boolean {
   );
 }
 
+function hasUsablePlatformRecipient(
+  conversation: StalledConversation
+): boolean {
+  if (conversation.lead.platform !== 'INSTAGRAM') return true;
+  return /^\d+$/.test(conversation.lead.platformUserId?.trim() || '');
+}
+
 function manyChatOutboundReference(conversation: StalledConversation): string {
   const opener = conversation.manyChatOpenerMessage?.trim() || '';
   if (/\bsession\s+liquidity\s+model\b/i.test(opener)) {
@@ -478,6 +485,9 @@ async function checkAutoTriggerSafety(
   }
 
   if (isManyChatOpeningHandoff(conversation)) {
+    if (!hasUsablePlatformRecipient(conversation)) {
+      return { safe: false, reason: 'manychat_missing_instagram_recipient_id' };
+    }
     return { safe: true, reason: null };
   }
 
