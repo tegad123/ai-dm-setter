@@ -671,6 +671,10 @@ export async function generateReply(
 
       fewShotBlock = await retrieveFewShotExamples({
         accountId,
+        // F3.3: scope few-shot retrieval to the calling persona so
+        // persona A's hand-curated training examples don't bleed into
+        // persona B's prompt context.
+        personaId,
         currentLeadMessage: lastLeadMsg.content,
         leadStage: leadContext.status,
         leadExperience: leadContext.experience,

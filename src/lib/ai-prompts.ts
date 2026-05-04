@@ -1534,9 +1534,12 @@ export async function buildDynamicSystemPrompt(
     freeValueLink: null
   };
 
-  // Fetch training examples for few-shot context
+  // F3.3: scope training examples to the calling persona only.
+  // TrainingExample has personaId NOT NULL (Phase 1 schema); the old
+  // accountId-only filter let persona A's curated examples leak into
+  // persona B's prompt context for any multi-persona account.
   const trainingExamples = await prisma.trainingExample.findMany({
-    where: { accountId },
+    where: { accountId, personaId },
     take: 10,
     orderBy: { createdAt: 'desc' }
   });
