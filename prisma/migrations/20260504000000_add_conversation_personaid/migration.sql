@@ -23,28 +23,45 @@
 -- unowned, so the migration is single-statement-safe to retry after fixing
 -- the offending account's persona configuration.
 
+-- Lift Postgres' default per-statement timeout for THIS transaction
+-- only. Supabase's pooler caps statements at 2 minutes by default; the
+-- backfill UPDATE on a busy table can exceed that. SET LOCAL is bounded
+-- to the transaction the migration runs in, so it doesn't leak.
+-- Prod incident 2026-05-04: first attempt hit error code 57014 at 2min.
+SET LOCAL statement_timeout = '10min';
+
 -- 1. Add column nullable
 ALTER TABLE "Conversation"
 ADD COLUMN "personaId" TEXT;
 
--- 2. Backfill — pick the active persona for each conversation's account.
--- Tie-break by most-recently-updated. Falls back to any persona if no
--- active row exists for the account (transitional accounts mid-onboarding).
-WITH chosen_persona AS (
-  SELECT DISTINCT ON (p."accountId")
-    p."accountId",
-    p."id" AS persona_id
-  FROM "AIPersona" p
-  ORDER BY p."accountId",
-           p."isActive" DESC,
-           p."updatedAt" DESC
-)
+-- Pre-compute the per-Lead persona choice into a temp table. This
+-- avoids re-running the JOIN + DISTINCT ON for every Conversation row
+-- and gives Postgres a small indexed lookup for the UPDATE step.
+CREATE TEMP TABLE _conversation_persona_backfill ON COMMIT DROP AS
+SELECT
+  l."id" AS lead_id,
+  (
+    SELECT p."id"
+    FROM "AIPersona" p
+    WHERE p."accountId" = l."accountId"
+    ORDER BY p."isActive" DESC, p."updatedAt" DESC
+    LIMIT 1
+  ) AS persona_id
+FROM "Lead" l
+WHERE EXISTS (
+  SELECT 1 FROM "Conversation" c
+  WHERE c."leadId" = l."id" AND c."personaId" IS NULL
+);
+
+CREATE INDEX ON _conversation_persona_backfill (lead_id);
+
+-- 2. Backfill via the precomputed mapping.
 UPDATE "Conversation" c
-SET "personaId" = cp.persona_id
-FROM "Lead" l, chosen_persona cp
-WHERE c."leadId" = l."id"
-  AND l."accountId" = cp."accountId"
-  AND c."personaId" IS NULL;
+SET "personaId" = b.persona_id
+FROM _conversation_persona_backfill b
+WHERE c."leadId" = b.lead_id
+  AND c."personaId" IS NULL
+  AND b.persona_id IS NOT NULL;
 
 -- 3. Assert backfill is complete. Any leftover NULL means an account has
 -- a Conversation but no AIPersona at all — operator data integrity bug
