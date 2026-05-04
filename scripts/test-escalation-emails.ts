@@ -147,7 +147,7 @@ async function main() {
       body: tc.body,
       details: tc.details,
       link: lead?.conversation?.id
-        ? `https://qualifydms.io/dashboard/conversations/${lead.conversation.id}`
+        ? `https://qualifydms.io/dashboard/conversations?conversationId=${lead.conversation.id}`
         : undefined
     });
 

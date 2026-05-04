@@ -1042,7 +1042,7 @@ export async function processIncomingMessage(
           const { escalate } = await import('@/lib/escalation-dispatch');
           const origin = process.env.NEXT_PUBLIC_APP_URL || '';
           const link = origin
-            ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+            ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
             : undefined;
           await escalate({
             type: 'distress',
@@ -1444,7 +1444,7 @@ export async function processIncomingMessage(
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
-          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
           : undefined;
         const quote =
           messageText.length > 220
@@ -1493,7 +1493,7 @@ export async function processIncomingMessage(
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
-          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
           : undefined;
         const quote =
           messageText.length > 220
@@ -3313,7 +3313,7 @@ async function sendAIReply(
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
-          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
           : undefined;
         await escalate({
           type: 'distress',
@@ -3525,7 +3525,7 @@ async function sendAIReply(
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
-        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
         : undefined;
       await escalate({
         type: 'ai_stuck',
@@ -3597,7 +3597,7 @@ async function sendAIReply(
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
-        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
         : undefined;
       await escalate({
         type: 'ai_stuck',
@@ -3653,7 +3653,7 @@ async function sendAIReply(
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
-          ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
           : undefined;
         await escalate({
           type: 'ai_stuck',
@@ -3721,7 +3721,7 @@ async function sendAIReply(
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
-        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
         : undefined;
       await escalate({
         type: 'ai_stuck',
@@ -3796,7 +3796,7 @@ async function sendAIReply(
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
-        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
         : undefined;
       await escalate({
         type: 'ai_stuck',
@@ -4123,7 +4123,7 @@ async function sendAIReply(
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
-        ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversationId}`
+        ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
         : undefined;
       await escalate({
         type: 'ai_stuck',

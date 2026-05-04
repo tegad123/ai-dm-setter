@@ -65,7 +65,7 @@ async function main() {
   }
 
   const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://qualifydms.io';
-  const link = `${origin.replace(/\/$/, '')}/dashboard/conversations/${lead.conversation.id}`;
+  const link = `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${lead.conversation.id}`;
   const res = await escalate({
     type: 'scheduling_conflict',
     accountId: lead.accountId,

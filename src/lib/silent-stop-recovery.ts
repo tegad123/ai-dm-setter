@@ -454,7 +454,7 @@ async function routeToOperatorReview(params: {
   });
   const origin = process.env.NEXT_PUBLIC_APP_URL || '';
   const link = origin
-    ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversation.id}`
+    ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversation.id}`
     : undefined;
   await escalate({
     type: 'ai_stuck',
