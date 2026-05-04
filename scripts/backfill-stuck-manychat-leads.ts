@@ -22,7 +22,7 @@
 import prisma from '../src/lib/prisma';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
-const ELIGIBLE_STAGES = ['NEW_LEAD', 'ENGAGED'] as const;
+const ELIGIBLE_STAGES = ['NEW_LEAD', 'ENGAGED', 'QUALIFYING'] as const;
 const TARGET_CONVERSATION_IDS = [
   'cmnp9r1mh000ml304dj6dz1a3', // mr.cocoabutter
   'cmor39iib000nl504pjq9afbs', // arielbuenaflorumpacan
