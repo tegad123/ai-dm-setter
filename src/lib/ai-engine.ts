@@ -7,6 +7,7 @@ import { retrieveFewShotExamples } from '@/lib/training-example-retriever';
 import {
   containsCapitalQuestion,
   containsIncomeGoalQuestion,
+  containsUrgencyQuestion,
   stripPreCallHomeworkFromMessages,
   scoreVoiceQualityGroup,
   detectMetadataLeak,
@@ -18,6 +19,8 @@ import {
   callLogisticsAlreadyDeliveredInRecentHistory,
   isAcknowledgmentOnlyLeadMessage,
   getUnacknowledgedLeadBurst,
+  isExplicitAcceptance,
+  aiPromisedArtifact,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
@@ -1526,6 +1529,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
     finalQualityScore = quality.score;
 
+    // R37 acceptance bypass — when the lead's last message is an explicit
+    // acceptance ("Yes bro", "lfg", "bet") AND the AI's previous turn
+    // promised an artifact (link / call / resource offer), the system has
+    // already routed past the capital question for this offer. R37's
+    // r37_acceptance_loopback gate hard-fails any reply that loops back
+    // to qualification in this state — so R24/Fix B must not force the
+    // loop themselves. Without this, the gates and R37 conflict and the
+    // retry loop exhausts into a deterministic "ask capital" fallback,
+    // dropping the artifact the lead just accepted.
+    const r37AcceptanceBypass = Boolean(
+      lastLeadMsg &&
+        lastAiMsg &&
+        isExplicitAcceptance(lastLeadMsg.content) &&
+        aiPromisedArtifact(lastAiMsg.content)
+    );
+
     // 5b. R24 CAPITAL VERIFICATION GATE. Runs only when (a) the active
     //     account has a threshold configured, (b) we resolved a
     //     conversationId, and (c) this reply is routing the lead into
@@ -1540,6 +1559,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     if (
       activeConversationId &&
       !rescheduleFlow &&
+      !r37AcceptanceBypass &&
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0 &&
       isRoutingToBookingHandoff(parsed)
@@ -1580,6 +1600,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     if (
       !r24Blocked &&
       !rescheduleFlow &&
+      !r37AcceptanceBypass &&
       activeConversationId &&
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0

@@ -1015,7 +1015,9 @@ const R37_AI_PROMISE_PATTERNS: RegExp[] = [
   // Resource drop: "I'll send the bootcamp", "here's the free resource"
   /\b(send\s+(you\s+)?(the\s+)?(bootcamp|video|course|resource|breakdown|youtube)|free\s+(value|resource|video|content))\b/i,
   // Direct offer: "wanna check this out"
-  /\b(check\s+this\s+out|peep\s+this|drop\s+the\s+(link|url))\b/i
+  /\b(check\s+this\s+out|peep\s+this|drop\s+the\s+(link|url))\b/i,
+  // Bare-question offer: "want it?", "want the link?", "want the course?"
+  /\bwant\s+(it|the\s+(link|url|course|bootcamp|video|breakdown|resource))\b\s*\??/i
 ];
 
 const R37_DELIVERED_ARTIFACT_RE =

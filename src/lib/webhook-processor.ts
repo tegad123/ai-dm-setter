@@ -189,15 +189,35 @@ async function alertMetaTokenInvalidated(params: {
 
 /**
  * Build the set of URLs the AI is allowed to send for a given account.
- * Pulls from the active account script records. Prompt/persona config can
- * contain placeholders or old seed data; ScriptAction/ScriptSlot rows are the
- * operator-controlled source of truth for deliverable URLs.
+ * Pulls from active script records AND active persona config. Both are
+ * operator-controlled — ScriptAction/ScriptSlot rows for the script-driven
+ * flow, and persona.{freeValueLink, downsellConfig.link, promptConfig.*} for
+ * accounts that configure URLs at the persona level (smoke tests + any
+ * account that hasn't migrated to ScriptAction rows).
  *
  * Anything NOT in this set is considered hallucinated and will be stripped
  * from the AI's reply before delivery.
  */
 async function getAllowedUrls(accountId: string): Promise<Set<string>> {
   const allowed = new Set<string>();
+  const addUrl = (raw: unknown): void => {
+    if (typeof raw !== 'string') return;
+    const trimmed = raw.trim();
+    if (trimmed && /^https?:\/\//i.test(trimmed)) {
+      allowed.add(trimmed);
+    }
+  };
+  const readJsonString = (
+    value: Prisma.JsonValue | null | undefined,
+    key: string
+  ): string | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const raw = (value as Record<string, unknown>)[key];
+    return typeof raw === 'string' ? raw : null;
+  };
+
   try {
     // Sprint 3: Add link slot URLs from ScriptSlots (legacy)
     const linkSlots = await prisma.scriptSlot.findMany({
@@ -210,9 +230,7 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       select: { url: true }
     });
     for (const slot of linkSlots) {
-      if (slot.url && /^https?:\/\//i.test(slot.url)) {
-        allowed.add(slot.url.trim());
-      }
+      addUrl(slot.url);
     }
 
     // Sprint 3 Revised: Add link URLs from Script template actions
@@ -225,9 +243,30 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       select: { linkUrl: true }
     });
     for (const action of scriptLinkActions) {
-      if (action.linkUrl && /^https?:\/\//i.test(action.linkUrl)) {
-        allowed.add(action.linkUrl.trim());
+      addUrl(action.linkUrl);
+    }
+
+    // Persona-level URLs. Operators configure downsell / booking / free-value
+    // links directly on AIPersona (no ScriptAction row required) — without
+    // this branch the sanitizer strips every persona-driven artifact link to
+    // "[link removed]". Smoke test SMOKE 05 (artifact-delivered-with-url) and
+    // any production account that hasn't created ScriptAction rows depend on
+    // this path.
+    const personas = await prisma.aIPersona.findMany({
+      where: { accountId, isActive: true },
+      select: {
+        freeValueLink: true,
+        downsellConfig: true,
+        promptConfig: true
       }
+    });
+    for (const persona of personas) {
+      addUrl(persona.freeValueLink);
+      addUrl(readJsonString(persona.downsellConfig, 'link'));
+      addUrl(readJsonString(persona.promptConfig, 'downsellLink'));
+      addUrl(readJsonString(persona.promptConfig, 'bookingTypeformUrl'));
+      addUrl(readJsonString(persona.promptConfig, 'youtubeFallbackUrl'));
+      addUrl(readJsonString(persona.promptConfig, 'freeValueLink'));
     }
   } catch (err) {
     console.error('[webhook-processor] getAllowedUrls failed:', err);
