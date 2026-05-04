@@ -21,7 +21,6 @@
 
 import prisma from '../src/lib/prisma';
 
-const ONE_HOUR_MS = 60 * 60 * 1000;
 const ELIGIBLE_STAGES = ['NEW_LEAD', 'ENGAGED', 'QUALIFYING'] as const;
 const TARGET_CONVERSATION_IDS = [
   'cmnp9r1mh000ml304dj6dz1a3', // mr.cocoabutter
@@ -39,9 +38,6 @@ const TARGET_CONVERSATION_IDS = [
 ];
 
 async function main() {
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - ONE_HOUR_MS);
-
   // Narrow filter at the DB layer to the known pending conversations only.
   // The two already-replied conversations (mulu_lu.8, dominicianpappi) are
   // intentionally not in TARGET_CONVERSATION_IDS.
@@ -72,7 +68,6 @@ async function main() {
   let alsoTurnedAiOn = 0;
   let skippedNoMessage = 0;
   let skippedLatestNotLead = 0;
-  let skippedTooRecent = 0;
 
   for (const conv of candidates) {
     const lastMsg = conv.messages[0];
@@ -84,11 +79,6 @@ async function main() {
       skippedLatestNotLead += 1;
       continue;
     }
-    if (lastMsg.timestamp >= cutoff) {
-      skippedTooRecent += 1;
-      continue;
-    }
-
     await prisma.conversation.update({
       where: { id: conv.id },
       data: {
@@ -112,7 +102,6 @@ async function main() {
   console.log(`[backfill]   of which aiActive flipped: ${alsoTurnedAiOn}`);
   console.log(`[backfill] skipped (no messages):     ${skippedNoMessage}`);
   console.log(`[backfill] skipped (latest != LEAD):  ${skippedLatestNotLead}`);
-  console.log(`[backfill] skipped (< 1h stale):      ${skippedTooRecent}`);
   console.log('[backfill] ---------------------------------------------');
   console.log(
     `[backfill] done. Heartbeat (cron every 1m) will pick up the ${flipped} flipped conversation(s) on the next tick.`
