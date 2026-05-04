@@ -11,14 +11,23 @@ const MANYCHAT_TRIGGER_TYPES = [
 ] as const;
 
 export const manyChatHandoffSchema = z.object({
-  instagramUserId: z.string().min(1),
+  // Coerce to string because ManyChat's variable picker outputs numeric
+  // IDs as JSON numbers (not strings) for `user.id` — Zod's z.string()
+  // would reject those without coercion. The schema validates min length
+  // after coercion so we still reject empty values.
+  instagramUserId: z.coerce.string().min(1),
   instagramUsername: z.string().min(1),
   openerMessage: z.string().min(1).max(2000),
   triggerType: z.enum(MANYCHAT_TRIGGER_TYPES),
   commentText: z.string().max(2000).optional(),
   postUrl: z.string().max(2000).optional(),
-  manyChatSubscriberId: z.string().min(1),
-  firedAt: z.string().datetime()
+  manyChatSubscriberId: z.coerce.string().min(1),
+  // Optional in the wire format — ManyChat doesn't always expose a ready
+  // ISO-8601 timestamp variable in their picker. When absent, the
+  // handler defaults to server-time `new Date()` (set in
+  // processManyChatHandoff below). When present it must still be a
+  // valid datetime so we don't ingest gibberish.
+  firedAt: z.string().datetime().optional()
 });
 
 export type ManyChatHandoffPayload = z.infer<typeof manyChatHandoffSchema>;
@@ -67,7 +76,11 @@ export async function processManyChatHandoff(params: {
     throw new ManyChatHandoffError('Invalid ManyChat payload', 400);
   }
   const payload = parsed.data;
-  const firedAt = new Date(payload.firedAt);
+  // ManyChat omits `firedAt` from many flow setups — see schema. Default
+  // to server-time on the assumption the External Request fires within
+  // milliseconds of the trigger event, which is true for ManyChat's
+  // synchronous flow execution model.
+  const firedAt = payload.firedAt ? new Date(payload.firedAt) : new Date();
   const handle = cleanInstagramUsername(payload.instagramUsername);
   const leadName = handle || payload.instagramUserId;
   const triggerSource =
