@@ -112,9 +112,16 @@ async function main() {
     `Test account: ${SMOKE_CONFIG.testAccountSlug} (${accountId})\nTest persona: ${SMOKE_CONFIG.testPersonaName} (${personaId})\n`
   );
 
+  // SMOKE_FILTER env var: comma-separated scenario IDs to run.
+  // e.g. SMOKE_FILTER="05,12,13" runs only those three. Empty = run all.
+  const filter = (process.env.SMOKE_FILTER ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const results: RunResult[] = [];
   for (let i = 0; i < SCENARIOS.length; i++) {
     const scenario = SCENARIOS[i]!;
+    if (filter.length > 0 && !filter.includes(scenario.id)) continue;
     process.stdout.write(`SMOKE ${scenario.id} ${scenario.name}... `);
     const r = await runOne(i, accountId, personaId);
     if (r.passed) {
