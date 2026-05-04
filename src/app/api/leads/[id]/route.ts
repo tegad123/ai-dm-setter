@@ -105,8 +105,8 @@ export async function PATCH(
       data
     });
 
-    // Broadcast real-time lead update
-    broadcastLeadUpdate({
+    // Broadcast real-time lead update (scoped to the auth's tenant).
+    broadcastLeadUpdate(auth.accountId, {
       id: lead.id,
       name: lead.name,
       stage: lead.stage,

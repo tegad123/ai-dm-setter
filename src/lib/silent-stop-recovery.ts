@@ -448,7 +448,10 @@ async function routeToOperatorReview(params: {
       lastSilentStopAt: new Date()
     }
   });
-  broadcastAIStatusChange({ conversationId: conversation.id, aiActive: false });
+  broadcastAIStatusChange(conversation.lead.accountId, {
+    conversationId: conversation.id,
+    aiActive: false
+  });
   const origin = process.env.NEXT_PUBLIC_APP_URL || '';
   const link = origin
     ? `${origin.replace(/\/$/, '')}/dashboard/conversations/${conversation.id}`
@@ -500,7 +503,7 @@ async function maybeAlertSilentStopSpike(accountId: string) {
     .catch((err) =>
       console.error('[silent-stop] spike notification failed:', err)
     );
-  broadcastNotification({ accountId, type: 'SYSTEM', title });
+  broadcastNotification(accountId, { type: 'SYSTEM', title });
 
   if (process.env.SLACK_WEBHOOK_URL) {
     await fetch(process.env.SLACK_WEBHOOK_URL, {
@@ -549,7 +552,7 @@ async function maybeAlertLowRecoveryRate(accountId: string) {
     .catch((err) =>
       console.error('[silent-stop] low recovery notification failed:', err)
     );
-  broadcastNotification({ accountId, type: 'SYSTEM', title });
+  broadcastNotification(accountId, { type: 'SYSTEM', title });
 
   if (process.env.SLACK_WEBHOOK_URL) {
     await fetch(process.env.SLACK_WEBHOOK_URL, {

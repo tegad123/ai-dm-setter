@@ -43,8 +43,8 @@ export async function PATCH(
       data: { aiActive }
     });
 
-    // Broadcast real-time AI status change
-    broadcastAIStatusChange({
+    // Broadcast real-time AI status change (scoped to the lead's tenant).
+    broadcastAIStatusChange(existing.lead.accountId, {
       conversationId: id,
       aiActive: conversation.aiActive
     });

@@ -76,8 +76,8 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Broadcast real-time notification
-    broadcastNotification({
+    // Broadcast real-time notification (scoped to the auth's tenant).
+    broadcastNotification(auth.accountId, {
       id: notification.id,
       type: notification.type,
       title: notification.title,

@@ -119,7 +119,10 @@ export async function POST(
         data: { status: 'CANCELLED' }
       });
 
-      broadcastAIStatusChange({ conversationId: id, aiActive: false });
+      broadcastAIStatusChange(conversation.lead.accountId, {
+        conversationId: id,
+        aiActive: false
+      });
 
       return NextResponse.json({
         conversationId: id,

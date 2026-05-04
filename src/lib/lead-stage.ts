@@ -232,7 +232,7 @@ export async function transitionLeadStage(
 
   // 4. Broadcast update (dynamic import to avoid circular dependencies)
   const { broadcastLeadUpdate } = await import('@/lib/realtime');
-  broadcastLeadUpdate({
+  broadcastLeadUpdate(updatedLead.accountId, {
     id: updatedLead.id,
     stage: updatedLead.stage,
     previousStage: updatedLead.previousStage,

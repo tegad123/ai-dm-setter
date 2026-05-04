@@ -3,10 +3,23 @@
 // ---------------------------------------------------------------------------
 // This is a simple pub/sub event bus that runs in the same process.
 // In production with multiple instances, replace with Redis Pub/Sub.
+//
+// SECURITY (P0 fix 2026-05-04): every event MUST carry an accountId so
+// the SSE route handler can filter the stream to the authenticated
+// caller's account. Cross-tenant emission was the root of the
+// unauthenticated SSE leak — enforcing accountId at the bus layer plus
+// `requireAuth` at the route is the belt-and-suspenders fix.
 // ---------------------------------------------------------------------------
 
 export interface RealtimeEvent {
   type: string;
+  /**
+   * Tenant scope. The SSE route filters events to
+   * `event.accountId === auth.accountId` so a connected client only
+   * receives traffic for their own tenant. Required — broadcasts
+   * without an accountId are a programmer bug.
+   */
+  accountId: string;
   data: Record<string, unknown>;
 }
 
@@ -42,65 +55,89 @@ export const eventBus = new EventBus();
 
 // ---------------------------------------------------------------------------
 // Convenience broadcast helpers
+//
+// Every helper takes `accountId` as the first positional argument and
+// publishes it on the event envelope. The SSE route uses it to scope
+// the stream — a missed accountId would mean a leak, so make it loud
+// with the required-positional shape rather than an optional field on
+// the data object.
 // ---------------------------------------------------------------------------
 
-export function broadcastNewMessage(data: {
-  id: string;
-  conversationId: string;
-  sender: string;
-  content: string;
-  imageUrl?: string | null;
-  hasImage?: boolean;
-  mediaType?: string | null;
-  mediaUrl?: string | null;
-  transcription?: string | null;
-  imageMetadata?: unknown;
-  mediaProcessedAt?: string | null;
-  mediaProcessingError?: string | null;
-  humanSource?: 'DASHBOARD' | 'PHONE' | null;
-  sentByUser?: { id: string; name: string; email?: string | null } | null;
-  platformMessageId?: string | null;
-  timestamp: string;
-  // Multi-bubble fields. Null/undefined for legacy single-message sends
-  // (the UI treats absence as an implicit 1-bubble group). When present,
-  // the UI groups bubbles with the same messageGroupId visually.
-  messageGroupId?: string | null;
-  bubbleIndex?: number | null;
-  bubbleTotalCount?: number | null;
-}): void {
-  eventBus.publish({ type: 'message:new', data });
+export function broadcastNewMessage(
+  accountId: string,
+  data: {
+    id: string;
+    conversationId: string;
+    sender: string;
+    content: string;
+    imageUrl?: string | null;
+    hasImage?: boolean;
+    mediaType?: string | null;
+    mediaUrl?: string | null;
+    transcription?: string | null;
+    imageMetadata?: unknown;
+    mediaProcessedAt?: string | null;
+    mediaProcessingError?: string | null;
+    humanSource?: 'DASHBOARD' | 'PHONE' | null;
+    sentByUser?: { id: string; name: string; email?: string | null } | null;
+    platformMessageId?: string | null;
+    timestamp: string;
+    // Multi-bubble fields. Null/undefined for legacy single-message sends
+    // (the UI treats absence as an implicit 1-bubble group). When present,
+    // the UI groups bubbles with the same messageGroupId visually.
+    messageGroupId?: string | null;
+    bubbleIndex?: number | null;
+    bubbleTotalCount?: number | null;
+  }
+): void {
+  eventBus.publish({ type: 'message:new', accountId, data });
 }
 
-export function broadcastConversationUpdate(data: {
-  id: string;
-  leadId: string;
-  aiActive: boolean;
-  unreadCount: number;
-  lastMessageAt?: string | null;
-}): void {
-  eventBus.publish({ type: 'conversation:updated', data });
+export function broadcastConversationUpdate(
+  accountId: string,
+  data: {
+    id: string;
+    leadId: string;
+    aiActive: boolean;
+    unreadCount: number;
+    lastMessageAt?: string | null;
+  }
+): void {
+  eventBus.publish({ type: 'conversation:updated', accountId, data });
 }
 
-export function broadcastAIStatusChange(data: {
-  conversationId: string;
-  aiActive: boolean;
-}): void {
-  eventBus.publish({ type: 'ai:status_changed', data });
+export function broadcastAIStatusChange(
+  accountId: string,
+  data: {
+    conversationId: string;
+    aiActive: boolean;
+  }
+): void {
+  eventBus.publish({ type: 'ai:status_changed', accountId, data });
 }
 
-export function broadcastLeadUpdate(data: Record<string, unknown>): void {
-  eventBus.publish({ type: 'lead:updated', data });
+export function broadcastLeadUpdate(
+  accountId: string,
+  data: Record<string, unknown>
+): void {
+  eventBus.publish({ type: 'lead:updated', accountId, data });
 }
 
-export function broadcastNotification(data: Record<string, unknown>): void {
-  eventBus.publish({ type: 'notification:new', data });
+export function broadcastNotification(
+  accountId: string,
+  data: Record<string, unknown>
+): void {
+  eventBus.publish({ type: 'notification:new', accountId, data });
 }
 
-export function broadcastAISuggestion(data: {
-  conversationId: string;
-  suggestedReply: string;
-  stage?: string;
-  confidence?: number;
-}): void {
-  eventBus.publish({ type: 'ai:suggestion', data });
+export function broadcastAISuggestion(
+  accountId: string,
+  data: {
+    conversationId: string;
+    suggestedReply: string;
+    stage?: string;
+    confidence?: number;
+  }
+): void {
+  eventBus.publish({ type: 'ai:suggestion', accountId, data });
 }

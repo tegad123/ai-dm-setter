@@ -10,7 +10,12 @@ const isPublicRoute = createRouteMatcher([
   '/api/auth/meta(.*)',
   '/api/auth/instagram(.*)',
   '/api/meta/(.*)',
-  '/api/realtime(.*)',
+  // SECURITY (P0 fix 2026-05-04): /api/realtime was previously listed
+  // here, which let Clerk skip auth entirely on the SSE endpoint. The
+  // route now calls requireAuth() internally AND we drop it from this
+  // matcher so Clerk enforces the session at the proxy layer too. Two
+  // layers of defense: an unauthenticated request can't reach the
+  // route handler at all, and even if it did the handler would 401.
   // Cron handlers do their own bearer-token auth via CRON_SECRET. If
   // Clerk runs first, an unauthenticated request returns 404 (Clerk's
   // default for API routes), which is what we were seeing in the
