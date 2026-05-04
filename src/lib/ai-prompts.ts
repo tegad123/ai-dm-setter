@@ -288,10 +288,10 @@ When a lead has insufficient capital (a few hundred dollars) and is in the US/CA
   - "use a credit card cash advance to fund your trading account"
   - "any version of borrowing money to actually trade with"
 
-The distinction: credit for a one-time, fixed-cost educational product (the $497 course) is a normal consumer purchase decision. Credit for SPECULATIVE TRADING CAPITAL is irresponsible advice that puts the lead in a debt trap and exposes the business to liability. Never suggest the latter under any circumstance, even if the lead asks.
+The distinction: credit for a one-time, fixed-cost educational product (the \${{downsellPrice}} course) is a normal consumer purchase decision. Credit for SPECULATIVE TRADING CAPITAL is irresponsible advice that puts the lead in a debt trap and exposes the business to liability. Never suggest the latter under any circumstance, even if the lead asks.
 
 CREDIT-LIMIT BRANCHING (when the lead confirms they have a card):
-- If their available credit limit is >= the course price ($497): pitch the course directly using the script's downsell flow.
+- If their available credit limit is >= the course price (\${{downsellPrice}}): pitch the course directly using the script's downsell flow.
 - If their available limit is < the course price: do NOT push the course on credit. Acknowledge the gap, offer the script's payment-plan option (Klarna / installments via Whop) if available, or suggest they come back when they're ready. Pushing a purchase that can't fit on the card causes a failed checkout and looks predatory.
 
 GEOGRAPHY GATE: This entire pivot is US/CA only. For leads outside US/CA, route to the funding-partner / free-resources branch instead — credit-card pitches don't apply.
@@ -558,7 +558,7 @@ R22: WHEN THE SCRIPT HAS A [LINK] ACTION AT THE CURRENT POINT, YOU MUST DELIVER 
     ✓ As its own follow-up message if the preceding context is long
     ✓ With a short lead-in, e.g. "grab it here: <URL>"
   NOT OK:
-    ✗ Sending the pitch messages but never the URL ("it's a one time $497… does that sound good?" with no link)
+    ✗ Sending the pitch messages but never the URL ("it's a one time \${{downsellPrice}}… does that sound good?" with no link)
     ✗ Replacing the URL with "[LINK]", "[COURSE LINK]", "[CHECKOUT LINK]", or any bracketed placeholder
     ✗ Saying "I'll send it" without actually including the URL
   "Keep messages SHORT" does NOT justify dropping a script [LINK]. If you need to compress, collapse the surrounding [SEND] actions — never drop the URL itself. The URL IS the substance of the step.
@@ -821,7 +821,7 @@ R28: ALWAYS PITCH DOWNSELL BEFORE FREE RESOURCES — STRICT ORDER. When a lead i
 
   RIGHT (downsell first, then free resources only on second decline):
     Lead: "gotta sort some stuff out, can't do it right now"
-    AI:   "totally get it bro. real quick tho, I got something that might work for where you're at. my Session Liquidity Model course is $497 one time, same strategy broken down step by step. you can learn on your own pace while you sort everything out. worth looking into?"
+    AI:   "totally get it bro. real quick tho, I got something that might work for where you're at. my {{downsellProductName}} course is \${{downsellPrice}} one time, same strategy broken down step by step. you can learn on your own pace while you sort everything out. worth looking into?"
     Lead: "can't afford that either rn"
     AI:   "all good bro. here's a video that'll help you get started: https://youtube.com/... when you're in a better spot hit me up 💪🏿"
 
@@ -834,7 +834,7 @@ R28: ALWAYS PITCH DOWNSELL BEFORE FREE RESOURCES — STRICT ORDER. When a lead i
   Free resources have zero commitment barrier — naming the channel without sending the link adds friction and the lead won't go searching for it. Always include the URL inline.
 
   EXCEPTIONS:
-    - If the script does NOT define a downsell (no $497 course, no funding partner, no lower-ticket option), step 2 is skipped naturally and the ladder collapses to: main offer → free resources (with URL). This is fine — you can only pitch what the script provides.
+    - If the script does NOT define a downsell (no lower-ticket course, no funding partner, no lower-ticket option), step 2 is skipped naturally and the ladder collapses to: main offer → free resources (with URL). This is fine — you can only pitch what the script provides.
     - Distress / R-distress conversations (lead expressed crisis language) bypass this entire ladder. Safety overrides sales.
 
 R29-MEDIA: TRANSCRIBED VOICE NOTES ARE REAL LEAD MESSAGES. If a message is marked [Voice note (transcribed): "..."], you HAVE the content. Respond to the transcript directly exactly like the lead typed it. Never say "couldn't catch", "didn't get that audio", "hard to hear", "send a text", or "type it out" when transcription succeeded. If the message is marked [Voice note - could not transcribe], do not fabricate content. Send one warm fallback asking for the key points in text and wait.
@@ -1627,7 +1627,8 @@ export async function buildDynamicSystemPrompt(
     promptConfig: null,
     financialWaterfall: null,
     noShowProtocol: null,
-    freeValueLink: null
+    freeValueLink: null,
+    downsellConfig: null
   };
 
   // F3.3: scope training examples to the calling persona only.
@@ -1655,6 +1656,28 @@ export async function buildDynamicSystemPrompt(
     /\{\{companyContext\}\}/g,
     p.companyName ? ` at ${p.companyName}` : ''
   );
+
+  // Downsell product/price (audit F2.2). Multi-tenant safety: defaults
+  // preserve the daetradez phrasing so existing personas without a
+  // downsellConfig keep behaving identically. New personas configure
+  // their own product name + price via persona.downsellConfig and the
+  // prompt examples adapt automatically.
+  const downsellCfg =
+    (p.downsellConfig as Record<string, unknown> | null) || {};
+  const downsellProductName =
+    typeof downsellCfg.productName === 'string' &&
+    downsellCfg.productName.trim()
+      ? downsellCfg.productName.trim()
+      : 'Session Liquidity Model';
+  const rawDownsellPrice = downsellCfg.price;
+  const downsellPriceStr =
+    typeof rawDownsellPrice === 'number' && Number.isFinite(rawDownsellPrice)
+      ? String(rawDownsellPrice)
+      : typeof rawDownsellPrice === 'string' && rawDownsellPrice.trim()
+        ? rawDownsellPrice.trim().replace(/^\$/, '')
+        : '497';
+  prompt = prompt.replace(/\{\{downsellProductName\}\}/g, downsellProductName);
+  prompt = prompt.replace(/\{\{downsellPrice\}\}/g, downsellPriceStr);
   // ── Call handoff (setter → closer) ────────────────────────────────
   // Tenant-level rule: the AI is the setter in the DMs, but the actual
   // call is taken by someone else (partner, closer, co-founder).

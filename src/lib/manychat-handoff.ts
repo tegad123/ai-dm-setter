@@ -110,20 +110,18 @@ export async function processManyChatHandoff(params: {
     include: { conversation: true }
   });
 
-  const oneHourAgo = new Date(firedAt.getTime() - 60 * 60 * 1000);
-  if (
-    existingLead?.conversation?.source === 'MANYCHAT' &&
-    existingLead.conversation.manyChatFiredAt &&
-    existingLead.conversation.manyChatFiredAt >= oneHourAgo
-  ) {
-    return {
-      ok: true,
-      duplicate: true,
-      accountId: account.id,
-      leadId: existingLead.id,
-      conversationId: existingLead.conversation.id
-    };
-  }
+  // Note: dedup is enforced at the Message level by ensureOpenerMessage and
+  // ensureLeadResponseMessage (content-keyed). Earlier logic returned early
+  // on any ManyChat handoff fired in the last hour, which silently dropped
+  // legitimate follow-up events — most importantly the second External
+  // Request that carries the lead's button-click as `leadResponseText`.
+  // Multi-step ManyChat sequences fire several events in close succession
+  // and each one needs to land in the thread.
+
+  let conversationId: string;
+  let leadId: string;
+  let leadResponseInserted = false;
+  let aiActiveOnConversation = false;
 
   if (existingLead?.conversation) {
     const updated = await prisma.conversation.update({
@@ -136,7 +134,7 @@ export async function processManyChatHandoff(params: {
         manyChatCommentText: payload.commentText ?? null,
         manyChatFiredAt: firedAt
       },
-      select: { id: true }
+      select: { id: true, aiActive: true }
     });
     await prisma.lead.update({
       where: { id: existingLead.id },
@@ -149,21 +147,15 @@ export async function processManyChatHandoff(params: {
       }
     });
     await ensureOpenerMessage(updated.id, payload.openerMessage, firedAt);
-    await ensureLeadResponseMessage(
+    leadResponseInserted = await ensureLeadResponseMessage(
       updated.id,
       payload.leadResponseText,
       firedAt
     );
-    return {
-      ok: true,
-      duplicate: false,
-      accountId: account.id,
-      leadId: existingLead.id,
-      conversationId: updated.id
-    };
-  }
-
-  if (existingLead) {
+    conversationId = updated.id;
+    leadId = existingLead.id;
+    aiActiveOnConversation = updated.aiActive;
+  } else if (existingLead) {
     const personaId = await resolveActivePersonaIdForCreate(account.id);
     const conversation = await prisma.conversation.create({
       data: {
@@ -178,68 +170,87 @@ export async function processManyChatHandoff(params: {
         manyChatCommentText: payload.commentText ?? null,
         manyChatFiredAt: firedAt
       },
-      select: { id: true }
+      select: { id: true, aiActive: true }
     });
     await ensureOpenerMessage(conversation.id, payload.openerMessage, firedAt);
-    await ensureLeadResponseMessage(
+    leadResponseInserted = await ensureLeadResponseMessage(
       conversation.id,
       payload.leadResponseText,
       firedAt
     );
-    return {
-      ok: true,
-      duplicate: false,
-      accountId: account.id,
-      leadId: existingLead.id,
-      conversationId: conversation.id
-    };
+    conversationId = conversation.id;
+    leadId = existingLead.id;
+    aiActiveOnConversation = conversation.aiActive;
+  } else {
+    const newLeadPersonaId = await resolveActivePersonaIdForCreate(account.id);
+    const lead = await prisma.lead.create({
+      data: {
+        accountId: account.id,
+        name: leadName,
+        handle,
+        platform: 'INSTAGRAM',
+        platformUserId: payload.instagramUserId,
+        triggerType: payload.triggerType === 'comment' ? 'COMMENT' : 'DM',
+        triggerSource,
+        stage: 'NEW_LEAD',
+        conversation: {
+          create: {
+            personaId: newLeadPersonaId,
+            aiActive: account.awayModeInstagram,
+            unreadCount: 0,
+            source: 'MANYCHAT',
+            leadSource: 'OUTBOUND',
+            manyChatOpenerMessage: payload.openerMessage,
+            manyChatTriggerType: payload.triggerType,
+            manyChatCommentText: payload.commentText ?? null,
+            manyChatFiredAt: firedAt
+          }
+        }
+      },
+      include: {
+        conversation: { select: { id: true, aiActive: true } }
+      }
+    });
+
+    await ensureOpenerMessage(
+      lead.conversation!.id,
+      payload.openerMessage,
+      firedAt
+    );
+    leadResponseInserted = await ensureLeadResponseMessage(
+      lead.conversation!.id,
+      payload.leadResponseText,
+      firedAt
+    );
+    conversationId = lead.conversation!.id;
+    leadId = lead.id;
+    aiActiveOnConversation = lead.conversation!.aiActive;
   }
 
-  const newLeadPersonaId = await resolveActivePersonaIdForCreate(account.id);
-  const lead = await prisma.lead.create({
-    data: {
-      accountId: account.id,
-      name: leadName,
-      handle,
-      platform: 'INSTAGRAM',
-      platformUserId: payload.instagramUserId,
-      triggerType: payload.triggerType === 'comment' ? 'COMMENT' : 'DM',
-      triggerSource,
-      stage: 'NEW_LEAD',
-      conversation: {
-        create: {
-          personaId: newLeadPersonaId,
-          aiActive: account.awayModeInstagram,
-          unreadCount: 0,
-          source: 'MANYCHAT',
-          leadSource: 'OUTBOUND',
-          manyChatOpenerMessage: payload.openerMessage,
-          manyChatTriggerType: payload.triggerType,
-          manyChatCommentText: payload.commentText ?? null,
-          manyChatFiredAt: firedAt
-        }
-      }
-    },
-    include: { conversation: { select: { id: true } } }
-  });
-
-  await ensureOpenerMessage(
-    lead.conversation!.id,
-    payload.openerMessage,
-    firedAt
-  );
-  await ensureLeadResponseMessage(
-    lead.conversation!.id,
-    payload.leadResponseText,
-    firedAt
-  );
+  // Schedule the AI reply when the lead actually engaged (button click
+  // landed as a new LEAD message) and the conversation is AI-eligible.
+  // ManyChat's button-click step is the sequence-completion signal —
+  // without scheduling here, the LEAD message just sits in the thread
+  // and the AI never picks it up because no Instagram webhook ever fires
+  // for a button click (it's internal to ManyChat).
+  if (leadResponseInserted && aiActiveOnConversation) {
+    try {
+      const { scheduleAIReply } = await import('@/lib/webhook-processor');
+      await scheduleAIReply(conversationId, account.id);
+    } catch (err) {
+      console.error(
+        `[manychat-handoff] scheduleAIReply failed for conversation ${conversationId} (non-fatal):`,
+        err
+      );
+    }
+  }
 
   return {
     ok: true,
     duplicate: false,
     accountId: account.id,
-    leadId: lead.id,
-    conversationId: lead.conversation!.id
+    leadId,
+    conversationId
   };
 }
 
@@ -280,6 +291,10 @@ async function ensureOpenerMessage(
       timestamp
     }
   });
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastMessageAt: timestamp }
+  });
 }
 
 /**
@@ -296,26 +311,38 @@ async function ensureOpenerMessage(
  * (rare but possible when the operator wires both events to a single
  * action node).
  *
- * Idempotent on (conversationId, sender=LEAD, content).
+ * Idempotent on (conversationId, sender=LEAD, content). Returns true when a
+ * NEW message was inserted, false when nothing was inserted (no content, or
+ * content already in the thread). Caller uses this to decide whether to
+ * schedule an AI reply — content-dedup'd retries must NOT re-schedule.
  */
 async function ensureLeadResponseMessage(
   conversationId: string,
   content: string | undefined,
   openerFiredAt: Date
-): Promise<void> {
+): Promise<boolean> {
   const trimmed = content?.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
   const existing = await prisma.message.findFirst({
     where: { conversationId, sender: 'LEAD', content: trimmed },
     select: { id: true }
   });
-  if (existing) return;
+  if (existing) return false;
+  const leadResponseTimestamp = new Date(openerFiredAt.getTime() + 1000);
   await prisma.message.create({
     data: {
       conversationId,
       sender: 'LEAD',
       content: trimmed,
-      timestamp: new Date(openerFiredAt.getTime() + 1000)
+      timestamp: leadResponseTimestamp
     }
   });
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: {
+      lastMessageAt: leadResponseTimestamp,
+      unreadCount: { increment: 1 }
+    }
+  });
+  return true;
 }

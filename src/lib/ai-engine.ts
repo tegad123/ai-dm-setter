@@ -897,6 +897,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   });
   const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
   const capitalCustomPrompt = personaForGate?.capitalVerificationPrompt ?? null;
+  // Audit F2.2 — multi-tenant downsell wording. Pull product name + price
+  // from persona.downsellConfig with daetradez-compatible fallbacks so
+  // override directives reference the right product/price for any account.
+  const downsellCfgForGate = (personaForGate?.downsellConfig || {}) as Record<
+    string,
+    unknown
+  >;
+  const downsellProductName =
+    typeof downsellCfgForGate.productName === 'string' &&
+    downsellCfgForGate.productName.trim()
+      ? downsellCfgForGate.productName.trim()
+      : 'Session Liquidity Model';
+  const downsellPriceStr = (() => {
+    const raw = downsellCfgForGate.price;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim().replace(/^\$/, '');
+    }
+    return '497';
+  })();
+  const downsellPriceWithSign = `$${downsellPriceStr}`;
   const promptConfigForGate = (personaForGate?.promptConfig || {}) as {
     callHandoff?: { closerName?: string };
     homeworkUrl?: unknown;
@@ -1766,7 +1787,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           break;
         case 'answer_below_threshold': {
           const stated = formatCapitalAmountForDirective(r24LastResult);
-          let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Your ONLY valid next action is the DOWNSELL PITCH. Do NOT ask more trading questions. Do NOT ask what they're working on. Do NOT give market / strategy advice. Do NOT route to booking. Do NOT send the Typeform / application form. Do NOT say "the team will reach out". Do NOT re-ask the capital question.\n\nFire the script's Step 9 "Not Qualified" branch NOW: acknowledge their situation in one short line (no judgment, no lecture), then present the lower-ticket course / downsell from the script ("my $497 Session Liquidity Model course breaks it down — same strategy, you learn on your own pace while you build capital" style). Wait for their answer to the downsell before any further routing. If your script has no downsell, send a soft-exit message that keeps the door open. Continuing the qualification dialogue after a confirmed capital miss is the exact failure mode this rule exists to prevent.`;
+          let baseDirective = `The lead's stated capital (${stated}) is below the minimum threshold (${thresholdStr}). Your ONLY valid next action is the DOWNSELL PITCH. Do NOT ask more trading questions. Do NOT ask what they're working on. Do NOT give market / strategy advice. Do NOT route to booking. Do NOT send the Typeform / application form. Do NOT say "the team will reach out". Do NOT re-ask the capital question.\n\nFire the script's Step 9 "Not Qualified" branch NOW: acknowledge their situation in one short line (no judgment, no lecture), then present the lower-ticket course / downsell from the script ("my ${downsellPriceWithSign} ${downsellProductName} course breaks it down — same strategy, you learn on your own pace while you build capital" style). Wait for their answer to the downsell before any further routing. If your script has no downsell, send a soft-exit message that keeps the door open. Continuing the qualification dialogue after a confirmed capital miss is the exact failure mode this rule exists to prevent.`;
 
           // GEOGRAPHY GATE — funding-partner programs only onboard
           // US/CA leads. When the lead is elsewhere, strip the
@@ -1781,7 +1802,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             recentLeadMessages
           );
           if (geo.restricted) {
-            baseDirective += `\n\nGEOGRAPHY GATE: The lead is based in ${geo.country}. Funding-partner programs (FTMO-style funded accounts, broker prop programs) are only available to leads in the US and Canada. DO NOT route this lead to the funding-partner branch under any circumstances. The only options you may offer here are: (1) the $497 course downsell, or (2) a free YouTube / resource redirect. Do not explain how prop firms work. Do not mention funded accounts, challenges, or third-party capital as an option.`;
+            baseDirective += `\n\nGEOGRAPHY GATE: The lead is based in ${geo.country}. Funding-partner programs (FTMO-style funded accounts, broker prop programs) are only available to leads in the US and Canada. DO NOT route this lead to the funding-partner branch under any circumstances. The only options you may offer here are: (1) the ${downsellPriceWithSign} course downsell, or (2) a free YouTube / resource redirect. Do not explain how prop firms work. Do not mention funded accounts, challenges, or third-party capital as an option.`;
             console.warn(
               `[ai-engine] R24 geography gate: restricted country "${geo.country}" detected for conv ${activeConversationId} — funding-partner path blocked`
             );
@@ -2038,7 +2059,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         f.includes('capital_q_after_implicit_no:')
       );
       if (capitalAfterImplicitNoFailed) {
-        const directive = `\n\n===== CAPITAL Q AFTER IMPLICIT NO =====\nThe lead has ALREADY told you they have no money in this conversation — "I'm a student", "no job", "broke", "I got nothing", or similar. That IS their capital answer. Asking the threshold question on top of it ignores them and reads as the bot not paying attention.\n\nWhat to do instead on this regen:\n  • Acknowledge what they said briefly + with empathy ("damn ok bro, gotchu" / "ah I hear you fr").\n  • Pivot to the script's downsell / lower-tier option (the $497 course / funding-partner option / YouTube channel as appropriate).\n  • Do NOT ask "do you have at least $X" or "what's your capital situation" or "how much you working with" or any variant. Capital was answered.\nForbidden phrases on this regen: "do you have at least", "you got at least", "at least \\$1k", "capital ready", "what's your capital situation", "how much you working with", "set aside for".\n=====`;
+        const directive = `\n\n===== CAPITAL Q AFTER IMPLICIT NO =====\nThe lead has ALREADY told you they have no money in this conversation — "I'm a student", "no job", "broke", "I got nothing", or similar. That IS their capital answer. Asking the threshold question on top of it ignores them and reads as the bot not paying attention.\n\nWhat to do instead on this regen:\n  • Acknowledge what they said briefly + with empathy ("damn ok bro, gotchu" / "ah I hear you fr").\n  • Pivot to the script's downsell / lower-tier option (the ${downsellPriceWithSign} ${downsellProductName} course / funding-partner option / YouTube channel as appropriate).\n  • Do NOT ask "do you have at least $X" or "what's your capital situation" or "how much you working with" or any variant. Capital was answered.\nForbidden phrases on this regen: "do you have at least", "you got at least", "at least \\$1k", "capital ready", "what's your capital situation", "how much you working with", "set aside for".\n=====`;
         systemPromptForLLM = baseSystemPrompt + directive;
         console.warn(
           `[ai-engine] Capital question after implicit-no detected — forcing regen to downsell branch (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -2342,7 +2363,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         f.includes('closer_or_call_in_downsell:')
       );
       if (closerOrCallInDownsellFailed) {
-        const downsellCallOverride = `\n\n===== NO CLOSER / NO CALL IN DOWNSELL =====\nThis lead is UNQUALIFIED for the main mentorship. The downsell is a SELF-SERVE COURSE — flat one-time price, no call, no closer. The previous reply mentioned the closer / a call / "pricing covered on the call" — that's wrong here.\n\nIf the lead asked about price, state the downsell course price directly from the script (e.g. "it's a one-time $497 bro, you get the full course"). If the persona has no downsell configured, route to the YouTube free-resource fallback per the script — no pricing discussion.\n\nDO NOT name-check the closer. DO NOT mention any call. DO NOT defer pricing to "the call". DO NOT pitch booking or scheduling. The qualification flow is over for this lead.\n=====`;
+        const downsellCallOverride = `\n\n===== NO CLOSER / NO CALL IN DOWNSELL =====\nThis lead is UNQUALIFIED for the main mentorship. The downsell is a SELF-SERVE COURSE — flat one-time price, no call, no closer. The previous reply mentioned the closer / a call / "pricing covered on the call" — that's wrong here.\n\nIf the lead asked about price, state the downsell course price directly from the script (e.g. "it's a one-time ${downsellPriceWithSign} bro, you get the full course"). If the persona has no downsell configured, route to the YouTube free-resource fallback per the script — no pricing discussion.\n\nDO NOT name-check the closer. DO NOT mention any call. DO NOT defer pricing to "the call". DO NOT pitch booking or scheduling. The qualification flow is over for this lead.\n=====`;
         systemPromptForLLM = baseSystemPrompt + downsellCallOverride;
         console.warn(
           `[ai-engine] Closer/call mention in downsell context — forcing regen with downsell-only override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
