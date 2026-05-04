@@ -138,6 +138,7 @@ export async function processManyChatHandoff(params: {
         triggerSource
       }
     });
+    await ensureOpenerMessage(updated.id, payload.openerMessage, firedAt);
     return {
       ok: true,
       duplicate: false,
@@ -164,6 +165,7 @@ export async function processManyChatHandoff(params: {
       },
       select: { id: true }
     });
+    await ensureOpenerMessage(conversation.id, payload.openerMessage, firedAt);
     return {
       ok: true,
       duplicate: false,
@@ -201,6 +203,12 @@ export async function processManyChatHandoff(params: {
     include: { conversation: { select: { id: true } } }
   });
 
+  await ensureOpenerMessage(
+    lead.conversation!.id,
+    payload.openerMessage,
+    firedAt
+  );
+
   return {
     ok: true,
     duplicate: false,
@@ -208,4 +216,43 @@ export async function processManyChatHandoff(params: {
     leadId: lead.id,
     conversationId: lead.conversation!.id
   };
+}
+
+/**
+ * Insert the ManyChat opener as a Message row so it appears in the
+ * conversation thread (dashboard UI + AI prompt history).
+ *
+ * Uses sender=AI so the dashboard renders it inline like any other
+ * outbound message — that's also what the lead saw on Instagram, so
+ * treating it as an AI-side message in the thread is faithful to the
+ * lead's experience. The voice-quality analyzer keys off training
+ * examples + persona style profile, not raw message history, so
+ * including this static templated opener does not pollute style
+ * inference.
+ *
+ * Idempotent: skips creation if any message with this exact content
+ * already exists on the conversation. Necessary because ManyChat may
+ * re-fire the External Request on flow re-entry (e.g. lead unfollows +
+ * refollows) and we don't want duplicates in the thread.
+ */
+async function ensureOpenerMessage(
+  conversationId: string,
+  content: string,
+  timestamp: Date
+): Promise<void> {
+  const trimmed = content.trim();
+  if (!trimmed) return;
+  const existing = await prisma.message.findFirst({
+    where: { conversationId, sender: 'AI', content: trimmed },
+    select: { id: true }
+  });
+  if (existing) return;
+  await prisma.message.create({
+    data: {
+      conversationId,
+      sender: 'AI',
+      content: trimmed,
+      timestamp
+    }
+  });
 }
