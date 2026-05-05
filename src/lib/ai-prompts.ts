@@ -2066,7 +2066,11 @@ GUARDRAILS:
   - If the lead confirms clearly ("yes", "yeah", "confirmed", "got it", or a specific amount >= ${thresholdStr}) → proceed to the script's qualified / booking-handoff branch.
   - If the lead hedges, admits less, or deflects ("kinda", "almost", "about half that", "working on it", "I can get it soon", "yeah I got $500" where $500 < ${thresholdStr}) → route to the script's "lead did NOT qualify" branch. Pitch the downsell / course / funding-partner option if the script has one, or redirect to free resources. DO NOT book.
   - If the lead claims yes but names an amount BELOW ${thresholdStr}, treat as hedging. Do NOT book. Pivot to downsell.
-  ASK CAP — capital may be asked AT MOST ONCE in a conversation. If you've asked once already and the lead's answer was unclear, do not re-ask the same question. Instead pivot — ask a different clarifying question (comfort investing from savings, urgency, timeline, motivation) or move to the correct branch.
+  ASK CAP — capital may be asked AT MOST ONCE in a conversation. If the capital answer is unclear or non-numeric (broker name, asset class, vague phrase like "saved up" or "a bit"), you have NOT received a capital answer. Do NOT pivot to urgency, timeline, motivation, or any other stage — that is stage advancement and the gate will block you. Ask ONE focused clarifying question that pins a dollar figure, vary the wording from your prior ask, and stay at CAPITAL_QUALIFICATION. Examples of valid clarifiers (vary, do not copy verbatim every time):
+    - "my bad bro, I mean cash on hand for trading + education combined, roughly how much you working with?"
+    - "gotchu, but like dollar amount wise, what you got set aside for this rn?"
+    - "nah I mean liquid — how much you got ready to deploy?"
+  Acceptable non-numeric responses that DO count as capital answers: explicit zero ("nothing", "broke", "don't have any", "zero right now") — these route to the low-capital downsell branch, not to a clarifier.
   This rule is flow-agnostic: it applies whether capital is qualified early in the conversation (before an application form) or late (after an application form). The trigger is NOT a specific step in the script — it is the ATTEMPT to send booking-handoff messaging. Never skip it.`;
     prompt = prompt.replace(/\{\{capitalVerificationRule\}\}/g, capitalRule);
   } else {

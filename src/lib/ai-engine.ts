@@ -1139,6 +1139,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   );
   const capitalVerificationSatisfied =
     hasCapitalVerificationQuestionAndAnswer(conversationHistory);
+  const previousAiTurnContent =
+    lastAiTurn?.content ?? lastAiMsg?.content ?? null;
+  const prevAiTurnWasCapitalAsk = previousAiTurnContent
+    ? containsCapitalQuestion(previousAiTurnContent)
+    : false;
   const botDetectionCount = conversationHistory.filter(
     (m) => isLeadCapitalParseCandidate(m) && isBotDetectionQuestion(m.content)
   ).length;
@@ -1660,6 +1665,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         capitalThreshold,
         capitalCustomPrompt,
         closerNames,
+        prevAiTurnWasCapitalAsk,
         currentTurnLeadMsg: lastLeadMsg
           ? {
               sender: lastLeadMsg.sender,
@@ -1878,7 +1884,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           auditErr
         );
       }
-      const fixBDirective = `Your previous reply attempted to advance this conversation toward a call pitch, booking, or resource handoff — but the lead has NOT yet confirmed they have at least ${thresholdStr} in capital available to start. You MUST regenerate. Your next reply MUST ask the capital verification question before pitching the call, application, or any next step. Use the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") — whichever fits your voice. Do NOT pitch the call or drop any link until the lead confirms an amount. This was detected at LLM stage=${parsed.stage || 'unknown'}, sub_stage=${parsed.subStage ?? 'null'} — so your internal stage labeling is not enough: you must actually ask the question before any advancement language.`;
+      const fixBDirective = `Your previous reply attempted to advance this conversation toward a call pitch, booking, or resource handoff — but the lead has NOT yet confirmed they have at least ${thresholdStr} in capital available to start. You MUST regenerate. Your next reply MUST ask the capital verification question before pitching the call, application, or any next step. Use the threshold-confirming form ("you got at least ${thresholdStr} in capital ready to start?") or the open-ended form ("how much do you have set aside?") — whichever fits your voice. Do NOT pitch the call or drop any link until the lead confirms an amount. This was detected at LLM stage=${parsed.stage || 'unknown'}, sub_stage=${parsed.subStage ?? 'null'} — so your internal stage labeling is not enough: you must actually ask the question before any advancement language.
+
+CRITICAL: Lead has not given a capital number yet. Ask one varied clarifier that pins a dollar figure. Do NOT ask the urgency/timeline/motivation/goal question. Do NOT repeat your prior capital question verbatim — vary the phrasing. Stay at CAPITAL_QUALIFICATION.`;
       const fixBOverride = `\n\n===== CRITICAL CAPITAL-VERIFICATION OVERRIDE (Fix B) =====\n${fixBDirective}\n=====`;
       systemPromptForLLM = baseSystemPrompt + fixBOverride;
       console.warn(
@@ -4513,17 +4521,53 @@ export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
  * Returns false for verification questions ("you got at least $X?")
  * and for normal qualification Q&A.
  */
-export function detectBookingAdvancement(
+export type BookingAdvancementReason =
+  | 'reported_booking_stage'
+  | 'reported_advancement_stage'
+  | 'advancement_language'
+  | 'closer_name_call_language'
+  | 'post_capital_non_numeric_pivot';
+
+export interface BookingAdvancementDecision {
+  advancement: boolean;
+  reason: BookingAdvancementReason | null;
+}
+
+interface BookingAdvancementOptions {
+  closerNames?: string[];
+  prevAiTurnWasCapitalAsk?: boolean;
+  capitalVerified?: boolean;
+}
+
+function normalizeBookingAdvancementOptions(
+  optionsOrCloserNames: string[] | BookingAdvancementOptions
+): BookingAdvancementOptions {
+  return Array.isArray(optionsOrCloserNames)
+    ? { closerNames: optionsOrCloserNames }
+    : optionsOrCloserNames;
+}
+
+export function detectBookingAdvancementDetails(
   parsed: ParsedAIResponse,
-  closerNames: string[] = []
-): boolean {
+  optionsOrCloserNames: string[] | BookingAdvancementOptions = []
+): BookingAdvancementDecision {
+  const options = normalizeBookingAdvancementOptions(optionsOrCloserNames);
   const stage = (parsed.stage || '').toUpperCase();
   if (
-    stage === 'BOOKING' ||
-    stage === 'SOFT_PITCH_COMMITMENT' ||
-    stage === 'FINANCIAL_SCREENING'
+    options.prevAiTurnWasCapitalAsk === true &&
+    options.capitalVerified !== true &&
+    (stage === 'URGENCY' ||
+      stage === 'GOAL_EMOTIONAL_WHY' ||
+      stage === 'SOFT_PITCH_COMMITMENT')
   ) {
-    return true;
+    return { advancement: true, reason: 'post_capital_non_numeric_pivot' };
+  }
+
+  if (stage === 'BOOKING') {
+    return { advancement: true, reason: 'reported_booking_stage' };
+  }
+  if (stage === 'SOFT_PITCH_COMMITMENT' || stage === 'FINANCIAL_SCREENING') {
+    return { advancement: true, reason: 'reported_advancement_stage' };
   }
   const joined =
     Array.isArray(parsed.messages) && parsed.messages.length > 0
@@ -4546,20 +4590,32 @@ export function detectBookingAdvancement(
     /\bhere'?s\s+the\s+link\b/i,
     /\b(you'?re\s+)?all\s+set\b/i
   ];
-  if (advancementPhrases.some((p) => p.test(joined))) return true;
+  if (advancementPhrases.some((p) => p.test(joined))) {
+    return { advancement: true, reason: 'advancement_language' };
+  }
   // Closer-name mentions combined with call-arrangement language.
   // Fires when the LLM says "chat with {closerName}" or similar at
   // ANY stage — Daniel's AI has pitched closer-name calls at OPENING before.
-  for (const name of closerNames) {
+  for (const name of options.closerNames ?? []) {
     if (!name || name.trim().length < 2) continue;
     const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pat = new RegExp(
       `\\b(call|chat|hop\\s+on.*|set\\s+(it|you)\\s+up|link.*apply|link.*book|get\\s+you\\s+set).*${escaped}|${escaped}.*\\b(call|chat|reach\\s+out|gonna\\s+contact|get\\s+in\\s+touch)\\b`,
       'i'
     );
-    if (pat.test(joined)) return true;
+    if (pat.test(joined)) {
+      return { advancement: true, reason: 'closer_name_call_language' };
+    }
   }
-  return false;
+  return { advancement: false, reason: null };
+}
+
+export function detectBookingAdvancement(
+  parsed: ParsedAIResponse,
+  optionsOrCloserNames: string[] | BookingAdvancementOptions = []
+): boolean {
+  return detectBookingAdvancementDetails(parsed, optionsOrCloserNames)
+    .advancement;
 }
 
 interface CapitalVerificationBlockResult {
@@ -4569,7 +4625,8 @@ interface CapitalVerificationBlockResult {
     | 'already_verified'
     | 'verified_in_history'
     | 'not_advancing'
-    | 'capital_not_verified_before_advancement';
+    | 'capital_not_verified_before_advancement'
+    | 'post_capital_non_numeric_pivot';
 }
 
 /**
@@ -4594,6 +4651,7 @@ async function shouldBlockForCapitalVerification(params: {
   capitalThreshold: number | null;
   capitalCustomPrompt: string | null;
   closerNames?: string[];
+  prevAiTurnWasCapitalAsk?: boolean;
   currentTurnLeadMsg?: {
     sender?: string;
     content: string;
@@ -4641,8 +4699,19 @@ async function shouldBlockForCapitalVerification(params: {
     return { blocked: false, reason: 'verified_in_history' };
   }
   // Check the current response for advancement. If yes → block.
-  if (detectBookingAdvancement(parsed, params.closerNames ?? [])) {
-    return { blocked: true, reason: 'capital_not_verified_before_advancement' };
+  const advancement = detectBookingAdvancementDetails(parsed, {
+    closerNames: params.closerNames ?? [],
+    prevAiTurnWasCapitalAsk: params.prevAiTurnWasCapitalAsk === true,
+    capitalVerified: r24.reason === 'answer_below_threshold'
+  });
+  if (advancement.advancement) {
+    return {
+      blocked: true,
+      reason:
+        advancement.reason === 'post_capital_non_numeric_pivot'
+          ? 'post_capital_non_numeric_pivot'
+          : 'capital_not_verified_before_advancement'
+    };
   }
   return { blocked: false, reason: 'not_advancing' };
 }

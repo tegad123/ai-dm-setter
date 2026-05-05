@@ -21,7 +21,8 @@ export type AssertionType =
   | 'ACCEPTANCE_HONORED'
   | 'INTENT_DEDUP_ENFORCED'
   | 'POSITIVE_ACKNOWLEDGED'
-  | 'MANYCHAT_STAGE_SKIP_BLOCKED';
+  | 'MANYCHAT_STAGE_SKIP_BLOCKED'
+  | 'POST_CAPITAL_CLARIFIER_ENFORCED';
 
 export interface FixturePersonaConfig {
   freeValueLink?: string | null;
@@ -67,6 +68,7 @@ export interface ConversationFixture {
   lastLeadMessage: string;
   recordedAssistantReply?: string;
   blockedDraftReply?: string;
+  blockedDraftStage?: string;
   capturedDataPoints?: Record<string, unknown>;
   capitalAsked?: boolean;
   systemStage?: string;

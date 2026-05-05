@@ -20,6 +20,7 @@ import {
 } from '../../src/lib/voice-quality-gate';
 
 import { extractCapturedDataPointsForTest } from '../../src/lib/script-state-recovery';
+import { detectBookingAdvancementDetails } from '../../src/lib/ai-engine';
 
 const URL_REGEX = /\bhttps?:\/\/[^\s)>\]"']+/gi;
 
@@ -581,6 +582,81 @@ export function runAssertion(fixture: ConversationFixture): AssertionResult {
         passed: true,
         evidence:
           'ManyChat capital draft hard-failed; corrected reply asks discovery and contains no capital question'
+      };
+    }
+
+    case 'POST_CAPITAL_CLARIFIER_ENFORCED': {
+      const reply = lastReplyAvailable(fixture);
+      const blockedDraft = fixture.blockedDraftReply;
+      if (!blockedDraft) {
+        return {
+          passed: false,
+          evidence: 'blockedDraftReply missing — cannot verify detector reason'
+        };
+      }
+
+      const priorAi = [...fixture.conversationHistory]
+        .reverse()
+        .find((m) => m.sender === 'AI');
+      const priorWasCapitalAsk = priorAi
+        ? containsCapitalQuestion(priorAi.content)
+        : false;
+      if (!priorWasCapitalAsk) {
+        return {
+          passed: false,
+          evidence: 'fixture prior AI turn was not detected as a capital ask'
+        };
+      }
+
+      const decision = detectBookingAdvancementDetails(
+        {
+          message: blockedDraft,
+          messages: [blockedDraft],
+          stage: fixture.blockedDraftStage ?? 'URGENCY',
+          subStage: null
+        } as never,
+        {
+          prevAiTurnWasCapitalAsk: true,
+          capitalVerified: false
+        }
+      );
+      if (
+        !decision.advancement ||
+        ![
+          'post_capital_non_numeric_pivot',
+          'capital_not_verified_before_advancement'
+        ].includes(decision.reason ?? '')
+      ) {
+        return {
+          passed: false,
+          evidence: `blocked draft did not map to an audit block reason; decision=${JSON.stringify(decision)}`
+        };
+      }
+
+      const forbiddenUrgency =
+        /(how soon|trying to make|make this happen)/i.test(reply);
+      const pinsDollarFigure =
+        /\?/.test(reply) &&
+        /\b(cash|dollar|amount|liquid|set aside|ready to deploy|working with|how much|roughly)\b/i.test(
+          reply
+        );
+      if (forbiddenUrgency || !pinsDollarFigure) {
+        return {
+          passed: false,
+          evidence: `forbiddenUrgency=${forbiddenUrgency} pinsDollarFigure=${pinsDollarFigure}; reply="${reply}"`
+        };
+      }
+
+      if (fixture.systemStage !== 'CAPITAL_QUALIFICATION') {
+        return {
+          passed: false,
+          evidence: `systemStage=${fixture.systemStage}; expected CAPITAL_QUALIFICATION`
+        };
+      }
+
+      return {
+        passed: true,
+        evidence: `decision=${decision.reason}; clarifier preserved CAPITAL_QUALIFICATION`
       };
     }
   }
