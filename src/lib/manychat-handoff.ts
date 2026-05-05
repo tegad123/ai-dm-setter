@@ -316,18 +316,19 @@ export async function processManyChatHandoff(params: {
  * Insert the ManyChat opener as a Message row so it appears in the
  * conversation thread (dashboard UI + AI prompt history).
  *
- * Uses sender=AI so the dashboard renders it inline like any other
- * outbound message — that's also what the lead saw on Instagram, so
- * treating it as an AI-side message in the thread is faithful to the
- * lead's experience. The voice-quality analyzer keys off training
- * examples + persona style profile, not raw message history, so
- * including this static templated opener does not pollute style
- * inference.
+ * Uses sender=MANYCHAT so the dashboard renders it with the violet
+ * "ManyChat · automation" treatment — operators can immediately tell
+ * which messages came from the ManyChat sequence vs the AI Setter.
+ * The voice-quality analyzer keys off training examples + persona
+ * style profile, not raw message history, so including this static
+ * templated opener does not pollute style inference.
  *
  * Idempotent: skips creation if any message with this exact content
- * already exists on the conversation. Necessary because ManyChat may
- * re-fire the External Request on flow re-entry (e.g. lead unfollows +
- * refollows) and we don't want duplicates in the thread.
+ * already exists on the conversation, regardless of whether it was
+ * previously stored as MANYCHAT (current) or AI (legacy, before the
+ * MANYCHAT enum value existed). Without the legacy `AI` match here,
+ * re-fires on already-handed-off conversations would double-store
+ * the opener.
  */
 async function ensureOpenerMessage(
   conversationId: string,
@@ -337,14 +338,18 @@ async function ensureOpenerMessage(
   const trimmed = content.trim();
   if (!trimmed) return;
   const existing = await prisma.message.findFirst({
-    where: { conversationId, sender: 'AI', content: trimmed },
+    where: {
+      conversationId,
+      sender: { in: ['MANYCHAT', 'AI'] },
+      content: trimmed
+    },
     select: { id: true }
   });
   if (existing) return;
   await prisma.message.create({
     data: {
       conversationId,
-      sender: 'AI',
+      sender: 'MANYCHAT',
       content: trimmed,
       systemPromptVersion: 'manychat-automation',
       timestamp
