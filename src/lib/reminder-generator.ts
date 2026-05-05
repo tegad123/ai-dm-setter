@@ -23,9 +23,20 @@ export function buildReminderPromptAppendix(params: {
   const { messageType, scheduledCallAt, scheduledCallTimezone, leadName } =
     params;
 
-  // Format the call time in the lead's timezone if we have one
+  // Format the call time in the lead's timezone if we have one. Audit
+  // fix 6 (2026-05-05): when timezone is unknown, do NOT invent a
+  // specific time — Wout's CDT-stamped reminder ("5:00 PM CDT") for
+  // an Amsterdam lead caused the missed call. Fall back to "tomorrow"
+  // / "later today" wording instead, and the prompt rules below
+  // already instruct the LLM to use generic time language in that
+  // case.
+  const haveTz =
+    typeof scheduledCallTimezone === 'string' &&
+    scheduledCallTimezone.trim().length > 0;
   const callLabel = scheduledCallAt
-    ? formatCallInTz(scheduledCallAt, scheduledCallTimezone)
+    ? haveTz
+      ? formatCallInTz(scheduledCallAt, scheduledCallTimezone)
+      : '(time scheduled, but lead timezone unknown — use "tomorrow" / "later today" wording, do NOT state a specific clock time)'
     : '(no time set)';
 
   const commonRules = `

@@ -26,6 +26,23 @@ export const TYPEFORM_BOOKING_URL = 'https://form.typeform.com/to/AGUtPdmb';
 const FOLLOW_UP_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
 const BOOKING_LINK_FOLLOWUP_MS = 30 * 60 * 1000; // 30min
 
+// Audit fix 3 (2026-05-05): hard caps on outbound nudges. Five
+// follow-ups in 24h after Typeform reads as harassment; once the lead
+// has soft-exited, ANY further proactive outreach is harassment. The
+// cron also schedules WINDOW_KEEPALIVE rows on its own cadence — cap
+// the total to prevent multi-day pinging on the same conversation.
+// Counted via existing ScheduledMessage rows so no schema migration
+// is required; counters stay accurate even across deploys.
+const MAX_FOLLOWUPS_AFTER_TYPEFORM = 2;
+const MAX_FOLLOWUPS_AFTER_SOFT_EXIT = 0;
+const MAX_KEEPALIVES_TOTAL = 3;
+
+// Treat already-fired AND in-flight rows as counting toward the cap
+// so a retry mid-cascade doesn't blow past the limit. CANCELLED rows
+// don't count (the lead replied, cascade was reset). FAILED rows
+// don't count (we want to allow a retry up to the cap).
+const COUNTABLE_STATUSES = ['PENDING', 'FIRING', 'FIRED'] as const;
+
 const FOLLOW_UP_TYPES: ScheduledMessageType[] = [
   'FOLLOW_UP_1',
   'FOLLOW_UP_2',
@@ -150,6 +167,25 @@ export interface FollowUpGateResult {
  * AI message looks like a soft-exit / unqualified-redirect, in which case
  * the caller must NOT schedule a follow-up cascade.
  */
+// Audit fix 3 helper. Counts ScheduledMessage rows of a given type set
+// (PENDING + SENT) on a conversation and returns whether scheduling
+// the next one would exceed `cap`. Caller-side caps replace the schema
+// counters proposed in the audit spec — same semantics, no migration.
+async function wouldExceedCap(
+  conversationId: string,
+  types: ScheduledMessageType[],
+  cap: number
+): Promise<boolean> {
+  const count = await prisma.scheduledMessage.count({
+    where: {
+      conversationId,
+      messageType: { in: types },
+      status: { in: [...COUNTABLE_STATUSES] }
+    }
+  });
+  return count >= cap;
+}
+
 export function shouldSkipFollowUp(
   input: FollowUpGateInput
 ): FollowUpGateResult {
@@ -349,6 +385,30 @@ export async function scheduleNextInCascade(
 
   const useBookingBody =
     firedType === 'BOOKING_LINK_FOLLOWUP' || isBookingCascadeBody(firedBody);
+
+  // Audit fix 3: cap follow-ups inside a Typeform cascade at
+  // MAX_FOLLOWUPS_AFTER_TYPEFORM. Once that many post-Typeform nudges
+  // have been queued/sent, any further extension reads as harassment —
+  // bail out and let the conversation rest until the lead engages.
+  if (useBookingBody) {
+    const exceeded = await wouldExceedCap(
+      conversationId,
+      [
+        'BOOKING_LINK_FOLLOWUP',
+        'FOLLOW_UP_1',
+        'FOLLOW_UP_2',
+        'FOLLOW_UP_3',
+        'FOLLOW_UP_SOFT_EXIT'
+      ],
+      MAX_FOLLOWUPS_AFTER_TYPEFORM + 1 // +1 because the original Typeform-shipping AI message is upstream of this cascade
+    );
+    if (exceeded) {
+      console.log(
+        `[follow-up-sequence] cascade ${firedType} → ${nextType} skipped for ${conversationId} — MAX_FOLLOWUPS_AFTER_TYPEFORM (${MAX_FOLLOWUPS_AFTER_TYPEFORM}) reached, awaiting lead re-engagement`
+      );
+      return null;
+    }
+  }
   const body = useBookingBody
     ? BOOKING_FOLLOW_UP_BODIES[nextType]
     : FOLLOW_UP_BODIES[nextType];

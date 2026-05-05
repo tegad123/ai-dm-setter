@@ -1310,6 +1310,61 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9c-ii. R19 EXTENSION — fabricated UNCERTAINTY about the next step. The
+  // AI always knows the next step (it has a script). Lines like "give me
+  // a sec to double-check the right next step", "let me get back to you
+  // on that", "not sure what to send" all signal a hallucinated pause
+  // and have caused multi-hour silence after capital was confirmed
+  // (audit case 2026-05-05). Treated as a hard fail so regeneration
+  // forces the AI to actually pick the next script step.
+  const FABRICATED_UNCERTAINTY_PATTERNS: RegExp[] = [
+    /\bgive me a sec to (check|double.?check|look|verify)\b/i,
+    /\blet me (check|double.?check|verify|look into) the (right|next|best)\b/i,
+    /\bi don.?t wanna point you wrong\b/i,
+    /\bnot sure (what|how) to\b/i,
+    /\blet me get back to you on (that|this)\b/i,
+    /\bi need to (check|verify|confirm) (first|before)\b/i
+  ];
+  for (const pat of FABRICATED_UNCERTAINTY_PATTERNS) {
+    if (pat.test(reply)) {
+      hardFails.push(
+        `fabricated_uncertainty: matched "${pat.source}" — the AI always knows the next script step; uncertainty is never a valid response`
+      );
+      break;
+    }
+  }
+
+  // 9c-iii. REPEATED-QUESTION HARD BLOCK. The soft signal at the
+  // jaccard ≥ 0.7 threshold below catches semantic re-asks but is
+  // overrideable when the rest of the reply scores well. These five
+  // exact phrases have shown up in production as same-question-twice
+  // failures and never have a legitimate re-ask reason — hard-block
+  // them when ANY recent AI message asked the same question.
+  const REPEATED_QUESTION_EXACT_PATTERNS: RegExp[] = [
+    /\bhow soon are you trying to make this happen\b/i,
+    /\bwhat'?s the main thing holding you back\b/i,
+    /\bwhat'?s your capital situation\b/i,
+    /\bwhat do you do for work\b/i,
+    /\bhow much are you trying to make\b/i
+  ];
+  const recentAIBlob = [
+    options?.previousAIMessage || '',
+    ...(options?.recentAIMessages || []),
+    ...(options?.previousAIQuestions || [])
+  ]
+    .filter((s): s is string => typeof s === 'string')
+    .join('\n');
+  if (recentAIBlob.trim().length > 0) {
+    for (const pat of REPEATED_QUESTION_EXACT_PATTERNS) {
+      if (pat.test(reply) && pat.test(recentAIBlob)) {
+        hardFails.push(
+          `repeated_question_exact: matched "${pat.source}" in both the new reply and a recent AI message — the lead has already answered, advance based on their answer`
+        );
+        break;
+      }
+    }
+  }
+
   // 9d. R19 EXTENSION — fabricated FUTURE plans/releases. Mirror of 9c in
   // the forward direction. Production example: lead asked "is part 2 of
   // the video out?" and the AI invented "part 2 is in the works, stay
@@ -2131,7 +2186,15 @@ export function scoreVoiceQuality(
         if (sim > bestSim) bestSim = sim;
       }
     }
-    if (bestSim >= 0.7) {
+    if (bestSim >= 0.85) {
+      // Tighter than the soft-signal threshold below — at this similarity
+      // it's effectively the same question. Force regeneration with a
+      // directive to advance based on the lead's prior answer rather
+      // than re-ask.
+      hardFails.push(
+        `repeated_question: similarity=${bestSim.toFixed(2)} between current question and a recent AI question — the lead has already answered, advance based on their answer instead of re-asking`
+      );
+    } else if (bestSim >= 0.7) {
       softSignals.repeated_question = -0.4;
     }
   }
@@ -2400,6 +2463,103 @@ export function scoreVoiceQuality(
     const leadNotUnqualified = options?.leadStage !== 'UNQUALIFIED';
     if (conversationShort && capitalNotFailed && leadNotUnqualified) {
       softSignals.premature_soft_exit_warm_lead = -0.4;
+    }
+  }
+
+  // ── EXPLICIT SOFT-EXIT FROM LEAD (hard fail when AI ignores) ────
+  // The lead has explicitly said "for now I'm not interested" / "I'll
+  // come back when I'm ready" / "I appreciate you but…" — not
+  // hesitation, an explicit decline. The AI must close gracefully and
+  // stop qualifying. Hard-fail any reply that asks another
+  // qualification question or pushes the script further. Forces regen
+  // with a directive that produces a single warm-close message.
+  const SOFT_EXIT_PATTERNS: RegExp[] = [
+    /\bfor now i (don['’]?t|do not|won['’]?t|will not) (think|need|want)\b/i,
+    /\bi['’]?(ll| will) (come back|reach out|hit you up|return) (later|when|if)\b/i,
+    /\bi need to (do|go through|figure out) (this|it) (myself|on my own|alone)\b/i,
+    /\bi think i (have|need) to go through it (myself|by myself|alone)\b/i,
+    /\bi appreciate you[\.,]/i,
+    /\bthank you.{0,30}but (for now|right now|at this point)\b/i
+  ];
+  if (
+    typeof options?.previousLeadMessage === 'string' &&
+    options.previousLeadMessage.trim().length > 0 &&
+    SOFT_EXIT_PATTERNS.some((p) => p.test(options.previousLeadMessage!))
+  ) {
+    const replyHasQuestion = /\?/.test(reply);
+    // Re-engagement keywords that would push the conversation forward
+    // when the lead has explicitly tapped out. Calibration vs
+    // false-positives kept tight: the AI is allowed to thank them and
+    // leave the door open, just not ask another qualifying question or
+    // pitch.
+    const replyKeepsPushing =
+      /\b(capital|trading background|how soon|how much|what['’]?s your|what do you|book a call|hop on a call|jump on a call|schedule|application|typeform)\b/i.test(
+        reply
+      );
+    if (replyHasQuestion || replyKeepsPushing) {
+      hardFails.push(
+        `explicit_soft_exit_ignored: lead's previous message indicated explicit soft exit ("${options.previousLeadMessage.trim().slice(0, 60)}") but reply continues qualifying — close warmly and stop outreach`
+      );
+    }
+  }
+
+  // ── FUTURE-COMMITMENT FROM LEAD (hard fail when AI ignores) ─────
+  // "I promise in half a year I'll buy your mentorship." — that's a
+  // future commitment, a WIN, and the AI must close gracefully without
+  // trying to compress the timeline. Hard-fail re-engagement /
+  // qualification on this turn.
+  const FUTURE_COMMITMENT_PATTERNS: RegExp[] = [
+    /\bi['’]?(ll| will) (buy|get|join|come back for).{0,30}(mentorship|program|course|your thing)\b/i,
+    /\bwhen i['’]?(m| am) (ready|in a better spot|more consistent)\b/i,
+    /\bin (a|half|one|two).{0,20}(year|month).{0,30}(i will|i['’]?ll)\b/i,
+    /\bpromise.{0,30}(i will|i['’]?ll|when)\b/i
+  ];
+  if (
+    typeof options?.previousLeadMessage === 'string' &&
+    options.previousLeadMessage.trim().length > 0 &&
+    FUTURE_COMMITMENT_PATTERNS.some((p) => p.test(options.previousLeadMessage!))
+  ) {
+    // Same forward-push detection as soft-exit. The right reply is a
+    // single appreciative line acknowledging the plan + door-open
+    // closer; anything that re-opens qualification is wrong.
+    const replyKeepsPushing =
+      /\?|\b(capital|trading background|how soon|how much|what['’]?s your|book a call|hop on a call|jump on a call|schedule|application|typeform)\b/i.test(
+        reply
+      );
+    if (replyKeepsPushing) {
+      hardFails.push(
+        `future_commitment_ignored: lead's previous message named a future commitment ("${options.previousLeadMessage.trim().slice(0, 60)}") but reply re-engages qualification — acknowledge gratefully and leave the door open instead`
+      );
+    }
+  }
+
+  // ── WRONG REGISTER AFTER MISSED CALL (hard fail) ────────────────
+  // Lead just told the AI they missed their call / had a calendar
+  // mixup / wasn't prepared. The right register is calm + apologetic +
+  // reschedule. 🔥, "let's go", "that's the energy" all read as
+  // celebrating a no-show — exact failure mode reported in audit
+  // (Wout 2026-05-04).
+  const MISSED_CALL_PATTERNS: RegExp[] = [
+    /\bmix.?up.{0,30}(calendar|booking|time)\b/i,
+    /\bwasn['’]?t prepared\b/i,
+    /\bwas (already|in) bed\b/i,
+    /\bmissed (the|my|our) call\b/i,
+    /\breschedule\b/i,
+    /\bdidn['’]?t (make it|show up|get the link)\b/i,
+    /\bwrong time\b/i,
+    /\btimezone (issue|problem|mixup)\b/i
+  ];
+  if (
+    typeof options?.previousLeadMessage === 'string' &&
+    options.previousLeadMessage.trim().length > 0 &&
+    MISSED_CALL_PATTERNS.some((p) => p.test(options.previousLeadMessage!))
+  ) {
+    const CELEBRATION_REGISTER =
+      /🔥|\blet['’]?s go+\b|\blet['’]?s gooo+\b|\bthat['’]?s the energy\b|\blfg+\b/i;
+    if (CELEBRATION_REGISTER.test(reply)) {
+      hardFails.push(
+        `wrong_register_on_cancellation: lead reported a missed call / mixup ("${options.previousLeadMessage.trim().slice(0, 60)}") but reply uses celebration register — switch to calm, apologetic tone and offer to reschedule`
+      );
     }
   }
 

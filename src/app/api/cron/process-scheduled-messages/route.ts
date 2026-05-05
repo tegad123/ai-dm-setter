@@ -317,7 +317,16 @@ async function fireScheduledMessage(
       messageType: row.messageType,
       scheduledCallAt:
         row.relatedCallAt ?? conversation.scheduledCallAt ?? null,
-      scheduledCallTimezone: conversation.scheduledCallTimezone ?? null,
+      // Audit fix 6 (2026-05-05): show the call time in the LEAD's
+      // timezone, not the timezone the call was booked in (which is
+      // typically the host's tz and produces wrong reminders for
+      // out-of-zone leads — e.g. "5:00 PM CDT" instead of
+      // "12:00 AM CET" for an Amsterdam lead). Fall back to
+      // scheduledCallTimezone only when the lead's tz is unknown;
+      // reminder-generator handles null by skipping the time entirely
+      // rather than inventing one.
+      scheduledCallTimezone:
+        conversation.leadTimezone ?? conversation.scheduledCallTimezone ?? null,
       leadName: lead.name || 'bro'
     });
 

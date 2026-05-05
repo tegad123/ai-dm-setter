@@ -2092,6 +2092,82 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      // Repeated-question hard block (audit fix 1, 2026-05-05). The
+      // gate fired either `repeated_question_exact:` (one of five
+      // exact phrases used twice) or `repeated_question:` (jaccard
+      // ≥ 0.85 across questions). Force regen to advance on the lead's
+      // prior answer rather than re-ask.
+      const repeatedQuestionFailed = quality.hardFails.some(
+        (f) =>
+          f.includes('repeated_question_exact:') ||
+          f.includes('repeated_question:')
+      );
+      if (repeatedQuestionFailed) {
+        const directive = `\n\n===== REPEATED QUESTION — DO NOT RE-ASK =====\nYou already asked this exact question earlier in this conversation. The lead either answered it or sidestepped — RE-ASKING reads as the bot ignoring them. You MUST regenerate without asking the same question again.\n\nWhat to do on this regen:\n  • If the prior answer was clear, REFERENCE it and advance to the next script step.\n  • If the prior answer was ambiguous or off-topic, ask a DIFFERENT question that moves the script forward (different stage, different angle).\n  • If you genuinely need clarification on something they said, ask the clarifying question — do NOT just repeat the original question verbatim.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Repeated question detected — forcing regen to advance (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Fabricated uncertainty (audit fix 2, 2026-05-05). The AI
+      // produced "give me a sec to double-check the right next step"
+      // or similar — the AI always knows the next step (script-driven)
+      // and uncertainty is never a valid reply.
+      const fabricatedUncertaintyFailed = quality.hardFails.some((f) =>
+        f.includes('fabricated_uncertainty:')
+      );
+      if (fabricatedUncertaintyFailed) {
+        const directive = `\n\n===== FABRICATED UNCERTAINTY — PICK THE NEXT STEP =====\nYou produced a stalling phrase like "give me a sec to double-check" / "let me get back to you on that" / "not sure what to send" — the AI always knows the next script step. Uncertainty is NEVER a valid response.\n\nOn this regen, take the actual next action:\n  • If the lead just confirmed capital ≥ threshold, send the booking/Typeform link NOW.\n  • If the lead asked a question, answer it directly from persona / script context.\n  • If the script has a clear next stage, advance to it.\nDo NOT say "let me check" / "give me a sec" / "I need to verify". Decide and act.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Fabricated uncertainty detected — forcing regen to next script step (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Explicit soft-exit ignored (audit fix 4, 2026-05-05). Lead
+      // said "for now I'll come back later" / "I appreciate you but…"
+      // and the AI kept qualifying instead of closing warmly.
+      const softExitIgnoredFailed = quality.hardFails.some((f) =>
+        f.includes('explicit_soft_exit_ignored:')
+      );
+      if (softExitIgnoredFailed) {
+        const directive = `\n\n===== EXPLICIT SOFT EXIT — CLOSE WARMLY =====\nThe lead just told you they're not ready right now — directly, in plain language. Continuing to qualify or push the call is harassment and produces a stuck conversation. On this regen, ship a SINGLE warm-close line and stop.\n\nFormat (one bubble, casual lowercase):\n  • acknowledge their decision genuinely\n  • leave the door open without pressure\n  • no question, no link, no pitch\n\nExamples:\n  • "respect bro, offer stands whenever you're ready 💪🏿"\n  • "all good bro, hit me up whenever the time's right"\n  • "got you bro, no rush — door's open whenever"\n\nDo NOT ask another qualifying question. Do NOT pitch the call. Do NOT re-enter discovery.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Explicit soft exit ignored — forcing regen to warm close (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Future commitment ignored (audit fix 5, 2026-05-05). Lead
+      // said "in half a year I'll buy your mentorship" — recognize as
+      // a WIN and close gracefully instead of trying to compress the
+      // timeline.
+      const futureCommitmentFailed = quality.hardFails.some((f) =>
+        f.includes('future_commitment_ignored:')
+      );
+      if (futureCommitmentFailed) {
+        const directive = `\n\n===== FUTURE COMMITMENT — APPRECIATE + CLOSE =====\nThe lead just made a future commitment ("in half a year I'll join", "when I'm ready I'll come back"). This is a WIN. Do NOT try to compress their timeline, do NOT re-engage qualification.\n\nOn this regen, ship a SINGLE appreciative line:\n  • Recognize the plan genuinely (not high-energy 🔥 — calm respect).\n  • Affirm their timeline.\n  • Leave the door open naturally.\n\nExample:\n  "respect bro, that's a solid plan honestly. when that half year hits and you're ready, just hit me up and we'll make it happen 💪🏿"\n\nDo NOT ask a question. Do NOT pitch a call. Do NOT compress the timeline.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Future commitment ignored — forcing regen to appreciative close (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Wrong register on cancellation (audit fix 7, 2026-05-05). Lead
+      // reported a missed call / mixup; AI used 🔥 / "let's go". Force
+      // regen to calm, apologetic, reschedule-focused tone.
+      const wrongRegisterFailed = quality.hardFails.some((f) =>
+        f.includes('wrong_register_on_cancellation:')
+      );
+      if (wrongRegisterFailed) {
+        const directive = `\n\n===== WRONG REGISTER — MISSED CALL / RESCHEDULE =====\nThe lead just told you they missed the call / had a calendar mixup / weren't prepared. 🔥 / "let's go" / "lfg" / celebration energy is COMPLETELY WRONG here — it reads as celebrating their no-show. Switch to calm, understanding, solution-focused tone.\n\nOn this regen:\n  • Acknowledge calmly: "no worries bro, it happens" / "all good".\n  • DO NOT use 🔥, "let's go", "let's gooo", "lfg", "that's the energy", or similar high-energy phrases.\n  • Offer to reschedule with the booking link from your context if available.\n  • Tone: relaxed, understanding, low-pressure.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] Wrong register on cancellation — forcing regen to calm tone (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       // Incomplete response directive (Brian Dycey 2026-04-27). The
       // gate fired the soft signal incomplete_response_no_followup
       // (no question, no URL, < 15 words, on a stage that needs
