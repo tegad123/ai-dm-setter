@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
+import { resolveAndUpgradeInstagramNumericId } from '@/lib/manychat-resolve-ig-id';
 
 // Sequence-completion handoff. Daniel's ManyChat flow fires this as the
 // FINAL action (after the Smart Delay + Condition) to signal "sequence
@@ -90,24 +91,21 @@ export async function processManyChatComplete(params: {
 
   const conversation = lead.conversation;
 
-  // Upgrade `Lead.platformUserId` to the numeric IG ID if we have one
-  // and the lead is currently stored with a handle. The early
-  // `manychat-handoff` webhook stores handles because ManyChat's
-  // variable picker doesn't expose the IG numeric ID at trigger time —
-  // but `{{user.id}}` IS available later in the flow when this
-  // completion webhook fires. Without this upgrade the
-  // `hasUsablePlatformRecipient` check in silent-stop-recovery refuses
-  // to ship AI replies (IG Send API needs 12+ digit IDs).
-  const incomingIsNumeric = /^\d{12,}$/.test(payload.instagramUserId);
-  const existingIsNumeric = /^\d{12,}$/.test(
-    (lead.platformUserId || '').trim()
-  );
-  if (incomingIsNumeric && !existingIsNumeric) {
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: { platformUserId: payload.instagramUserId }
-    });
-  }
+  // Resolve & upgrade `Lead.platformUserId` to the IG numeric user ID
+  // (`ig_id`). ManyChat's variable picker doesn't expose `ig_id` for
+  // IG accounts — `{{contact.id}}` returns the ManyChat-internal
+  // subscriber ID. The shared resolver calls ManyChat's REST API
+  // (`/fb/subscriber/getInfo`) to translate subscriber ID → ig_id and
+  // updates the lead in one shot. Without this, the silent-stop
+  // heartbeat's `hasUsablePlatformRecipient` rejects the lead and the
+  // AI reply never ships.
+  await resolveAndUpgradeInstagramNumericId({
+    accountId: account.id,
+    leadId: lead.id,
+    existingPlatformUserId: lead.platformUserId,
+    incomingInstagramUserId: payload.instagramUserId,
+    manyChatSubscriberId: payload.manyChatSubscriberId
+  });
 
   // Idempotent: a re-fire after the operator already handed off (or
   // after the time-based fallback already flipped) returns success

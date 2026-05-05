@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
+import { resolveAndUpgradeInstagramNumericId } from '@/lib/manychat-resolve-ig-id';
 
 // Capture a single automated DM that ManyChat just sent to a lead
 // through Daniel's IG account. We can't rely on Meta's IG echo webhooks
@@ -89,6 +90,25 @@ export async function processManyChatMessage(params: {
     throw new ManyChatMessageError('lead_not_found', 404);
   }
   const conversationId = lead.conversation.id;
+
+  // Resolve the IG numeric user ID via ManyChat REST when the lead is
+  // still stored with a handle / subscriber ID. Same rationale as in
+  // manychat-complete: silent-stop heartbeat refuses to ship AI replies
+  // to leads whose `platformUserId` isn't a 12+ digit IG ID. Fire-and-
+  // forget so a transient ManyChat API blip doesn't fail the message
+  // capture itself.
+  resolveAndUpgradeInstagramNumericId({
+    accountId: account.id,
+    leadId: lead.id,
+    existingPlatformUserId: lead.platformUserId,
+    incomingInstagramUserId: payload.instagramUserId,
+    manyChatSubscriberId: payload.manyChatSubscriberId
+  }).catch((err) => {
+    console.warn(
+      `[manychat-message] ig_id resolve failed for lead ${lead.id} (non-fatal):`,
+      err
+    );
+  });
 
   // Dedup: prefer the operator-provided manyChatMessageId when present
   // (deterministic, survives ManyChat retries). Fall back to a content +

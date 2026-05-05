@@ -36,6 +36,12 @@ interface SubscriberInfo {
   id: string;
   /** Instagram username (without @) — present when subscriber came via IG. */
   ig_username?: string;
+  /** Instagram numeric user ID (the 16-17 digit identifier Meta's IG
+   *  Send API expects as the recipient). ManyChat returns this as a
+   *  JSON number — read it as `string | number` and coerce, since
+   *  numbers above ~15 digits can lose precision in JS Number even
+   *  though IG IDs currently fit within Number.MAX_SAFE_INTEGER. */
+  ig_id?: string | number;
   /** ISO timestamp of the most recent inbound/outbound message on the
    *  ManyChat side. We use this as the "did ManyChat message them
    *  recently?" signal — see windowDays in findSubscriber*. */
@@ -171,4 +177,45 @@ export async function looksLikeManyChatHandoff(
     options
   );
   return sub !== null;
+}
+
+/**
+ * Look up a ManyChat subscriber by their ManyChat-internal subscriber
+ * ID. Used to resolve the Instagram numeric user ID (`ig_id`) when
+ * ManyChat's variable picker only exposes the subscriber ID
+ * (`{{contact.id}}`), not the IG numeric ID directly. Without `ig_id`,
+ * the AI can't deliver replies via Meta's IG Send API.
+ *
+ * Returns null on any failure — caller falls back to whatever the lead
+ * was created with (typically the handle).
+ */
+export async function findSubscriberById(
+  apiKey: string,
+  subscriberId: string
+): Promise<SubscriberInfo | null> {
+  if (!apiKey || !subscriberId) return null;
+  const cleaned = subscriberId.trim();
+  if (!cleaned) return null;
+  return call<SubscriberInfo>(
+    apiKey,
+    `/fb/subscriber/getInfo?subscriber_id=${encodeURIComponent(cleaned)}`
+  );
+}
+
+/**
+ * Coerce a SubscriberInfo's `ig_id` field to a numeric string usable
+ * as a Meta IG Send API recipient. Returns null when the field is
+ * missing, zero, or doesn't look like a real IG numeric ID (12+
+ * digits). The 12-digit floor matches what
+ * `silent-stop-recovery.hasUsablePlatformRecipient` requires.
+ */
+export function extractInstagramNumericId(
+  sub: SubscriberInfo | null | undefined
+): string | null {
+  if (!sub) return null;
+  const raw = sub.ig_id;
+  if (raw === undefined || raw === null || raw === 0) return null;
+  const asString = typeof raw === 'number' ? String(raw) : String(raw).trim();
+  if (!/^\d{12,}$/.test(asString)) return null;
+  return asString;
 }

@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
 import { resolveActivePersonaIdForCreate } from '@/lib/active-persona';
+import { resolveAndUpgradeInstagramNumericId } from '@/lib/manychat-resolve-ig-id';
 
 const MANYCHAT_TRIGGER_TYPES = [
   'new_follower',
@@ -267,6 +268,37 @@ export async function processManyChatHandoff(params: {
     conversationId = lead.conversation!.id;
     leadId = lead.id;
     aiActiveOnConversation = lead.conversation!.aiActive;
+  }
+
+  // Resolve the IG numeric user ID via ManyChat REST. ManyChat's
+  // `{{contact.id}}` returns the ManyChat-internal subscriber ID, not
+  // the IG numeric ID Meta's Send API requires. The resolver upgrades
+  // `Lead.platformUserId` so downstream send paths
+  // (`hasUsablePlatformRecipient` in silent-stop-recovery, the
+  // scheduleAIReply branch below, every future heartbeat tick) see a
+  // usable recipient. Only re-flips canSendViaInstagramApi when the
+  // upgrade actually produced a numeric ID.
+  const resolvedIgNumeric = await resolveAndUpgradeInstagramNumericId({
+    accountId: account.id,
+    leadId,
+    existingPlatformUserId: payload.instagramUserId,
+    incomingInstagramUserId: payload.instagramUserId,
+    manyChatSubscriberId: payload.manyChatSubscriberId
+  }).catch((err) => {
+    console.warn(
+      `[manychat-handoff] ig_id resolve failed for lead ${leadId} (non-fatal):`,
+      err
+    );
+    return null;
+  });
+  if (
+    resolvedIgNumeric &&
+    looksLikeInstagramRecipientId(
+      resolvedIgNumeric,
+      payload.manyChatSubscriberId
+    )
+  ) {
+    canSendViaInstagramApi = true;
   }
 
   // Schedule the AI reply when the lead actually engaged (button click
