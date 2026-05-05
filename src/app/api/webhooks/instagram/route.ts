@@ -252,8 +252,71 @@ async function processInstagramEvents(payload: any): Promise<void> {
       ].filter(Boolean)
     );
 
+    // ── Handle top-level message_deletions array ───────────────────────
+    // Newer Meta IG webhook deliveries include an explicit
+    // `message_deletions` array on the entry when a user unsends a DM.
+    // Each item has the unsent message's `mid`. Process before the
+    // `messaging` loop so a same-payload mix (rare but possible) is
+    // handled in order.
+    const topLevelDeletions = Array.isArray(
+      (entry as { message_deletions?: Array<{ mid?: string }> })
+        .message_deletions
+    )
+      ? (entry as { message_deletions?: Array<{ mid?: string }> })
+          .message_deletions || []
+      : [];
+    for (const del of topLevelDeletions) {
+      const mid = (del?.mid || '').trim();
+      if (!mid) continue;
+      try {
+        const { processMessageDeletion } = await import(
+          '@/lib/webhook-processor'
+        );
+        await processMessageDeletion({
+          accountId,
+          platformMessageId: mid,
+          deletedBy: 'LEAD',
+          deletedSource: 'INSTAGRAM'
+        });
+      } catch (delErr) {
+        console.error(
+          '[instagram-webhook] processMessageDeletion (top-level) failed (non-fatal):',
+          delErr
+        );
+      }
+    }
+
     // ── Handle messaging events (new DM received) ──────────────────────
     for (const event of entry.messaging ?? []) {
+      // Some IG webhook variants nest the deletion inside the messaging
+      // event itself with `message.is_deleted: true` rather than the
+      // top-level `message_deletions` array. Handle that shape here so
+      // both routes converge on processMessageDeletion.
+      const inlineDeletion =
+        event.message?.is_deleted === true && event.message?.mid;
+      if (inlineDeletion) {
+        const mid = String(event.message.mid).trim();
+        if (mid) {
+          try {
+            const { processMessageDeletion } = await import(
+              '@/lib/webhook-processor'
+            );
+            await processMessageDeletion({
+              accountId,
+              platformMessageId: mid,
+              deletedBy: 'LEAD',
+              deletedSource: 'INSTAGRAM'
+            });
+          } catch (delErr) {
+            console.error(
+              '[instagram-webhook] processMessageDeletion (inline) failed (non-fatal):',
+              delErr
+            );
+          }
+        }
+        continue;
+      }
+
       if (!event.message) continue;
 
       const senderId: string = event.sender?.id ?? '';

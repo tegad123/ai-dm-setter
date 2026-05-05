@@ -161,6 +161,83 @@ export async function sendDM(
 }
 
 // ---------------------------------------------------------------------------
+// Unsend DM
+// ---------------------------------------------------------------------------
+//
+// Calls Meta's `DELETE /{message_id}` with the same token / graph
+// host that sendDM uses. Constraints (per Meta's docs and observed
+// behavior):
+//   - Only messages the business sent can be deleted (lead messages
+//     have to be unsent by the lead themselves).
+//   - There's a time window — Meta documents 24h, but in practice
+//     once-read or older-than-~10min messages can return errors. The
+//     caller is responsible for enforcing the UI-side window;
+//     unsendDM just attempts the delete and reports the outcome.
+//   - The DELETE is idempotent on Meta's side: a second call on an
+//     already-deleted message typically returns 200 with success
+//     true OR a 400 with a "not found" error. Either way, the
+//     caller should mark the local Message row deleted on success
+//     responses and NOT mark it deleted on hard errors so the lead
+//     still sees the original.
+
+export async function unsendDM(
+  accountId: string,
+  platformMessageId: string
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const { getCredentials } = await import('@/lib/credential-store');
+  const igCreds = await getCredentials(accountId, 'INSTAGRAM');
+  const igToken = igCreds?.accessToken as string | undefined;
+  const metaToken = await getMetaAccessToken(accountId);
+  const accessToken = igToken || metaToken;
+  if (!accessToken) {
+    return {
+      ok: false,
+      status: 0,
+      error: 'No Meta/Instagram access token configured for this account'
+    };
+  }
+
+  const isIGToken = accessToken.startsWith('IGAA');
+  const apiBase = isIGToken ? IG_GRAPH_API_BASE : GRAPH_API_BASE;
+  const trimmedMid = platformMessageId.trim();
+  if (!trimmedMid) {
+    return { ok: false, status: 0, error: 'Empty platformMessageId' };
+  }
+  // IG tokens: token in query string. FB tokens: Authorization header.
+  const url = isIGToken
+    ? `${apiBase}/${encodeURIComponent(trimmedMid)}?access_token=${encodeURIComponent(accessToken)}`
+    : `${apiBase}/${encodeURIComponent(trimmedMid)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        ...(isIGToken ? {} : { Authorization: `Bearer ${accessToken}` })
+      }
+    });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      console.warn(
+        `[instagram] Unsend ${trimmedMid} failed: ${response.status} ${errBody.slice(0, 300)}`
+      );
+      return {
+        ok: false,
+        status: response.status,
+        error: errBody || response.statusText
+      };
+    }
+    console.log(
+      `[instagram] Unsend ${trimmedMid} ok via ${isIGToken ? 'instagram' : 'facebook'} graph`
+    );
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[instagram] Unsend ${trimmedMid} threw:`, msg);
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Send Audio DM (Instagram Voice Note)
 // ---------------------------------------------------------------------------
 

@@ -308,8 +308,42 @@ export function ConversationThread({
 }: ConversationThreadProps) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  // Tracks which messages have an unsend in flight so we can disable the
+  // button + show a toast without lifting state up.
+  const [unsendingIds, setUnsendingIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleUnsend = async (messageId: string) => {
+    if (unsendingIds.has(messageId)) return;
+    setUnsendingIds((prev) => new Set(prev).add(messageId));
+    try {
+      const res = await apiFetch<{ ok: boolean; alreadyDeleted?: boolean }>(
+        `/api/conversations/${conversation.id}/messages/${messageId}/unsend`,
+        { method: 'POST' }
+      );
+      if (res.ok) {
+        toast.success(
+          res.alreadyDeleted ? 'Message already unsent' : 'Message unsent'
+        );
+        // The dashboard will reflect the deletedAt state on the next
+        // SSE message:deleted event or conversation reload. Avoiding
+        // optimistic local mutation here keeps the conversation prop
+        // as the single source of truth.
+      } else {
+        toast.error('Unsend failed — message may still be visible to the lead');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unsend failed';
+      toast.error(msg);
+    } finally {
+      setUnsendingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  };
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -448,6 +482,20 @@ export function ConversationThread({
                   const isHuman = sender === 'human';
                   const isSystem = sender === 'system';
                   const isManyChat = sender === 'manychat';
+                  // Soft-deleted messages render greyed-out with a label
+                  // rather than disappearing — operators retain context
+                  // about what was sent and who retracted it.
+                  const isDeleted = Boolean(msg.deletedAt);
+                  const deletedByLead = msg.deletedSource === 'INSTAGRAM';
+                  // 10-minute unsend window matches the server-side
+                  // gate. Within window + own-side + not yet deleted →
+                  // show the unsend hover button.
+                  const ageMs = Date.now() - new Date(msg.timestamp).getTime();
+                  const canUnsend =
+                    !isDeleted &&
+                    !isLead &&
+                    !isSystem &&
+                    ageMs <= 10 * 60 * 1000;
                   if (isSystem) {
                     return (
                       <div
@@ -542,15 +590,37 @@ export function ConversationThread({
                             </span>
                           </span>
                         )}
+                        {isDeleted && (
+                          <span className='text-muted-foreground mb-0.5 inline-block text-[10px] italic'>
+                            {deletedByLead
+                              ? 'Lead deleted this message'
+                              : 'Unsent'}
+                          </span>
+                        )}
                         <div
                           className={cn(
-                            'glass-bubble',
+                            'group glass-bubble relative',
                             isLead && 'theirs',
                             isAI && 'mine',
                             isHuman && 'mine-human',
-                            isManyChat && 'mine mine-manychat'
+                            isManyChat && 'mine mine-manychat',
+                            isDeleted && 'italic opacity-50'
                           )}
                         >
+                          {canUnsend && (
+                            <button
+                              type='button'
+                              onClick={() => handleUnsend(msg.id)}
+                              disabled={unsendingIds.has(msg.id)}
+                              className='absolute -top-2 -left-2 hidden h-6 w-6 items-center justify-center rounded-full border border-red-300 bg-white text-red-500 shadow-sm transition-opacity group-hover:flex hover:bg-red-50 disabled:cursor-wait disabled:opacity-50 dark:border-red-700 dark:bg-slate-900 dark:hover:bg-red-950'
+                              title='Unsend message'
+                              aria-label='Unsend message'
+                            >
+                              <span className='text-[14px] leading-none'>
+                                ×
+                              </span>
+                            </button>
+                          )}
                           {msg.isVoiceNote && msg.voiceNoteUrl && (
                             <div className='mb-2'>
                               <audio

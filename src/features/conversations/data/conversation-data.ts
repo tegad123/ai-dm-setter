@@ -1,8 +1,16 @@
 export interface Message {
   id: string;
-  sender: 'ai' | 'lead' | 'human' | 'system';
+  sender: 'ai' | 'lead' | 'human' | 'system' | 'manychat';
   content: string;
   timestamp: string;
+  // Soft-delete fields. Set when the message is unsent — either by
+  // the lead on Instagram (deletedSource='INSTAGRAM', deletedBy='LEAD')
+  // or by an operator from the dashboard (deletedSource='DASHBOARD',
+  // deletedBy=userId). UI greys the bubble out + shows a label rather
+  // than removing it entirely so the operator retains audit context.
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  deletedSource?: 'INSTAGRAM' | 'FACEBOOK' | 'DASHBOARD' | 'MANYCHAT' | null;
   isVoiceNote?: boolean;
   voiceNoteUrl?: string;
   imageUrl?: string | null;

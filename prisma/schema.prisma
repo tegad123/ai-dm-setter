@@ -1168,6 +1168,26 @@ model Message {
   bubbleTotalCount  Int?
   intraGroupDelayMs Int?
 
+  // ── Unsend / soft-delete ───────────────────────────────────
+  // Soft-delete so the audit trail stays intact. Two paths set
+  // these:
+  //   - Inbound (lead unsent on IG): the IG message_deletions
+  //     webhook event marks the row deletedAt = event time,
+  //     deletedBy = 'LEAD', deletedSource = 'INSTAGRAM'. Dashboard
+  //     renders the bubble grayed-out with "Lead deleted this
+  //     message" so operators know the lead retracted something.
+  //   - Outbound (operator unsent from dashboard): the
+  //     /api/conversations/[id]/messages/[mid]/unsend endpoint
+  //     calls Meta's IG DELETE /{message_id}, then on success
+  //     marks the row deletedAt = now(), deletedBy = userId,
+  //     deletedSource = 'DASHBOARD'.
+  // Once deletedAt is set, the conversation thread query MAY hide
+  // the row entirely (we'll style it as visible-but-grayed in the
+  // first iteration so operators retain context).
+  deletedAt     DateTime?
+  deletedBy     String? // userId for DASHBOARD source, 'LEAD' / 'AI' / 'MANYCHAT' for platform-side deletes
+  deletedSource String? // 'INSTAGRAM' | 'FACEBOOK' | 'DASHBOARD' | 'MANYCHAT'
+
   // Relations
   conversation        Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sentByUser          User?                @relation("HumanSender", fields: [sentByUserId], references: [id])

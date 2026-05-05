@@ -106,6 +106,27 @@ export function broadcastConversationUpdate(
   eventBus.publish({ type: 'conversation:updated', accountId, data });
 }
 
+// Soft-deletion of a Message. Fires on:
+//   - Inbound: IG webhook reports the lead unsent a DM (deletedSource =
+//     'INSTAGRAM', deletedBy = 'LEAD').
+//   - Outbound: an operator unsent from the dashboard (deletedSource =
+//     'DASHBOARD', deletedBy = userId).
+// The dashboard listens for this and either greys-out the message bubble
+// or removes it depending on UI preference. The Message row stays in
+// the DB — `deletedAt` is what flips the rendering.
+export function broadcastMessageDeleted(
+  accountId: string,
+  data: {
+    id: string;
+    conversationId: string;
+    deletedAt: string;
+    deletedBy: string | null;
+    deletedSource: string | null;
+  }
+): void {
+  eventBus.publish({ type: 'message:deleted', accountId, data });
+}
+
 export function broadcastAIStatusChange(
   accountId: string,
   data: {

@@ -4738,6 +4738,88 @@ function looksLikeManyChatAutomationEcho(
 }
 
 /**
+ * Soft-delete a Message in response to an external deletion event —
+ * either the lead unsent on Instagram (`deletedBy='LEAD'`,
+ * `deletedSource='INSTAGRAM'`) or a future Facebook equivalent. The
+ * row stays in the DB so the operator can see "this was deleted at
+ * X" rather than "this never existed"; the UI greys out / labels
+ * deleted messages.
+ *
+ * Idempotent: re-firing on a row that's already marked deleted is a
+ * no-op (we don't update `deletedAt` on subsequent webhooks for the
+ * same mid, otherwise Meta retries would shift the timestamp).
+ *
+ * Returns true when a row was actually flipped, false when the lookup
+ * missed (mid we never saw — likely already-deleted-before-we-stored,
+ * or an mid for a different account on a multi-tenant proxy) or when
+ * the row was already soft-deleted.
+ */
+export async function processMessageDeletion(params: {
+  accountId: string;
+  platformMessageId: string;
+  deletedBy: string;
+  deletedSource: 'INSTAGRAM' | 'FACEBOOK';
+  deletedAt?: Date;
+}): Promise<boolean> {
+  const trimmed = (params.platformMessageId || '').trim();
+  if (!trimmed) return false;
+
+  // Scope by accountId to defend against cross-tenant collisions on
+  // platformMessageId (Meta mid uniqueness isn't guaranteed across
+  // unrelated pages, and we have a `@@unique([conversationId,
+  // platformMessageId])` not a global one).
+  const message = await prisma.message.findFirst({
+    where: {
+      platformMessageId: trimmed,
+      conversation: { lead: { accountId: params.accountId } }
+    },
+    select: { id: true, conversationId: true, deletedAt: true }
+  });
+  if (!message) {
+    console.log(
+      `[webhook-processor] processMessageDeletion: no Message row for mid=${trimmed} on account ${params.accountId} — skipping`
+    );
+    return false;
+  }
+  if (message.deletedAt) {
+    return false;
+  }
+
+  const when = params.deletedAt ?? new Date();
+  await prisma.message.update({
+    where: { id: message.id },
+    data: {
+      deletedAt: when,
+      deletedBy: params.deletedBy,
+      deletedSource: params.deletedSource
+    }
+  });
+
+  // Realtime broadcast so any open dashboard tab on this account
+  // greys-out the bubble immediately.
+  try {
+    const { broadcastMessageDeleted } = await import('@/lib/realtime');
+    broadcastMessageDeleted(params.accountId, {
+      id: message.id,
+      conversationId: message.conversationId,
+      deletedAt: when.toISOString(),
+      deletedBy: params.deletedBy,
+      deletedSource: params.deletedSource
+    });
+  } catch (err) {
+    console.warn(
+      '[webhook-processor] broadcastMessageDeleted failed (non-fatal):',
+      err
+    );
+  }
+
+  console.log(
+    `[webhook-processor] Soft-deleted message ${message.id} on conversation ${message.conversationId} (mid=${trimmed}, source=${params.deletedSource}, by=${params.deletedBy})`
+  );
+  return true;
+}
+
+/**
  * Process a message sent by the business/admin (not the lead).
  * Saves it as a HUMAN message, pauses AI, and cancels pending scheduled replies.
  */
