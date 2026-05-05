@@ -2458,6 +2458,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      // R40 (@shepherdgushe.zw 2026-05-05). Lead confirmed downsell
+      // acceptance (downsellInterestConfirmed=true) AND is below the
+      // capital threshold (capitalThresholdMet=false). The previous
+      // draft pitched the call instead of delivering the course URL.
+      // Force regen to drop the link.
+      const r40DownsellAcceptCallFailed = quality.hardFails.some((f) =>
+        f.includes('r40_call_pitch_to_unqualified_after_downsell_accept:')
+      );
+      if (r40DownsellAcceptCallFailed) {
+        const r40Override = `\n\n===== R40 — DELIVER COURSE URL, DO NOT PITCH CALL =====\nThis lead is BELOW the capital threshold AND has affirmed downsell interest. The next reply MUST deliver the ${downsellPriceWithSign} ${downsellProductName} URL from the script's "Available Links & URLs" section. Drop the link.\n\nThe call CTA is reserved for QUALIFIED leads only. Pitching a call here loops an unqualified lead back into the main-mentorship sales path they have already been disqualified from.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "hop on a quick call"\n  ✗ "jump on a call"\n  ✗ "right hand man Anthony"\n  ✗ "Anthony so he can break it down"\n  ✗ "wanna get on a chat"\n  ✗ ANY closer name + ANY call/chat/quick mention\n\nREQUIRED ON THIS REGEN:\n  ✓ Brief acknowledgment of their acceptance (one short line, e.g. "bet bro, that's the move").\n  ✓ The downsell URL inline (the actual link from the script — never a placeholder).\n  ✓ Optional warm sign-off ("take your time with it, hit me up when you're done").\n\nIf no downsell URL is configured, soft-exit with the free-resource fallback (per R28). Do NOT substitute a call CTA.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + r40Override;
+        console.warn(
+          `[ai-engine] R40 violation — call pitched to unqualified lead after downsell accept; forcing regen to URL delivery (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const repetitiveQuestionFailed =
         quality.softSignals.repetitive_question_pattern !== undefined;
       if (repetitiveQuestionFailed) {

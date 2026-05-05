@@ -3177,6 +3177,32 @@ export function scoreVoiceQualityGroup(
     );
   }
 
+  // R40 hard-fail (@shepherdgushe.zw 2026-05-05). Lead is BELOW the
+  // capital threshold (capitalThresholdMet=false) AND has affirmed
+  // downsell interest (downsellInterestConfirmed=true). The next AI
+  // move MUST be deliver-the-course-URL, not pitch-the-call. Calls
+  // are reserved for QUALIFIED leads only — pitching one to a lead
+  // who's already been LOW_TICKET-routed loops them back into the
+  // qualified-lead pipeline they don't belong in. See R40 in
+  // ai-prompts.ts for the full rule + production incident.
+  const r40Dp = options?.capturedDataPoints as
+    | Record<string, { value?: unknown } | undefined>
+    | undefined;
+  const r40CapitalThresholdMet = r40Dp?.capitalThresholdMet?.value;
+  const r40DownsellInterestConfirmed = r40Dp?.downsellInterestConfirmed?.value;
+  if (
+    r40CapitalThresholdMet === false &&
+    r40DownsellInterestConfirmed === true &&
+    (containsCallPitch(joined) || containsCallOrBookingAdvancement(joined)) &&
+    !hardFails.some((f) =>
+      f.includes('r40_call_pitch_to_unqualified_after_downsell_accept:')
+    )
+  ) {
+    hardFails.push(
+      '[group] r40_call_pitch_to_unqualified_after_downsell_accept: lead is below the capital threshold AND already affirmed the downsell. The next move is to deliver the downsell URL, not pitch the call. Calls are for QUALIFIED leads only.'
+    );
+  }
+
   if (
     leadGaveLongTimeline(options?.previousLeadMessage) &&
     containsCallOrBookingAdvancement(joined) &&
