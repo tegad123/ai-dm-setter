@@ -4702,6 +4702,7 @@ function looksLikeManyChatAutomationEcho(
   conversation: {
     source?: string | null;
     manyChatOpenerMessage?: string | null;
+    awaitingAiResponse?: boolean | null;
   },
   messageText: string
 ): boolean {
@@ -4712,11 +4713,28 @@ function looksLikeManyChatAutomationEcho(
   const opener = conversation.manyChatOpenerMessage?.trim();
   if (opener && trimmed === opener) return true;
 
-  return [
+  // Existing hardcoded shapes for daetradez's current sequence — keep
+  // them as a fast positive match alongside the state-based fallback so
+  // the detector still works even if `awaitingAiResponse` is in a
+  // transient true state during a race.
+  const matchesKnownShape = [
     /\bthis\s+is\s+gonna\s+make\s+you\s+dangerous\b/i,
     /\bminutes?\s+of\s+sauce\b/i,
     /\bdid\s+you\s+give\s+it\s+a\s+watch\b/i
   ].some((pattern) => pattern.test(trimmed));
+  if (matchesKnownShape) return true;
+
+  // State-based fallback: while a MANYCHAT-source conversation has not
+  // been handed off to AI yet (either via the manychat-complete webhook
+  // or the time-based heartbeat fallback), any echo with no matching
+  // mid in our DB is most likely a ManyChat-sent automation message —
+  // a sequence step we don't have hardcoded text for. Tag it MANYCHAT.
+  //
+  // Trade-off accepted: an operator messaging the lead from IG mobile
+  // during this window also gets tagged MANYCHAT. The window is short
+  // (sequence runs ~30 min) and self-clears once `awaitingAiResponse`
+  // flips to true, after which operator messages resume HUMAN tagging.
+  return conversation.awaitingAiResponse === false;
 }
 
 /**
@@ -4836,7 +4854,7 @@ export async function processAdminMessage(
     const message = await prisma.message.create({
       data: {
         conversationId,
-        sender: 'AI',
+        sender: 'MANYCHAT',
         content: messageText,
         timestamp: new Date(),
         platformMessageId: platformMessageId || null,
@@ -4846,7 +4864,9 @@ export async function processAdminMessage(
     await prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        aiActive: true,
+        // Note: do NOT touch `aiActive` here — the ManyChat sequence is
+        // still running. AI takeover happens via the manychat-complete
+        // endpoint or the time-based heartbeat fallback.
         lastMessageAt: message.timestamp
       }
     });
@@ -4857,13 +4877,13 @@ export async function processAdminMessage(
     broadcastNewMessage(accountId, {
       id: message.id,
       conversationId,
-      sender: 'AI',
+      sender: 'MANYCHAT',
       content: messageText,
       platformMessageId: platformMessageId || null,
       timestamp: message.timestamp.toISOString()
     });
     console.log(
-      `[webhook-processor] ManyChat automation echo saved as AI for conversation ${conversationId}`
+      `[webhook-processor] ManyChat automation echo saved as MANYCHAT for conversation ${conversationId}`
     );
     return;
   }

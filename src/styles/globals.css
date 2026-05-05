@@ -328,6 +328,12 @@
   margin-left: auto;
   border-bottom-right-radius: 6px;
 }
+.glass-bubble.mine-manychat {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  color: white;
+  margin-left: auto;
+  border-bottom-right-radius: 6px;
+}
 .glass-bubble.theirs {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(148, 163, 184, 0.18);

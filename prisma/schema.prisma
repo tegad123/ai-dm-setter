@@ -71,6 +71,7 @@ enum MessageSender {
   LEAD
   HUMAN
   SYSTEM
+  MANYCHAT
 }
 
 enum CapitalVerificationStatus {

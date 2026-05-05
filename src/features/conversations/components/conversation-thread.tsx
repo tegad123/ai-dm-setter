@@ -447,6 +447,7 @@ export function ConversationThread({
                   const isAI = sender === 'ai';
                   const isHuman = sender === 'human';
                   const isSystem = sender === 'system';
+                  const isManyChat = sender === 'manychat';
                   if (isSystem) {
                     return (
                       <div
@@ -533,12 +534,21 @@ export function ConversationThread({
                             ) : null}
                           </span>
                         )}
+                        {isFirstInGroup && isManyChat && (
+                          <span className='mb-0.5 inline-block text-[10px] text-violet-400'>
+                            ManyChat
+                            <span className='text-muted-foreground ml-1'>
+                              · automation
+                            </span>
+                          </span>
+                        )}
                         <div
                           className={cn(
                             'glass-bubble',
                             isLead && 'theirs',
                             isAI && 'mine',
-                            isHuman && 'mine-human'
+                            isHuman && 'mine-human',
+                            isManyChat && 'mine mine-manychat'
                           )}
                         >
                           {msg.isVoiceNote && msg.voiceNoteUrl && (

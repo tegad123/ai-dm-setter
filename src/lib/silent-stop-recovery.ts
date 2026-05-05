@@ -53,6 +53,12 @@ export interface SilentStopHeartbeatResult {
   autoTriggered: number;
   operatorReview: number;
   failed: number;
+  // ManyChat-handoff'd conversations whose `awaitingAiResponse` flag was
+  // never set (because the operator's flow ends silently — no completion
+  // webhook fires). The fallback flips them BEFORE the main scan so the
+  // same heartbeat tick can route them through the standard recovery
+  // path. Counter exposed for ops visibility.
+  manyChatRecovered: number;
 }
 
 export type StalledConversation = Awaited<
@@ -413,6 +419,78 @@ async function fetchStalledConversations(now = new Date()) {
     orderBy: { awaitingSince: 'asc' },
     take: MAX_HEARTBEAT_BATCH
   });
+}
+
+// Time-based fallback for ManyChat-handoff'd conversations stuck because
+// the operator's automation never fired the completion webhook
+// (manychat-complete). The handoff webhook fires EARLY (when the lead
+// taps the opener button) and intentionally leaves `awaitingAiResponse`
+// false because the ManyChat sequence is still in flight. The completion
+// webhook is supposed to flip it to true at the end. If the operator
+// forgets to wire that final step, this fallback flips the flag once the
+// lead's last message has been sitting unanswered for >5 min — same
+// signal the existing heartbeat already uses.
+//
+// Idempotent. Skips rows already-flipped, rows whose latest message is
+// not from LEAD, and rows recently touched by a recovery attempt
+// (`lastSilentStopAt` dedup window matches the main fetcher's).
+async function recoverManyChatStuckConversations(
+  now = new Date()
+): Promise<number> {
+  const threshold = new Date(now.getTime() - SILENCE_THRESHOLD_MS);
+  const dedupCutoff = new Date(now.getTime() - DETECTION_DEDUP_MS);
+
+  const candidates = await prisma.conversation.findMany({
+    where: {
+      source: 'MANYCHAT',
+      awaitingAiResponse: false,
+      lead: { stage: { in: ['NEW_LEAD', 'ENGAGED'] } },
+      OR: [
+        { lastSilentStopAt: null },
+        { lastSilentStopAt: { lt: dedupCutoff } }
+      ]
+    },
+    select: {
+      id: true,
+      awaitingSince: true,
+      lead: { select: { handle: true } },
+      messages: {
+        orderBy: { timestamp: 'desc' },
+        take: 1,
+        select: { sender: true, timestamp: true }
+      }
+    },
+    take: MAX_HEARTBEAT_BATCH
+  });
+
+  let flipped = 0;
+  for (const conv of candidates) {
+    const last = conv.messages[0];
+    if (!last || last.sender !== 'LEAD') continue;
+    if (last.timestamp >= threshold) continue;
+
+    // Race vs the completion endpoint: if the endpoint already set
+    // `awaitingSince=now()` and our scan ran first this tick, we'd
+    // clobber forward in time with `lastLead.timestamp`, making the row
+    // look LESS stale than it is. Pick the newer of the two.
+    const existing = conv.awaitingSince ? conv.awaitingSince.getTime() : 0;
+    const fromLead = last.timestamp.getTime();
+    const awaitingSince = new Date(Math.max(existing, fromLead));
+
+    await prisma.conversation.update({
+      where: { id: conv.id },
+      data: {
+        aiActive: true,
+        awaitingAiResponse: true,
+        awaitingSince
+      }
+    });
+    flipped += 1;
+    console.log(
+      `[silent-stop] manychat fallback flipped ${conv.id} @${conv.lead?.handle ?? 'unknown'} awaitingSince=${awaitingSince.toISOString()}`
+    );
+  }
+  return flipped;
 }
 
 async function diagnoseStopReason(
@@ -840,13 +918,19 @@ export async function handleSilentStop(
 }
 
 export async function silentStopHeartbeat(): Promise<SilentStopHeartbeatResult> {
+  // Run the ManyChat-stuck recovery FIRST so any rows it flips become
+  // visible to the main `fetchStalledConversations` query in this same
+  // heartbeat tick (no 1-minute wait for the next cron run).
+  const manyChatRecovered = await recoverManyChatStuckConversations();
+
   const stalled = await fetchStalledConversations();
   const result: SilentStopHeartbeatResult = {
     scanned: stalled.length,
     detected: 0,
     autoTriggered: 0,
     operatorReview: 0,
-    failed: 0
+    failed: 0,
+    manyChatRecovered
   };
   const accountIds = new Set<string>();
 
