@@ -4,7 +4,10 @@ import { broadcastAIStatusChange, broadcastNotification } from '@/lib/realtime';
 import { detectDistress } from '@/lib/distress-detector';
 import { attemptSelfRecovery } from '@/lib/script-state-recovery';
 import type { ScriptHistoryMessage } from '@/lib/script-state-recovery';
-import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
+import {
+  scoreVoiceQualityGroup,
+  isExplicitAcceptance
+} from '@/lib/voice-quality-gate';
 import { processScheduledReply } from '@/lib/webhook-processor';
 
 const SILENCE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -136,6 +139,24 @@ function isManyChatOpeningHandoff(conversation: StalledConversation): boolean {
     !capturedPointHasValue(points, 'workBackground') &&
     !capturedPointHasValue(points, 'incomeGoal')
   );
+}
+
+// Eligibility for the canned discovery-bridge: the lead's only message
+// is a button-click acceptance (e.g. "Yes, send it over!"). When the
+// lead has sent additional free-text content, the canned response would
+// ignore that context (e.g. lead says "I've trade for around 1.5years"
+// and the bridge still asks "what's your trading background"). Routing
+// such conversations through the regular AI recovery path lets the
+// engine read and react to what was actually said.
+function onlyButtonClickAcceptanceReceived(
+  conversation: StalledConversation
+): boolean {
+  const leadMessages = conversation.messages.filter(
+    (message) => message.sender === 'LEAD'
+  );
+  if (leadMessages.length === 0) return true;
+  if (leadMessages.length > 1) return false;
+  return isExplicitAcceptance(leadMessages[0].content);
 }
 
 function hasUsablePlatformRecipient(
@@ -587,7 +608,10 @@ async function triggerAiSelfRecovery(
   conversation: StalledConversation,
   diagnosis: Diagnosis
 ): Promise<RecoveryDraft> {
-  if (isManyChatOpeningHandoff(conversation)) {
+  if (
+    isManyChatOpeningHandoff(conversation) &&
+    onlyButtonClickAcceptanceReceived(conversation)
+  ) {
     return buildManyChatOpeningRecovery(conversation);
   }
 
