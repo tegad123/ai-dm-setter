@@ -179,8 +179,8 @@ async function testAnthropicPath() {
         orderBy: { generatedAt: 'desc' }
       });
       assert(
-        s1?.modelUsed === 'claude-sonnet-4-6',
-        'TEST 2a — modelUsed = claude-sonnet-4-6',
+        s1?.modelUsed === 'claude-sonnet-4-20250514',
+        'TEST 2a — modelUsed = claude-sonnet-4-20250514',
         `modelUsed="${s1?.modelUsed}"`
       );
       assert(
@@ -284,7 +284,7 @@ async function testFallbackPath() {
       assert(!!r.reply, 'TEST 4a — fallback still produced a reply');
       assert(
         s?.modelUsed === 'gpt-4o-mini-fallback' ||
-          s?.modelUsed === 'claude-sonnet-4-6',
+          s?.modelUsed === 'claude-sonnet-4-20250514',
         'TEST 4b — modelUsed reflects actual path taken',
         `modelUsed="${s?.modelUsed}"`
       );
@@ -312,13 +312,12 @@ async function testOpenAIUntouched() {
         orderBy: { generatedAt: 'desc' }
       });
       // Production isolation invariant: aiProvider=openai accounts must
-      // NOT route to the new Sonnet 4.6 path. They can still fall
-      // through to env-configured anthropic (older snapshot) when they
-      // have no creds — that's pre-existing behavior unrelated to the
-      // Sonnet 4.6 rollout flag.
+      // NOT route to the Anthropic main-reply model. They can still
+      // fall through to env-configured anthropic when they have no
+      // creds — that's pre-existing behavior.
       assert(
-        s?.modelUsed !== 'claude-sonnet-4-6',
-        'TEST 5b — openai-default account does NOT route to Sonnet 4.6',
+        s?.modelUsed !== 'claude-sonnet-4-20250514',
+        'TEST 5b — openai-default account does NOT route to the Anthropic reply model',
         `modelUsed="${s?.modelUsed}"`
       );
     }

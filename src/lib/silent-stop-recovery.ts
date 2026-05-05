@@ -712,19 +712,21 @@ async function routeToOperatorReview(params: {
       triggeredAt: new Date()
     }
   });
+  // We notify the operator (escalate() below) and tally the silent-stop
+  // counter, but we DO NOT flip aiActive=false. Previously this path
+  // permanently disabled the AI for the conversation, which meant a
+  // lead returning later with high-intent ("I'm ready to take best
+  // things who improve me") got NO reply because aiActive was stuck
+  // off. The operator alert is enough; if they want to take over they
+  // can toggle Human=ON from the UI.
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      aiActive: false,
       awaitingAiResponse: false,
       awaitingSince: null,
       silentStopCount: { increment: 1 },
       lastSilentStopAt: new Date()
     }
-  });
-  broadcastAIStatusChange(conversation.lead.accountId, {
-    conversationId: conversation.id,
-    aiActive: false
   });
   const origin = process.env.NEXT_PUBLIC_APP_URL || '';
   const link = origin

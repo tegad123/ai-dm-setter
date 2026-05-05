@@ -3390,7 +3390,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 // Provider Resolution (per-account BYOK with env fallback)
 // ---------------------------------------------------------------------------
 
-const SONNET_46_MODEL = 'claude-sonnet-4-6';
+// Reverted from 'claude-sonnet-4-6' on 2026-05-05 after observed
+// regressions in the production reply path (script-skip recovery
+// gate failures, escalation churn). Holding on the dated Sonnet 4
+// model that was stable through prior weeks of traffic. Constant
+// name kept for diff minimalism.
+const SONNET_46_MODEL = 'claude-sonnet-4-20250514';
 // Default main-generation model for all OpenAI-routed accounts. GPT-5.4
 // mini: accepts temp=0.85 + JSON response_format, requires
 // max_completion_tokens (handled in callOpenAI). Swapped from
