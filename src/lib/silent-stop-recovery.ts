@@ -166,6 +166,35 @@ function latestNonSystemMessage(conversation: StalledConversation) {
     .find((message) => message.sender !== 'SYSTEM');
 }
 
+function latestLeadAlreadyAnswered(conversation: StalledConversation): boolean {
+  const lastLead = latestLeadMessage(conversation);
+  const latest = latestNonSystemMessage(conversation);
+  if (!lastLead || !latest) return false;
+  if (latest.timestamp.getTime() <= lastLead.timestamp.getTime()) return false;
+  return latest.sender === 'AI' || latest.sender === 'HUMAN';
+}
+
+export function latestLeadAlreadyAnsweredForTest(args: {
+  messages: Array<{ sender: string; content?: string; timestamp: Date }>;
+}): boolean {
+  return latestLeadAlreadyAnswered(args as unknown as StalledConversation);
+}
+
+async function repairAnsweredAwaitingState(
+  conversation: StalledConversation
+): Promise<void> {
+  const latest = latestNonSystemMessage(conversation);
+  if (!latest) return;
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      awaitingAiResponse: false,
+      awaitingSince: null,
+      lastMessageAt: latest.timestamp
+    }
+  });
+}
+
 function countAiMessages(conversation: StalledConversation): number {
   return conversation.messages.filter((message) => message.sender === 'AI')
     .length;
@@ -918,6 +947,19 @@ export async function handleSilentStop(
   const lastLead = latestLeadMessage(conversation);
   if (!lastLead) return 'SKIPPED';
 
+  // If an AI/HUMAN row exists after the latest lead row, the lead was
+  // already answered. A stale Conversation.awaitingAiResponse flag can
+  // happen if a long multi-bubble delivery times out after writing the
+  // bubbles but before the final conversation-row update. Do not create
+  // a silent-stop event in that state; repair the row and skip.
+  if (latestLeadAlreadyAnswered(conversation)) {
+    console.log(
+      `[silent-stop] inner skip ${conversation.id}: latest lead already answered; repairing stale awaiting state`
+    );
+    await repairAnsweredAwaitingState(conversation);
+    return 'SKIPPED';
+  }
+
   // Belt-and-suspenders re-check at the inner level. The
   // silentStopHeartbeat caller already filters by
   // isConversationActive, but a deploy-timing race between cron
@@ -1052,15 +1094,23 @@ export async function silentStopHeartbeat(): Promise<SilentStopHeartbeatResult> 
   // through if the row was hydrated with messages whose timestamps
   // race the conversation-row update. isConversationActive enforces
   // the invariant against the actual message rows we read.
-  const stalled = candidates.filter((c) => {
+  const stalled: StalledConversation[] = [];
+  for (const c of candidates) {
+    if (latestLeadAlreadyAnswered(c)) {
+      console.log(
+        `[silent-stop] skip ${c.id}: latest lead already answered; repairing stale awaiting state`
+      );
+      await repairAnsweredAwaitingState(c);
+      continue;
+    }
     if (isConversationActive(c)) {
       console.log(
         `[silent-stop] skip ${c.id}: lead still active (last 10 min)`
       );
-      return false;
+      continue;
     }
-    return true;
-  });
+    stalled.push(c);
+  }
   const result: SilentStopHeartbeatResult = {
     scanned: stalled.length,
     detected: 0,

@@ -15,7 +15,8 @@ import { describe, it } from 'node:test';
 
 import {
   ACTIVE_WINDOW_MS_FOR_TEST,
-  isConversationActiveForTest
+  isConversationActiveForTest,
+  latestLeadAlreadyAnsweredForTest
 } from '../../src/lib/silent-stop-recovery';
 
 const now = Date.now();
@@ -114,5 +115,24 @@ describe('isConversationActive — bug 19 keepalive on active conversation', () 
     // Lock the window value so an accidental edit to the constant
     // surfaces as a test failure, not a silent regression.
     assert.equal(ACTIVE_WINDOW_MS_FOR_TEST, 10 * 60 * 1000);
+  });
+
+  it('returns TRUE when a stale awaiting row already has AI replies after the latest lead', () => {
+    // Test 6 shape (2026-05-05): the lead returned after 15+ min with
+    // a buying signal, the AI shipped a multi-bubble call pitch, but
+    // the final Conversation update did not land before the silent-stop
+    // heartbeat. The detector must trust the actual Message rows: if
+    // latest non-system is AI/HUMAN after latest LEAD, the lead was
+    // answered and silent-stop must skip/repair instead of creating an
+    // OPERATOR_REVIEW event or keepalive.
+    const alreadyAnswered = latestLeadAlreadyAnsweredForTest({
+      messages: [
+        { sender: 'LEAD', timestamp: minutesAgo(20) },
+        { sender: 'AI', timestamp: minutesAgo(18) },
+        { sender: 'AI', timestamp: minutesAgo(17) },
+        { sender: 'AI', timestamp: minutesAgo(15) }
+      ]
+    });
+    assert.equal(alreadyAnswered, true);
   });
 });
