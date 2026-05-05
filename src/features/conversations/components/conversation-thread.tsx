@@ -583,10 +583,21 @@ export function ConversationThread({
                         )}
                         {isFirstInGroup && isManyChat && (
                           <span className='mb-0.5 inline-block text-[10px] text-violet-400'>
-                            ManyChat
-                            <span className='text-muted-foreground ml-1'>
-                              · automation
-                            </span>
+                            {msg.msgSource === 'QUALIFYDMS_AI' ? (
+                              <>
+                                AI Setter
+                                <span className='text-muted-foreground ml-1'>
+                                  · via ManyChat
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                ManyChat
+                                <span className='text-muted-foreground ml-1'>
+                                  · flow
+                                </span>
+                              </>
+                            )}
                           </span>
                         )}
                         {isDeleted && (

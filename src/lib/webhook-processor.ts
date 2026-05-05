@@ -3129,7 +3129,8 @@ async function deliverBubbleGroup(params: {
         stallType: isFirst ? result.stallType || null : null,
         followUpAttemptNumber: isFirst ? (result.followUpNumber ?? null) : null,
         systemPromptVersion: isFirst ? result.systemPromptVersion : null,
-        suggestionId: isFirst ? result.suggestionId || null : null
+        suggestionId: isFirst ? result.suggestionId || null : null,
+        msgSource: 'QUALIFYDMS_AI'
       }
     });
     if (isFirst) firstMessageId = msg.id;
@@ -4088,7 +4089,8 @@ async function sendAIReply(
         stallType: result.stallType || null,
         followUpAttemptNumber: result.followUpNumber ?? null,
         systemPromptVersion: result.systemPromptVersion,
-        suggestionId: result.suggestionId || null
+        suggestionId: result.suggestionId || null,
+        msgSource: 'QUALIFYDMS_AI'
       }
     });
     aiMessageId = aiMessage.id;
@@ -4968,7 +4970,8 @@ export async function processAdminMessage(
         // generic "couldn't catch the audio" replies. (@andreierz
         // 2026-05-05)
         isVoiceNote: Boolean(audioUrl),
-        voiceNoteUrl: audioUrl ?? null
+        voiceNoteUrl: audioUrl ?? null,
+        msgSource: 'MANYCHAT_FLOW'
       }
     });
     await prisma.conversation.update({
@@ -5140,7 +5143,8 @@ export async function processAdminMessage(
       isHumanOverride,
       rejectedAISuggestionId,
       editedFromSuggestion,
-      loggedDuringTrainingPhase
+      loggedDuringTrainingPhase,
+      msgSource: 'HUMAN_OVERRIDE'
     }
   });
   console.log('message saved:', message.id);

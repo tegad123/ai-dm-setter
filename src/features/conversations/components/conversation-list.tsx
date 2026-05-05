@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 
 type InboxTab = 'all' | 'priority' | 'unread' | 'qualified' | 'unqualified';
 type PlatformFilter = '' | 'INSTAGRAM' | 'FACEBOOK';
+type SourceFilter = '' | 'MANYCHAT' | 'DIRECT';
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -29,6 +30,8 @@ interface ConversationListProps {
   onTabChange?: (tab: InboxTab) => void;
   platformFilter?: PlatformFilter;
   onPlatformFilterChange?: (f: PlatformFilter) => void;
+  sourceFilter?: SourceFilter;
+  onSourceFilterChange?: (f: SourceFilter) => void;
 }
 
 export function ConversationList({
@@ -38,12 +41,19 @@ export function ConversationList({
   activeTab = 'all',
   onTabChange,
   platformFilter = '',
-  onPlatformFilterChange
+  onPlatformFilterChange,
+  sourceFilter = '',
+  onSourceFilterChange
 }: ConversationListProps) {
   const [search, setSearch] = useState('');
-  const filtered = conversations.filter((c) =>
-    c.leadName.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = conversations
+    .filter((c) => c.leadName.toLowerCase().includes(search.toLowerCase()))
+    .filter((c) => {
+      if (!sourceFilter) return true;
+      if (sourceFilter === 'MANYCHAT') return c.source === 'MANYCHAT';
+      if (sourceFilter === 'DIRECT') return c.source !== 'MANYCHAT';
+      return true;
+    });
 
   return (
     <div className='flex h-full min-h-0 w-80 flex-col border-r'>
@@ -140,6 +150,34 @@ export function ConversationList({
                 )}
               >
                 {pf.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Source Filter */}
+        {onSourceFilterChange && (
+          <div className='mb-3 flex gap-1'>
+            {[
+              { key: '' as SourceFilter, label: 'All sources' },
+              { key: 'MANYCHAT' as SourceFilter, label: 'ManyChat' },
+              { key: 'DIRECT' as SourceFilter, label: 'Direct' }
+            ].map((sf) => (
+              <button
+                key={sf.key}
+                onClick={() => onSourceFilterChange(sf.key)}
+                className={cn(
+                  'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                  sourceFilter === sf.key
+                    ? sf.key === 'MANYCHAT'
+                      ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+                      : sf.key === 'DIRECT'
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                        : 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                )}
+              >
+                {sf.label}
               </button>
             ))}
           </div>

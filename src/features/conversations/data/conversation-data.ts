@@ -42,6 +42,15 @@ export interface Message {
   messageGroupId?: string | null;
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;
+  // Which system authored this message. QUALIFYDMS_AI = our AI engine,
+  // MANYCHAT_FLOW = static ManyChat automation step, HUMAN_OVERRIDE = operator
+  // typed it, UNKNOWN = legacy rows before this field was added.
+  msgSource?:
+    | 'QUALIFYDMS_AI'
+    | 'MANYCHAT_FLOW'
+    | 'HUMAN_OVERRIDE'
+    | 'UNKNOWN'
+    | null;
 }
 
 export interface ConversationTag {

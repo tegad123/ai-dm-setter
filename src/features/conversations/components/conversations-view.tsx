@@ -63,6 +63,9 @@ export function ConversationsView() {
   const conversationIdParam = searchParams.get('conversationId');
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('');
+  const [sourceFilter, setSourceFilter] = useState<'' | 'MANYCHAT' | 'DIRECT'>(
+    ''
+  );
   const {
     conversations: apiConversations,
     loading: listLoading,
@@ -143,6 +146,7 @@ export function ConversationsView() {
         messageGroupId: extra.messageGroupId ?? null,
         bubbleIndex: extra.bubbleIndex ?? null,
         bubbleTotalCount: extra.bubbleTotalCount ?? null,
+        msgSource: extra.msgSource ?? null,
         // Soft-delete fields. Read via the `extra` cast — ApiMessage's
         // narrow type doesn't list them yet, but the API selects the
         // full Message row so the values are present at runtime.
@@ -270,6 +274,8 @@ export function ConversationsView() {
         onTabChange={setInboxTab}
         platformFilter={platformFilter}
         onPlatformFilterChange={setPlatformFilter}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
       />
       <ConversationThread
         conversation={selected}

@@ -242,8 +242,13 @@ export async function POST(
         // QualifyDMs UI rather than the native Meta app (the echo
         // path sets 'PHONE').
         ...(sender === 'HUMAN'
-          ? { sentByUserId: auth.userId, humanSource: 'DASHBOARD' }
+          ? {
+              sentByUserId: auth.userId,
+              humanSource: 'DASHBOARD',
+              msgSource: 'HUMAN_OVERRIDE' as const
+            }
           : {}),
+        ...(sender === 'AI' ? { msgSource: 'QUALIFYDMS_AI' as const } : {}),
         ...overrideFields,
         // Self-optimizing layer tracking fields (only set for AI messages)
         ...(sender === 'AI'

@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "MessageSource" AS ENUM ('QUALIFYDMS_AI', 'MANYCHAT_FLOW', 'HUMAN_OVERRIDE', 'UNKNOWN');
+
+-- AlterTable
+ALTER TABLE "Message" ADD COLUMN "msgSource" "MessageSource" NOT NULL DEFAULT 'UNKNOWN';

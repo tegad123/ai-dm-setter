@@ -384,6 +384,7 @@ async function ensureOpenerMessage(
       sender: 'MANYCHAT',
       content: trimmed,
       systemPromptVersion: 'manychat-automation',
+      msgSource: 'MANYCHAT_FLOW',
       timestamp
     }
   });
