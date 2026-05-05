@@ -90,6 +90,25 @@ export async function processManyChatComplete(params: {
 
   const conversation = lead.conversation;
 
+  // Upgrade `Lead.platformUserId` to the numeric IG ID if we have one
+  // and the lead is currently stored with a handle. The early
+  // `manychat-handoff` webhook stores handles because ManyChat's
+  // variable picker doesn't expose the IG numeric ID at trigger time —
+  // but `{{user.id}}` IS available later in the flow when this
+  // completion webhook fires. Without this upgrade the
+  // `hasUsablePlatformRecipient` check in silent-stop-recovery refuses
+  // to ship AI replies (IG Send API needs 12+ digit IDs).
+  const incomingIsNumeric = /^\d{12,}$/.test(payload.instagramUserId);
+  const existingIsNumeric = /^\d{12,}$/.test(
+    (lead.platformUserId || '').trim()
+  );
+  if (incomingIsNumeric && !existingIsNumeric) {
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { platformUserId: payload.instagramUserId }
+    });
+  }
+
   // Idempotent: a re-fire after the operator already handed off (or
   // after the time-based fallback already flipped) returns success
   // with a flag so ManyChat-side debugging can see the state.
