@@ -1,4 +1,5 @@
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { signState } from '@/lib/oauth-state';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -25,10 +26,16 @@ export async function GET(req: NextRequest) {
       'http://localhost:3000';
     const redirectUri = `${baseUrl}/api/auth/meta/callback`;
 
-    // Encode accountId in state so we can associate the token after callback
-    const state = Buffer.from(
-      JSON.stringify({ accountId: auth.accountId, userId: auth.userId })
-    ).toString('base64url');
+    // HMAC-sign the state so the callback can detect tampering. Without
+    // a signature, an attacker can craft a state with another user's
+    // accountId and have OAuth tokens linked to the wrong tenant on
+    // their callback. signState fail-closes if the secret env var is
+    // missing — caller will see a 500 rather than an unsigned token
+    // making it through.
+    const state = signState({
+      accountId: auth.accountId,
+      userId: auth.userId
+    });
 
     // Try config_id first (Facebook Login for Business), fall back to scope
     const configId = process.env.META_LOGIN_CONFIG_ID;

@@ -1,4 +1,5 @@
 import { saveCredentials } from '@/lib/credential-store';
+import { verifyState } from '@/lib/oauth-state';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 30;
@@ -37,15 +38,22 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Decode state to get accountId
-    let state: { accountId: string; userId: string };
-    try {
-      state = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
-    } catch {
+    // Verify the HMAC signature on the state parameter. A forged or
+    // tampered state — including a state issued during a different
+    // session that an attacker captured — fails verification and is
+    // rejected. signState/verifyState use a server-side secret;
+    // anything an attacker can produce without that secret won't
+    // verify.
+    const verified = verifyState(stateParam);
+    if (!verified) {
       return NextResponse.redirect(
         `${baseUrl}/dashboard/settings/integrations?error=invalid_state`
       );
     }
+    const state: { accountId: string; userId: string } = {
+      accountId: verified.accountId,
+      userId: verified.userId
+    };
 
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;

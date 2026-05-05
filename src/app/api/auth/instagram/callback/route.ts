@@ -1,4 +1,5 @@
 import { saveCredentials } from '@/lib/credential-store';
+import { verifyState } from '@/lib/oauth-state';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Instagram OAuth callback needs time for: token exchange + long-lived exchange + profile fetch + subscription
@@ -40,15 +41,18 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Decode state
-    let state: { accountId: string; userId: string };
-    try {
-      state = JSON.parse(Buffer.from(stateParam, 'base64url').toString());
-    } catch {
+    // Verify HMAC-signed state — see meta/callback for rationale.
+    // Plain base64 JSON lets an attacker forge any accountId/userId.
+    const verified = verifyState(stateParam);
+    if (!verified) {
       return NextResponse.redirect(
         `${baseUrl}/dashboard/settings/integrations?error=invalid_state`
       );
     }
+    const state: { accountId: string; userId: string } = {
+      accountId: verified.accountId,
+      userId: verified.userId
+    };
 
     const appId = process.env.INSTAGRAM_APP_ID;
     const appSecret = process.env.INSTAGRAM_APP_SECRET;

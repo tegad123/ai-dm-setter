@@ -1,4 +1,5 @@
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { signState } from '@/lib/oauth-state';
 import { NextRequest, NextResponse } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -25,10 +26,13 @@ export async function GET(req: NextRequest) {
       'http://localhost:3000';
     const redirectUri = `${baseUrl}/api/auth/instagram/callback`;
 
-    // Encode accountId in state so we can associate the token after callback
-    const state = Buffer.from(
-      JSON.stringify({ accountId: auth.accountId, userId: auth.userId })
-    ).toString('base64url');
+    // HMAC-signed state — see meta/route.ts for the rationale. Plain
+    // base64 JSON lets an attacker forge any accountId/userId; signing
+    // anchors the callback to a state we issued.
+    const state = signState({
+      accountId: auth.accountId,
+      userId: auth.userId
+    });
 
     const scopes = [
       'instagram_business_basic',

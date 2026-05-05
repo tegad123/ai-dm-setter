@@ -1,19 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getCredentials } from '@/lib/credential-store';
+import { requireAuth, AuthError } from '@/lib/auth-guard';
 
 // ---------------------------------------------------------------------------
 // POST — Manually subscribe all connected pages to webhook events
 // Call this if DMs are not arriving after OAuth connection
+// ---------------------------------------------------------------------------
+//
+// SECURITY: gated behind `requireAuth` and scoped to the caller's
+// accountId. Previously this endpoint was unauthenticated AND
+// iterated every active META/INSTAGRAM credential across all
+// accounts — anyone could trigger a re-subscribe sweep, and (worse)
+// learn the page-id surface of all tenants from the response body.
+// Both leaks closed.
 // ---------------------------------------------------------------------------
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
 
 export async function POST(request: NextRequest) {
   try {
-    // Find all active META and INSTAGRAM credentials
+    let auth;
+    try {
+      auth = await requireAuth(request);
+    } catch (err) {
+      if (err instanceof AuthError) {
+        return NextResponse.json(
+          { error: err.message },
+          { status: err.status }
+        );
+      }
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Tenant-scoped: only the caller's own account credentials.
     const credentials = await prisma.integrationCredential.findMany({
-      where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
+      where: {
+        accountId: auth.accountId,
+        provider: { in: ['META', 'INSTAGRAM'] },
+        isActive: true
+      }
     });
 
     if (credentials.length === 0) {
