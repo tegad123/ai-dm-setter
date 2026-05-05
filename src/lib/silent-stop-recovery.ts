@@ -131,8 +131,21 @@ function capturedPointHasValue(
 
 function isManyChatOpeningHandoff(conversation: StalledConversation): boolean {
   if (conversation.source !== 'MANYCHAT') return false;
-  if (latestNonSystemMessage(conversation)?.sender !== 'LEAD') return false;
   if (countAiMessages(conversation) > 3) return false;
+
+  // Lead must have engaged at least once (button click on the opener
+  // gets stored as a LEAD message). The original check required the
+  // LATEST non-system message to be LEAD — too strict for realistic
+  // flows where ManyChat sends additional automation DMs after the
+  // button click ("Perfect…6 minutes of sauce", "Did You Give it a
+  // watch?"). Those land as MANYCHAT messages and shifted the latest-
+  // non-system pointer off LEAD, causing the discovery bridge to
+  // skip and the regular AI engine to take over → R24/Fix B gates
+  // exhausted → escalation. Just check that LEAD has shown up at all.
+  const hasLeadEngagement = conversation.messages.some(
+    (message) => message.sender === 'LEAD'
+  );
+  if (!hasLeadEngagement) return false;
 
   const points = capturedDataPointsAsRecord(conversation);
   return (
