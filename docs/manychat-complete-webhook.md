@@ -86,3 +86,10 @@ unanswered for >5 minutes, the heartbeat flips the same flags and the
 AI takes over. So the webhook is "fast path"; the fallback is "safety
 net." Adding the webhook gives ~5× faster handoff and cleaner ops
 logs.
+
+## Related — capture each ManyChat-sent message
+
+To make every ManyChat-sent DM appear in the QualifyDMs dashboard
+(opener follow-up, video links, sequence reminders), see
+[`manychat-message-webhook.md`](./manychat-message-webhook.md). Fire
+that webhook right after every "Send Message" node in your flow.
