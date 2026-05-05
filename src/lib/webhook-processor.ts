@@ -418,6 +418,21 @@ export function isRescheduleSignal(text: string | null | undefined): boolean {
   return RESCHEDULE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/**
+ * Send-decision policy (2026-05-05). The AI auto-sends iff `aiActive`
+ * is true on the conversation. Away-mode is intentionally NOT a
+ * parameter — it controls only the default for NEW conversation
+ * creation (Conversation.aiActive's initial value), never delivery
+ * for existing conversations.
+ *
+ * This signature is the contract the policy is enforced against:
+ * any future regression that re-couples send-decision to away-mode
+ * has to add a parameter here, which the unit test will catch.
+ */
+export function shouldAutoSendReply(args: { aiActive: boolean }): boolean {
+  return args.aiActive === true;
+}
+
 function extractLeadEmail(text: string): string | null {
   const match = text.match(LEAD_EMAIL_PATTERN);
   return match ? match[0].toLowerCase() : null;
@@ -2026,59 +2041,44 @@ export async function scheduleAIReply(
     rescheduleFlowActive = true;
   }
 
-  // Check account-level PER-PLATFORM away mode. The lead's platform decides
-  // whether the Instagram or Facebook switch applies to this conversation.
+  // Send-decision policy (2026-05-05):
+  //   aiActive = true  → AI auto-sends responses
+  //   aiActive = false → AI generates suggestions only
   //
-  // Auto-send requires BOTH:
-  //   (1) The platform's away-mode is ON (operator has explicitly opted this
-  //       platform in to AI auto-send), AND
-  //   (2) The conversation's aiActive flag is true (no human has taken over
-  //       this specific lead).
+  // Away mode is a separate concern, intentionally decoupled from
+  // delivery: it only controls the DEFAULT for NEW conversation
+  // creation (Conversation.aiActive's initial value when an inbound
+  // creates the row — see processIncomingMessage where
+  // shouldEnableAI = awayModeForPlatform). Once a conversation
+  // exists, awayMode does not influence whether the AI sends or
+  // suggests — only aiActive does.
   //
-  // Earlier version used OR semantics ("either gate opens the floodgate"),
-  // which bit us because `Conversation.aiActive` defaults to true on
-  // creation. That meant any new Instagram lead coming in through the Meta
-  // webhook created a conversation with aiActive=true, and the AI
-  // auto-replied even though the operator had never flipped the Instagram
-  // switch on. See daetradez's @l.galeza for a real example. Requiring
-  // BOTH makes the per-platform switch an actual opt-in: no sends until
-  // the operator turns the platform on.
+  // The previous version coupled both — auto-send required
+  // (awayMode || autoSendOverride) AND aiActive. That coupling caused
+  // a class of bugs where flipping aiActive ON for a specific
+  // conversation produced an AISuggestion that never shipped because
+  // platform-level awayMode was off. The @l.galeza incident the old
+  // comment cited was about the OPPOSITE failure mode (a brand-new
+  // inbound lead auto-replying before opt-in) — that risk is now
+  // owned by the conversation-creation path: a lead created while
+  // awayMode=false comes in with aiActive=false and stays in
+  // suggestion mode until the operator manually flips it.
   //
   // REGRESSION NOTE — DELIVERY-TIME RE-CHECK: this entire scheduleAIReply
   // function re-runs from scratch every time the cron picks up a PENDING
-  // ScheduledReply (via the skipDelayQueue=true branch). That means both
-  // toggles (awayModeInstagram/Facebook here, and conversation.aiActive
-  // inside sendAIReply below) are re-fetched at DELIVERY time, not snapshotted
-  // at scheduling time. So an operator who flips the platform switch off
-  // between a lead's message and the scheduled reply firing will NOT see
-  // a stale auto-send go out — the delivery path re-evaluates against
-  // the current DB state. sendAIReply does the final "is aiActive still
-  // true?" check one more time as a belt-and-suspenders guard (see line
-  // ~1605). Do NOT cache or pass these flags across the scheduling-to-
-  // delivery boundary — always resolve them from the current DB row.
-  log('sched.step1.findAccount');
-  const account = await prisma.account.findUnique({
-    where: { id: accountId },
-    select: {
-      awayMode: true,
-      awayModeInstagram: true,
-      awayModeFacebook: true
-    }
-  });
-  const awayModeForPlatform = resolvePlatformAwayMode(account, lead.platform);
-
-  // Auto-send only when the per-conversation AI toggle is ON AND
-  // EITHER the account-level platform away-mode is on OR the
-  // conversation has `autoSendOverride` set — the latter lets an
-  // operator graduate one lead to AI-autonomous while keeping the
-  // rest of the platform in review-banner mode (see the per-
-  // conversation override doc on Conversation.autoSendOverride).
+  // ScheduledReply (via the skipDelayQueue=true branch). The aiActive
+  // flag is re-fetched at DELIVERY time, not snapshotted at scheduling
+  // time. So an operator who flips aiActive=false between a lead's
+  // message and the scheduled reply firing will see the delivery path
+  // route to suggestion mode instead of shipping. Do NOT cache the
+  // flag across the scheduling-to-delivery boundary — always resolve
+  // from the current DB row.
+  log('sched.step1.aiActiveCheck');
   const aiActive = conversation.aiActive;
-  const autoSendOverride = conversation.autoSendOverride;
-  const shouldAutoSend = aiActive && (awayModeForPlatform || autoSendOverride);
+  const shouldAutoSend = shouldAutoSendReply({ aiActive });
   log(
     'sched.step1.aiActive',
-    `aiActive=${aiActive} platform=${lead.platform} awayMode=${awayModeForPlatform} override=${autoSendOverride} shouldAutoSend=${shouldAutoSend}`
+    `aiActive=${aiActive} platform=${lead.platform} shouldAutoSend=${shouldAutoSend}`
   );
 
   if (
@@ -5396,14 +5396,19 @@ export async function handleAIHandoff(
 // ---------------------------------------------------------------------------
 // Orphan AISuggestion rescue (platform away-mode flip false→true)
 // ---------------------------------------------------------------------------
-// When an operator flips per-conversation `aiActive` on for a chat BEFORE
-// flipping the platform-level away-mode on, the AI generation fires
-// immediately (via handleAIHandoff) but the `shouldAutoSend` dual-gate
-// evaluates to false (aiActive=true && awayModeFacebook=false → false).
-// The generated reply gets saved as an AISuggestion row + broadcast to
-// the dashboard websocket but NEVER shipped to Meta and NEVER saved as
-// a Message row. Later when the operator flips the platform on, nothing
-// retroactively re-fires those orphans.
+// LEGACY (pre-2026-05-05): when an operator flipped per-conversation
+// `aiActive` on for a chat BEFORE flipping the platform-level away-mode on,
+// the dual-gate `shouldAutoSend = aiActive && (awayMode || autoSendOverride)`
+// evaluated to false and the generated reply got stranded as an
+// AISuggestion row instead of shipping. Later when the operator flipped
+// the platform on, this rescue swept those orphans and re-fired them.
+//
+// CURRENT (2026-05-05+): the dual-gate is gone. Send decision is now
+// `aiActive` alone. New orphans of this exact shape can no longer be
+// produced. The rescue is kept for two reasons:
+//   1. legacy orphans accrued before the policy change still benefit
+//      from a sweep when the operator notices and flips away-mode
+//   2. defense-in-depth against any future unintentional re-coupling
 //
 // This rescue finds conversations where:
 //   - Platform matches the one that just got turned on

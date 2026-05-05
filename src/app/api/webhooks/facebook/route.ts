@@ -8,7 +8,6 @@ import {
   computeReplyDelaySeconds
 } from '@/lib/webhook-processor';
 import prisma from '@/lib/prisma';
-import { resolvePlatformAwayMode } from '@/lib/stage-progression';
 
 // Vercel Hobby defaults to 10s — AI generation + send needs more time.
 // Bumped to 120s to fit the inline-delay-then-reply path.
@@ -367,28 +366,15 @@ async function processFacebookEvents(payload: any): Promise<void> {
           continue;
         }
 
-        // Check conversation AI toggle and platform-specific away mode.
-        // Legacy account.awayMode is only a fallback when the platform flag is
-        // null/undefined; an explicit Facebook=false must win.
-        const [convo, account] = await Promise.all([
-          prisma.conversation.findUnique({
-            where: { id: result.conversationId },
-            select: { aiActive: true }
-          }),
-          prisma.account.findUnique({
-            where: { id: accountId },
-            select: {
-              awayMode: true,
-              awayModeInstagram: true,
-              awayModeFacebook: true
-            }
-          })
-        ]);
-        const awayModeForPlatform = resolvePlatformAwayMode(
-          account,
-          'FACEBOOK'
-        );
-        if (convo?.aiActive || awayModeForPlatform) {
+        // Send-decision policy (2026-05-05): gen pipeline runs iff
+        // aiActive=true. Away-mode is irrelevant here — it only
+        // controls the initial value of aiActive on conversation
+        // creation, not delivery for existing conversations.
+        const convo = await prisma.conversation.findUnique({
+          where: { id: result.conversationId },
+          select: { aiActive: true }
+        });
+        if (convo?.aiActive) {
           const delaySeconds = await computeReplyDelaySeconds(accountId);
           const targetConvoId = result.conversationId;
 
