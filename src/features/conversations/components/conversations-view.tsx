@@ -136,7 +136,16 @@ export function ConversationsView() {
       humanSource: extra.humanSource ?? null,
       messageGroupId: extra.messageGroupId ?? null,
       bubbleIndex: extra.bubbleIndex ?? null,
-      bubbleTotalCount: extra.bubbleTotalCount ?? null
+      bubbleTotalCount: extra.bubbleTotalCount ?? null,
+      // Soft-delete fields. Read via the `extra` cast — ApiMessage's
+      // narrow type doesn't list them yet, but the API selects the
+      // full Message row so the values are present at runtime. Without
+      // these copied through, the renderer's isDeleted check
+      // (`Boolean(msg.deletedAt)`) is always false and lead-side
+      // unsends never grey out the bubble.
+      deletedAt: extra.deletedAt ?? null,
+      deletedBy: extra.deletedBy ?? null,
+      deletedSource: extra.deletedSource ?? null
     };
   });
 
