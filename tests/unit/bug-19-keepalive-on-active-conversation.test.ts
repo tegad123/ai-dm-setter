@@ -80,6 +80,24 @@ describe('isConversationActive — bug 19 keepalive on active conversation', () 
     assert.equal(active, false);
   });
 
+  it('returns TRUE for the @shepherdgushe.zw shape (HUMAN replied recently, then lead replied within window)', () => {
+    // HUMAN reply from the operator's phone (humanSource=PHONE)
+    // counts as "bot side spoke recently" — the operator is engaged,
+    // firing a silent-stop on top of their flow makes things worse.
+    // Lead at 9:57, HUMAN at 9:54 (3 min before), silent-stop check
+    // at 10:02 (5 min after lead). recentLead=true, recentBotSide=
+    // true (HUMAN within window) → active → SKIP.
+    const active = isConversationActiveForTest({
+      awaitingAiResponse: true,
+      messages: [
+        { sender: 'LEAD', timestamp: minutesAgo(13) },
+        { sender: 'HUMAN', timestamp: minutesAgo(8) },
+        { sender: 'LEAD', timestamp: minutesAgo(5) }
+      ]
+    });
+    assert.equal(active, true);
+  });
+
   it('returns FALSE when lead spoke recently but AI has not, and we are NOT awaiting (paused convo)', () => {
     // Edge case: aiActive=false (paused), lead replied with no
     // pending reply. Without awaitingAiResponse the heartbeat

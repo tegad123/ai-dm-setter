@@ -10,9 +10,21 @@ import {
 } from '@/lib/voice-quality-gate';
 import { processScheduledReply } from '@/lib/webhook-processor';
 
-const SILENCE_THRESHOLD_MS = 5 * 60 * 1000;
-// Window over which we look for "did the lead just speak / has the AI
-// also spoken recently" when deciding the conversation is still
+// Raised 5 → 10 min on 2026-05-05. The first iteration of the active-
+// conversation guard was correct in theory but bit @shepherdgushe.zw
+// in production: the cron tick at 15:02:00 UTC fired the silent-stop
+// 51 s after a fresh deploy went Ready, very likely from the OLD
+// pre-fix function instance still warm in Vercel's edge before
+// promotion. Aligning the silence threshold with the active window
+// (both 10 min) makes the SQL pre-filter alone strong enough — even
+// without any JS guard, a lead message inside the active window can
+// never satisfy `lastMessageAt < threshold`, so no candidate is
+// returned. Plus matches the user's "longer for keepalive" intent
+// (their spec called out 5 min for heartbeat / longer for keepalive
+// — the silent-stop fallback is the keepalive flavor).
+const SILENCE_THRESHOLD_MS = 10 * 60 * 1000;
+// Window over which we look for "did the lead just speak / has the
+// bot side spoken recently" when deciding the conversation is still
 // active. If both sides have messaged within this window — or the AI
 // is still mid-generation (awaitingAiResponse=true) — we never fire
 // the silent-stop fallback. Prevents the @arro_.92 incident: lead
@@ -123,10 +135,20 @@ function isConversationActive(conversation: StalledConversation): boolean {
     (m) => m.sender === 'LEAD' && m.timestamp.getTime() >= cutoff
   );
   if (!recentLead) return false;
-  const recentAi = conversation.messages.some(
-    (m) => m.sender === 'AI' && m.timestamp.getTime() >= cutoff
+  // "Bot side" includes both AI auto-replies AND HUMAN messages —
+  // operator manually responding from the dashboard or their phone is
+  // still "someone responded to the lead". Without HUMAN here, an
+  // operator dropping a quick reply from their phone (humanSource=
+  // PHONE) within the active window would still let the silent-stop
+  // soft-close fire 5–10 min later — the @shepherdgushe.zw 2026-05-05
+  // incident showed exactly this shape (HUMAN at 9:54, lead at 9:57,
+  // silent-stop at 10:02).
+  const recentBotSide = conversation.messages.some(
+    (m) =>
+      (m.sender === 'AI' || m.sender === 'HUMAN') &&
+      m.timestamp.getTime() >= cutoff
   );
-  return recentAi || conversation.awaitingAiResponse === true;
+  return recentBotSide || conversation.awaitingAiResponse === true;
 }
 
 export const ACTIVE_WINDOW_MS_FOR_TEST = ACTIVE_WINDOW_MS;
@@ -895,6 +917,19 @@ export async function handleSilentStop(
 ): Promise<'AUTO_TRIGGERED' | 'OPERATOR_REVIEW' | 'FAILED' | 'SKIPPED'> {
   const lastLead = latestLeadMessage(conversation);
   if (!lastLead) return 'SKIPPED';
+
+  // Belt-and-suspenders re-check at the inner level. The
+  // silentStopHeartbeat caller already filters by
+  // isConversationActive, but a deploy-timing race between cron
+  // promotion and code load could let an active conversation slip
+  // past — re-evaluate against the same invariant here so the
+  // soft-close cannot ship in that window.
+  if (isConversationActive(conversation)) {
+    console.log(
+      `[silent-stop] inner skip ${conversation.id}: lead still active (last 10 min)`
+    );
+    return 'SKIPPED';
+  }
 
   const now = new Date();
   const diagnosis = await diagnoseStopReason(conversation, lastLead.timestamp);
