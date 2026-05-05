@@ -40,7 +40,14 @@ export async function PATCH(
 
     const conversation = await prisma.conversation.update({
       where: { id },
-      data: { aiActive }
+      data: {
+        aiActive,
+        // Mirror autoSendOverride so operator-enabled conversations
+        // auto-send even when account-level away-mode is off. This is
+        // what distinguishes "operator explicitly turned on AI for this
+        // chat" from "default aiActive=true from schema".
+        autoSendOverride: aiActive
+      }
     });
 
     // Broadcast real-time AI status change (scoped to the lead's tenant).

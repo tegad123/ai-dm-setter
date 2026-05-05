@@ -419,18 +419,25 @@ export function isRescheduleSignal(text: string | null | undefined): boolean {
 }
 
 /**
- * Send-decision policy (2026-05-05). The AI auto-sends iff `aiActive`
- * is true on the conversation. Away-mode is intentionally NOT a
- * parameter — it controls only the default for NEW conversation
- * creation (Conversation.aiActive's initial value), never delivery
- * for existing conversations.
+ * Send-decision policy. Auto-send fires when aiActive=true AND either:
+ *   (a) account-level away-mode is ON for the lead's platform, OR
+ *   (b) operator explicitly enabled per-conversation override
+ *       (autoSendOverride=true, set by the ai-toggle route)
  *
- * This signature is the contract the policy is enforced against:
- * any future regression that re-couples send-decision to away-mode
- * has to add a parameter here, which the unit test will catch.
+ * Why awayMode is back: Conversation.aiActive @default(true) in the
+ * schema means every row starts with aiActive=true. A pure aiActive
+ * gate would fire on every lead on every account regardless of whether
+ * the operator enabled AI. The awayMode || autoSendOverride term is
+ * the account/intent check that scopes auto-send to accounts where
+ * the operator turned it on, plus any conversations where they
+ * explicitly overrode it per-conversation.
  */
-export function shouldAutoSendReply(args: { aiActive: boolean }): boolean {
-  return args.aiActive === true;
+export function shouldAutoSendReply(args: {
+  aiActive: boolean;
+  awayMode: boolean;
+  autoSendOverride: boolean;
+}): boolean {
+  return args.aiActive && (args.awayMode || args.autoSendOverride);
 }
 
 function extractLeadEmail(text: string): string | null {
@@ -2075,10 +2082,23 @@ export async function scheduleAIReply(
   // from the current DB row.
   log('sched.step1.aiActiveCheck');
   const aiActive = conversation.aiActive;
-  const shouldAutoSend = shouldAutoSendReply({ aiActive });
+  const autoSendOverride = conversation.autoSendOverride;
+  const accountForSend = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { awayModeInstagram: true, awayModeFacebook: true, awayMode: true }
+  });
+  const awayModeForSend = resolvePlatformAwayMode(
+    accountForSend,
+    lead.platform
+  );
+  const shouldAutoSend = shouldAutoSendReply({
+    aiActive,
+    awayMode: awayModeForSend,
+    autoSendOverride
+  });
   log(
     'sched.step1.aiActive',
-    `aiActive=${aiActive} platform=${lead.platform} shouldAutoSend=${shouldAutoSend}`
+    `aiActive=${aiActive} awayMode=${awayModeForSend} autoSendOverride=${autoSendOverride} platform=${lead.platform} shouldAutoSend=${shouldAutoSend}`
   );
 
   if (
