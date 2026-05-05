@@ -112,6 +112,7 @@ export async function GET(request: NextRequest) {
           where: {
             AND: [
               { sender: { not: 'SYSTEM' } },
+              { deletedAt: null },
               { NOT: { content: { startsWith: 'OPERATOR NOTE:' } } }
             ]
           },

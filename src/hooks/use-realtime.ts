@@ -5,6 +5,7 @@ import { useEffect, useRef, useCallback } from 'react';
 type EventType =
   | 'message:new'
   | 'conversation:updated'
+  | 'message:deleted'
   | 'notification:new'
   | 'lead:updated'
   | 'ai:status_changed'

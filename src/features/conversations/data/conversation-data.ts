@@ -6,8 +6,8 @@ export interface Message {
   // Soft-delete fields. Set when the message is unsent — either by
   // the lead on Instagram (deletedSource='INSTAGRAM', deletedBy='LEAD')
   // or by an operator from the dashboard (deletedSource='DASHBOARD',
-  // deletedBy=userId). UI greys the bubble out + shows a label rather
-  // than removing it entirely so the operator retains audit context.
+  // deletedBy=userId). Lead-side deletes render as grey audit context;
+  // dashboard unsends are hidden from the active thread after SSE refresh.
   deletedAt?: string | null;
   deletedBy?: string | null;
   deletedSource?: 'INSTAGRAM' | 'FACEBOOK' | 'DASHBOARD' | 'MANYCHAT' | null;

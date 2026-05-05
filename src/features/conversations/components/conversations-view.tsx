@@ -109,45 +109,49 @@ export function ConversationsView() {
   // `sender` ("HUMAN" / "AI" / "LEAD") from the Prisma enum; the
   // renderer lowercases it before comparison. `sentByUser` is a new
   // join (Apr 21) used to show the operator's name on manual sends.
-  const localMessages: Message[] = apiMessages.map((m) => {
-    // `sentByUser` isn't on the narrow `ApiMessage` type yet — read it
-    // as an unknown extra field rather than growing the type so other
-    // consumers of the Message API stay unaffected.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const extra = m as any;
-    return {
-      id: m.id,
-      sender: m.sender.toLowerCase() as 'ai' | 'lead' | 'human' | 'system',
-      content: m.content,
-      timestamp: m.sentAt || m.timestamp || '',
-      isVoiceNote: m.isVoiceNote,
-      voiceNoteUrl: m.voiceNoteUrl ?? undefined,
-      imageUrl: m.imageUrl ?? null,
-      hasImage: m.hasImage ?? Boolean(m.imageUrl),
-      mediaType: m.mediaType ?? null,
-      mediaUrl: m.mediaUrl ?? null,
-      transcription: m.transcription ?? null,
-      imageMetadata: m.imageMetadata ?? null,
-      mediaProcessedAt: m.mediaProcessedAt ?? null,
-      mediaProcessingError: m.mediaProcessingError ?? null,
-      isHumanOverride: m.isHumanOverride,
-      humanOverrideNote: m.humanOverrideNote,
-      sentByUser: extra.sentByUser ?? null,
-      humanSource: extra.humanSource ?? null,
-      messageGroupId: extra.messageGroupId ?? null,
-      bubbleIndex: extra.bubbleIndex ?? null,
-      bubbleTotalCount: extra.bubbleTotalCount ?? null,
-      // Soft-delete fields. Read via the `extra` cast — ApiMessage's
-      // narrow type doesn't list them yet, but the API selects the
-      // full Message row so the values are present at runtime. Without
-      // these copied through, the renderer's isDeleted check
-      // (`Boolean(msg.deletedAt)`) is always false and lead-side
-      // unsends never grey out the bubble.
-      deletedAt: extra.deletedAt ?? null,
-      deletedBy: extra.deletedBy ?? null,
-      deletedSource: extra.deletedSource ?? null
-    };
-  });
+  const localMessages: Message[] = apiMessages
+    .map((m) => {
+      // `sentByUser` isn't on the narrow `ApiMessage` type yet — read it
+      // as an unknown extra field rather than growing the type so other
+      // consumers of the Message API stay unaffected.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const extra = m as any;
+      return {
+        id: m.id,
+        sender: m.sender.toLowerCase() as
+          | 'ai'
+          | 'lead'
+          | 'human'
+          | 'system'
+          | 'manychat',
+        content: m.content,
+        timestamp: m.sentAt || m.timestamp || '',
+        isVoiceNote: m.isVoiceNote,
+        voiceNoteUrl: m.voiceNoteUrl ?? undefined,
+        imageUrl: m.imageUrl ?? null,
+        hasImage: m.hasImage ?? Boolean(m.imageUrl),
+        mediaType: m.mediaType ?? null,
+        mediaUrl: m.mediaUrl ?? null,
+        transcription: m.transcription ?? null,
+        imageMetadata: m.imageMetadata ?? null,
+        mediaProcessedAt: m.mediaProcessedAt ?? null,
+        mediaProcessingError: m.mediaProcessingError ?? null,
+        isHumanOverride: m.isHumanOverride,
+        humanOverrideNote: m.humanOverrideNote,
+        sentByUser: extra.sentByUser ?? null,
+        humanSource: extra.humanSource ?? null,
+        messageGroupId: extra.messageGroupId ?? null,
+        bubbleIndex: extra.bubbleIndex ?? null,
+        bubbleTotalCount: extra.bubbleTotalCount ?? null,
+        // Soft-delete fields. Read via the `extra` cast — ApiMessage's
+        // narrow type doesn't list them yet, but the API selects the
+        // full Message row so the values are present at runtime.
+        deletedAt: extra.deletedAt ?? null,
+        deletedBy: extra.deletedBy ?? null,
+        deletedSource: extra.deletedSource ?? null
+      };
+    })
+    .filter((m) => !(m.deletedAt && m.deletedSource === 'DASHBOARD'));
 
   // Map conversations list
   const localConversations: Conversation[] = apiConversations.map((c) =>
@@ -199,6 +203,15 @@ export function ConversationsView() {
   // Refresh immediately when the webhook broadcasts one so Daniel's
   // native Facebook/Instagram replies appear without waiting for polling.
   useRealtime('message:new', (data) => {
+    const payload = data as { conversationId?: string } | null;
+    refetchList();
+    if (payload?.conversationId && payload.conversationId === activeId) {
+      refetchMessages();
+      refetchSuggestion();
+    }
+  });
+
+  useRealtime('message:deleted', (data) => {
     const payload = data as { conversationId?: string } | null;
     refetchList();
     if (payload?.conversationId && payload.conversationId === activeId) {

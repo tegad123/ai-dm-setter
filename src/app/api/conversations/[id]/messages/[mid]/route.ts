@@ -1,9 +1,7 @@
 import { unsendConversationMessage } from '@/lib/conversation-message-unsend';
 import { NextRequest } from 'next/server';
 
-// Legacy compatibility endpoint. The dashboard now uses:
-// DELETE /api/conversations/[id]/messages/[mid]
-export async function POST(
+export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; mid: string }> }
 ) {

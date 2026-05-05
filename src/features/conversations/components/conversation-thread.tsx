@@ -319,8 +319,8 @@ export function ConversationThread({
     setUnsendingIds((prev) => new Set(prev).add(messageId));
     try {
       const res = await apiFetch<{ ok: boolean; alreadyDeleted?: boolean }>(
-        `/api/conversations/${conversation.id}/messages/${messageId}/unsend`,
-        { method: 'POST' }
+        `/api/conversations/${conversation.id}/messages/${messageId}`,
+        { method: 'DELETE' }
       );
       if (res.ok) {
         toast.success(
@@ -482,9 +482,8 @@ export function ConversationThread({
                   const isHuman = sender === 'human';
                   const isSystem = sender === 'system';
                   const isManyChat = sender === 'manychat';
-                  // Soft-deleted messages render greyed-out with a label
-                  // rather than disappearing — operators retain context
-                  // about what was sent and who retracted it.
+                  // Lead-side soft-deletes render greyed-out with a label.
+                  // Dashboard unsends are filtered out before this component.
                   const isDeleted = Boolean(msg.deletedAt);
                   const deletedByLead = msg.deletedSource === 'INSTAGRAM';
                   // 10-minute unsend window matches the server-side
