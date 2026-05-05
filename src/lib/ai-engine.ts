@@ -3449,7 +3449,7 @@ async function resolveAIProvider(accountId: string): Promise<{
     return {
       provider: 'anthropic',
       apiKey: anthropicCreds.apiKey as string,
-      model: (anthropicCreds.model as string) || 'claude-sonnet-4-20250514'
+      model: (anthropicCreds.model as string) || SONNET_46_MODEL
     };
   }
 
@@ -3459,9 +3459,7 @@ async function resolveAIProvider(accountId: string): Promise<{
   const apiKey = provider === 'anthropic' ? anthropicKey : openaiKey;
   const model =
     process.env.AI_MODEL ||
-    (provider === 'anthropic'
-      ? 'claude-sonnet-4-20250514'
-      : OPENAI_DEFAULT_MODEL);
+    (provider === 'anthropic' ? SONNET_46_MODEL : OPENAI_DEFAULT_MODEL);
 
   return { provider: provider as 'openai' | 'anthropic', apiKey, model };
 }
