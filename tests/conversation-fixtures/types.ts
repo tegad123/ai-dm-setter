@@ -75,6 +75,7 @@ export interface ConversationFixture {
   expectedBehavior: string;
   forbiddenBehavior: string;
   assertion: FixtureAssertion;
+  additionalAssertions?: FixtureAssertion[];
 }
 
 export interface AssertionResult {

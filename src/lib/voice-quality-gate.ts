@@ -3203,6 +3203,20 @@ export function scoreVoiceQualityGroup(
     );
   }
 
+  // R40 second arm: downsell accepted but reply contains no URL.
+  // The call-pitch arm above catches "wrong action"; this arm catches
+  // "no action" — AI acknowledged acceptance but never dropped the link.
+  if (
+    r40CapitalThresholdMet === false &&
+    r40DownsellInterestConfirmed === true &&
+    !/https?:\/\//.test(joined) &&
+    !hardFails.some((f) => f.includes('r40_downsell_accepted_missing_url:'))
+  ) {
+    hardFails.push(
+      '[group] r40_downsell_accepted_missing_url: lead confirmed downsell interest but reply contains no URL. The ONLY valid next action is to deliver the downsell course URL inline.'
+    );
+  }
+
   if (
     leadGaveLongTimeline(options?.previousLeadMessage) &&
     containsCallOrBookingAdvancement(joined) &&

@@ -39,6 +39,10 @@ export const fixture: ConversationFixture = {
     }
   ],
   lastLeadMessage: 'Yes yes',
+  capturedDataPoints: {
+    capitalThresholdMet: { value: false },
+    downsellInterestConfirmed: { value: true }
+  },
   // The recorded reply is the FIXED behavior post-R40: brief
   // acknowledgment + the downsell URL inline. No call CTA.
   recordedAssistantReply:
@@ -67,5 +71,13 @@ export const fixture: ConversationFixture = {
     ],
     notes:
       'Mirrors the regex shape used by the r40_call_pitch_to_unqualified_after_downsell_accept gate. Drift between this assertion and the gate regex would let a regression slip through both.'
-  }
+  },
+  additionalAssertions: [
+    {
+      type: 'ACCEPTANCE_HONORED',
+      acceptanceMustDeliverField: 'downsellLink',
+      notes:
+        'R40 second arm: acceptance + no URL triggers r40_downsell_accepted_missing_url hardfail. Reply must contain the downsell URL.'
+    }
+  ]
 };

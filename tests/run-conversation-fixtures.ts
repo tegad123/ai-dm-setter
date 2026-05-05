@@ -38,6 +38,19 @@ async function runOne(fixture: ConversationFixture): Promise<RunOutcome> {
   const start = Date.now();
   try {
     const result = runAssertion(fixture);
+    if (result.passed && fixture.additionalAssertions?.length) {
+      for (const extra of fixture.additionalAssertions) {
+        const extraResult = runAssertion({ ...fixture, assertion: extra });
+        if (!extraResult.passed) {
+          return {
+            fixture,
+            passed: false,
+            evidence: `[${extra.type}] ${extraResult.evidence}`,
+            durationMs: Date.now() - start
+          };
+        }
+      }
+    }
     return {
       fixture,
       passed: result.passed,

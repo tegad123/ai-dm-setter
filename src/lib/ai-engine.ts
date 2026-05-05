@@ -2474,6 +2474,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const r40MissingUrlFailed = quality.hardFails.some((f) =>
+        f.includes('r40_downsell_accepted_missing_url:')
+      );
+      if (r40MissingUrlFailed) {
+        const r40UrlOverride = `\n\n===== R40 — DELIVER COURSE URL NOW =====\nThe lead confirmed downsell interest but your reply contained no URL. The ONLY valid next action is to deliver the ${downsellPriceWithSign} ${downsellProductName} link from the "Available Links & URLs" section in this system prompt.\n\nFormat: brief acknowledgment (one short line) + the URL inline. Nothing else.\n\nIf no URL is configured in the script, use the free-resource fallback (per R28). DO NOT ask what timezone they are in. DO NOT ask scheduling questions. DO NOT defer the link to a later message.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + r40UrlOverride;
+        console.warn(
+          `[ai-engine] R40 violation — downsell accepted but no URL in reply; forcing regen to URL delivery (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const repetitiveQuestionFailed =
         quality.softSignals.repetitive_question_pattern !== undefined;
       if (repetitiveQuestionFailed) {
