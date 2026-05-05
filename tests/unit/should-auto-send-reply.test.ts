@@ -1,14 +1,18 @@
 // Unit tests for shouldAutoSendReply — the send-decision gate.
 //
-// The policy (2026-05-05): AI auto-sends iff `aiActive=true` on the
-// conversation. Away-mode does NOT influence this — it only controls
-// the default value of aiActive on NEW conversation creation, never
-// delivery for an existing conversation.
+// Policy: auto-send fires when aiActive=true AND (awayMode=true OR
+// autoSendOverride=true).
 //
-// These four cases are the locked-in contract. If a future change
-// re-couples send-decision to away-mode (the prior buggy behavior),
-// the first case (aiActive=true + awayMode=false → AUTO-SEND) flips
-// and this test fails.
+// Why awayMode is back: Conversation.aiActive @default(true) means
+// every conversation row starts with aiActive=true. Without the
+// awayMode/autoSendOverride check, every lead on every account would
+// auto-send regardless of whether the operator enabled AI for that
+// account. The awayMode||autoSendOverride term scopes auto-send to
+// accounts where the operator deliberately turned it on.
+//
+// autoSendOverride=true is set by the ai-toggle route when the operator
+// explicitly enables AI per-conversation. This lets per-conversation
+// override work on accounts where global away-mode is off.
 //
 // Run: npx tsx --test tests/unit/should-auto-send-reply.test.ts
 
@@ -17,44 +21,68 @@ import { describe, it } from 'node:test';
 
 import { shouldAutoSendReply } from '../../src/lib/webhook-processor';
 
-describe('shouldAutoSendReply — aiActive is the sole send-decision gate', () => {
-  it('aiActive=true + awayMode=false → AUTO-SEND (was the bug)', () => {
-    // Pre-fix: this returned false because the dual-gate required
-    // (awayMode || autoSendOverride). Operators flipping aiActive on
-    // for a single conversation got an AISuggestion that never
-    // shipped. Post-fix: aiActive=true alone produces auto-send.
-    assert.equal(shouldAutoSendReply({ aiActive: true }), true);
+describe('shouldAutoSendReply', () => {
+  it('aiActive=true + awayMode=true → AUTO-SEND (normal away-mode path)', () => {
+    assert.equal(
+      shouldAutoSendReply({
+        aiActive: true,
+        awayMode: true,
+        autoSendOverride: false
+      }),
+      true
+    );
   });
 
-  it('aiActive=false + awayMode=true → SUGGEST', () => {
-    // Operator paused this specific conversation. Even with platform
-    // away-mode on, this one stays in suggestion mode. aiActive is
-    // the override — operator's per-convo intent wins.
-    assert.equal(shouldAutoSendReply({ aiActive: false }), false);
+  it('aiActive=true + awayMode=false + autoSendOverride=true → AUTO-SEND (operator explicit)', () => {
+    // Operator flipped AI on for this specific conversation even though
+    // global away-mode is off. autoSendOverride=true (set by ai-toggle
+    // route) carries the intent.
+    assert.equal(
+      shouldAutoSendReply({
+        aiActive: true,
+        awayMode: false,
+        autoSendOverride: true
+      }),
+      true
+    );
   });
 
-  it('aiActive=true + awayMode=true → AUTO-SEND', () => {
-    // Both signals aligned — auto-send. Same answer as pre-fix.
-    assert.equal(shouldAutoSendReply({ aiActive: true }), true);
+  it('aiActive=true + awayMode=false + autoSendOverride=false → SUGGEST only', () => {
+    // aiActive=true from schema default, operator never explicitly
+    // enabled auto-send, account has away-mode off. Must NOT fire.
+    // This is the root-cause case from the 2026-05-05 "bot fires for
+    // every lead" incident.
+    assert.equal(
+      shouldAutoSendReply({
+        aiActive: true,
+        awayMode: false,
+        autoSendOverride: false
+      }),
+      false
+    );
+  });
+
+  it('aiActive=false + awayMode=true → SUGGEST (operator paused this convo)', () => {
+    // Per-convo AI is off. Account away-mode cannot override an
+    // explicit operator pause.
+    assert.equal(
+      shouldAutoSendReply({
+        aiActive: false,
+        awayMode: true,
+        autoSendOverride: false
+      }),
+      false
+    );
   });
 
   it('aiActive=false + awayMode=false → SUGGEST', () => {
-    // Both signals aligned — suggestion mode only. Same answer as
-    // pre-fix.
-    assert.equal(shouldAutoSendReply({ aiActive: false }), false);
-  });
-
-  it('signature shape — function takes only aiActive (away-mode is not a parameter)', () => {
-    // Locks the API contract: if a future change adds awayMode (or
-    // autoSendOverride) back to the signature, this assert fails and
-    // the maintainer has to think about whether they really want to
-    // re-couple the policy. The signature itself is the documented
-    // invariant.
-    const fnArity = shouldAutoSendReply.length;
     assert.equal(
-      fnArity,
-      1,
-      'shouldAutoSendReply should accept exactly one args object'
+      shouldAutoSendReply({
+        aiActive: false,
+        awayMode: false,
+        autoSendOverride: false
+      }),
+      false
     );
   });
 });

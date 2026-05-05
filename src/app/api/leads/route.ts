@@ -119,9 +119,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { resolveActivePersonaIdForCreate } = await import(
-      '@/lib/active-persona'
-    );
+    const [{ resolveActivePersonaIdForCreate }, account] = await Promise.all([
+      import('@/lib/active-persona'),
+      prisma.account.findUnique({
+        where: { id: auth.accountId },
+        select: { awayModeInstagram: true, awayModeFacebook: true }
+      })
+    ]);
+    const aiActiveForNew =
+      platform === 'INSTAGRAM'
+        ? (account?.awayModeInstagram ?? false)
+        : platform === 'FACEBOOK'
+          ? (account?.awayModeFacebook ?? false)
+          : false;
     const personaId = await resolveActivePersonaIdForCreate(auth.accountId);
     const lead = await prisma.lead.create({
       data: {
@@ -135,7 +145,7 @@ export async function POST(req: NextRequest) {
         conversation: {
           create: {
             personaId,
-            aiActive: true
+            aiActive: aiActiveForNew
           }
         }
       },
