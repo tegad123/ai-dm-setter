@@ -164,9 +164,22 @@ function setPoint<T>(
 function sortedHistory(
   history: ScriptHistoryMessage[]
 ): ScriptHistoryMessage[] {
-  return [...history].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+  // MANYCHAT messages are opening-handoff hooks (button-clicks, auto-
+  // fired automation copy) — they don't represent a script step the
+  // setter performed and they don't represent a lead disclosure. Every
+  // existing extract* / detect* / recovery helper iterating this list
+  // already filters by sender === 'AI' | 'HUMAN' | 'LEAD' explicitly,
+  // which excludes MANYCHAT incidentally. Centralising the reject
+  // here locks in the invariant for every CURRENT and FUTURE caller —
+  // and fixes the latent priorityForSkipRecovery bug that did
+  // .at(-1) without sender filtering and could pick a MANYCHAT row
+  // as "latest" for HOT-vs-MEDIUM bucketing.
+  return [...history]
+    .filter((m) => m.sender !== 'MANYCHAT')
+    .sort(
+      (a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
 }
 
 function firstUrl(text: string | null | undefined): string | null {

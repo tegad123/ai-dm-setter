@@ -11,7 +11,20 @@ import {
 import { processScheduledReply } from '@/lib/webhook-processor';
 
 const SILENCE_THRESHOLD_MS = 5 * 60 * 1000;
-const DETECTION_DEDUP_MS = 60 * 1000;
+// Window over which we look for "did the lead just speak / has the AI
+// also spoken recently" when deciding the conversation is still
+// active. If both sides have messaged within this window — or the AI
+// is still mid-generation (awaitingAiResponse=true) — we never fire
+// the silent-stop fallback. Prevents the @arro_.92 incident: lead
+// burst-typed 5 messages 7:03–7:05, AI followed up at 7:06, and the
+// 5-min `awaitingSince` clock still tripped a "yo bro you still
+// around?" at 7:13 even though the conversation was clearly live.
+const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+// Raised from 60s → 2h on 2026-05-05. The previous dedup let the same
+// conversation re-fire the silent-stop ~60×/hr; one well-timed nudge
+// per 2h is enough and matches `window-keepalive`'s philosophy
+// (DEDUP_WINDOW_MS = 20h there, much longer cadence).
+const DETECTION_DEDUP_MS = 2 * 60 * 60 * 1000;
 const MAX_HEARTBEAT_BATCH = 25;
 const SPIKE_WINDOW_MS = 60 * 60 * 1000;
 const RECOVERY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -92,6 +105,36 @@ function latestLeadMessage(conversation: StalledConversation) {
     .slice()
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
     .find((message) => message.sender === 'LEAD');
+}
+
+// A conversation is "active" — and therefore must NOT be silent-
+// stopped — when the lead has spoken in the last ACTIVE_WINDOW_MS AND
+// either the AI has also spoken in that window OR awaitingAiResponse
+// is still true. The first arm catches genuine back-and-forth; the
+// second catches the case where the lead just spoke and the AI is
+// still mid-generation. The fallback "yo bro you still around?" only
+// makes sense when the lead has gone dark for >ACTIVE_WINDOW_MS after
+// the AI's last reply — the original `awaitingSince`-only check tripped
+// during burst typing because the timer started on the FIRST inbound
+// message and didn't account for subsequent lead activity.
+function isConversationActive(conversation: StalledConversation): boolean {
+  const cutoff = Date.now() - ACTIVE_WINDOW_MS;
+  const recentLead = conversation.messages.some(
+    (m) => m.sender === 'LEAD' && m.timestamp.getTime() >= cutoff
+  );
+  if (!recentLead) return false;
+  const recentAi = conversation.messages.some(
+    (m) => m.sender === 'AI' && m.timestamp.getTime() >= cutoff
+  );
+  return recentAi || conversation.awaitingAiResponse === true;
+}
+
+export const ACTIVE_WINDOW_MS_FOR_TEST = ACTIVE_WINDOW_MS;
+export function isConversationActiveForTest(args: {
+  awaitingAiResponse: boolean;
+  messages: Array<{ sender: string; timestamp: Date }>;
+}): boolean {
+  return isConversationActive(args as unknown as StalledConversation);
 }
 
 function latestNonSystemMessage(conversation: StalledConversation) {
@@ -432,6 +475,12 @@ async function fetchStalledConversations(now = new Date()) {
       aiActive: true,
       awaitingAiResponse: true,
       awaitingSince: { lt: threshold },
+      // Belt-and-suspenders DB-side filter mirroring the
+      // isConversationActive guard. `lastMessageAt` is bumped on every
+      // message write, so requiring it to be older than the silence
+      // threshold rules out the burst-typing case before we even
+      // hydrate the conversation in JS.
+      lastMessageAt: { lt: threshold },
       OR: [
         { lastSilentStopAt: null },
         { lastSilentStopAt: { lt: dedupCutoff } }
@@ -962,7 +1011,21 @@ export async function silentStopHeartbeat(): Promise<SilentStopHeartbeatResult> 
   // heartbeat tick (no 1-minute wait for the next cron run).
   const manyChatRecovered = await recoverManyChatStuckConversations();
 
-  const stalled = await fetchStalledConversations();
+  const candidates = await fetchStalledConversations();
+  // Final in-memory guard. The DB query already filters by
+  // `lastMessageAt < threshold`, but a conversation could still slip
+  // through if the row was hydrated with messages whose timestamps
+  // race the conversation-row update. isConversationActive enforces
+  // the invariant against the actual message rows we read.
+  const stalled = candidates.filter((c) => {
+    if (isConversationActive(c)) {
+      console.log(
+        `[silent-stop] skip ${c.id}: lead still active (last 10 min)`
+      );
+      return false;
+    }
+    return true;
+  });
   const result: SilentStopHeartbeatResult = {
     scanned: stalled.length,
     detected: 0,

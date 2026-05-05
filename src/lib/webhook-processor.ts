@@ -4940,7 +4940,15 @@ export async function processAdminMessage(
         content: messageText,
         timestamp: new Date(),
         platformMessageId: platformMessageId || null,
-        systemPromptVersion: 'manychat-automation'
+        systemPromptVersion: 'manychat-automation',
+        // Capture the audio URL on the row so the downstream Whisper
+        // transcription can pick it up. Previously the URL was dropped
+        // here and ManyChat-sent voice notes were 100% un-transcribed —
+        // the AI saw `[Voice note]` with no content and shipped
+        // generic "couldn't catch the audio" replies. (@andreierz
+        // 2026-05-05)
+        isVoiceNote: Boolean(audioUrl),
+        voiceNoteUrl: audioUrl ?? null
       }
     });
     await prisma.conversation.update({
@@ -4952,6 +4960,42 @@ export async function processAdminMessage(
         lastMessageAt: message.timestamp
       }
     });
+    if (audioUrl) {
+      // Mirror the lead-side transcription path
+      // (processIncomingMessage → enqueueInboundMediaProcessing). We
+      // need a personaId for the Supabase Storage path; ManyChat
+      // echoes don't carry one, so resolve to the account's most
+      // recent persona. Storage namespace is per-persona, not
+      // semantically tied to ManyChat-vs-lead, so any valid persona
+      // for the account is fine.
+      try {
+        const personaForMedia = await prisma.aIPersona.findFirst({
+          where: { accountId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true }
+        });
+        if (personaForMedia) {
+          await enqueueInboundMediaProcessing({
+            accountId,
+            personaId: personaForMedia.id,
+            conversationId,
+            messageId: message.id,
+            mediaType: 'audio',
+            sourceUrl: audioUrl,
+            durationSeconds: null
+          });
+        } else {
+          console.warn(
+            `[webhook-processor] ManyChat echo audio for ${conversationId} not transcribed: no persona for account ${accountId}`
+          );
+        }
+      } catch (mediaErr) {
+        console.error(
+          `[webhook-processor] ManyChat echo transcription failed for ${conversationId}:`,
+          mediaErr
+        );
+      }
+    }
     await prisma.scheduledReply.updateMany({
       where: { conversationId, status: 'PENDING' },
       data: { status: 'CANCELLED' }
@@ -4965,7 +5009,7 @@ export async function processAdminMessage(
       timestamp: message.timestamp.toISOString()
     });
     console.log(
-      `[webhook-processor] ManyChat automation echo saved as MANYCHAT for conversation ${conversationId}`
+      `[webhook-processor] ManyChat automation echo saved as MANYCHAT for conversation ${conversationId} (voiceNote=${Boolean(audioUrl)})`
     );
     return;
   }
@@ -5080,6 +5124,43 @@ export async function processAdminMessage(
     }
   });
   console.log('message saved:', message.id);
+
+  // Transcribe operator-sent voice notes the same way we transcribe
+  // lead-sent ones (processIncomingMessage at line ~1000-1023). The
+  // resulting transcription lands on the row so the next AI
+  // generation sees the operator's actual words instead of a bare
+  // [Voice note] placeholder. Without this, an operator dropping a
+  // 30-second context voice note from their phone got entirely
+  // ignored by the next AI turn.
+  if (audioUrl) {
+    try {
+      const personaForMedia = await prisma.aIPersona.findFirst({
+        where: { accountId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true }
+      });
+      if (personaForMedia) {
+        await enqueueInboundMediaProcessing({
+          accountId,
+          personaId: personaForMedia.id,
+          conversationId,
+          messageId: message.id,
+          mediaType: 'audio',
+          sourceUrl: audioUrl,
+          durationSeconds: null
+        });
+      } else {
+        console.warn(
+          `[webhook-processor] HUMAN/PHONE echo audio for ${conversationId} not transcribed: no persona for account ${accountId}`
+        );
+      }
+    } catch (mediaErr) {
+      console.error(
+        `[webhook-processor] HUMAN/PHONE echo transcription failed for ${conversationId}:`,
+        mediaErr
+      );
+    }
+  }
 
   // Bump lastMessageAt but do NOT auto-pause the AI on a single echo.
   // Previous behavior flipped aiActive=false on every echo, which was

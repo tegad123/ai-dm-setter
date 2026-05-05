@@ -1195,7 +1195,7 @@ export function scoreVoiceQuality(
   // transcription failed.
   if (options?.mediaContextCorpus?.includes('[Voice note (transcribed):')) {
     const ignoredTranscribedVoiceNoteRe =
-      /(couldn'?t catch|didn'?t catch|type it out|send (a )?text|hard to hear)/i;
+      /(couldn'?t catch|didn'?t (catch|get that audio)|type it out|send (a )?text|hard to hear)/i;
     if (ignoredTranscribedVoiceNoteRe.test(reply)) {
       hardFails.push(
         'r29_transcribed_voice_note_ignored: voice note was transcribed in context, but reply used audio-fallback/type-it-out language'
