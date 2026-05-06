@@ -209,6 +209,16 @@ function parseCapitalAmount(text: string): {
   return { amount: Math.round(amount), currencyExplicit };
 }
 
+function hasPercentageSignal(text: string): boolean {
+  return /\d\s*%|%\s*\d/.test(text);
+}
+
+function hasTradingContext(text: string): boolean {
+  return /\b(tp|sl|take\s*profit|stop\s*loss|h[145]|m(?:5|15|30)|liquidity|previous\s+(?:hh|ll)|funded\s+account|payout|eur(?:usd|jpy|gbp)|gbp(?:usd|jpy)|usd(?:jpy|cad|chf)|aud(?:usd|jpy)|nzdusd|xauusd|btcusd|ethusd|pips?)\b/i.test(
+    text
+  );
+}
+
 function classifyCapitalReply(
   message: ScriptHistoryMessage,
   question: ScriptHistoryMessage,
@@ -251,13 +261,33 @@ function classifyCapitalReply(
 
   const parsedAmount = parseCapitalAmount(text);
   if (parsedAmount) {
+    if (hasPercentageSignal(text)) return null;
+    if (hasTradingContext(text)) return null;
+    // Reject any message that contains words clearly NOT about personal
+    // capital — prop-trader / eval / account-history phrasing. These
+    // produced false-positive disqualifications for high-value leads
+    // who happened to mention small numbers in trading-history context
+    // (Peppe "5 funded accounts, 2 of 100k, one payout tomorrow",
+    // Travis "blowing 23 evals... reach a payout"). The
+    // hasTradingContext check above SHOULD catch most of these but
+    // hasn't been bulletproof in production.
+    if (
+      /\b(eval|evals|blew|blown|blowing|lost|drawdown|account size|sizing)\b/i.test(
+        text
+      )
+    ) {
+      return null;
+    }
+    // Require explicit currency. Without "$X" / "X usd" / "X dollars",
+    // a bare number in a free-form reply is too ambiguous to drive a
+    // disqualification — let the AI keep asking. The caller can still
+    // re-extract on a follow-up turn when the lead clarifies.
+    if (!parsedAmount.currencyExplicit) return null;
     return {
       kind: 'amount',
       amount: parsedAmount.amount,
-      confidence: parsedAmount.currencyExplicit ? 'HIGH' : 'MEDIUM',
-      method: parsedAmount.currencyExplicit
-        ? 'specific_amount_explicit_currency'
-        : 'specific_amount_currency_unclear'
+      confidence: 'HIGH',
+      method: 'specific_amount_explicit_currency'
     };
   }
 
