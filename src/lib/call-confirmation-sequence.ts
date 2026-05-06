@@ -463,7 +463,6 @@ async function handleCallRescheduleNeeded(params: {
   await prisma.conversation.update({
     where: { id: conversationId },
     data: {
-      aiActive: false,
       callOutcome: 'RESCHEDULED',
       schedulingConflict: true,
       schedulingConflictAt: new Date(),

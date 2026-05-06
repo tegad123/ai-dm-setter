@@ -1324,7 +1324,6 @@ export async function processIncomingMessage(
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
-            aiActive: false,
             awaitingAiResponse: false,
             awaitingSince: null,
             distressDetected: true,
@@ -1386,7 +1385,6 @@ export async function processIncomingMessage(
         broadcastConversationUpdate(accountId, {
           id: conversationId,
           leadId: lead.id,
-          aiActive: false,
           unreadCount: (lead.conversation!.unreadCount || 0) + 1,
           lastMessageAt: now.toISOString()
         });
@@ -1443,8 +1441,7 @@ export async function processIncomingMessage(
             timestamp: supportiveMsg.timestamp.toISOString()
           });
           broadcastAIStatusChange(accountId, {
-            conversationId,
-            aiActive: false
+            conversationId
           });
         } catch (supErr) {
           console.error(
@@ -1656,7 +1653,6 @@ export async function processIncomingMessage(
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
-            aiActive: false,
             awaitingAiResponse: false,
             awaitingSince: null,
             schedulingConflict: true,
@@ -1740,11 +1736,9 @@ export async function processIncomingMessage(
         broadcastConversationUpdate(accountId, {
           id: conversationId,
           leadId: lead.id,
-          aiActive: false,
           unreadCount: (lead.conversation!.unreadCount || 0) + 1,
           lastMessageAt: now.toISOString()
         });
-        broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
 
         // Escalate to operator: in-app URGENT row + email (gated by
         // notifyOnSchedulingConflict). Same code path the soft
@@ -3623,7 +3617,6 @@ async function deliverSingleAIMessage(params: {
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
-            aiActive: false,
             awaitingAiResponse: false,
             awaitingSince: null
           }
@@ -3856,7 +3849,6 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null,
           distressDetected: true,
@@ -3940,7 +3932,6 @@ async function sendAIReply(
           timestamp: supportiveMsg.timestamp.toISOString()
         });
       }
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
     } catch (err) {
       console.error(
         '[webhook-processor] Layer 2 distress handler failed (non-fatal, AI still paused):',
@@ -4075,12 +4066,10 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -4133,12 +4122,10 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       await prisma.voiceQualityFailure
         .create({
           data: {
@@ -4203,12 +4190,10 @@ async function sendAIReply(
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
-            aiActive: false,
             awaitingAiResponse: false,
             awaitingSince: null
           }
         });
-        broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
         const { escalate } = await import('@/lib/escalation-dispatch');
         const origin = process.env.NEXT_PUBLIC_APP_URL || '';
         const link = origin
@@ -4271,12 +4256,10 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -4346,12 +4329,10 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -4592,7 +4573,6 @@ async function sendAIReply(
       where: { id: conversationId },
       data: {
         outcome: 'UNQUALIFIED_REDIRECT',
-        aiActive: false,
         awaitingAiResponse: false,
         awaitingSince: null,
         typeformFilledNoBooking: true,
@@ -4630,7 +4610,6 @@ async function sendAIReply(
       where: { conversationId, status: 'PENDING' },
       data: { status: 'CANCELLED' }
     });
-    broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
     console.log(
       `[webhook-processor] Typeform no-booking screen-out finalized for ${conversationId}`
     );
@@ -4642,7 +4621,6 @@ async function sendAIReply(
       where: { id: conversationId },
       data: {
         outcome: 'SOFT_EXIT',
-        aiActive: false,
         awaitingAiResponse: false,
         awaitingSince: null
       }
@@ -4662,12 +4640,10 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         }
       });
-      broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
       const { escalate } = await import('@/lib/escalation-dispatch');
       const origin = process.env.NEXT_PUBLIC_APP_URL || '';
       const link = origin
@@ -5332,7 +5308,6 @@ export async function processAdminMessage(
       const updated = await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          aiActive: false,
           awaitingAiResponse: false,
           awaitingSince: null
         },
@@ -5394,7 +5369,6 @@ export async function processAdminMessage(
     humanSource: 'PHONE'
   });
   if (autoPausedFromConsecutivePhone) {
-    broadcastAIStatusChange(accountId, { conversationId, aiActive: false });
   }
 
   console.log(
@@ -5785,7 +5759,6 @@ async function handleTypeformFilledNoBookingScreenOut(
   await prisma.conversation.update({
     where: { id: p.conversationId },
     data: {
-      aiActive: false,
       awaitingAiResponse: false,
       awaitingSince: null,
       outcome: 'UNQUALIFIED_REDIRECT',
@@ -5895,13 +5868,11 @@ async function handleTypeformFilledNoBookingScreenOut(
   broadcastConversationUpdate(p.accountId, {
     id: p.conversationId,
     leadId: p.leadId,
-    aiActive: false,
     unreadCount: p.unreadCount + 1,
     lastMessageAt: p.inboundAt.toISOString()
   });
   broadcastAIStatusChange(p.accountId, {
-    conversationId: p.conversationId,
-    aiActive: false
+    conversationId: p.conversationId
   });
 }
 

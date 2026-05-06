@@ -98,7 +98,10 @@ export function broadcastConversationUpdate(
   data: {
     id: string;
     leadId: string;
-    aiActive: boolean;
+    // Optional — omit when no aiActive change. Auto-pause paths were
+    // removed (operator never wants the system to silently flip AI off);
+    // when aiActive is undefined the dashboard keeps its existing value.
+    aiActive?: boolean;
     unreadCount: number;
     lastMessageAt?: string | null;
   }
@@ -131,7 +134,8 @@ export function broadcastAIStatusChange(
   accountId: string,
   data: {
     conversationId: string;
-    aiActive: boolean;
+    // Optional — broadcast with no aiActive value when nothing changed.
+    aiActive?: boolean;
   }
 ): void {
   eventBus.publish({ type: 'ai:status_changed', accountId, data });
