@@ -294,6 +294,8 @@ interface ConversationThreadProps {
   onToggleAI?: (aiActive: boolean) => Promise<void>;
   /** Latest unactioned AI suggestion (test-mode platforms with auto-send off). */
   pendingSuggestion?: PendingSuggestion | null;
+  /** Manual recovery copy prefilled from Action Required. */
+  manualReply?: string | null;
   /** Called after approve / edit / dismiss so the parent can refetch. */
   onSuggestionActioned?: () => void;
 }
@@ -304,6 +306,7 @@ export function ConversationThread({
   onSendMessage,
   onToggleAI,
   pendingSuggestion,
+  manualReply,
   onSuggestionActioned
 }: ConversationThreadProps) {
   const [message, setMessage] = useState('');
@@ -313,6 +316,7 @@ export function ConversationThread({
   const [unsendingIds, setUnsendingIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const appliedManualReplyRef = useRef<string | null>(null);
 
   const handleUnsend = async (messageId: string) => {
     if (unsendingIds.has(messageId)) return;
@@ -352,6 +356,15 @@ export function ConversationThread({
         messagesContainerRef.current.scrollHeight;
     }
   }, [conversation.messages.length]);
+
+  useEffect(() => {
+    const trimmed = manualReply?.trim();
+    if (!trimmed) return;
+    const key = `${conversation.id}:${trimmed}`;
+    if (appliedManualReplyRef.current === key) return;
+    appliedManualReplyRef.current = key;
+    setMessage(trimmed);
+  }, [conversation.id, manualReply]);
 
   const handleSend = async () => {
     if (!message.trim() || !onSendMessage) return;

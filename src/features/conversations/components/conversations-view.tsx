@@ -61,6 +61,7 @@ export function ConversationsView() {
   const searchParams = useSearchParams();
   const accountId = searchParams.get('accountId');
   const conversationIdParam = searchParams.get('conversationId');
+  const manualReplyParam = searchParams.get('manualReply');
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('');
   const [sourceFilter, setSourceFilter] = useState<'' | 'MANYCHAT' | 'DIRECT'>(
@@ -283,6 +284,7 @@ export function ConversationsView() {
         onSendMessage={handleSendMessage}
         onToggleAI={handleToggleAI}
         pendingSuggestion={suggestion}
+        manualReply={activeId === conversationIdParam ? manualReplyParam : null}
         onSuggestionActioned={() => {
           // After approve / edit / dismiss, refetch both the suggestion
           // (to clear the banner) and the messages (so newly-sent

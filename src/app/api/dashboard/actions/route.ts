@@ -1,5 +1,9 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import {
+  classifyMetaDeliveryError,
+  SCHEDULED_REPLY_MAX_ATTEMPTS
+} from '@/lib/meta-delivery-errors';
 import { detectMetadataLeak } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -37,6 +41,44 @@ const HISTORICAL_METADATA_LEAK_MS =
   HISTORICAL_METADATA_LEAK_DAYS * 24 * 60 * 60 * 1000;
 const R34_COUNTER_WINDOW_MS = 24 * 60 * 60 * 1000;
 const R34_ALERT_WINDOW_MS = 60 * 60 * 1000;
+
+function replyTextFromGeneratedResult(generatedResult: unknown): string | null {
+  if (!generatedResult || typeof generatedResult !== 'object') return null;
+  const result = generatedResult as { reply?: unknown; messages?: unknown };
+  if (Array.isArray(result.messages)) {
+    const messages = result.messages.filter(
+      (message): message is string =>
+        typeof message === 'string' && message.trim().length > 0
+    );
+    if (messages.length > 0) return messages.join('\n');
+  }
+  return typeof result.reply === 'string' && result.reply.trim().length > 0
+    ? result.reply
+    : null;
+}
+
+function replyTextFromSuggestion(suggestion: {
+  responseText: string;
+  messageBubbles: unknown;
+}): string {
+  if (Array.isArray(suggestion.messageBubbles)) {
+    const messages = suggestion.messageBubbles.filter(
+      (message): message is string =>
+        typeof message === 'string' && message.trim().length > 0
+    );
+    if (messages.length > 0) return messages.join('\n');
+  }
+  return suggestion.responseText;
+}
+
+function deliveryErrorCodeLabel(errorInfo: {
+  metaCode: number | null;
+  httpStatus: number | null;
+}): string {
+  if (errorInfo.metaCode !== null) return `Meta code ${errorInfo.metaCode}`;
+  if (errorInfo.httpStatus !== null) return `HTTP ${errorInfo.httpStatus}`;
+  return 'Unknown error code';
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -80,6 +122,7 @@ export async function GET(request: NextRequest) {
       distressRows,
       stuckCandidates,
       deliveryFailureRows,
+      scheduledReplyFailureRows,
       pausedSystemRows,
       capitalRoutingRows,
       upcomingCallRows,
@@ -181,6 +224,45 @@ export async function GET(request: NextRequest) {
             failedAt: true
           },
           orderBy: { failedAt: 'desc' }
+        }),
+        []
+      ),
+
+      // ── PRIORITY 1.C2: Terminal AI ScheduledReply failures ─────
+      // These are generated AI replies that Meta never accepted. They
+      // need a per-lead operator action because the generated text is
+      // still valuable and can be sent manually from the conversation.
+      safe(
+        prisma.scheduledReply.findMany({
+          where: {
+            accountId,
+            status: 'FAILED',
+            attempts: { gte: SCHEDULED_REPLY_MAX_ATTEMPTS },
+            OR: [
+              {
+                processedAt: {
+                  gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
+                }
+              },
+              {
+                scheduledFor: {
+                  gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
+                }
+              }
+            ]
+          },
+          select: {
+            id: true,
+            conversationId: true,
+            scheduledFor: true,
+            attempts: true,
+            lastError: true,
+            generatedResult: true,
+            createdAt: true,
+            processedAt: true
+          },
+          orderBy: { scheduledFor: 'desc' },
+          take: 50
         }),
         []
       ),
@@ -584,6 +666,9 @@ export async function GET(request: NextRequest) {
     const referencedConvIds = new Set<string>();
     distressRows.forEach((c) => referencedConvIds.add(c.id));
     stuckCandidates.forEach((c) => referencedConvIds.add(c.id));
+    scheduledReplyFailureRows.forEach((r) =>
+      referencedConvIds.add(r.conversationId)
+    );
     pausedSystemRows.forEach((c) => referencedConvIds.add(c.id));
     capitalRoutingRows.forEach((r) => referencedConvIds.add(r.conversationId));
     upcomingCallRows.forEach((c) => referencedConvIds.add(c.id));
@@ -747,6 +832,98 @@ export async function GET(request: NextRequest) {
             }
           ]
         : [];
+
+    // PRIORITY 1.C2 — terminal ScheduledReply delivery failures
+    // Per-lead rows with generated copy preserved for manual send.
+    const scheduledFailureConvIds = Array.from(
+      new Set(scheduledReplyFailureRows.map((r) => r.conversationId))
+    );
+    const scheduledFailureConvs =
+      scheduledFailureConvIds.length > 0
+        ? await safe(
+            prisma.conversation.findMany({
+              where: {
+                id: { in: scheduledFailureConvIds },
+                ...accountConvFilter
+              },
+              select: {
+                id: true,
+                lead: { select: { id: true, name: true, handle: true } }
+              }
+            }),
+            []
+          )
+        : [];
+    const scheduledFailureConvById = new Map(
+      scheduledFailureConvs.map((c) => [c.id, c])
+    );
+    const missingReplyConvIds = scheduledReplyFailureRows
+      .filter((r) => !replyTextFromGeneratedResult(r.generatedResult))
+      .map((r) => r.conversationId);
+    const fallbackSuggestions =
+      missingReplyConvIds.length > 0
+        ? await safe(
+            prisma.aISuggestion.findMany({
+              where: {
+                accountId,
+                conversationId: {
+                  in: Array.from(new Set(missingReplyConvIds))
+                },
+                wasSelected: false,
+                wasRejected: false
+              },
+              orderBy: { generatedAt: 'desc' },
+              select: {
+                conversationId: true,
+                responseText: true,
+                messageBubbles: true
+              }
+            }),
+            []
+          )
+        : [];
+    const fallbackReplyByConv = new Map<string, string>();
+    for (const suggestion of fallbackSuggestions) {
+      if (!fallbackReplyByConv.has(suggestion.conversationId)) {
+        fallbackReplyByConv.set(
+          suggestion.conversationId,
+          replyTextFromSuggestion(suggestion)
+        );
+      }
+    }
+    const urgentScheduledReplyFailures = scheduledReplyFailureRows
+      .map((row) => {
+        const conv = scheduledFailureConvById.get(row.conversationId);
+        if (!conv) return null;
+        if (isDismissed(row.conversationId, 'scheduled_delivery_failure')) {
+          return null;
+        }
+        const errorInfo = classifyMetaDeliveryError(
+          row.lastError ?? 'Unknown delivery error'
+        );
+        const generatedReplyText =
+          replyTextFromGeneratedResult(row.generatedResult) ??
+          fallbackReplyByConv.get(row.conversationId) ??
+          '';
+        return {
+          type: 'scheduled_delivery_failure' as const,
+          scheduledReplyId: row.id,
+          conversationId: row.conversationId,
+          leadId: conv.lead.id,
+          leadName: conv.lead.name,
+          leadHandle: conv.lead.handle,
+          failedAt: (
+            row.processedAt ??
+            row.scheduledFor ??
+            row.createdAt
+          ).toISOString(),
+          attempts: errorInfo.permanent ? 1 : row.attempts,
+          generatedReplyText,
+          errorCodeLabel: deliveryErrorCodeLabel(errorInfo),
+          errorMeaning: errorInfo.meaning
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
 
     // PRIORITY 2.A — AI paused by system
     // Resolve the most-recent SYSTEM notification per lead to pull
@@ -1224,6 +1401,7 @@ export async function GET(request: NextRequest) {
       urgent: [
         ...urgentDistress,
         ...urgentSchedulingConflicts,
+        ...urgentScheduledReplyFailures,
         ...urgentStuck,
         ...urgentDeliveryFailures
       ],

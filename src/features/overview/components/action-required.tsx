@@ -16,6 +16,7 @@ import {
   IconCash,
   IconChecklist,
   IconSparkles,
+  IconSend,
   IconX
 } from '@tabler/icons-react';
 
@@ -57,6 +58,19 @@ interface UrgentDeliveryFailure {
   conversationIds: string[];
   latestFailureAt: string | null;
 }
+interface UrgentScheduledDeliveryFailure {
+  type: 'scheduled_delivery_failure';
+  scheduledReplyId: string;
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  failedAt: string;
+  attempts: number;
+  generatedReplyText: string;
+  errorCodeLabel: string;
+  errorMeaning: string;
+}
 interface UrgentSchedulingConflict {
   type: 'scheduling_conflict';
   conversationId: string;
@@ -70,6 +84,7 @@ type UrgentItem =
   | UrgentDistress
   | UrgentStuck
   | UrgentDeliveryFailure
+  | UrgentScheduledDeliveryFailure
   | UrgentSchedulingConflict;
 
 interface AttentionPaused {
@@ -349,6 +364,7 @@ function SectionLabel({ label, count }: SectionLabelProps) {
 type DismissibleActionType =
   | 'distress'
   | 'stuck'
+  | 'scheduled_delivery_failure'
   | 'scheduling_conflict'
   | 'pending_auto_recovery'
   | 'ai_paused'
@@ -590,6 +606,77 @@ function renderUrgent(
           onDismiss={() => onDismiss(item.conversationId, 'stuck')}
         />
       );
+    case 'scheduled_delivery_failure': {
+      const replyText =
+        item.generatedReplyText.trim() || 'Reply text unavailable';
+      const manualHref = item.generatedReplyText.trim()
+        ? `/dashboard/conversations?conversationId=${item.conversationId}&manualReply=${encodeURIComponent(item.generatedReplyText)}`
+        : `/dashboard/conversations?conversationId=${item.conversationId}`;
+      return (
+        <div
+          key={`scheduled-delivery-failure-${item.scheduledReplyId}`}
+          className={cn(
+            'group mx-1 my-2 rounded-md border border-red-500/25 bg-red-500/[0.04] p-3',
+            'dark:border-red-400/25 dark:bg-red-400/[0.06]'
+          )}
+        >
+          <div className='flex items-start gap-3'>
+            <IconAlertCircle className='mt-0.5 h-4 w-4 shrink-0 text-red-500' />
+            <div className='min-w-0 flex-1 space-y-2'>
+              <div className='flex min-w-0 items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <div className='text-sm font-medium'>
+                    Delivery Failed — manual send required
+                  </div>
+                  <div className='text-muted-foreground text-xs'>
+                    <span className='text-foreground font-medium'>
+                      {item.leadName}
+                    </span>
+                    {item.leadHandle ? ` @${item.leadHandle}` : ''} ·{' '}
+                    {relativeTime(item.failedAt, now)} · {item.attempts} attempt
+                    {item.attempts === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <button
+                  type='button'
+                  aria-label='Dismiss'
+                  onClick={() =>
+                    onDismiss(item.conversationId, 'scheduled_delivery_failure')
+                  }
+                  className={cn(
+                    'text-muted-foreground/60 hover:text-foreground',
+                    'hover:bg-muted -mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded',
+                    'opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100'
+                  )}
+                >
+                  <IconX className='h-3.5 w-3.5' />
+                </button>
+              </div>
+              <div className='text-muted-foreground text-xs'>
+                <span className='font-medium text-red-600 dark:text-red-400'>
+                  {item.errorCodeLabel}
+                </span>
+                {' · '}
+                {item.errorMeaning}
+              </div>
+              <pre className='bg-background/80 border-border/70 max-h-32 overflow-auto rounded-md border px-2.5 py-2 text-xs break-words whitespace-pre-wrap'>
+                {replyText}
+              </pre>
+              <Link
+                href={manualHref}
+                className={cn(
+                  'inline-flex h-8 items-center gap-2 rounded-md px-3 text-xs font-medium',
+                  'bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600'
+                )}
+              >
+                <IconSend className='h-3.5 w-3.5' />
+                Send manually
+              </Link>
+            </div>
+          </div>
+        </div>
+      );
+    }
     case 'delivery_failure':
       // Aggregate row — not dismissible at the account level.
       // Operators resolve by fixing the underlying delivery issue.
