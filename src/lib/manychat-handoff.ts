@@ -2,6 +2,13 @@ import prisma from '@/lib/prisma';
 import { z } from 'zod';
 import { resolveActivePersonaIdForCreate } from '@/lib/active-persona';
 import { resolveAndUpgradeInstagramNumericId } from '@/lib/manychat-resolve-ig-id';
+import { getCredentials } from '@/lib/credential-store';
+import { findSubscriberById } from '@/lib/manychat';
+
+// ManyChat's {{contact.ig_username}} returns the raw numeric IGSID instead of
+// the actual username when its subscriber cache is degraded — most commonly
+// right after an Instagram re-auth event. Detect and resolve before persisting.
+const NUMERIC_IGSID = /^\d{12,}$/;
 
 const MANYCHAT_TRIGGER_TYPES = [
   'new_follower',
@@ -118,7 +125,44 @@ export async function processManyChatHandoff(params: {
   // milliseconds of the trigger event, which is true for ManyChat's
   // synchronous flow execution model.
   const firedAt = payload.firedAt ? new Date(payload.firedAt) : new Date();
-  const handle = cleanInstagramUsername(payload.instagramUsername);
+  let handle = cleanInstagramUsername(payload.instagramUsername);
+
+  // When ManyChat's subscriber cache is degraded (typically right after an
+  // Instagram re-auth), {{contact.ig_username}} resolves to the raw numeric
+  // IGSID instead of the actual username. Detect this and resolve the real
+  // handle via ManyChat's subscriber API before we write anything to the DB.
+  // Without this guard the lead's handle AND display name both become the
+  // 15-digit IGSID and are effectively unreadable in the dashboard.
+  if (NUMERIC_IGSID.test(handle)) {
+    console.warn(
+      `[manychat-handoff] numeric instagramUsername "${handle}" received — ManyChat subscriber cache likely degraded. Resolving real username via subscriber ${payload.manyChatSubscriberId}.`
+    );
+    try {
+      const creds = await getCredentials(account.id, 'MANYCHAT');
+      if (creds?.apiKey && typeof creds.apiKey === 'string') {
+        const sub = await findSubscriberById(
+          creds.apiKey,
+          payload.manyChatSubscriberId
+        );
+        if (sub?.ig_username) {
+          handle = cleanInstagramUsername(sub.ig_username);
+          console.log(
+            `[manychat-handoff] resolved @${handle} from subscriber ${payload.manyChatSubscriberId} (was "${payload.instagramUsername}")`
+          );
+        } else {
+          console.warn(
+            `[manychat-handoff] subscriber ${payload.manyChatSubscriberId} has no ig_username — persisting numeric handle as fallback`
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '[manychat-handoff] subscriber username resolution failed (non-fatal):',
+        err
+      );
+    }
+  }
+
   const leadName = handle || payload.instagramUserId;
   let canSendViaInstagramApi = looksLikeInstagramRecipientId(
     payload.instagramUserId,
