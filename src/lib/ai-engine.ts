@@ -65,6 +65,13 @@ export interface ConversationMessage {
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;
   systemPromptVersion?: string | null;
+  // True when an operator unsent the prior AI/HUMAN message and
+  // replaced it with this one (within 2 min). The system prompt
+  // builder injects an [Operator correction] directive when the most
+  // recent setter-side message has this flag, telling the LLM to
+  // treat THIS message — not the unsent one — as the canonical prior
+  // turn and to continue from this point.
+  isHumanCorrection?: boolean;
 }
 
 function isOperatorNoteContent(content: string | null | undefined): boolean {
@@ -1184,12 +1191,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     capitalThreshold > 0
       ? `\n\n===== NEXT SLOT: CAPITAL =====\nYou just asked the urgency question and the lead just answered it. Per the qualification flow, the next required slot is CAPITAL — ask it on THIS turn. Open-ended phrasings are fine: "real quick, what's your capital situation like for the markets right now?", "how much you got set aside for trading?", "what're you sitting on as far as capital goes?", "you ready to deploy at least $${capitalThreshold.toLocaleString('en-US')}?". Do NOT pitch a call. Do NOT route to booking, application, Typeform, or send a "team will reach out" message. Do NOT regress to discovery probes like "what's the real why", "what would that change for you", or "what's been holding you back". Acknowledge the lead's urgency answer in one short opener (e.g., "bet, love the urgency"), then ask the capital question.\n=====`
       : '';
+  // Operator correction directive — fires when the most recent
+  // setter-side message (AI or HUMAN) carries isHumanCorrection=true,
+  // meaning the operator unsent the prior AI message and replaced it
+  // with a manual correction within 2 minutes. The LLM must treat the
+  // operator's correction as the canonical prior turn and ignore the
+  // unsent message (which has already been filtered out of the
+  // history at the DB layer via deletedAt).
+  const lastSetterMsg = [...conversationHistory]
+    .reverse()
+    .find((m) => m.sender === 'AI' || m.sender === 'HUMAN');
+  const operatorCorrectionDirective =
+    lastSetterMsg?.isHumanCorrection === true
+      ? `\n\n===== OPERATOR CORRECTION =====\nThe operator unsent the previous AI message and replaced it with the most recent setter message you see in the history. The unsent message is GONE — it was retracted before the lead acted on it. Treat the operator's correction as the canonical prior turn. Do NOT reference the unsent message's content. Do NOT apologise for the prior message. Continue the conversation forward from the operator's correction as if that's exactly what was sent.\n=====`
+      : '';
   const baseSystemPrompt =
     systemPrompt +
     unqualifiedGuard +
     botDetectionDirective +
     earlyCapitalGateDirective +
-    nextSlotIsCapitalDirective;
+    nextSlotIsCapitalDirective +
+    operatorCorrectionDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {

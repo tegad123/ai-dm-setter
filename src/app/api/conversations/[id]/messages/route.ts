@@ -2,8 +2,7 @@ import prisma from '@/lib/prisma';
 import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import {
   broadcastNewMessage,
-  broadcastConversationUpdate,
-  broadcastAIStatusChange
+  broadcastConversationUpdate
 } from '@/lib/realtime';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
@@ -228,6 +227,29 @@ export async function POST(
       }
     }
 
+    // Auto-detect "operator correction": HUMAN send within 2 min of an
+    // OPERATOR_UNSEND on this conversation. The AI prompt builder picks
+    // up isHumanCorrection=true and injects an [Operator correction]
+    // note so the AI treats this message — not the unsent one — as the
+    // canonical prior turn.
+    let isHumanCorrection = false;
+    if (sender === 'HUMAN') {
+      const recentUnsend = await prisma.message.findFirst({
+        where: {
+          conversationId: id,
+          deletedAt: { gte: new Date(Date.now() - 2 * 60 * 1000) },
+          deletedReason: 'OPERATOR_UNSEND'
+        },
+        select: { id: true }
+      });
+      if (recentUnsend) {
+        isHumanCorrection = true;
+        console.log(
+          `[messages] Auto-flagged HUMAN message as correction (recent unsend ${recentUnsend.id} on conv ${id})`
+        );
+      }
+    }
+
     const message = await prisma.message.create({
       data: {
         conversationId: id,
@@ -236,16 +258,15 @@ export async function POST(
         timestamp: now,
         // Populate sentByUserId for HUMAN messages so the UI can show
         // WHICH operator sent it (Daniel vs another setter on the
-        // team) instead of the generic "Human Setter" label. Prior to
-        // this, every HUMAN message had sentByUserId: null.
+        // team) instead of the generic "Human Setter" label.
         // humanSource='DASHBOARD' — this message was typed into the
-        // QualifyDMs UI rather than the native Meta app (the echo
-        // path sets 'PHONE').
+        // QualifyDMs UI rather than the native Meta app.
         ...(sender === 'HUMAN'
           ? {
               sentByUserId: auth.userId,
               humanSource: 'DASHBOARD',
-              msgSource: 'HUMAN_OVERRIDE' as const
+              msgSource: 'HUMAN_OVERRIDE' as const,
+              isHumanCorrection
             }
           : {}),
         ...(sender === 'AI' ? { msgSource: 'QUALIFYDMS_AI' as const } : {}),
@@ -269,16 +290,31 @@ export async function POST(
       }
     });
 
-    // If human override, pause AI and update lastMessageAt
-    const updateData: { lastMessageAt?: Date; aiActive?: boolean } = {};
+    // POLICY (2026-05-06): a manual HUMAN send is a CORRECTION or
+    // ADDITION — not an AI takeover. aiActive stays whatever the
+    // operator set it to via the toggle. Only the explicit toggle
+    // flips aiActive. We still cancel pending debounced AI replies
+    // and follow-up cascades so the operator's send doesn't get
+    // talked over, and we set awaitingAiResponse=false because the
+    // operator just handled this turn (AI waits for the lead's next
+    // reply). When the HUMAN send happens within 2 min of an unsend
+    // on this conversation, treat it as a correction and tag the
+    // new message + inject the operator-correction context into the
+    // AI's next prompt.
+    const updateData: {
+      lastMessageAt?: Date;
+      awaitingAiResponse?: boolean;
+      awaitingSince?: Date | null;
+    } = {};
     if (sender !== 'SYSTEM') {
       updateData.lastMessageAt = now;
     }
     if (sender === 'HUMAN') {
-      updateData.aiActive = false;
-      // Cancel any pending debounced AI reply — the human just took over.
-      // Otherwise the queued AI reply would fire a minute later and talk
-      // over the human's message.
+      updateData.awaitingAiResponse = false;
+      updateData.awaitingSince = null;
+      // Cancel any pending debounced AI reply — the human just sent
+      // a message, the queued AI reply would otherwise fire a minute
+      // later and talk over them.
       await prisma.scheduledReply
         .updateMany({
           where: { conversationId: id, status: 'PENDING' },
@@ -286,18 +322,14 @@ export async function POST(
         })
         .catch((err) => {
           console.error(
-            '[messages] Failed to cancel pending replies on human takeover (non-fatal):',
+            '[messages] Failed to cancel pending replies on human send (non-fatal):',
             err
           );
         });
       // ALSO cancel any pending BOOKING_LINK_FOLLOWUP / FOLLOW_UP_*
-      // cascade row. The scheduledReply table is the debounced reply
-      // queue; the scheduledMessage table holds the 30-min booking
-      // check-in + 12h follow-up cascade. Before this fix, a human
-      // manual send cancelled the former but left the latter PENDING,
-      // producing duplicate "did you book that call?" sends (daetradez
-      // 2026-04-24 — Daniel's 7:58 PM manual message followed by the
-      // AI's booking-cascade follow-up with identical content).
+      // cascade row. Before this fix, a human manual send cancelled
+      // the former but left the latter PENDING, producing duplicate
+      // sends.
       try {
         const { cancelAllPendingFollowUps } = await import(
           '@/lib/follow-up-sequence'
@@ -364,12 +396,8 @@ export async function POST(
       });
     }
 
-    if (sender === 'HUMAN') {
-      broadcastAIStatusChange(auth.accountId, {
-        conversationId: id,
-        aiActive: false
-      });
-    }
+    // No AI status broadcast on HUMAN send. aiActive doesn't change
+    // automatically — operator must use the toggle to flip it.
 
     // Fire-and-forget: send the message to the platform (Facebook/Instagram)
     // Don't block the API response — deliver in background.

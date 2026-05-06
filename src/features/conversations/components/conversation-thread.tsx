@@ -322,6 +322,13 @@ export function ConversationThread({
     if (unsendingIds.has(messageId)) return;
     setUnsendingIds((prev) => new Set(prev).add(messageId));
     try {
+      // Server returns:
+      //   200 { ok: true, ... } — unsent
+      //   503 { error, retryable: true } — Meta transient
+      //   410 { error } — Meta won't allow (already read / window expired)
+      //   400 { error } — bad input (lead msg, etc.)
+      // apiFetch throws on non-2xx with error message in the throw,
+      // so we catch and read the response message to format the toast.
       const res = await apiFetch<{ ok: boolean; alreadyDeleted?: boolean }>(
         `/api/conversations/${conversation.id}/messages/${messageId}`,
         { method: 'DELETE' }
@@ -330,16 +337,28 @@ export function ConversationThread({
         toast.success(
           res.alreadyDeleted ? 'Message already unsent' : 'Message unsent'
         );
-        // The dashboard will reflect the deletedAt state on the next
-        // SSE message:deleted event or conversation reload. Avoiding
-        // optimistic local mutation here keeps the conversation prop
-        // as the single source of truth.
       } else {
         toast.error('Unsend failed — message may still be visible to the lead');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unsend failed';
-      toast.error(msg);
+      const message =
+        err instanceof Error && err.message ? err.message : 'Unsend failed';
+      // Heuristic: retryable errors land here too — the message text from
+      // the server includes "temporarily unavailable" or "Try again". Show
+      // a longer toast with a Retry action so the operator can rerun
+      // without reaching for the X again.
+      const isRetryable = /temporarily unavailable|try again/i.test(message);
+      if (isRetryable) {
+        toast.error(message, {
+          duration: 10000,
+          action: {
+            label: 'Retry',
+            onClick: () => handleUnsend(messageId)
+          }
+        });
+      } else {
+        toast.error(message);
+      }
     } finally {
       setUnsendingIds((prev) => {
         const next = new Set(prev);
@@ -499,15 +518,13 @@ export function ConversationThread({
                   // Dashboard unsends are filtered out before this component.
                   const isDeleted = Boolean(msg.deletedAt);
                   const deletedByLead = msg.deletedSource === 'INSTAGRAM';
-                  // 10-minute unsend window matches the server-side
-                  // gate. Within window + own-side + not yet deleted →
-                  // show the unsend hover button.
-                  const ageMs = Date.now() - new Date(msg.timestamp).getTime();
-                  const canUnsend =
-                    !isDeleted &&
-                    !isLead &&
-                    !isSystem &&
-                    ageMs <= 10 * 60 * 1000;
+                  // Show the unsend hover button on any non-lead,
+                  // non-system, non-already-deleted message. We do NOT
+                  // gate on age in the UI — Meta's API is the source of
+                  // truth for whether unsend is possible. If the window
+                  // has passed or the lead has read it, the API returns
+                  // a specific error and the toast surfaces the reason.
+                  const canUnsend = !isDeleted && !isLead && !isSystem;
                   if (isSystem) {
                     return (
                       <div

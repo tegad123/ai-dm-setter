@@ -1202,6 +1202,19 @@ model Message {
   deletedAt     DateTime?
   deletedBy     String? // userId for DASHBOARD source, 'LEAD' / 'AI' / 'MANYCHAT' for platform-side deletes
   deletedSource String? // 'INSTAGRAM' | 'FACEBOOK' | 'DASHBOARD' | 'MANYCHAT'
+  // Free-form reason for the soft-delete. 'OPERATOR_UNSEND' is the
+  // canonical value for dashboard-initiated unsends. NULL on legacy
+  // rows soft-deleted before this field shipped.
+  deletedReason String?
+
+  // ── Human correction flag ───────────────────────────────────
+  // True when an operator unsent an AI/HUMAN message and replaced it
+  // with a corrected manual send within 2 minutes. The AI prompt
+  // builder sees this flag and injects an "[Operator correction]"
+  // note so the AI treats the corrected message — not the unsent
+  // one — as the canonical prior turn. Only auto-set; never
+  // back-applied to historical rows.
+  isHumanCorrection Boolean @default(false)
 
   // Relations
   conversation        Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)

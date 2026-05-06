@@ -2157,6 +2157,12 @@ export async function scheduleAIReply(
         }
       },
       messages: {
+        // Soft-deleted messages (operator unsends, lead unsends) MUST
+        // NOT enter the AI context. Once a message is unsent, the
+        // conversation continues as if it never existed — the
+        // operator's correction (or the lead's retraction) is the
+        // canonical state. See conversation-message-unsend.ts.
+        where: { deletedAt: null },
         orderBy: { timestamp: 'asc' }
       }
     }
@@ -2939,7 +2945,11 @@ export async function scheduleAIReply(
     mediaCostUsd: m.mediaCostUsd,
     messageGroupId: m.messageGroupId,
     bubbleIndex: m.bubbleIndex,
-    bubbleTotalCount: m.bubbleTotalCount
+    bubbleTotalCount: m.bubbleTotalCount,
+    // Carry through to ai-engine so the [Operator correction]
+    // directive fires when the most recent setter message is a
+    // post-unsend manual reply.
+    isHumanCorrection: m.isHumanCorrection
   }));
 
   let result;
