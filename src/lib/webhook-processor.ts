@@ -92,7 +92,6 @@ function isMetaTokenError(err: unknown): boolean {
   ).toLowerCase();
   return (
     /\bcode[\s":]*190\b/.test(msg) ||
-    /oauthexception/.test(msg) ||
     /session has been invalidated/.test(msg) ||
     /subcode[\s":]*460/.test(msg) ||
     /access token.*expired/.test(msg) ||
@@ -130,21 +129,81 @@ async function shipTextToMeta(
     }
     if (platform === 'INSTAGRAM') {
       const r = await sendInstagramDM(accountId, platformUserId, text);
+      const messageId = r?.messageId?.trim();
+      if (!messageId) {
+        throw new Error('Instagram send DM succeeded without a messageId');
+      }
       return {
-        messageId: r?.messageId ?? null,
+        messageId,
         error: null,
         tokenInvalid: false
       };
     }
     if (platform === 'FACEBOOK') {
       const r = await sendFacebookMessage(accountId, platformUserId, text);
+      const messageId = r?.messageId?.trim();
+      if (!messageId) {
+        throw new Error('Facebook send message succeeded without a messageId');
+      }
       return {
-        messageId: r?.messageId ?? null,
+        messageId,
         error: null,
         tokenInvalid: false
       };
     }
     throw new Error(`Unsupported platform for ship: ${platform}`);
+  } catch (err) {
+    return {
+      messageId: null,
+      error: err instanceof Error ? err : new Error(String(err)),
+      tokenInvalid: isMetaTokenError(err)
+    };
+  }
+}
+
+async function shipAudioToMeta(
+  platform: string,
+  accountId: string,
+  platformUserId: string,
+  audioUrl: string
+): Promise<ShipOutcome> {
+  try {
+    if (!canShipToPlatformRecipient(platform, platformUserId)) {
+      throw new Error(
+        `invalid_${platform.toLowerCase()}_recipient_id:${platformUserId}`
+      );
+    }
+    if (platform === 'INSTAGRAM') {
+      const { sendAudioDM } = await import('@/lib/instagram');
+      const r = await sendAudioDM(accountId, platformUserId, audioUrl);
+      const messageId = r?.messageId?.trim();
+      if (!messageId) {
+        throw new Error(
+          'Instagram send audio DM succeeded without a messageId'
+        );
+      }
+      return {
+        messageId,
+        error: null,
+        tokenInvalid: false
+      };
+    }
+    if (platform === 'FACEBOOK') {
+      const { sendAudioMessage } = await import('@/lib/facebook');
+      const r = await sendAudioMessage(accountId, platformUserId, audioUrl);
+      const messageId = r?.messageId?.trim();
+      if (!messageId) {
+        throw new Error(
+          'Facebook send audio message succeeded without a messageId'
+        );
+      }
+      return {
+        messageId,
+        error: null,
+        tokenInvalid: false
+      };
+    }
+    throw new Error(`Unsupported platform for audio ship: ${platform}`);
   } catch (err) {
     return {
       messageId: null,
@@ -201,6 +260,68 @@ async function alertMetaTokenInvalidated(params: {
       err
     );
   }
+}
+
+async function notifyDeliveryFailure(params: {
+  accountId: string;
+  leadId: string;
+  platform: string;
+  platformUserId: string | null;
+  ship: ShipOutcome;
+  title?: string;
+  bodyPrefix?: string;
+}): Promise<Error> {
+  const {
+    accountId,
+    leadId,
+    platform,
+    platformUserId,
+    ship,
+    title = 'Message delivery failed',
+    bodyPrefix = 'AI reply'
+  } = params;
+  const error = ship.error ?? new Error('Unknown delivery error');
+  const errorMessage = error.message || String(error);
+
+  console.error(
+    `[webhook-processor] Failed to deliver to ${platform} after retries:`,
+    error
+  );
+
+  if (ship.tokenInvalid) {
+    await alertMetaTokenInvalidated({
+      accountId,
+      leadId,
+      platform,
+      errorDetail: errorMessage
+    });
+  } else {
+    try {
+      await prisma.notification.create({
+        data: {
+          accountId,
+          type: 'SYSTEM',
+          title,
+          body: `${bodyPrefix} to ${platformUserId ?? 'unknown recipient'} on ${platform} failed to send: ${errorMessage.slice(0, 200)}`,
+          leadId
+        }
+      });
+      broadcastNotification(accountId, { type: 'SYSTEM', title });
+    } catch (notifyErr) {
+      console.error(
+        '[webhook-processor] Failed to create failure notification:',
+        notifyErr
+      );
+    }
+  }
+
+  return error;
+}
+
+async function notifyAndThrowDeliveryFailure(
+  params: Parameters<typeof notifyDeliveryFailure>[0]
+): Promise<never> {
+  throw await notifyDeliveryFailure(params);
 }
 
 // ---------------------------------------------------------------------------
@@ -3076,10 +3197,10 @@ function sleep(ms: number): Promise<void> {
 /**
  * Deliver a multi-bubble AI response as N separate platform sends.
  * Creates a MessageGroup parent row, then iterates the bubble array:
- *   1. prisma.message.create with messageGroupId + bubbleIndex
- *   2. platform send (sendInstagramDM / sendFacebookMessage — each
+ *   1. platform send (sendInstagramDM / sendFacebookMessage — each
  *      already does its own 1s/2s/4s exponential backoff on transient
  *      errors, so we only catch POST-retry failures here)
+ *   2. prisma.message.create with messageGroupId + bubbleIndex
  *   3. broadcastNewMessage with group fields so the UI can render in
  *      real time
  *   4. sleep calculateBubbleDelay(nextBubbleChars) before next bubble
@@ -3147,6 +3268,7 @@ async function deliverBubbleGroup(params: {
   const groupStart = now;
   let delivered = 0;
   let failedAt: Date | null = null;
+  let deliveryError: Error | null = null;
   let firstMessageId = '';
   let abortedByHuman = false;
 
@@ -3174,7 +3296,38 @@ async function deliverBubbleGroup(params: {
       }
     }
 
-    // 2. Per-bubble Message row. Metadata written on bubble 0 only —
+    // 2. Platform send FIRST. Only create the Message row after Meta
+    // returns a messageId, otherwise a transient outage looks like a
+    // successful AI reply in the dashboard and the scheduled row never
+    // retries.
+    const ship = lead.platformUserId
+      ? await shipTextToMeta(
+          lead.platform,
+          lead.accountId,
+          lead.platformUserId,
+          bubble
+        )
+      : {
+          messageId: null,
+          error: new Error('no platformUserId on lead'),
+          tokenInvalid: false
+        };
+
+    if (!ship.messageId) {
+      failedAt = new Date();
+      deliveryError = await notifyDeliveryFailure({
+        accountId: lead.accountId,
+        leadId: lead.id,
+        platform: lead.platform,
+        platformUserId: lead.platformUserId,
+        ship,
+        title: 'Multi-bubble delivery failed',
+        bodyPrefix: `Bubble ${i + 1} of ${sanitizedBubbles.length}`
+      });
+      break;
+    }
+
+    // 3. Per-bubble Message row. Metadata written on bubble 0 only —
     // downstream analytics group by AI-turn = one stage-bearing row.
     // TODO(Sprint 7 / Fix D): real state-machine rows should own stage
     // progression so every bubble can reference the turn stage without
@@ -3200,83 +3353,15 @@ async function deliverBubbleGroup(params: {
         followUpAttemptNumber: isFirst ? (result.followUpNumber ?? null) : null,
         systemPromptVersion: isFirst ? result.systemPromptVersion : null,
         suggestionId: isFirst ? result.suggestionId || null : null,
-        msgSource: 'QUALIFYDMS_AI'
+        msgSource: 'QUALIFYDMS_AI',
+        platformMessageId: ship.messageId
       }
     });
     if (isFirst) firstMessageId = msg.id;
 
-    // 3. Platform send. sendInstagramDM / sendFacebookMessage each
-    // internally retry 1s/2s/4s on transient errors — a throw from
-    // shipTextToMeta means all retries exhausted.
-    if (lead.platformUserId) {
-      const ship = await shipTextToMeta(
-        lead.platform,
-        lead.accountId,
-        lead.platformUserId,
-        bubble
-      );
-      if (ship.messageId) {
-        // Patch pmid onto the just-created bubble row so echo dedup
-        // can match this delivery. Non-fatal if the patch fails —
-        // the message did land, we just lose the dedup anchor.
-        await prisma.message
-          .update({
-            where: { id: msg.id },
-            data: { platformMessageId: ship.messageId }
-          })
-          .catch(() => {});
-        console.log(
-          `[webhook-processor] bubble ${i}/${sanitizedBubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id}, mid=${ship.messageId})`
-        );
-      } else {
-        // Ship FAILED — delete the ghost bubble row so the dashboard
-        // doesn't show a message the lead never got. Stop the loop;
-        // whatever already shipped (bubbles 0..i-1) stays on Meta.
-        failedAt = new Date();
-        console.error(
-          `[webhook-processor] Multi-bubble delivery failed at bubble ${i}/${sanitizedBubbles.length}:`,
-          ship.error
-        );
-        await prisma.message
-          .delete({ where: { id: msg.id } })
-          .catch((delErr) =>
-            console.error(
-              '[webhook-processor] Failed to delete ghost bubble row:',
-              delErr
-            )
-          );
-        if (ship.tokenInvalid) {
-          await alertMetaTokenInvalidated({
-            accountId: lead.accountId,
-            leadId: lead.id,
-            platform: lead.platform,
-            errorDetail: ship.error?.message || 'unknown'
-          });
-        } else {
-          try {
-            await prisma.notification.create({
-              data: {
-                accountId: lead.accountId,
-                type: 'SYSTEM',
-                title: 'Multi-bubble delivery failed',
-                body: `Bubble ${i + 1} of ${sanitizedBubbles.length} failed to deliver to ${lead.platformUserId} on ${lead.platform}: ${(ship.error?.message || 'Unknown error').slice(0, 200)}. Earlier bubbles were delivered; no further bubbles will be sent.`,
-                leadId: lead.id
-              }
-            });
-            broadcastNotification(lead.accountId, {
-              type: 'SYSTEM',
-              title: 'Multi-bubble delivery failed'
-            });
-          } catch (notifyErr) {
-            console.error(
-              '[webhook-processor] Failed to create mid-group failure notification:',
-              notifyErr
-            );
-          }
-        }
-        break;
-      }
-    }
+    console.log(
+      `[webhook-processor] bubble ${i}/${sanitizedBubbles.length - 1} sent to ${lead.platformUserId} (group=${group.id}, mid=${ship.messageId})`
+    );
 
     // 4. SSE broadcast — include group fields so the dashboard can
     // render in real time without re-fetching.
@@ -3385,6 +3470,10 @@ async function deliverBubbleGroup(params: {
     }
   });
 
+  if (failedAt && delivered === 0) {
+    throw deliveryError ?? new Error('Multi-bubble delivery failed');
+  }
+
   return {
     groupId: group.id,
     delivered,
@@ -3410,6 +3499,266 @@ export function matchFailedCapitalBookingPitch(text: string): string | null {
   return (
     patterns.map((pat) => text.match(pat)?.[0] ?? null).find(Boolean) ?? null
   );
+}
+
+async function deliverSingleAIMessage(params: {
+  conversationId: string;
+  accountId: string;
+  lead: {
+    id: string;
+    platform: string;
+    platformUserId: string | null;
+    accountId: string;
+  };
+  result: {
+    reply: string;
+    stage: string;
+    subStage?: string | null;
+    stageConfidence: number;
+    sentimentScore: number;
+    experiencePath?: string | null;
+    objectionDetected?: string | null;
+    stallType?: string | null;
+    followUpNumber?: number | null;
+    systemPromptVersion: string;
+    suggestionId?: string | null;
+    shouldVoiceNote?: boolean;
+    voiceNoteAction?: { slot_id: string } | null;
+  };
+  now: Date;
+  libraryVN?: { id: string; audioFileUrl: string; triggerType: string };
+}): Promise<{ id: string; content: string; timestamp: Date } | null> {
+  const { conversationId, accountId, lead, result, now, libraryVN } = params;
+  const platformUserId = lead.platformUserId;
+
+  if (!platformUserId) {
+    await notifyAndThrowDeliveryFailure({
+      accountId: lead.accountId,
+      leadId: lead.id,
+      platform: lead.platform,
+      platformUserId,
+      ship: {
+        messageId: null,
+        error: new Error('no platformUserId on lead'),
+        tokenInvalid: false
+      }
+    });
+    return null;
+  }
+
+  let platformMessageId: string | null = null;
+  let isVoiceNote = false;
+  let voiceNoteUrl: string | null = null;
+  let sentLibraryVoiceNote: {
+    id: string;
+    triggerType: string;
+    audioFileUrl: string;
+  } | null = null;
+
+  if (libraryVN) {
+    const ship = await shipAudioToMeta(
+      lead.platform,
+      lead.accountId,
+      platformUserId,
+      libraryVN.audioFileUrl
+    );
+    if (ship.messageId) {
+      platformMessageId = ship.messageId;
+      isVoiceNote = true;
+      voiceNoteUrl = libraryVN.audioFileUrl;
+      sentLibraryVoiceNote = libraryVN;
+      console.log(
+        `[webhook-processor] Library voice note (id: ${libraryVN.id}) sent to ${platformUserId}`
+      );
+    } else {
+      console.error(
+        '[webhook-processor] Library voice note send failed, falling back to text:',
+        ship.error
+      );
+    }
+  }
+
+  if (!platformMessageId && result.voiceNoteAction?.slot_id) {
+    try {
+      const slot = await prisma.voiceNoteSlot.findFirst({
+        where: { id: result.voiceNoteAction.slot_id, accountId }
+      });
+
+      if (
+        slot?.audioFileUrl &&
+        (slot.status === 'UPLOADED' || slot.status === 'APPROVED')
+      ) {
+        const ship = await shipAudioToMeta(
+          lead.platform,
+          lead.accountId,
+          platformUserId,
+          slot.audioFileUrl
+        );
+        if (ship.messageId) {
+          platformMessageId = ship.messageId;
+          isVoiceNote = true;
+          voiceNoteUrl = slot.audioFileUrl;
+          console.log(
+            `[webhook-processor] Pre-recorded voice note (slot: ${slot.slotName}) sent to ${platformUserId}`
+          );
+        } else {
+          console.error(
+            '[webhook-processor] Pre-recorded voice note send failed, falling back to text:',
+            ship.error
+          );
+        }
+      } else if (
+        slot &&
+        slot.fallbackBehavior === 'SEND_TEXT_EQUIVALENT' &&
+        slot.fallbackText
+      ) {
+        result.reply = slot.fallbackText;
+        console.log(
+          `[webhook-processor] Voice note slot "${slot.slotName}" empty — using fallback text`
+        );
+      } else if (slot && slot.fallbackBehavior === 'BLOCK_UNTIL_FILLED') {
+        console.warn(
+          `[webhook-processor] Voice note slot "${slot.slotName}" blocked — halting conversation`
+        );
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            aiActive: false,
+            awaitingAiResponse: false,
+            awaitingSince: null
+          }
+        });
+        await prisma.notification.create({
+          data: {
+            accountId,
+            type: 'SYSTEM',
+            title: 'Voice note required',
+            body: `AI paused: voice note slot "${slot.slotName}" needs an audio upload before the conversation can continue.`,
+            leadId: lead.id
+          }
+        });
+        return null;
+      }
+    } catch (slotErr) {
+      const errMsg =
+        slotErr instanceof Error ? slotErr.message : String(slotErr);
+      console.error(
+        '[webhook-processor] Pre-recorded voice note error:',
+        errMsg
+      );
+    }
+  }
+
+  if (!platformMessageId && result.shouldVoiceNote) {
+    try {
+      const { generateVoiceNote } = await import('@/lib/elevenlabs');
+      const { audioUrl } = await generateVoiceNote(accountId, result.reply);
+      const ship = await shipAudioToMeta(
+        lead.platform,
+        lead.accountId,
+        platformUserId,
+        audioUrl
+      );
+      if (ship.messageId) {
+        platformMessageId = ship.messageId;
+        isVoiceNote = true;
+        voiceNoteUrl = audioUrl;
+        console.log(
+          `[webhook-processor] Voice note sent to ${platformUserId} on ${lead.platform}`
+        );
+      } else {
+        console.error(
+          '[webhook-processor] Voice note failed, falling back to text:',
+          ship.error
+        );
+      }
+    } catch (voiceErr) {
+      console.error(
+        '[webhook-processor] Voice note failed, falling back to text:',
+        voiceErr instanceof Error ? voiceErr.message : voiceErr
+      );
+    }
+  }
+
+  if (!platformMessageId) {
+    const ship = await shipTextToMeta(
+      lead.platform,
+      lead.accountId,
+      platformUserId,
+      result.reply
+    );
+    if (!ship.messageId) {
+      await notifyAndThrowDeliveryFailure({
+        accountId: lead.accountId,
+        leadId: lead.id,
+        platform: lead.platform,
+        platformUserId,
+        ship
+      });
+    }
+    platformMessageId = ship.messageId;
+    console.log(
+      `[webhook-processor] ${lead.platform === 'INSTAGRAM' ? 'IG DM' : 'FB message'} sent to ${platformUserId} (mid=${platformMessageId})`
+    );
+  }
+
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      sender: 'AI',
+      content: result.reply,
+      timestamp: now,
+      stage: result.stage || null,
+      subStage: result.subStage || null,
+      stageConfidence: result.stageConfidence,
+      sentimentScore: result.sentimentScore,
+      experiencePath: result.experiencePath || null,
+      objectionType: result.objectionDetected || null,
+      stallType: result.stallType || null,
+      followUpAttemptNumber: result.followUpNumber ?? null,
+      systemPromptVersion: result.systemPromptVersion,
+      suggestionId: result.suggestionId || null,
+      msgSource: 'QUALIFYDMS_AI',
+      platformMessageId,
+      isVoiceNote,
+      voiceNoteUrl
+    }
+  });
+
+  if (sentLibraryVoiceNote) {
+    try {
+      const { logVoiceNoteSend } = await import('@/lib/voice-note-send-log');
+      await logVoiceNoteSend({
+        accountId,
+        leadId: lead.id,
+        voiceNoteId: sentLibraryVoiceNote.id,
+        messageIndex: await prisma.message.count({
+          where: { conversationId }
+        }),
+        triggerType: sentLibraryVoiceNote.triggerType
+      });
+    } catch (logErr) {
+      console.error(
+        '[webhook-processor] Failed to log VN send (non-fatal):',
+        logErr
+      );
+    }
+  }
+
+  broadcastNewMessage(accountId, {
+    id: message.id,
+    conversationId,
+    sender: 'AI',
+    content: result.reply,
+    platformMessageId,
+    timestamp: message.timestamp.toISOString()
+  });
+
+  return {
+    id: message.id,
+    content: message.content,
+    timestamp: message.timestamp
+  };
 }
 
 async function sendAIReply(
@@ -4124,8 +4473,8 @@ async function sendAIReply(
     !result.voiceNoteAction?.slot_id &&
     !libraryVN;
 
-  let aiMessageId: string;
-  let singleMessageSender: string | null = null;
+  let deliveredReplyText = result.reply;
+  let deliveredAt = now;
 
   if (useMultiBubble) {
     // ── Multi-bubble path ────────────────────────────────────────
@@ -4136,7 +4485,9 @@ async function sendAIReply(
       result,
       now
     });
-    aiMessageId = groupResult.firstMessageId;
+    deliveredReplyText = result.messages
+      .slice(0, groupResult.delivered)
+      .join('\n');
     if (groupResult.failedAt) {
       console.warn(
         `[webhook-processor] Multi-bubble group ${groupResult.groupId} failed after ${groupResult.delivered}/${result.messages.length} bubbles delivered`
@@ -4144,43 +4495,29 @@ async function sendAIReply(
     }
   } else {
     // ── Single-message path (legacy, voice-note compatible) ──────
-    const aiMessage = await prisma.message.create({
-      data: {
-        conversationId,
-        sender: 'AI',
-        content: result.reply,
-        timestamp: now,
-        stage: result.stage || null,
-        subStage: result.subStage || null,
-        stageConfidence: result.stageConfidence,
-        sentimentScore: result.sentimentScore,
-        experiencePath: result.experiencePath || null,
-        objectionType: result.objectionDetected || null,
-        stallType: result.stallType || null,
-        followUpAttemptNumber: result.followUpNumber ?? null,
-        systemPromptVersion: result.systemPromptVersion,
-        suggestionId: result.suggestionId || null,
-        msgSource: 'QUALIFYDMS_AI'
-      }
+    const delivered = await deliverSingleAIMessage({
+      conversationId,
+      accountId,
+      lead,
+      result,
+      now,
+      libraryVN
     });
-    aiMessageId = aiMessage.id;
-    singleMessageSender = aiMessage.sender;
+    if (!delivered) return;
+    deliveredReplyText = delivered.content;
+    deliveredAt = delivered.timestamp;
   }
 
   // ── Link AISuggestion as selected ──────────────────────────────
-  // finalSentText carries the full outgoing text. For multi-bubble,
-  // join bubbles with "\n" so override-detection Jaccard comparison
-  // sees the complete message the lead received.
+  // finalSentText carries the text Meta confirmed. For multi-bubble
+  // partial delivery, only delivered bubbles are marked selected.
   if (result.suggestionId) {
     try {
-      const finalText = useMultiBubble
-        ? result.messages.join('\n')
-        : result.reply;
       await prisma.aISuggestion.update({
         where: { id: result.suggestionId },
         data: {
           wasSelected: true,
-          finalSentText: finalText
+          finalSentText: deliveredReplyText
         }
       });
     } catch (err) {
@@ -4195,7 +4532,7 @@ async function sendAIReply(
   await prisma.conversation.update({
     where: { id: conversationId },
     data: {
-      lastMessageAt: now,
+      lastMessageAt: deliveredAt,
       awaitingAiResponse: false,
       awaitingSince: null
     }
@@ -4400,306 +4737,6 @@ async function sendAIReply(
   ).catch((err) =>
     console.error('[webhook-processor] Lead stage update error:', err)
   );
-
-  // ── Broadcast + platform send (single-message path only) ───────
-  // Multi-bubble already did both per-bubble inside deliverBubbleGroup,
-  // so everything below is skipped for multi-bubble turns. Voice-note
-  // paths remain inside this single-message branch — voice notes are
-  // inherently one-turn and never coexist with multi-bubble (see the
-  // useMultiBubble check earlier in this function).
-  if (!useMultiBubble) {
-    if (singleMessageSender === 'SYSTEM') {
-      console.warn(
-        `[webhook-processor] SYSTEM message reached sendAIReply for ${conversationId}; internal note will not be delivered to Meta`
-      );
-      return;
-    }
-
-    broadcastNewMessage(accountId, {
-      id: aiMessageId,
-      conversationId,
-      sender: 'AI',
-      content: result.reply,
-      timestamp: now.toISOString()
-    });
-
-    // ── Send to platform ────────────────────────────────────────────
-    if (lead.platformUserId) {
-      let voiceNoteSent = false;
-
-      // libraryVN captured at the top of sendAIReply (used for the
-      // useMultiBubble check). Reuse it here.
-      if (libraryVN && !voiceNoteSent) {
-        try {
-          await prisma.message.update({
-            where: { id: aiMessageId },
-            data: { isVoiceNote: true, voiceNoteUrl: libraryVN.audioFileUrl }
-          });
-
-          if (lead.platform === 'INSTAGRAM') {
-            const { sendAudioDM } = await import('@/lib/instagram');
-            await sendAudioDM(
-              lead.accountId,
-              lead.platformUserId,
-              libraryVN.audioFileUrl
-            );
-          } else if (lead.platform === 'FACEBOOK') {
-            const { sendAudioMessage } = await import('@/lib/facebook');
-            await sendAudioMessage(
-              lead.accountId,
-              lead.platformUserId,
-              libraryVN.audioFileUrl
-            );
-          }
-
-          voiceNoteSent = true;
-
-          // Log the send for cooldown tracking
-          try {
-            const { logVoiceNoteSend } = await import(
-              '@/lib/voice-note-send-log'
-            );
-            await logVoiceNoteSend({
-              accountId,
-              leadId: lead.id,
-              voiceNoteId: libraryVN.id,
-              messageIndex: await prisma.message.count({
-                where: { conversationId }
-              }),
-              triggerType: libraryVN.triggerType
-            });
-          } catch (logErr) {
-            console.error(
-              '[webhook-processor] Failed to log VN send (non-fatal):',
-              logErr
-            );
-          }
-
-          console.log(
-            `[webhook-processor] Library voice note (id: ${libraryVN.id}) sent to ${lead.platformUserId}`
-          );
-        } catch (err) {
-          console.error(
-            '[webhook-processor] Library voice note send failed:',
-            err
-          );
-          // Fall through to slot system
-        }
-      }
-
-      // ── Pre-recorded voice note (VoiceNoteSlot system) ────────────
-      if (result.voiceNoteAction?.slot_id) {
-        try {
-          const slot = await prisma.voiceNoteSlot.findFirst({
-            where: { id: result.voiceNoteAction.slot_id, accountId }
-          });
-
-          if (
-            slot?.audioFileUrl &&
-            (slot.status === 'UPLOADED' || slot.status === 'APPROVED')
-          ) {
-            // Send pre-recorded audio
-            await prisma.message.update({
-              where: { id: aiMessageId },
-              data: { isVoiceNote: true, voiceNoteUrl: slot.audioFileUrl }
-            });
-
-            if (lead.platform === 'INSTAGRAM') {
-              const { sendAudioDM } = await import('@/lib/instagram');
-              await sendAudioDM(
-                lead.accountId,
-                lead.platformUserId,
-                slot.audioFileUrl
-              );
-            } else if (lead.platform === 'FACEBOOK') {
-              const { sendAudioMessage } = await import('@/lib/facebook');
-              await sendAudioMessage(
-                lead.accountId,
-                lead.platformUserId,
-                slot.audioFileUrl
-              );
-            }
-
-            voiceNoteSent = true;
-            console.log(
-              `[webhook-processor] Pre-recorded voice note (slot: ${slot.slotName}) sent to ${lead.platformUserId}`
-            );
-          } else if (
-            slot &&
-            slot.fallbackBehavior === 'SEND_TEXT_EQUIVALENT' &&
-            slot.fallbackText
-          ) {
-            // Use fallback text instead of audio
-            result.reply = slot.fallbackText;
-            console.log(
-              `[webhook-processor] Voice note slot "${slot.slotName}" empty — using fallback text`
-            );
-          } else if (slot && slot.fallbackBehavior === 'BLOCK_UNTIL_FILLED') {
-            // Halt: create notification and pause AI
-            console.warn(
-              `[webhook-processor] Voice note slot "${slot.slotName}" blocked — halting conversation`
-            );
-            await prisma.conversation.update({
-              where: { id: conversationId },
-              data: {
-                aiActive: false,
-                awaitingAiResponse: false,
-                awaitingSince: null
-              }
-            });
-            await prisma.notification.create({
-              data: {
-                accountId,
-                type: 'SYSTEM',
-                title: 'Voice note required',
-                body: `AI paused: voice note slot "${slot.slotName}" needs an audio upload before the conversation can continue.`,
-                leadId: lead.id
-              }
-            });
-            return; // Do not send anything
-          }
-          // SKIP_ACTION: fall through, send AI's generated text as normal
-        } catch (slotErr: unknown) {
-          const errMsg =
-            slotErr instanceof Error ? slotErr.message : String(slotErr);
-          console.error(
-            '[webhook-processor] Pre-recorded voice note error:',
-            errMsg
-          );
-          // Fall through to ElevenLabs or text
-        }
-      }
-
-      // ── Voice note generation via ElevenLabs (if AI recommends it) ──
-      if (!voiceNoteSent && result.shouldVoiceNote) {
-        try {
-          const { generateVoiceNote } = await import('@/lib/elevenlabs');
-          const { audioUrl } = await generateVoiceNote(accountId, result.reply);
-
-          // Update the message record with voice note data
-          await prisma.message.update({
-            where: { id: aiMessageId },
-            data: { isVoiceNote: true, voiceNoteUrl: audioUrl }
-          });
-
-          // Send audio to platform
-          if (lead.platform === 'INSTAGRAM') {
-            const { sendAudioDM } = await import('@/lib/instagram');
-            await sendAudioDM(lead.accountId, lead.platformUserId, audioUrl);
-          } else if (lead.platform === 'FACEBOOK') {
-            const { sendAudioMessage } = await import('@/lib/facebook');
-            await sendAudioMessage(
-              lead.accountId,
-              lead.platformUserId,
-              audioUrl
-            );
-          }
-
-          voiceNoteSent = true;
-          console.log(
-            `[webhook-processor] Voice note sent to ${lead.platformUserId} on ${lead.platform}`
-          );
-        } catch (voiceErr: any) {
-          console.error(
-            '[webhook-processor] Voice note failed, falling back to text:',
-            voiceErr?.message || voiceErr
-          );
-          // Fall through to text send below
-        }
-      }
-
-      // ── Text message send (default, or fallback if voice failed) ──
-      if (!voiceNoteSent) {
-        const ship = await shipTextToMeta(
-          lead.platform,
-          lead.accountId,
-          lead.platformUserId,
-          result.reply
-        );
-        if (ship.messageId) {
-          // Success — patch the pmid onto the pre-created Message row
-          // so Meta-echo dedup works and historical audit has the
-          // delivery receipt.
-          if (aiMessageId) {
-            await prisma.message
-              .update({
-                where: { id: aiMessageId },
-                data: { platformMessageId: ship.messageId }
-              })
-              .catch((err) =>
-                console.error(
-                  '[webhook-processor] Failed to patch platformMessageId (non-fatal):',
-                  err
-                )
-              );
-          }
-          console.log(
-            `[webhook-processor] ${lead.platform === 'INSTAGRAM' ? 'IG DM' : 'FB message'} sent to ${lead.platformUserId} (mid=${ship.messageId})`
-          );
-        } else {
-          // Ship FAILED — remove the ghost Message row so the dashboard
-          // doesn't show "AI replied" for a message the lead never got.
-          // Fires the token-invalidated alert when the error matches
-          // the dead-token signature, so the operator knows to reconnect.
-          console.error(
-            `[webhook-processor] Failed to deliver to ${lead.platform} after retries:`,
-            ship.error
-          );
-          if (aiMessageId) {
-            await prisma.message
-              .delete({ where: { id: aiMessageId } })
-              .catch((err) =>
-                console.error(
-                  '[webhook-processor] Failed to delete ghost Message row:',
-                  err
-                )
-              );
-            // Also prevent downstream "AISuggestion.wasSelected=true" on
-            // an undelivered message.
-            if (result.suggestionId) {
-              await prisma.aISuggestion
-                .update({
-                  where: { id: result.suggestionId },
-                  data: { wasSelected: false, finalSentText: null }
-                })
-                .catch(() => {});
-            }
-          }
-          if (ship.tokenInvalid) {
-            await alertMetaTokenInvalidated({
-              accountId: lead.accountId,
-              leadId: lead.id,
-              platform: lead.platform,
-              errorDetail: ship.error?.message || 'unknown'
-            });
-          } else {
-            // Non-token error (rate limit, network glitch, etc.) —
-            // fire the existing generic delivery-failed notification.
-            try {
-              await prisma.notification.create({
-                data: {
-                  accountId: lead.accountId,
-                  type: 'SYSTEM',
-                  title: 'Message delivery failed',
-                  body: `AI reply to ${lead.platformUserId} on ${lead.platform} failed to send: ${(ship.error?.message || 'Unknown error').slice(0, 200)}`,
-                  leadId: lead.id
-                }
-              });
-              broadcastNotification(lead.accountId, {
-                type: 'SYSTEM',
-                title: 'Message delivery failed'
-              });
-            } catch (notifyErr) {
-              console.error(
-                '[webhook-processor] Failed to create failure notification:',
-                notifyErr
-              );
-            }
-          }
-        }
-      }
-    } // close if (lead.platformUserId) — single-message platform send
-  } // close if (!useMultiBubble) — single-message path
 
   console.log(
     `[webhook-processor] AI reply sent for conversation ${conversationId} | stage: ${result.stage}`

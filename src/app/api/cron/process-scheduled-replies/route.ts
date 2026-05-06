@@ -56,10 +56,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Find pending replies that are due
+    // Find due replies. FAILED rows with attempts remaining are retried
+    // on later ticks so transient Meta outages stay visible without
+    // becoming permanent "AI silence".
     const dueReplies = await prisma.scheduledReply.findMany({
       where: {
-        status: 'PENDING',
+        status: { in: ['PENDING', 'FAILED'] },
         scheduledFor: { lte: now },
         attempts: { lt: 3 }
       },
@@ -102,7 +104,7 @@ export async function GET(req: NextRequest) {
     // Mark as PROCESSING (optimistic lock to prevent double-pickup)
     const ids = pendingReplies.map((r) => r.id);
     await prisma.scheduledReply.updateMany({
-      where: { id: { in: ids }, status: 'PENDING' },
+      where: { id: { in: ids }, status: { in: ['PENDING', 'FAILED'] } },
       data: { status: 'PROCESSING' }
     });
 
@@ -123,7 +125,7 @@ export async function GET(req: NextRequest) {
 
         await prisma.scheduledReply.update({
           where: { id: reply.id },
-          data: { status: 'SENT', processedAt: new Date() }
+          data: { status: 'SENT', processedAt: new Date(), lastError: null }
         });
         sent++;
       } catch (err: any) {
@@ -134,7 +136,7 @@ export async function GET(req: NextRequest) {
         await prisma.scheduledReply.update({
           where: { id: reply.id },
           data: {
-            status: reply.attempts + 1 >= 3 ? 'FAILED' : 'PENDING',
+            status: 'FAILED',
             attempts: { increment: 1 },
             lastError: (err?.message || 'Unknown error').slice(0, 500)
           }
