@@ -161,47 +161,93 @@ export async function updateConversationOutcome(
 /**
  * Record the first time a conversation reaches a given stage.
  * Only writes once per stage (idempotent).
+ *
+ * Also backfills all EARLIER stages in the SOP sequence when called for a
+ * later stage. The AI engine emits the stage of the current reply (e.g.
+ * "CAPITAL_QUALIFICATION") but doesn't always re-emit prior stages it has
+ * already passed through. Without backfill the sidebar shows zero checkmarks
+ * even when the conversation is several stages deep — see andreierz on
+ * 2026-05-06 (systemStage=CAPITAL_QUALIFICATION but every timestamp null).
  */
+const SOP_STAGE_ORDER = [
+  'OPENING',
+  'SITUATION_DISCOVERY',
+  'GOAL_EMOTIONAL_WHY',
+  'URGENCY',
+  'SOFT_PITCH_COMMITMENT',
+  'FINANCIAL_SCREENING',
+  'BOOKING'
+] as const;
+
+const STAGE_FIELD_MAP: Record<string, string> = {
+  // New 7-stage SOP sequence
+  OPENING: 'stageOpeningAt',
+  SITUATION_DISCOVERY: 'stageSituationDiscoveryAt',
+  GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
+  URGENCY: 'stageUrgencyAt',
+  SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
+  FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
+  BOOKING: 'stageBookingAt',
+  // Legacy stage names (backward compat — alias to new fields)
+  GREETING: 'stageOpeningAt',
+  QUALIFICATION: 'stageQualificationAt',
+  VISION_BUILDING: 'stageVisionBuildingAt',
+  PAIN_IDENTIFICATION: 'stagePainIdentificationAt',
+  SOLUTION_OFFER: 'stageSolutionOfferAt',
+  // CAPITAL_QUALIFICATION is a sub-stage between FINANCIAL_SCREENING and
+  // BOOKING — when reached, every SOP stage through FINANCIAL_SCREENING is
+  // implicitly complete.
+  CAPITAL_QUALIFICATION: 'stageFinancialScreeningAt'
+};
+
 export async function recordStageTimestamp(
   conversationId: string,
   stage: string
 ): Promise<void> {
-  const stageFieldMap: Record<string, string> = {
-    // New 7-stage SOP sequence
-    OPENING: 'stageOpeningAt',
-    SITUATION_DISCOVERY: 'stageSituationDiscoveryAt',
-    GOAL_EMOTIONAL_WHY: 'stageGoalEmotionalWhyAt',
-    URGENCY: 'stageUrgencyAt',
-    SOFT_PITCH_COMMITMENT: 'stageSoftPitchCommitmentAt',
-    FINANCIAL_SCREENING: 'stageFinancialScreeningAt',
-    BOOKING: 'stageBookingAt',
-    // Legacy stage names (backward compat)
-    GREETING: 'stageOpeningAt',
-    QUALIFICATION: 'stageQualificationAt',
-    VISION_BUILDING: 'stageVisionBuildingAt',
-    PAIN_IDENTIFICATION: 'stagePainIdentificationAt',
-    SOLUTION_OFFER: 'stageSolutionOfferAt',
-    CAPITAL_QUALIFICATION: 'stageCapitalQualificationAt'
-  };
-
-  const field = stageFieldMap[stage];
+  const field = STAGE_FIELD_MAP[stage];
   if (!field) return;
 
-  // Only set if not already set
-  const convo = await prisma.conversation.findUnique({
-    where: { id: conversationId },
-    select: { [field]: true }
-  });
+  // Determine which earlier SOP stages to also backfill. If the stage isn't
+  // in the SOP sequence (e.g. legacy/sub-stage), only backfill its own field.
+  const stageIndex = SOP_STAGE_ORDER.indexOf(
+    stage as (typeof SOP_STAGE_ORDER)[number]
+  );
+  const stagesToFill =
+    stageIndex >= 0 ? SOP_STAGE_ORDER.slice(0, stageIndex + 1) : [stage];
+  // Special-case: CAPITAL_QUALIFICATION implies all SOP stages through
+  // FINANCIAL_SCREENING (index 5) are complete.
+  const finalStagesToFill =
+    stage === 'CAPITAL_QUALIFICATION'
+      ? SOP_STAGE_ORDER.slice(0, 6)
+      : stagesToFill;
 
-  if (convo && !(convo as any)[field]) {
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { [field]: new Date() }
-    });
-    console.log(
-      `[state-machine] Conversation ${conversationId} first reached stage: ${stage}`
-    );
+  const fieldsToCheck = finalStagesToFill
+    .map((s) => STAGE_FIELD_MAP[s])
+    .filter(Boolean);
+
+  // Pull the whole row — Prisma's `select` types reject dynamic-key objects
+  // (Record<string, true>), and the read cost difference vs. a narrow select
+  // is negligible compared to the write/index hit.
+  const convo = await prisma.conversation.findUnique({
+    where: { id: conversationId }
+  });
+  if (!convo) return;
+
+  const now = new Date();
+  const updates: Record<string, Date> = {};
+  for (const f of fieldsToCheck) {
+    if (!(convo as Record<string, unknown>)[f]) updates[f] = now;
   }
+
+  if (Object.keys(updates).length === 0) return;
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: updates
+  });
+  console.log(
+    `[state-machine] Conversation ${conversationId} reached stage ${stage}; backfilled fields: ${Object.keys(updates).join(', ')}`
+  );
 }
 
 // ---------------------------------------------------------------------------
