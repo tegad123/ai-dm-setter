@@ -980,7 +980,13 @@ export async function processIncomingMessage(
         conversation: {
           create: {
             personaId: newConversationPersonaId,
-            aiActive: shouldEnableAI,
+            // POLICY (2026-05-06): new conversations are created with
+            // AI OFF. Operator must explicitly toggle AI on. This
+            // overrides the legacy awayMode-based default. Going
+            // forward awayMode no longer auto-enables AI on new
+            // inbound leads — same applies to ongoing-conversation
+            // detection (the old `shouldEnableAI` ternary is gone).
+            aiActive: false,
             unreadCount: 1,
             leadEmail: detectedEmail,
             source: initialSource,

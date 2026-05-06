@@ -248,7 +248,10 @@ export async function processManyChatHandoff(params: {
       data: {
         leadId: existingLead.id,
         personaId,
-        aiActive: account.awayModeInstagram,
+        // POLICY (2026-05-06): new conversations always start with AI
+        // OFF. Operator must explicitly toggle on. awayModeInstagram
+        // no longer auto-enables AI on new ManyChat handoffs.
+        aiActive: false,
         unreadCount: 0,
         source: 'MANYCHAT',
         leadSource: 'OUTBOUND',
@@ -283,7 +286,10 @@ export async function processManyChatHandoff(params: {
         conversation: {
           create: {
             personaId: newLeadPersonaId,
-            aiActive: account.awayModeInstagram,
+            // POLICY (2026-05-06): new conversations always start with AI
+            // OFF. Operator must explicitly toggle on. awayModeInstagram
+            // no longer auto-enables AI on new ManyChat handoffs.
+            aiActive: false,
             unreadCount: 0,
             source: 'MANYCHAT',
             leadSource: 'OUTBOUND',

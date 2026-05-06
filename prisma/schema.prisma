@@ -920,7 +920,11 @@ model Lead {
 model Conversation {
   id             String    @id @default(cuid())
   leadId         String    @unique
-  aiActive       Boolean   @default(true)
+  // Default false (2026-05-06 policy): new conversations are
+  // created with AI OFF; the operator explicitly toggles it on.
+  // The legacy default of `true` caused AI to silently auto-engage
+  // every new lead regardless of operator intent.
+  aiActive       Boolean   @default(false)
   unreadCount    Int       @default(0)
   priorityScore  Int       @default(0) // 0-100, higher = hotter lead
   lastAIAnalysis DateTime? // When AI last scored this conversation
