@@ -768,28 +768,63 @@ export async function processIncomingMessage(
     const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
     const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
 
-    // ── ManyChat handoff detection (2026-04-30) ───────────────────
+    // ── ManyChat handoff detection + recovery (2026-04-30, expanded 2026-05-06) ──
     // For Instagram leads on accounts that have a ManyChat
-    // integration active, check whether this username is a recent
-    // ManyChat subscriber. If yes, the lead just replied to a
-    // ManyChat-sent opener — mark the conversation source MANYCHAT
-    // so the AI suppresses its own opener and prepends an
-    // outbound_context block. Fail-closed: any error → INBOUND.
+    // integration active, look up the subscriber. If found within the
+    // recency window, mark the conversation source MANYCHAT so the
+    // AI suppresses its own opener and prepends an outbound_context
+    // block. Additionally use the subscriber's `ig_username` and
+    // `name` to recover proper handle / display name when our local
+    // resolution returned a numeric IGSID (Meta API down, or upstream
+    // never resolved). This catches every lead where ManyChat's
+    // External Request action failed to fire (e.g. button-gated flow
+    // that the lead bypassed by replying with text). Fail-closed:
+    // any error → INBOUND with whatever resolution we already have.
     let initialSource: 'INBOUND' | 'MANYCHAT' = 'INBOUND';
-    if (platform === 'INSTAGRAM' && senderHandle) {
+    // Use the resolved handle (post-getUserProfile) — ManyChat's
+    // findByInstagramUsername 404s on numeric IGSIDs, so calling with
+    // an unresolved handle is wasted RTT.
+    const lookupHandle = resolvedHandle || senderHandle;
+    if (
+      platform === 'INSTAGRAM' &&
+      lookupHandle &&
+      !NUMERIC_IGSID.test(lookupHandle)
+    ) {
       try {
         const { getCredentials } = await import('@/lib/credential-store');
         const creds = await getCredentials(accountId, 'MANYCHAT');
         if (creds?.apiKey && typeof creds.apiKey === 'string') {
-          const { looksLikeManyChatHandoff } = await import('@/lib/manychat');
-          const isManyChat = await looksLikeManyChatHandoff(
-            creds.apiKey,
-            senderHandle
+          const { findSubscriberByInstagramUsername } = await import(
+            '@/lib/manychat'
           );
-          if (isManyChat) {
+          const sub = await findSubscriberByInstagramUsername(
+            creds.apiKey,
+            lookupHandle
+          );
+          if (sub) {
             initialSource = 'MANYCHAT';
+            // Recover handle/name from ManyChat when our resolution is
+            // still numeric or empty. ManyChat tracks subscribers with
+            // ig_username + name as soon as their automation triggers,
+            // so this fills the gap when Meta's user-lookup side-channel
+            // failed upstream.
+            if (sub.ig_username && NUMERIC_IGSID.test(resolvedHandle)) {
+              resolvedHandle = sub.ig_username.replace(/^@+/, '').trim();
+              console.log(
+                `[webhook-processor] recovered @${resolvedHandle} via ManyChat subscriber lookup (was "${senderHandle}")`
+              );
+            }
+            const mcName =
+              sub.name ||
+              [sub.first_name, sub.last_name].filter(Boolean).join(' ').trim();
+            if (mcName && /^\d+$/.test(resolvedName)) {
+              resolvedName = mcName;
+              console.log(
+                `[webhook-processor] recovered name "${mcName}" via ManyChat subscriber lookup`
+              );
+            }
             console.log(
-              `[webhook-processor] ManyChat handoff detected for new lead @${senderHandle} on account ${accountId}`
+              `[webhook-processor] ManyChat handoff detected for new lead @${resolvedHandle} on account ${accountId}`
             );
           }
         }
