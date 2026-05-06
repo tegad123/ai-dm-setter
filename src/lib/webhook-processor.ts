@@ -46,6 +46,10 @@ import {
 } from '@/lib/media-processing';
 import { randomUUID } from 'crypto';
 
+// Mirrors the same constant in manychat-handoff.ts — detect when an IGSID
+// leaked through as a username/handle before any DB write.
+const NUMERIC_IGSID = /^\d{12,}$/;
+
 // ---------------------------------------------------------------------------
 // Meta send helper — delivery with pmid capture + token-invalidation alert
 // ---------------------------------------------------------------------------
@@ -660,6 +664,37 @@ export async function processIncomingMessage(
     `[webhook-processor] Processing ${platform} ${triggerType} from ${senderHandle}: "${messageText.slice(0, 80)}"`
   );
 
+  // Guard: Meta sometimes delivers the raw IGSID as both sender name and
+  // handle when its user-lookup side-channel fails. Resolve before any DB
+  // write so we never persist a 15-digit number as Lead.handle / Lead.name.
+  let resolvedHandle = senderHandle;
+  let resolvedName = senderName;
+  if (platform === 'INSTAGRAM' && NUMERIC_IGSID.test(senderHandle)) {
+    console.warn(
+      `[webhook-processor] numeric senderHandle "${senderHandle}" received — IG username resolution failed upstream. Attempting getUserProfile for ${platformUserId}.`
+    );
+    try {
+      const { getUserProfile } = await import('@/lib/instagram');
+      const profile = await getUserProfile(accountId, platformUserId);
+      if (profile?.username) {
+        resolvedHandle = profile.username;
+        resolvedName = profile.name || profile.username;
+        console.log(
+          `[webhook-processor] resolved @${resolvedHandle} from getUserProfile (was "${senderHandle}")`
+        );
+      } else {
+        console.warn(
+          `[webhook-processor] getUserProfile returned no username for ${platformUserId} — persisting numeric handle as fallback`
+        );
+      }
+    } catch (err) {
+      console.warn(
+        '[webhook-processor] getUserProfile failed (non-fatal):',
+        err
+      );
+    }
+  }
+
   // ── Step 1: Find or create the lead ────────────────────────────
   // Match priority:
   //   1. platformUserId — the IG/FB numeric ID. Stable, unique per
@@ -778,8 +813,8 @@ export async function processIncomingMessage(
     lead = await prisma.lead.create({
       data: {
         accountId,
-        name: senderName,
-        handle: senderHandle,
+        name: resolvedName,
+        handle: resolvedHandle,
         platform,
         platformUserId,
         triggerType,
@@ -824,10 +859,10 @@ export async function processIncomingMessage(
   ) {
     await prisma.lead.update({
       where: { id: lead.id },
-      data: { name: senderName, handle: senderHandle }
+      data: { name: resolvedName, handle: resolvedHandle }
     });
     console.log(
-      `[webhook-processor] Updated lead name: ${lead.name} → ${senderName} (@${senderHandle})`
+      `[webhook-processor] Updated lead name: ${lead.name} → ${resolvedName} (@${resolvedHandle})`
     );
   }
 

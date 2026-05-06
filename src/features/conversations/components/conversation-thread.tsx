@@ -544,10 +544,23 @@ export function ConversationThread({
                     inGroup && nextMsg?.messageGroupId === groupId;
                   const isFirstInGroup = !sameGroupAsPrev;
                   const isLastInGroup = !sameGroupAsNext;
+                  // Suppress placeholder content when the message is rendered
+                  // as media — the audio player / image IS the message body.
+                  // Bare "[Image]" / "[Voice note]" placeholders are server-side
+                  // descriptors for the AI prompt, not text the operator should
+                  // see in the bubble. Keep the transcription wrapper intact
+                  // (e.g. `[Voice note (transcribed): "..."]`) so the operator
+                  // can read what was said.
+                  const isBareVoicePlaceholder =
+                    msg.isVoiceNote &&
+                    typeof msg.content === 'string' &&
+                    /^\s*\[Voice note\]\s*$/i.test(msg.content);
                   const displayContent =
                     msg.hasImage && msg.content === '[Image]'
                       ? ''
-                      : msg.content;
+                      : isBareVoicePlaceholder
+                        ? ''
+                        : msg.content;
                   return (
                     <div
                       key={msg.id}
@@ -632,11 +645,21 @@ export function ConversationThread({
                             </button>
                           )}
                           {msg.isVoiceNote && msg.voiceNoteUrl && (
-                            <div className='mb-2'>
+                            <div
+                              className={cn(
+                                displayContent || msg.transcription
+                                  ? 'mb-2'
+                                  : 'mb-0'
+                              )}
+                            >
+                              {/* preload='metadata' so the duration appears
+                                  immediately. preload='none' (the prior value)
+                                  left the player at 0:00 until first play, which
+                                  made every voice note look broken. */}
                               <audio
                                 controls
-                                preload='none'
-                                className='h-8 w-48'
+                                preload='metadata'
+                                className='h-8 w-full max-w-[260px]'
                               >
                                 <source
                                   src={msg.voiceNoteUrl}
