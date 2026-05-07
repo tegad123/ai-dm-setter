@@ -695,9 +695,9 @@ function FeatureOne() {
                 <div className='phone-notch'></div>
                 <div className='ig-bar'>
                   <div className='ig-back'>‹</div>
-                  <div className='ig-avatar'>D</div>
+                  <div className='ig-avatar'>Y</div>
                   <div className='ig-user'>
-                    <span className='ig-name'>daetradez</span>
+                    <span className='ig-name'>yourbrand</span>
                     <span className='ig-active'>Active now</span>
                   </div>
                   {IG_ICONS}

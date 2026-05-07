@@ -1,6 +1,10 @@
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { detectRestrictedGeography, generateReply } from '@/lib/ai-engine';
+import {
+  detectRestrictedGeography,
+  generateReply,
+  type GenerateReplyResult
+} from '@/lib/ai-engine';
 import type { LeadContext, BookingSlot } from '@/lib/ai-prompts';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
@@ -2958,15 +2962,15 @@ export async function scheduleAIReply(
     isHumanCorrection: m.isHumanCorrection
   }));
 
-  let result;
+  let result: GenerateReplyResult;
   try {
-    result = await generateReply(
+    result = (await generateReply(
       accountId,
       conversation.personaId,
       formattedMessages,
       leadContext,
       scoringContext
-    );
+    )) as GenerateReplyResult;
     const _aiGenMs = Date.now() - _aiGenStart;
     log(
       'sched.step4.generateDone',
@@ -3951,6 +3955,62 @@ async function sendAIReply(
     } catch (err) {
       console.error(
         '[webhook-processor] Layer 2 distress handler failed (non-fatal, AI still paused):',
+        err
+      );
+    }
+    return;
+  }
+
+  // ── No-training suppression ────────────────────────────────────
+  // generateReply refused because the persona has no training messages.
+  // Without training, the master prompt's legacy brand fixtures bleed
+  // into replies (cross-tenant voice leak — nickdoesfutures 2026-05-07).
+  // Pause AI on this conversation and notify the operator to upload
+  // training data before re-enabling.
+  if ((result as GenerateReplyResult).noTrainingSuppressed) {
+    console.warn(
+      `[webhook-processor] No-training suppression engaged for conv ${conversationId} (account ${accountId}) — AI paused, awaiting training data.`
+    );
+    try {
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: {
+          aiActive: false,
+          awaitingAiResponse: false,
+          awaitingSince: null
+        }
+      });
+      await prisma.scheduledReply.updateMany({
+        where: { conversationId, status: 'PENDING' },
+        data: { status: 'CANCELLED' }
+      });
+      try {
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
+          : undefined;
+        await escalate({
+          type: 'ai_stuck',
+          accountId: lead.accountId,
+          leadId: lead.id,
+          conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          title: 'AI paused — upload training data to enable replies',
+          body: `${lead.name} (@${lead.handle}): AI is paused because this persona has no training data uploaded. Replies are blocked to prevent cross-tenant voice leakage. Upload training conversations in Settings → Training, then re-enable AI on this conversation.`,
+          details: 'noTrainingSuppressed set by ai-engine pre-flight guard',
+          link
+        });
+      } catch (notifErr) {
+        console.error(
+          '[webhook-processor] No-training escalation failed (non-fatal):',
+          notifErr
+        );
+      }
+    } catch (err) {
+      console.error(
+        '[webhook-processor] No-training suppression handler failed (non-fatal, AI still paused):',
         err
       );
     }

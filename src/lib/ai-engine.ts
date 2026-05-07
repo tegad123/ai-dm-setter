@@ -179,6 +179,7 @@ function buildApplicationContextBlock(params: {
   capitalConfirmed: number | null;
   callScheduledAt: Date | null;
   typeformAnswers: Prisma.JsonValue | null;
+  closerName?: string | null;
 }): string {
   const lines = [
     '<application_context>',
@@ -193,10 +194,11 @@ function buildApplicationContextBlock(params: {
     );
   }
   if (params.callScheduledAt) {
+    const closerLabel = (params.closerName || 'the closer').trim();
     lines.push(
       '',
       `Call scheduled for: ${params.callScheduledAt.toISOString()}`,
-      'The lead has booked their call with Anthony.'
+      `The lead has booked their call with ${closerLabel}.`
     );
   }
 
@@ -481,6 +483,15 @@ export interface GenerateReplyResult {
   distressLabel?: string | null;
   /** Typeform was filled but no booking slot was selected. Expected screen-out path. */
   typeformFilledNoBooking?: boolean;
+  /**
+   * Multi-tenant safety: the calling persona has zero training messages.
+   * Without training, the master prompt's hardcoded brand fixtures (legacy
+   * daetradez voice references) bleed into the reply. sendAIReply MUST
+   * abort delivery, flip aiActive=false on the conversation, and notify
+   * the operator that this persona needs training data before AI replies
+   * can resume. (Fix for cross-tenant leak — nickdoesfutures 2026-05-07.)
+   */
+  noTrainingSuppressed?: boolean;
   /** Script-state recovery metadata, when deterministic recovery/override ran. */
   selfRecovered?: boolean;
   selfRecoveryEventId?: string | null;
@@ -651,6 +662,59 @@ export async function generateReply(
       throw new Error(
         `[ai-engine] generateReply: persona ${personaId} belongs to account ${personaCheck.accountId} but generation was called with accountId=${accountId}. Cross-account call rejected.`
       );
+    }
+  }
+
+  // No-training guard. The master prompt template still contains hardcoded
+  // brand-identity strings (legacy daetradez fixtures — Anthony, Daniel,
+  // Session Liquidity Model). For a persona with zero training messages,
+  // those fixtures dominate the reply because there is no own-voice signal
+  // to anchor against. Refusing to generate is safer than emitting a reply
+  // in another tenant's voice. The webhook processor handles the suppressed
+  // result by flipping aiActive=false and notifying the operator to upload
+  // training data before re-enabling AI.
+  {
+    const trainingCount = await prisma.trainingMessage.count({
+      where: {
+        conversation: {
+          accountId,
+          personaId
+        }
+      }
+    });
+    if (trainingCount === 0) {
+      console.warn(
+        `[ai-engine] generateReply: persona ${personaId} (account ${accountId}) has zero training messages — suppressing AI reply to prevent cross-tenant voice bleed.`
+      );
+      return {
+        reply: '',
+        messages: [],
+        format: 'text',
+        stage: '',
+        subStage: null,
+        stageConfidence: 0,
+        sentimentScore: 0,
+        experiencePath: null,
+        objectionDetected: null,
+        stallType: null,
+        affirmationDetected: false,
+        followUpNumber: null,
+        softExit: false,
+        escalateToHuman: true,
+        leadTimezone: null,
+        selectedSlotIso: null,
+        leadEmail: null,
+        suggestedTag: '',
+        suggestedTags: [],
+        shouldVoiceNote: false,
+        voiceNoteAction: null,
+        qualityScore: 0,
+        suggestedDelay: 0,
+        systemPromptVersion: 'no-training-suppressed',
+        suggestionId: null,
+        capitalOutcome: 'not_evaluated',
+        noTrainingSuppressed: true
+      };
     }
   }
 
@@ -838,7 +902,7 @@ Your entire response MUST be a single valid JSON object matching the RESPONSE FO
 
 At minimum, your JSON must include these fields with valid values:
 - "format": "text" (or "voice_note" if enabled)
-- "message": the actual reply you want sent to the lead, written in Daniel's voice (lowercase opener, casual)
+- "message": the actual reply you want sent to the lead, written in your configured voice (lowercase opener, casual)
 - "stage": one of OPENING | SITUATION_DISCOVERY | GOAL_EMOTIONAL_WHY | URGENCY | SOFT_PITCH_COMMITMENT | FINANCIAL_SCREENING | BOOKING — whichever stage you are ACTUALLY in right now based on the conversation
 - "stage_confidence": a number 0.0–1.0
 
@@ -1083,7 +1147,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       submittedAt: conversationCallState.typeformSubmittedAt,
       capitalConfirmed: conversationCallState.typeformCapitalConfirmed,
       callScheduledAt: conversationCallState.typeformCallScheduledAt,
-      typeformAnswers: conversationCallState.typeformAnswers
+      typeformAnswers: conversationCallState.typeformAnswers,
+      closerName: personaForGate?.closerName ?? null
     });
     if (applicationBlock) {
       systemPrompt = applicationBlock + '\n' + systemPrompt;
@@ -2218,7 +2283,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         typeof quality.softSignals?.ignored_personal_question === 'number';
       if (ignoredPersonalQ) {
         const leadMsg = lastLeadMsg?.content?.slice(0, 200) ?? '';
-        const directive = `\n\n===== IGNORED PERSONAL QUESTION =====\nThe lead just asked YOU a personal question: "${leadMsg}". You ignored it and pivoted to your next script question — that's the clearest bot signal possible. A real human never does this.\n\nOn this regen, your reply MUST:\n  1. Answer the lead's personal question in 1-2 short sentences from Daniel's perspective. Use first-person language ("I've", "my", "I"). Be specific and real, not vague.\n  2. THEN ask your next question naturally.\nDo NOT open with the next script question. Do NOT deflect with phrases like "I stay away from the prop-firm weeds tbh" or "I don't really get into that" — those read as dodges. Give a real, brief answer.\n\nExamples:\n  Lead: "Hbu" → AI: "been at it for a few years bro, lost a lot before it actually clicked fr. what do you do for work rn?"\n  Lead: "what's your favorite prop firm?" → AI: "i go for the ones with clean rules and no surprise scaling — consistency over hype. you been happy with alpha so far?"\n=====`;
+        const directive = `\n\n===== IGNORED PERSONAL QUESTION =====\nThe lead just asked YOU a personal question: "${leadMsg}". You ignored it and pivoted to your next script question — that's the clearest bot signal possible. A real human never does this.\n\nOn this regen, your reply MUST:\n  1. Answer the lead's personal question in 1-2 short sentences from your own configured persona's perspective. Use first-person language ("I've", "my", "I"). Be specific and real, not vague.\n  2. THEN ask your next question naturally.\nDo NOT open with the next script question. Do NOT deflect with phrases like "I stay away from the prop-firm weeds tbh" or "I don't really get into that" — those read as dodges. Give a real, brief answer.\n\nExamples:\n  Lead: "Hbu" → AI: "been at it for a few years bro, lost a lot before it actually clicked fr. what do you do for work rn?"\n  Lead: "what's your favorite prop firm?" → AI: "i go for the ones with clean rules and no surprise scaling — consistency over hype. you been happy with alpha so far?"\n=====`;
         systemPromptForLLM = baseSystemPrompt + directive;
         console.warn(
           `[ai-engine] Ignored personal question detected — forcing regen with first-person answer (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -2489,7 +2554,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         f.includes('r40_call_pitch_to_unqualified_after_downsell_accept:')
       );
       if (r40DownsellAcceptCallFailed) {
-        const r40Override = `\n\n===== R40 — DELIVER COURSE URL, DO NOT PITCH CALL =====\nThis lead is BELOW the capital threshold AND has affirmed downsell interest. The next reply MUST deliver the ${downsellPriceWithSign} ${downsellProductName} URL from the script's "Available Links & URLs" section. Drop the link.\n\nThe call CTA is reserved for QUALIFIED leads only. Pitching a call here loops an unqualified lead back into the main-mentorship sales path they have already been disqualified from.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "hop on a quick call"\n  ✗ "jump on a call"\n  ✗ "right hand man Anthony"\n  ✗ "Anthony so he can break it down"\n  ✗ "wanna get on a chat"\n  ✗ ANY closer name + ANY call/chat/quick mention\n\nREQUIRED ON THIS REGEN:\n  ✓ Brief acknowledgment of their acceptance (one short line, e.g. "bet bro, that's the move").\n  ✓ The downsell URL inline (the actual link from the script — never a placeholder).\n  ✓ Optional warm sign-off ("take your time with it, hit me up when you're done").\n\nIf no downsell URL is configured, soft-exit with the free-resource fallback (per R28). Do NOT substitute a call CTA.\n=====`;
+        const r40CloserLabel = (
+          personaForGate?.closerName || 'the closer'
+        ).trim();
+        const r40Override = `\n\n===== R40 — DELIVER COURSE URL, DO NOT PITCH CALL =====\nThis lead is BELOW the capital threshold AND has affirmed downsell interest. The next reply MUST deliver the ${downsellPriceWithSign} ${downsellProductName} URL from the script's "Available Links & URLs" section. Drop the link.\n\nThe call CTA is reserved for QUALIFIED leads only. Pitching a call here loops an unqualified lead back into the main-mentorship sales path they have already been disqualified from.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "hop on a quick call"\n  ✗ "jump on a call"\n  ✗ "right hand man ${r40CloserLabel}"\n  ✗ "${r40CloserLabel} so they can break it down"\n  ✗ "wanna get on a chat"\n  ✗ ANY closer name + ANY call/chat/quick mention\n\nREQUIRED ON THIS REGEN:\n  ✓ Brief acknowledgment of their acceptance (one short line, e.g. "bet bro, that's the move").\n  ✓ The downsell URL inline (the actual link from the script — never a placeholder).\n  ✓ Optional warm sign-off ("take your time with it, hit me up when you're done").\n\nIf no downsell URL is configured, soft-exit with the free-resource fallback (per R28). Do NOT substitute a call CTA.\n=====`;
         systemPromptForLLM = baseSystemPrompt + r40Override;
         console.warn(
           `[ai-engine] R40 violation — call pitched to unqualified lead after downsell accept; forcing regen to URL delivery (attempt ${attempt + 1}/${MAX_RETRIES + 1})`

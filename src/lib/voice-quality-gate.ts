@@ -235,7 +235,7 @@ const CALL_PITCH_RE =
   /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat))\b/i;
 
 const CALL_OR_BOOKING_ADVANCEMENT_RE =
-  /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat)|typeform|application|booking link|book(ing)?\s+(a\s+)?call|send(ing)?\s+(you\s+)?(the\s+)?link\s+(to|for)\s+(apply|book|schedule)|fill\s+(it|this|the form|everything)\s+out|anthony)\b/i;
+  /\b(hop on a (quick )?(call|chat)|call with [A-Z][a-z]+|quick (call|chat)|jump on a (quick )?(call|chat)|get on a (quick )?(call|chat)|15[- ]?min(ute)? (call|chat)|typeform|application|booking link|book(ing)?\s+(a\s+)?call|send(ing)?\s+(you\s+)?(the\s+)?link\s+(to|for)\s+(apply|book|schedule)|fill\s+(it|this|the form|everything)\s+out)\b/i;
 
 const SCHEDULING_QUESTION_RE =
   /\b(what|which)\s+(day|time)\s+works|\bwhen\s+(are\s+you\s+free|works|can\s+you\s+hop\s+on)|\bwhen('?s| is)\s+(better|best|good)\s+for\s+you|\bwhat\s+(day|time)\s+are\s+you\s+free|\bwhat'?s\s+(a\s+good\s+time|your\s+schedule)|\bwhat\s+does\s+your\s+schedule\s+look\s+like/i;
