@@ -1343,6 +1343,31 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       )
     : null;
 
+  // Path B(1): suppress legacy income_goal_overdue + qualification_stalled
+  // hard fails when an active relational Script is present. Those gates
+  // were tuned for the old collapsed Daniel-script and conflict with
+  // multi-step parsed scripts (daetradez asks income from JOB at Step 7
+  // and income GOAL from TRADING at Step 9 — both legitimately past
+  // message 4). The 22-step focus-mode + call-proposal prereq gate
+  // shipped in cca9a94 already enforces pacing for parsed scripts via
+  // the script's own structure. Operators can override with
+  // AIPersona.promptConfig.skipLegacyPacingGates to force a value.
+  const personaPromptConfig =
+    (scriptStateSnapshot?.persona?.promptConfig as Record<
+      string,
+      unknown
+    > | null) || null;
+  const explicitSkipLegacyPacingGates =
+    personaPromptConfig &&
+    typeof personaPromptConfig.skipLegacyPacingGates === 'boolean'
+      ? (personaPromptConfig.skipLegacyPacingGates as boolean)
+      : null;
+  const hasParsedScript = !!scriptStateSnapshot?.script;
+  const skipLegacyPacingGates =
+    explicitSkipLegacyPacingGates !== null
+      ? explicitSkipLegacyPacingGates
+      : hasParsedScript;
+
   const buildVoiceQualityOptions = (
     candidateMessageCount: number,
     capitalOutcomeOverride?: VoiceGateCapitalOutcome
@@ -1366,6 +1391,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepScriptedQuestions:
       currentStepShape?.scriptedQuestionContents ?? [],
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
+    skipLegacyPacingGates,
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
     capitalQuestionAsked,

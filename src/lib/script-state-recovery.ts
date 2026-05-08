@@ -741,7 +741,17 @@ export function isStepComplete(
 ): boolean {
   const rule = ruleRecord(step);
   const type = typeof rule.type === 'string' ? rule.type : null;
-  if (!type || type === 'always_complete') return true;
+  // Behavior change (2026-05-08, bug-26): a NULL completionRule used to
+  // mean "this step is auto-complete". That assumption made
+  // computeSystemStage return the LAST step of every parsed script
+  // (because the parser doesn't synthesise completion rules), which
+  // surfaced in the dashboard as e.g. "Didnt Receive Homework" on a
+  // fresh conversation. Now: null type → INCOMPLETE. Operators marking
+  // a step explicitly auto-complete must use `{ "type": "always_complete" }`
+  // in completionRule. Backward-compat carve-out for `always_complete`
+  // is retained below.
+  if (type === 'always_complete') return true;
+  if (!type) return false;
 
   if (type === 'data_captured') {
     const fields = Array.isArray(rule.fields) ? rule.fields : [];

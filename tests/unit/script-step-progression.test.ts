@@ -757,3 +757,81 @@ describe('bug-25-silent-branch-enforcement (acceptance criteria)', () => {
     assert.ok(maxQuestionSimilarityToScript(reply, scripted) > 0.5);
   });
 });
+
+// ---------------------------------------------------------------------------
+// inferCurrentStepNumber stale-snapshot guard (bug-26)
+// ---------------------------------------------------------------------------
+
+describe('inferCurrentStepNumber — stale-snapshot guard (bug-26)', () => {
+  it('snapshot=1 with 2+ AI turns is treated as stale and uses AI-turn floor', () => {
+    // After completionRule=null defaults to INCOMPLETE,
+    // computeSystemStage returns Step 1 even when the AI has progressed
+    // several turns past it. The stale-snapshot guard must prefer the
+    // AI-turn floor in that case.
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 1,
+        totalSteps: 22,
+        aiMessageCount: 8
+      }),
+      9
+    );
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 1,
+        totalSteps: 22,
+        aiMessageCount: 2
+      }),
+      3
+    );
+  });
+
+  it('snapshot=1 with 0 AI turns is legitimately at Step 1', () => {
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 1,
+        totalSteps: 22,
+        aiMessageCount: 0
+      }),
+      1
+    );
+  });
+
+  it('snapshot=1 with exactly 1 AI turn (just the opener) stays at Step 1', () => {
+    // aiMessageCount=1 means the AI has sent the opener and the lead
+    // hasn't replied yet. Snapshot=1 is correct here, not stale.
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 1,
+        totalSteps: 22,
+        aiMessageCount: 1
+      }),
+      1
+    );
+  });
+
+  it('preserves cap-at-floor behavior for snapshot > 1', () => {
+    // Existing test from prior suite — snapshot=22 with aiCount=3 should
+    // cap at 4 (the AI-turn floor) so a faulty all-complete reading
+    // doesn't push past the conversation's actual progress.
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 22,
+        totalSteps: 22,
+        aiMessageCount: 3
+      }),
+      4
+    );
+  });
+
+  it('preserves snapshot when both snapshot and floor are usable and snapshot > 1', () => {
+    assert.equal(
+      inferCurrentStepNumber({
+        snapshotCurrentStep: 5,
+        totalSteps: 22,
+        aiMessageCount: 10
+      }),
+      5
+    );
+  });
+});

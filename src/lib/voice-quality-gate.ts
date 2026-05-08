@@ -732,6 +732,23 @@ export interface VoiceQualityOptions {
   currentStepHasAnyAskAction?: boolean;
   /** Current LLM-reported stage for this generated turn. */
   currentStage?: string | null;
+  /**
+   * When true, suppresses the legacy hardcoded pacing gates that were
+   * built for the old collapsed-script structure:
+   *   - income_goal_overdue ("by the 4th AI message, ask income goal")
+   *   - qualification_stalled ("if still in Goal/Why by message 8, advance")
+   * These gates conflict with the parsed 22-step relational Script
+   * pacing (e.g. daetradez asks income from JOB at Step 7 and income
+   * goal from TRADING at Step 9 — both legitimately past message 4).
+   * Defaulted true in ai-engine when an active relational Script is
+   * present for the account; left false for legacy rawScript-only
+   * accounts so existing behavior is preserved. Set explicitly via
+   * AIPersona.promptConfig.skipLegacyPacingGates to override the
+   * auto-detection.
+   * Soft signal `qualification_pace_too_slow` is preserved either way —
+   * it doesn't hard-fail and is informational.
+   */
+  skipLegacyPacingGates?: boolean;
   /** Whether any prior AI turn already asked about the lead's income goal. */
   incomeGoalAsked?: boolean;
   /** Whether any prior AI turn already asked the capital verification question. */
@@ -2176,7 +2193,8 @@ export function scoreVoiceQuality(
     typeof aiMsgCount === 'number' &&
     aiMsgCount >= 4 &&
     !options?.incomeGoalAsked &&
-    !incomeGoalAskedThisTurn
+    !incomeGoalAskedThisTurn &&
+    !options?.skipLegacyPacingGates
   ) {
     hardFails.push(
       "income_goal_overdue: by the 4th AI message, the reply must ask about the lead's income goal instead of continuing trading discussion"
@@ -2203,7 +2221,8 @@ export function scoreVoiceQuality(
   } else if (
     typeof aiMsgCount === 'number' &&
     aiMsgCount > 8 &&
-    stageGoalWhyOrEarlier
+    stageGoalWhyOrEarlier &&
+    !options?.skipLegacyPacingGates
   ) {
     hardFails.push(
       'qualification_stalled: AI has been in discovery/goal discussion too long and must advance to urgency'

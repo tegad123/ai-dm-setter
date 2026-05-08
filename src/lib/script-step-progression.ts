@@ -707,15 +707,22 @@ export function inferCurrentStepNumber(params: {
   const lastStep = Math.max(1, totalSteps);
   const floor = Math.min(lastStep, Math.max(1, aiMessageCount + 1));
   if (
-    typeof snapshotCurrentStep === 'number' &&
-    snapshotCurrentStep > 0 &&
-    snapshotCurrentStep <= lastStep
+    typeof snapshotCurrentStep !== 'number' ||
+    snapshotCurrentStep <= 0 ||
+    snapshotCurrentStep > lastStep
   ) {
-    // Use the snapshot value when it's plausible. Cap at AI-turn floor
-    // so a faulty all-complete computeSystemStage (which jumps to last
-    // step) can't push us past where the conversation has actually
-    // been.
-    return Math.min(snapshotCurrentStep, floor);
+    return floor;
   }
-  return floor;
+  // Stale-snapshot guard (bug-26): with completionRule defaulting to
+  // INCOMPLETE for parsed scripts, computeSystemStage returns Step 1
+  // even when the AI has progressed several turns past it. When the
+  // snapshot says Step 1 but AI turns have happened, trust the
+  // AI-turn floor instead.
+  if (snapshotCurrentStep === 1 && aiMessageCount >= 2) {
+    return floor;
+  }
+  // Snapshot is trustworthy (> 1) — cap at AI-turn floor so a faulty
+  // all-complete reading can't push the AI past where the conversation
+  // has actually been.
+  return Math.min(snapshotCurrentStep, floor);
 }
