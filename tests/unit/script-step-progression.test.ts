@@ -14,11 +14,17 @@ import {
   CALL_PROPOSAL_PREREQS,
   buildCurrentStepBlock,
   checkCallProposalPrereqs,
+  containsQuestion,
+  countQuestionMarks,
+  detectAcknowledgmentOpener,
   detectBeliefBreakDelivered,
   detectBeliefBreakInMessage,
   detectCallProposalAttempt,
+  getStepActionShape,
   hasCapturedDataPoint,
   inferCurrentStepNumber,
+  jaccardSimilarity,
+  maxQuestionSimilarityToScript,
   type CompactScriptStep
 } from '../../src/lib/script-step-progression';
 
@@ -466,5 +472,288 @@ describe('bug-24-script-step-enforcement (acceptance criteria)', () => {
     // detectCallProposalAttempt returns false → gate doesn't even check
     // prereqs. Step 3's question is allowed when capturedDataPoints is empty.
     assert.equal(detectCallProposalAttempt(aiReply), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Question + acknowledgment detection (Step 4 silent-branch enforcement)
+// ---------------------------------------------------------------------------
+
+describe('countQuestionMarks / containsQuestion', () => {
+  it('counts each ? in a reply', () => {
+    assert.equal(countQuestionMarks('what? when? how?'), 3);
+    assert.equal(countQuestionMarks('no question here.'), 0);
+    assert.equal(countQuestionMarks('one only?'), 1);
+  });
+
+  it('containsQuestion is true iff > 0 marks', () => {
+    assert.equal(containsQuestion('how about you?'), true);
+    assert.equal(containsQuestion('appreciate that bro.'), false);
+  });
+});
+
+describe('detectAcknowledgmentOpener', () => {
+  it("detects 'that's real bro'", () => {
+    assert.equal(detectAcknowledgmentOpener("that's real bro"), true);
+  });
+
+  it("detects 'I hear you'", () => {
+    assert.equal(detectAcknowledgmentOpener('I hear you on that one'), true);
+  });
+
+  it("detects 'respect that'", () => {
+    assert.equal(
+      detectAcknowledgmentOpener('respect that bro, takes balls to share that'),
+      true
+    );
+  });
+
+  it("detects 'damn bro'", () => {
+    assert.equal(detectAcknowledgmentOpener('damn bro that hits home'), true);
+  });
+
+  it("detects 'gotcha'", () => {
+    assert.equal(
+      detectAcknowledgmentOpener('gotcha, I appreciate the openness'),
+      true
+    );
+  });
+
+  it('does NOT trigger on neutral openers', () => {
+    assert.equal(
+      detectAcknowledgmentOpener('how long have you been trading'),
+      false
+    );
+    assert.equal(detectAcknowledgmentOpener('what do you do for work'), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getStepActionShape — silent branch detection
+// ---------------------------------------------------------------------------
+
+describe('getStepActionShape', () => {
+  it('flags a [MSG] + [WAIT] only branch as silent', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 4,
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Obstacle given — detailed and emotional',
+              actions: [
+                { actionType: 'send_message', content: 'sit in it bro' },
+                { actionType: 'wait_for_response' }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 4);
+    assert.ok(shape);
+    assert.equal(shape!.hasSilentBranch, true);
+    assert.equal(shape!.hasAnyAskAction, false);
+    assert.deepEqual(shape!.silentBranchLabels, [
+      'Obstacle given — detailed and emotional'
+    ]);
+  });
+
+  it('does NOT flag branches that have [ASK]', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 5,
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Default',
+              actions: [
+                { actionType: 'send_message', content: 'context bro' },
+                {
+                  actionType: 'ask_question',
+                  content: 'What do you do for work?'
+                },
+                { actionType: 'wait_for_response' }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 5);
+    assert.ok(shape);
+    assert.equal(shape!.hasSilentBranch, false);
+    assert.equal(shape!.hasAnyAskAction, true);
+    assert.deepEqual(shape!.scriptedQuestionContents, [
+      'What do you do for work?'
+    ]);
+  });
+
+  it('handles a step with mixed branches (some silent, some with ASK)', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 4,
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Going well',
+              actions: [
+                { actionType: 'send_message', content: 'love that' },
+                {
+                  actionType: 'ask_question',
+                  content: 'what next level look like?'
+                },
+                { actionType: 'wait_for_response' }
+              ]
+            },
+            {
+              branchLabel: 'Obstacle given — detailed and emotional',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content: 'acknowledge using their words'
+                },
+                { actionType: 'wait_for_response' }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 4);
+    assert.ok(shape);
+    assert.equal(shape!.hasSilentBranch, true);
+    assert.equal(shape!.hasAnyAskAction, true);
+    assert.deepEqual(shape!.silentBranchLabels, [
+      'Obstacle given — detailed and emotional'
+    ]);
+    assert.deepEqual(shape!.scriptedQuestionContents, [
+      'what next level look like?'
+    ]);
+  });
+
+  it('returns null for missing step number or null script', () => {
+    assert.equal(getStepActionShape(null, 5), null);
+    assert.equal(getStepActionShape({ steps: [] }, 5), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jaccardSimilarity / maxQuestionSimilarityToScript
+// ---------------------------------------------------------------------------
+
+describe('jaccardSimilarity', () => {
+  it('returns 1 for identical content (modulo stopwords)', () => {
+    const sim = jaccardSimilarity(
+      'what do you do for work',
+      'what do you do for work'
+    );
+    assert.ok(sim >= 0.9, `expected ≥0.9 got ${sim}`);
+  });
+
+  it('returns < 0.2 for the @daniel_elumelu off-script question vs Step 5 ASK', () => {
+    // The AI improvised "If that kept happening for another 6 months,
+    // what would it cost you?" — which is NOT in the script's Step 5 ASK
+    // ("What do you do for work?"). Word overlap should be low.
+    const offScript =
+      'If that kept happening for another 6 months, what would it cost you?';
+    const scripted = 'What do you do for work?';
+    assert.ok(jaccardSimilarity(offScript, scripted) < 0.2);
+  });
+
+  it('returns 0 for empty inputs', () => {
+    assert.equal(jaccardSimilarity('', 'anything'), 0);
+    assert.equal(jaccardSimilarity('anything', ''), 0);
+  });
+});
+
+describe('maxQuestionSimilarityToScript', () => {
+  it('returns 1 (no comparison possible) when reply has no questions', () => {
+    assert.equal(
+      maxQuestionSimilarityToScript('appreciate that bro.', [
+        'What do you do?'
+      ]),
+      1
+    );
+  });
+
+  it('returns 1 when there are no scripted asks', () => {
+    assert.equal(maxQuestionSimilarityToScript('what next?', []), 1);
+  });
+
+  it('returns the BEST overlap when reply has multiple questions and asks', () => {
+    const reply =
+      'how long you been at it bro? what do you do for work right now?';
+    const scripted = ['What do you do for work?', 'How have the markets been?'];
+    const sim = maxQuestionSimilarityToScript(reply, scripted);
+    // The "what do you do for work" question is a near match to scripted[0].
+    assert.ok(sim > 0.3, `expected >0.3 got ${sim}`);
+  });
+
+  it('flags improvised question with low max similarity', () => {
+    // @daniel_elumelu Turn 2 incident: "If that kept happening for
+    // another 6 months, what would it cost you?" vs scripted asks for
+    // Step 4 emotional branch (which has NO ASK so this would be empty
+    // — but exercise the off-script path with Step 5 asks).
+    const offScript =
+      'If that kept happening for another 6 months, what would it cost you?';
+    const scripted = [
+      'What do you do for work?',
+      'How long you been doing that?'
+    ];
+    const sim = maxQuestionSimilarityToScript(offScript, scripted);
+    assert.ok(sim < 0.2, `expected <0.2 got ${sim}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-25-silent-branch-enforcement (acceptance criteria for Step 4 fix)
+// ---------------------------------------------------------------------------
+
+describe('bug-25-silent-branch-enforcement (acceptance criteria)', () => {
+  it('@daniel_elumelu Turn 1: AI on silent branch + emotional opener + question = block', () => {
+    // Reply text mirrors the actual production output that triggered
+    // the bug: short acknowledgment opener + improvised follow-up.
+    const reply =
+      "that's real bro, sit with that for a sec. what's been the heaviest part of it?";
+    assert.equal(detectAcknowledgmentOpener(reply), true);
+    assert.equal(containsQuestion(reply), true);
+    // Combined with currentStepHasSilentBranch=true (passed via options
+    // in voice-quality-gate), the gate emits the
+    // silent_branch_violated_with_question hard fail.
+  });
+
+  it('@daniel_elumelu Turn 2: improvised pain-future-pacing fires off-script signal', () => {
+    const reply =
+      'I hear you. If that kept happening for another 6 months, what would it cost you?';
+    assert.equal(detectAcknowledgmentOpener(reply), true);
+    assert.equal(containsQuestion(reply), true);
+    // No scripted ask exists for Step 4's silent branch → the gate
+    // also fires silent_branch_violated_with_question.
+  });
+
+  it('multiple-questions hard fail catches turn-stacking', () => {
+    const reply =
+      "respect that bro. what's pushing you? when did it start? how do you feel about it?";
+    assert.equal(countQuestionMarks(reply), 3);
+    // 3 ?s → multiple_questions_in_reply hard fail in gate (>= 2 trigger).
+  });
+
+  it('valid silent-branch acknowledgment passes (no question)', () => {
+    const reply =
+      'that takes real strength to share bro. honestly respect you opening up like that.';
+    assert.equal(detectAcknowledgmentOpener(reply), true);
+    assert.equal(containsQuestion(reply), false);
+    // No `?` → silent_branch_violated_with_question does NOT fire.
+  });
+
+  it('valid Step 5 reply with scripted-ish question passes off-script check', () => {
+    const reply =
+      'alright so give me a bit of context bro. What do you do for work?';
+    const scripted = ['What do you do for work?'];
+    assert.ok(maxQuestionSimilarityToScript(reply, scripted) > 0.5);
   });
 });

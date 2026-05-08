@@ -230,10 +230,36 @@ export async function serializeScriptForPrompt(
   }
 
   if (focusModeActive) {
+    // Detect silent branches in the CURRENT step (not the preview) so
+    // the directive is precise. A silent branch = [MSG]+[WAIT] with no
+    // [ASK]. When the lead's last reply matches the operator-defined
+    // condition for that branch, the AI must acknowledge ONLY — no
+    // follow-up question.
+    const currentStepRow = focusedSteps.find(
+      (s) => s.stepNumber === clampedCurrent
+    );
+    const silentBranchLabels: string[] = [];
+    if (currentStepRow) {
+      for (const branch of currentStepRow.branches) {
+        const acts = branch.actions;
+        const hasAsk = acts.some((a) => a.actionType === 'ask_question');
+        const hasMsg = acts.some((a) => a.actionType === 'send_message');
+        const hasWait = acts.some((a) => a.actionType === 'wait_for_response');
+        if (!hasAsk && hasMsg && hasWait) {
+          silentBranchLabels.push(branch.branchLabel);
+        }
+      }
+    }
+
+    const silentBranchDirective =
+      silentBranchLabels.length > 0
+        ? `\n\nSILENT-BRANCH RULE — READ CAREFULLY: The current step contains ${silentBranchLabels.length === 1 ? 'a branch' : 'branches'} that ${silentBranchLabels.length === 1 ? 'is' : 'are'} acknowledgment-ONLY (no [ASK] action): ${silentBranchLabels.map((l) => `"${l}"`).join(', ')}. When the lead's most recent reply triggers ${silentBranchLabels.length === 1 ? 'that branch' : 'one of those branches'} (e.g. they shared their pain with emotional weight without being asked), your reply MUST be acknowledgment ONLY:\n  ✓ Reference the lead's exact words. Sit in the moment.\n  ✓ End on a statement / period. Do NOT include a question mark.\n  ✗ Do NOT improvise a follow-up probe ("what would it cost you", "how does that feel", "if that kept happening" — none of those are in the script).\n  ✗ Do NOT pivot to the next scripted question on this turn — the [WAIT] is for the lead to keep talking on their own.\nThe lead will continue the disclosure unprompted. Wait.`
+        : '';
+
     parts.push(
       `## Script Framework — CURRENT STEP ONLY\n` +
         `You are working through a multi-step qualification script. Below is your CURRENT step and a brief preview of the NEXT step. Subsequent steps are intentionally hidden — do NOT improvise your way to a later stage of the script. Complete the current step's [JUDGE]/[MSG]/[ASK] actions, wait for the lead's reply, then advance one step on the next turn.\n\n` +
-        `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).\n${stepLines.join('\n')}`
+        `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). When a step's branch contains [MSG] + [WAIT] but NO [ASK], you must ACKNOWLEDGE ONLY — do not append a question. Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).${silentBranchDirective}\n${stepLines.join('\n')}`
     );
   } else {
     parts.push(

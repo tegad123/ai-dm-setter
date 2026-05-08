@@ -370,6 +370,320 @@ export function buildCurrentStepBlock(
   return parts.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Silent-branch enforcement (Step 4 "Obstacle given — detailed and emotional"
+// pattern)
+// ---------------------------------------------------------------------------
+// Some script branches end with [MSG] + [WAIT] and have NO [ASK]. The
+// operator's intent is "acknowledge what the lead just shared and SIT IN
+// THE MOMENT — the lead will keep talking on their own". When the AI
+// improvises a follow-up question on those branches, it kills the
+// emotional disclosure mid-flight (@daniel_elumelu Turn 2/3 incident
+// 2026-05-08). The helpers below let the gate detect:
+//
+//   1. The current step contains at least one branch shaped like
+//      [MSG] + [WAIT] with no [ASK] (a "silent branch").
+//   2. The list of scripted [ASK] question texts across all branches in
+//      the current step — used to flag improvised off-script questions.
+// ---------------------------------------------------------------------------
+
+export interface StepActionShape {
+  /**
+   * True when at least one branch in the step has [MSG]/[WAIT] actions
+   * but NO [ASK] action. Operator's intent on that branch is "send the
+   * acknowledgment, end on a statement, do not append a question".
+   */
+  hasSilentBranch: boolean;
+  /**
+   * True when at least one branch in the step has any [ASK] action.
+   * Used to relax the no-question rule when the step does want a
+   * question on the branch the LLM is taking.
+   */
+  hasAnyAskAction: boolean;
+  /** Concatenated [ASK] content strings across branches (for off-script comparison). */
+  scriptedQuestionContents: string[];
+  /** Branch labels that are silent (for prompt directive + audit log). */
+  silentBranchLabels: string[];
+}
+
+interface MinimalStep {
+  stepNumber: number;
+  actions: Array<{
+    actionType: string;
+    content?: string | null;
+  }>;
+  branches: Array<{
+    branchLabel: string;
+    actions: Array<{
+      actionType: string;
+      content?: string | null;
+    }>;
+  }>;
+}
+
+/**
+ * Pure-data: derives the action shape for a given step number. Pass an
+ * already-loaded script (from script-serializer's query) so this stays
+ * synchronous and DB-free.
+ */
+export function getStepActionShape(
+  script: { steps: MinimalStep[] } | null,
+  stepNumber: number
+): StepActionShape | null {
+  if (!script) return null;
+  const step = script.steps.find((s) => s.stepNumber === stepNumber);
+  if (!step) return null;
+
+  const allBranches: Array<{
+    label: string;
+    actions: Array<{ actionType: string; content?: string | null }>;
+  }> = [];
+  if (step.actions.length > 0) {
+    allBranches.push({ label: '__direct__', actions: step.actions });
+  }
+  for (const branch of step.branches) {
+    allBranches.push({ label: branch.branchLabel, actions: branch.actions });
+  }
+
+  const silentBranchLabels: string[] = [];
+  const scriptedQuestionContents: string[] = [];
+  let hasAnyAskAction = false;
+
+  for (const branch of allBranches) {
+    const askActions = branch.actions.filter(
+      (a) => a.actionType === 'ask_question'
+    );
+    const msgActions = branch.actions.filter(
+      (a) => a.actionType === 'send_message'
+    );
+    const waitActions = branch.actions.filter(
+      (a) => a.actionType === 'wait_for_response'
+    );
+    if (askActions.length > 0) {
+      hasAnyAskAction = true;
+      for (const a of askActions) {
+        if (typeof a.content === 'string' && a.content.trim().length > 0) {
+          scriptedQuestionContents.push(a.content.trim());
+        }
+      }
+    } else if (
+      msgActions.length > 0 &&
+      waitActions.length > 0 &&
+      branch.label !== '__direct__'
+    ) {
+      // Silent branch: operator wrote acknowledgment + wait, no question.
+      silentBranchLabels.push(branch.label);
+    }
+  }
+
+  return {
+    hasSilentBranch: silentBranchLabels.length > 0,
+    hasAnyAskAction,
+    scriptedQuestionContents,
+    silentBranchLabels
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Acknowledgment-opener detection
+// ---------------------------------------------------------------------------
+// When a reply starts with an emotional acknowledgment phrase AND the
+// current step contains a silent branch, that's a strong signal the AI
+// took the silent branch — but if the reply also contains a `?`, the
+// AI is violating the operator's "sit in the moment" instruction.
+
+const ACKNOWLEDGMENT_OPENER_PATTERNS: RegExp[] = [
+  /^that'?s\s+(real|heavy|tough|deep|crazy|wild|a\s+lot)\b/i,
+  /^(i\s+)?hear\s+you\b/i,
+  /^(i\s+)?feel\s+you\b/i,
+  /^respect\s+(that|you)\b/i,
+  /^appreciate\s+(you|that)\b/i,
+  /^damn\s+bro\b/i,
+  /^that\s+takes\s+real\b/i,
+  /^genuinely\s+(respect|appreciate|hear)\b/i,
+  /^thank\s+you\s+for\s+(sharing|opening)\b/i,
+  /^(makes\s+sense|gotcha)\b/i
+];
+
+export function detectAcknowledgmentOpener(reply: string): boolean {
+  if (!reply || typeof reply !== 'string') return false;
+  const trimmed = reply.trim();
+  return ACKNOWLEDGMENT_OPENER_PATTERNS.some((p) => p.test(trimmed));
+}
+
+// ---------------------------------------------------------------------------
+// Question detection helpers
+// ---------------------------------------------------------------------------
+
+export function countQuestionMarks(reply: string): number {
+  if (!reply || typeof reply !== 'string') return 0;
+  return (reply.match(/\?/g) || []).length;
+}
+
+export function containsQuestion(reply: string): boolean {
+  return countQuestionMarks(reply) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Off-script question detection (Jaccard word overlap)
+// ---------------------------------------------------------------------------
+// When the current step has scripted [ASK] content AND the AI emits a
+// question, compare their word sets. Low overlap = AI is improvising a
+// different question. Fires as a SOFT signal (not hard) to allow
+// reasonable paraphrase while penalising inventing pain-future-pacing
+// questions that aren't in the script anywhere.
+
+const STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'do',
+  'does',
+  'for',
+  'from',
+  'have',
+  'has',
+  'i',
+  'if',
+  'in',
+  'is',
+  'it',
+  'me',
+  'my',
+  'of',
+  'on',
+  'or',
+  'so',
+  'that',
+  'the',
+  'their',
+  'they',
+  'this',
+  'to',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'with',
+  'you',
+  'your',
+  'how',
+  'why',
+  'who',
+  'which',
+  'whose',
+  'about',
+  'after',
+  'all',
+  'any',
+  'been',
+  'being',
+  'can',
+  'could',
+  'did',
+  'down',
+  'each',
+  'few',
+  'had',
+  'he',
+  'her',
+  'here',
+  'him',
+  'his',
+  'just',
+  'like',
+  'm',
+  'more',
+  'most',
+  'no',
+  'not',
+  'now',
+  'off',
+  'one',
+  'only',
+  'other',
+  'our',
+  'out',
+  'over',
+  'own',
+  'same',
+  'she',
+  'should',
+  'some',
+  'such',
+  'than',
+  'them',
+  'then',
+  'there',
+  'these',
+  'those',
+  'through',
+  'too',
+  'up',
+  'very',
+  'will',
+  'would',
+  'bro',
+  'man',
+  'tho',
+  'yeah',
+  'yo'
+]);
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !STOPWORDS.has(w))
+  );
+}
+
+export function jaccardSimilarity(a: string, b: string): number {
+  const setA = tokenize(a);
+  const setB = tokenize(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  setA.forEach((w) => {
+    if (setB.has(w)) intersection++;
+  });
+  const union = setA.size + setB.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Returns the maximum Jaccard similarity between the reply's question
+ * sentences and any scripted [ASK] content. Used to flag improvised
+ * off-script questions when similarity is below a threshold (e.g. 0.2).
+ */
+export function maxQuestionSimilarityToScript(
+  reply: string,
+  scriptedQuestions: string[]
+): number {
+  if (scriptedQuestions.length === 0) return 1; // no script to compare against
+  const replyQuestions = reply
+    .split(/(?<=[.?!])\s+/)
+    .filter((s) => s.includes('?'));
+  if (replyQuestions.length === 0) return 1;
+  let maxSim = 0;
+  for (const replyQ of replyQuestions) {
+    for (const scriptQ of scriptedQuestions) {
+      const sim = jaccardSimilarity(replyQ, scriptQ);
+      if (sim > maxSim) maxSim = sim;
+    }
+  }
+  return maxSim;
+}
+
 /**
  * Returns the array index of the step that the AI should be working
  * on right now. Heuristic, robust to missing completionRule:

@@ -7,7 +7,10 @@
 
 import {
   checkCallProposalPrereqs,
-  detectCallProposalAttempt
+  countQuestionMarks,
+  detectAcknowledgmentOpener,
+  detectCallProposalAttempt,
+  maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
 
 export interface QualityResult {
@@ -704,6 +707,29 @@ export interface VoiceQualityOptions {
    * happened before allowing any capital question.
    */
   capturedDataPoints?: Record<string, unknown> | null;
+  /**
+   * True when the current script step contains at least one branch
+   * shaped like [MSG] + [WAIT] with no [ASK] (a "silent branch", e.g.
+   * daetradez Step 4 "Obstacle given — detailed and emotional"). When
+   * the AI's reply opens with an emotional acknowledgment phrase AND
+   * contains a `?`, the gate hard-fails — the LLM took the silent
+   * branch but appended an off-script question.
+   */
+  currentStepHasSilentBranch?: boolean;
+  /**
+   * Branch labels that are silent (used by the regen directive so the
+   * LLM knows which branch to honor with acknowledgment-only).
+   */
+  currentStepSilentBranchLabels?: string[];
+  /**
+   * The exact [ASK] question texts the script defines for the current
+   * step (across all branches). Used by the soft signal that flags
+   * improvised off-script questions when their word overlap with the
+   * scripted asks is below threshold.
+   */
+  currentStepScriptedQuestions?: string[];
+  /** True when the current step has at least one [ASK] action in any branch. */
+  currentStepHasAnyAskAction?: boolean;
   /** Current LLM-reported stage for this generated turn. */
   currentStage?: string | null;
   /** Whether any prior AI turn already asked about the lead's income goal. */
@@ -1160,6 +1186,64 @@ export function scoreVoiceQuality(
           `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
           `Do NOT propose a call until every prerequisite is captured.`
       );
+    }
+  }
+
+  // Silent-branch enforcement: when the current script step contains a
+  // [MSG]+[WAIT]-only branch (no [ASK]) and the reply opens with an
+  // emotional acknowledgment phrase ("that's real", "I hear you",
+  // "respect that", etc.) AND contains a `?`, the LLM has clearly taken
+  // the silent branch but improvised an off-script follow-up. Operator's
+  // instruction on those branches is "sit in the moment". Hard-fail and
+  // regen with a no-question constraint.
+  // (@daniel_elumelu Turn 2/3 incident 2026-05-08: AI drilled the lead
+  // for emotional depth three turns in a row instead of letting the
+  // disclosure breathe.)
+  const replyQuestionCount = countQuestionMarks(reply);
+  if (
+    options?.currentStepHasSilentBranch &&
+    replyQuestionCount > 0 &&
+    detectAcknowledgmentOpener(reply)
+  ) {
+    const silentLabels = (options.currentStepSilentBranchLabels || [])
+      .map((l) => `"${l}"`)
+      .join(', ');
+    hardFails.push(
+      `silent_branch_violated_with_question: The script's current step has an acknowledgment-only branch (${silentLabels || 'unnamed silent branch'}) — [MSG]+[WAIT] with NO [ASK]. Your reply opened with an acknowledgment phrase but contained a question. The operator's intent on that branch is to sit in the moment and let the lead keep talking. Send the acknowledgment ONLY. End with a statement (period), not a question (?).`
+    );
+  }
+
+  // Multiple-questions guard: any single AI turn should fire AT MOST one
+  // question. The daetradez script's [ASK] actions all contain exactly one
+  // `?`. When the AI emits 2+ questions in a single reply, it's almost
+  // always either (a) stacking an off-script probe on top of the scripted
+  // ask, or (b) drilling the lead repeatedly within one turn. Hard-fail
+  // and regen down to a single question.
+  if (replyQuestionCount >= 2) {
+    hardFails.push(
+      `multiple_questions_in_reply: reply contained ${replyQuestionCount} question marks. Send ONE question per turn. Pick the most important one for the current script step and drop the rest.`
+    );
+  }
+
+  // Off-script question soft signal: when the current step DOES define
+  // [ASK] content but the reply's question shares < 0.2 Jaccard overlap
+  // with any scripted ask, the LLM is improvising a different question
+  // (e.g. pain-future-pacing pulled from sales training that isn't in
+  // the operator's script). Soft signal at -0.4 lets the score fall
+  // below the regen threshold but doesn't hard-block — paraphrase is
+  // still allowed when the question shape matches.
+  if (
+    options?.currentStepHasAnyAskAction &&
+    replyQuestionCount > 0 &&
+    Array.isArray(options.currentStepScriptedQuestions) &&
+    options.currentStepScriptedQuestions.length > 0
+  ) {
+    const sim = maxQuestionSimilarityToScript(
+      reply,
+      options.currentStepScriptedQuestions
+    );
+    if (sim < 0.2) {
+      softSignals.improvised_question_off_script = -0.4;
     }
   }
 

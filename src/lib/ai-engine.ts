@@ -49,7 +49,9 @@ import {
 import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
 import {
   detectBeliefBreakInMessage,
-  hasCapturedDataPoint
+  getStepActionShape,
+  hasCapturedDataPoint,
+  inferCurrentStepNumber
 } from '@/lib/script-step-progression';
 
 // ---------------------------------------------------------------------------
@@ -1324,6 +1326,23 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let r24WasEvaluatedThisTurn = false;
   let lastR24Override = '';
 
+  // Resolve the action shape of the current script step so the voice-
+  // quality-gate can enforce silent-branch + off-script-question rules.
+  // Pulls from scriptStateSnapshot.script (already loaded by
+  // prepareScriptState) so this stays a single DB query per turn.
+  const inferredStepNumberForGate = inferCurrentStepNumber({
+    snapshotCurrentStep: scriptStateSnapshot?.currentScriptStep ?? null,
+    totalSteps: scriptStateSnapshot?.script?.steps.length ?? 0,
+    aiMessageCount: priorAIMessages.length
+  });
+  const currentStepShape = scriptStateSnapshot?.script
+    ? getStepActionShape(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        scriptStateSnapshot.script as any,
+        inferredStepNumberForGate
+      )
+    : null;
+
   const buildVoiceQualityOptions = (
     candidateMessageCount: number,
     capitalOutcomeOverride?: VoiceGateCapitalOutcome
@@ -1342,6 +1361,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
     capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? {},
+    currentStepHasSilentBranch: currentStepShape?.hasSilentBranch ?? false,
+    currentStepSilentBranchLabels: currentStepShape?.silentBranchLabels ?? [],
+    currentStepScriptedQuestions:
+      currentStepShape?.scriptedQuestionContents ?? [],
+    currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
     capitalQuestionAsked,
@@ -1880,6 +1904,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const callProposalPrereqsMissingFailed = quality.hardFails.some((f) =>
       f.includes('call_proposal_prereqs_missing:')
+    );
+    const silentBranchViolationFailed = quality.hardFails.some((f) =>
+      f.includes('silent_branch_violated_with_question:')
+    );
+    const multipleQuestionsFailed = quality.hardFails.some((f) =>
+      f.includes('multiple_questions_in_reply:')
     );
 
     if (
@@ -2574,6 +2604,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + callBeforeCapitalOverride;
         console.warn(
           `[ai-engine] Call pitch before capital verification detected — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (silentBranchViolationFailed) {
+        const labels = (currentStepShape?.silentBranchLabels || [])
+          .map((l) => `"${l}"`)
+          .join(', ');
+        const silentBranchOverride = `\n\n===== SILENT BRANCH — ACKNOWLEDGMENT ONLY =====\nThe lead just shared something emotional and the script's current step has an acknowledgment-only branch (${labels || 'unnamed silent branch'}) — [MSG] + [WAIT], NO [ASK]. The operator's instruction on this branch is to SIT IN THE MOMENT — no follow-up question.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Any question mark (?)\n  ✗ Any "what about X" / "how does that feel" / "if that kept happening" follow-up probe\n  ✗ Pivoting to the next scripted question on the same turn\n\nREQUIRED ON THIS REGEN:\n  ✓ Acknowledge specifically what the lead just said using their own words. Make them feel deeply heard.\n  ✓ End on a statement (period). The lead will keep talking on their own.\n  ✓ Keep it short — one or two sentences max.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + silentBranchOverride;
+        console.warn(
+          `[ai-engine] Silent branch violated with question — forcing acknowledgment-only regen (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (multipleQuestionsFailed) {
+        const multiQOverride = `\n\n===== MULTIPLE QUESTIONS — ONE ONLY =====\nYour previous draft contained more than one question mark. Send ONE question per turn — pick the most important one for the current script step and drop the rest. The script's [ASK] actions all contain exactly one question; mirror that shape.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + multiQOverride;
+        console.warn(
+          `[ai-engine] Multiple questions in reply — forcing single-question regen (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
