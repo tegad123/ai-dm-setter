@@ -4,6 +4,7 @@ import {
   buildDualLayerBlock
 } from '@/lib/persona-breakdown-serializer';
 import { serializeScriptForPrompt } from '@/lib/script-serializer';
+import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
 
 // ---------------------------------------------------------------------------
 // Rule-authoring policy (READ THIS BEFORE ADDING A NEW R-RULE)
@@ -231,7 +232,7 @@ Progress through these stages IN ORDER. Never skip a stage. Never jump ahead bec
 - MANDATORY. This stage CANNOT be skipped under ANY circumstance (R2).
 - Must fire BEFORE the soft pitch EVERY time (R3).
 - TWO parts, both required:
-  1. Timeline: ask the urgency question from the tenant script ("how soon are you trying to make this happen?").
+  1. Timeline: ask the urgency question from the tenant script ("{{urgencyQuestion}}").
   2. Consequence: fire ONE consequence question per R39 that surfaces the cost of NOT changing — referencing the lead's Goal/Why content.
 - Wait for the lead's response to BOTH before advancing to Stage 5.
 - Purpose: get the lead to verbalize their own urgency AND their own cost-of-inaction. Both feed the soft pitch on Stage 5.
@@ -491,7 +492,7 @@ R18: NEVER soft-exit a HAS_MENTOR or NOT_READY objection — no matter how final
 
 QUALIFICATION PACE RULE:
 By AI message 4, you MUST have asked about the lead's income goal.
-If you are past AI message 8 and still in Goal/Why or earlier, advance NOW to Urgency and fire BOTH parts of Stage 4 per R39: the timeline question ("how soon are you trying to make this happen?") AND the consequence question (cost-of-inaction referencing their Goal/Why). Do not satisfy the pace rule with the timeline alone.
+If you are past AI message 8 and still in Goal/Why or earlier, advance NOW to Urgency and fire BOTH parts of Stage 4 per R39: the timeline question ("{{urgencyQuestion}}") AND the consequence question (cost-of-inaction referencing their Goal/Why). Do not satisfy the pace rule with the timeline alone.
 If you are past AI message 12 and capital has not been asked, ask capital NOW: "real quick, what's your capital situation like for the markets right now?"
 
 If you reach AI message 4 without asking about income goal, ask it NOW regardless of what else is being discussed.
@@ -987,7 +988,7 @@ R38: MIRROR CHARGED WORDS BACK AS A QUESTION. When a lead uses an emotionally lo
 
   AFTER THE LEAD ELABORATES, advance per the existing flow: counter the real objection, or move to the next stage.
 
-R39: AFTER THE URGENCY TIMELINE QUESTION, FIRE ONE CONSEQUENCE QUESTION. Stage 4 (URGENCY) has TWO parts, both required: (a) the timeline ask from the tenant script ("how soon are you trying to make this happen?") and (b) ONE consequence question that gets the lead to ARTICULATE the cost of NOT changing. Goal and Why told you what they want. The consequence question makes them feel the cost of staying put — and that feeling is what the soft pitch references on Stage 5.
+R39: AFTER THE URGENCY TIMELINE QUESTION, FIRE ONE CONSEQUENCE QUESTION. Stage 4 (URGENCY) has TWO parts, both required: (a) the timeline ask from the tenant script ("{{urgencyQuestion}}") and (b) ONE consequence question that gets the lead to ARTICULATE the cost of NOT changing. Goal and Why told you what they want. The consequence question makes them feel the cost of staying put — and that feeling is what the soft pitch references on Stage 5.
 
   THE CONSEQUENCE QUESTION FORMAT:
   Reference SPECIFIC content the lead already shared — their job, income, stated frustration, family situation, time stuck in the grind. Generic "where will you be in 5 years?" is filler; it doesn't move them.
@@ -1838,6 +1839,18 @@ export async function buildDynamicSystemPrompt(
   );
   prompt = prompt.replace(/\{\{firstName\}\}/g, principalFirstName);
   prompt = prompt.replace(/\{\{firstNameLower\}\}/g, principalFirstNameLower);
+
+  // Resolve the urgency-stage timeline question per persona. The legacy
+  // daetradez timeline phrasing is retired permanently from production
+  // code — operators control the wording via their uploaded script's
+  // URGENCY step or AIPersona.promptConfig.urgencyQuestion. Falls back
+  // to a generic safe phrasing when nothing else is configured. See
+  // urgency-question-resolver.ts for the full fallback chain.
+  const urgencyQuestionForPrompt = await resolveScriptUrgencyQuestion(
+    accountId,
+    personaId
+  );
+  prompt = prompt.replace(/\{\{urgencyQuestion\}\}/g, urgencyQuestionForPrompt);
 
   if (closerName) {
     // Identity-level one-liner (shown in YOUR IDENTITY)

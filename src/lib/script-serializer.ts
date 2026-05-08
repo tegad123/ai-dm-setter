@@ -124,6 +124,15 @@ export async function serializeScriptForPrompt(
     if (step.objective) {
       stepLines.push(`Objective: ${step.objective}`);
     }
+    // Inject the operator-edited canonical question so the LLM sees the
+    // exact wording from the script editor (vs. inferring from action
+    // content alone). When the operator types a precise question shape
+    // into ScriptStep.canonicalQuestion, that wording must reach the
+    // prompt verbatim — otherwise the AI improvises a similar question
+    // and the operator's intent is lost.
+    if (step.canonicalQuestion && step.canonicalQuestion.trim().length > 0) {
+      stepLines.push(`Canonical question: ${step.canonicalQuestion.trim()}`);
+    }
 
     if (step.branches.length > 0) {
       for (const branch of step.branches) {

@@ -1096,6 +1096,19 @@ export async function processIncomingMessage(
         lastMessageAt: null,
         outcome: 'ONGOING',
         leadIntentTag: 'NEUTRAL',
+        // Script-state machine reset (added 2026-05-08). Without these,
+        // the conversation re-entered with stale systemStage/script-step
+        // and the AI skipped early stages on the "fresh" lead. Mirrors
+        // the script-state fields populated by prepareScriptState +
+        // ai-engine retry loop.
+        systemStage: null,
+        currentScriptStep: 1,
+        capturedDataPoints: {},
+        awaitingAiResponse: false,
+        awaitingSince: null,
+        silentStopCount: 0,
+        stageMismatchCount: 0,
+        llmEmittedStage: null,
         // Current 7-stage timestamps
         stageOpeningAt: null,
         stageSituationDiscoveryAt: null,

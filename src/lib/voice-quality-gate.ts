@@ -1340,8 +1340,13 @@ export function scoreVoiceQuality(
   // exact phrases have shown up in production as same-question-twice
   // failures and never have a legitimate re-ask reason — hard-block
   // them when ANY recent AI message asked the same question.
+  // Exact-phrase repeat-question detectors. The legacy daetradez urgency
+  // timeline phrasing was removed from this list when the urgency wording
+  // became per-persona (resolveScriptUrgencyQuestion). Generic re-ask
+  // detection still fires via the Jaccard similarity threshold below, so
+  // semantic repeats are still caught — we just no longer hardcode that
+  // tenant's exact phrasing as a banned repeat shape.
   const REPEATED_QUESTION_EXACT_PATTERNS: RegExp[] = [
-    /\bhow soon are you trying to make this happen\b/i,
     /\bwhat'?s the main thing holding you back\b/i,
     /\bwhat'?s your capital situation\b/i,
     /\bwhat do you do for work\b/i,

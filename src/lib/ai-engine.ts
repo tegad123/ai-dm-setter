@@ -40,6 +40,7 @@ import {
   type RecoveryResult,
   type ScriptStateSnapshot
 } from '@/lib/script-state-recovery';
+import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1393,6 +1394,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }))
   });
 
+  // Resolve the persona-specific urgency-stage timeline question once per
+  // generation. Used by:
+  //   - the stalled-qualification regen directive (mid-loop)
+  //   - the validation-loop regen directive (mid-loop)
+  //   - the retry-exhausted parsed.message replacements (final attempt)
+  // Falls back through Active Script → AIPersona.promptConfig → generic
+  // safe phrasing. NEVER returns the retired daetradez "how soon are you
+  // trying to make this happen" phrasing.
+  const personaUrgencyQuestion = await resolveScriptUrgencyQuestion(
+    accountId,
+    personaId
+  );
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
     const callResult = await callLLM(
@@ -2500,7 +2514,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
 
       if (qualificationStalledFailed) {
-        const stalledOverride = `\n\n===== QUALIFICATION STALLED OVERRIDE =====\nYou have been in discovery / goal discussion for too long. Advance NOW to the next stage. Ask the urgency question: "how soon are you trying to make this happen?" Do not send more trading validation first.\n=====`;
+        const stalledOverride = `\n\n===== QUALIFICATION STALLED OVERRIDE =====\nYou have been in discovery / goal discussion for too long. Advance NOW to the next stage. Ask the urgency question: "${personaUrgencyQuestion}" Do not send more trading validation first.\n=====`;
         systemPromptForLLM = baseSystemPrompt + stalledOverride;
         console.warn(
           `[ai-engine] Qualification stalled — forcing urgency question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -2640,7 +2654,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     if (validationLoopFailed) {
-      const validationLoopOverride = `\n\n===== VALIDATION LOOP OVERRIDE =====\nYou have sent 3+ validation messages in a row without advancing. Stop validating and ask a qualification question NOW. Move to the next script stage. If you are still in Goal/Why, ask: "how soon are you trying to make this happen?"\n=====`;
+      const validationLoopOverride = `\n\n===== VALIDATION LOOP OVERRIDE =====\nYou have sent 3+ validation messages in a row without advancing. Stop validating and ask a qualification question NOW. Move to the next script stage. If you are still in Goal/Why, ask: "${personaUrgencyQuestion}"\n=====`;
       systemPromptForLLM += validationLoopOverride;
       console.warn(
         `[ai-engine] Validation loop detected — forcing qualification advancement (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
@@ -2997,7 +3011,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         console.warn(
           `[ai-engine] Qualification-stall/validation-loop gate exhausted ${MAX_RETRIES + 1} attempts — replacing with urgency question for convo ${activeConversationId}`
         );
-        parsed.message = 'how soon are you trying to make this happen?';
+        // Use the persona-resolved urgency question. NEVER fall back to
+        // the retired daetradez phrasing — that wording is gone from
+        // production code and only lives in a tenant's own script if
+        // they choose to keep it.
+        parsed.message = personaUrgencyQuestion;
         parsed.messages = [parsed.message];
         parsed.stage = 'URGENCY';
         parsed.subStage = null;
@@ -3015,7 +3033,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           parsed.messages.length === 0 ||
           !parsed.messages.join(' ').includes('?')
         ) {
-          parsed.message = 'how soon are you trying to make this happen?';
+          // Same persona-resolved fallback — no hardcoded daetradez line.
+          parsed.message = personaUrgencyQuestion;
           parsed.messages = [parsed.message];
           parsed.stage = 'URGENCY';
         } else {
