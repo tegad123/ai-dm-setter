@@ -485,6 +485,78 @@ export function getStepActionShape(
 }
 
 // ---------------------------------------------------------------------------
+// Step-10 (Deep Why) enforcement
+// ---------------------------------------------------------------------------
+// Step 10 — "Desired Outcome — Deep Why" — captures the lead's emotional
+// reason behind their income goal. Without this, the call proposal lands
+// without a hook AND the script's belief-break + soft-pitch beats lose
+// their leverage. Production drift (@tegaumukoro_ 2026-05-08): AI was
+// jumping from Step 9 (income goal captured) directly to Step 12
+// (obstacle identification) because the LLM picked up Step 12's
+// "if obstacle already stored → skip to Step 13" rule and conflated
+// the early_obstacle (captured at Step 2) with the deliberate Step 12
+// obstacle ask.
+//
+// The detector + gate below force Step 10 to fire BEFORE any Step 12+
+// content is allowed once incomeGoal is captured.
+
+/**
+ * Phrases that signal the AI is trying to advance past Step 10.
+ *   - obstacle re-ask shapes (Step 12)
+ *   - belief-break / reframe openers (Step 13)
+ *   - buy-in confirmation language (Step 14)
+ *   - urgency ask (Step 15)
+ *   - call-proposal language (Step 16) — also covered by
+ *     detectCallProposalAttempt; included here for completeness.
+ */
+const STEP_12_PLUS_PATTERNS: RegExp[] = [
+  // Step 12: explicit obstacle re-ask
+  /\bwhat\s+(do\s+you\s+feel|would\s+you\s+say)\s+is\s+(the\s+)?main\s+(thing|obstacle)\s+holding\s+you\s+back\b/i,
+  /\bmain\s+(thing|obstacle)\s+(stopping|holding)\s+you\b/i,
+  // Step 13: belief-break openers
+  /\b99%\s+of\s+traders\b/i,
+  /\bdon'?t\s+know\s+what\s+the\s+real\s+problem\s+is\b/i,
+  /\bsystems?\s+you\s+have\s+in\s+place\b/i,
+  /\bthat'?s\s+totally\s+normal\b.{0,80}\bbad\s+habits\b/i,
+  // Step 14: buy-in confirmation phrasing
+  /\bwould\s+(that|having)\s+(kind\s+of\s+)?(structure|system|guidance)\s+(help|change)\b/i,
+  // Step 15: urgency ask shapes
+  /\bis\s+now\s+the\s+time\s+to\s+(actually\s+)?overcome\b/i
+];
+
+export function detectStep12PlusContent(reply: string): boolean {
+  if (!reply || typeof reply !== 'string') return false;
+  if (STEP_12_PLUS_PATTERNS.some((p) => p.test(reply))) return true;
+  // Step 16 call-proposal language is its own category but also blocks
+  // Step 10 when fired prematurely.
+  return detectCallProposalAttempt(reply);
+}
+
+/**
+ * Returns true when the AI's reply attempts to advance past Step 10
+ * but the lead's emotional why has not been captured. Combined check:
+ *   - reply contains Step 12+ shaped content
+ *   - capturedDataPoints has incomeGoal (Step 9 done)
+ *   - capturedDataPoints does NOT have deepWhy / desiredOutcome (Step 10 skipped)
+ */
+export function detectStep10Skipped(
+  reply: string,
+  capturedDataPoints: Record<string, unknown> | null | undefined
+): boolean {
+  if (!detectStep12PlusContent(reply)) return false;
+  const incomeGoalPresent =
+    hasCapturedDataPoint(capturedDataPoints, 'incomeGoal') ||
+    hasCapturedDataPoint(capturedDataPoints, 'income_goal');
+  if (!incomeGoalPresent) return false;
+  const deepWhyPresent =
+    hasCapturedDataPoint(capturedDataPoints, 'deepWhy') ||
+    hasCapturedDataPoint(capturedDataPoints, 'deep_why') ||
+    hasCapturedDataPoint(capturedDataPoints, 'desiredOutcome') ||
+    hasCapturedDataPoint(capturedDataPoints, 'desired_outcome');
+  return !deepWhyPresent;
+}
+
+// ---------------------------------------------------------------------------
 // Acknowledgment-opener detection
 // ---------------------------------------------------------------------------
 // When a reply starts with an emotional acknowledgment phrase AND the

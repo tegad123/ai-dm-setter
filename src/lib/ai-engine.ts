@@ -1937,6 +1937,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     const multipleQuestionsFailed = quality.hardFails.some((f) =>
       f.includes('multiple_questions_in_reply:')
     );
+    const step10DeepWhySkippedFailed = quality.hardFails.some((f) =>
+      f.includes('step_10_deep_why_skipped:')
+    );
 
     if (
       quality.passed &&
@@ -2649,6 +2652,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + multiQOverride;
         console.warn(
           `[ai-engine] Multiple questions in reply — forcing single-question regen (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (step10DeepWhySkippedFailed) {
+        const step10Override = `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, or call proposal.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS REGEN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is {their stated income goal / what they want from trading} so important to you though? Asking since the more I know the better I'll be able to help."\n\nUse the lead's actual stated goal/income number to fill the {their stated goal} slot. Do NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + step10Override;
+        console.warn(
+          `[ai-engine] Step 10 (Deep Why) skip detected — forcing regen back to deep-why ask (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 

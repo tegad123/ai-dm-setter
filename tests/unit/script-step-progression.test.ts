@@ -20,6 +20,8 @@ import {
   detectBeliefBreakDelivered,
   detectBeliefBreakInMessage,
   detectCallProposalAttempt,
+  detectStep10Skipped,
+  detectStep12PlusContent,
   getStepActionShape,
   hasCapturedDataPoint,
   inferCurrentStepNumber,
@@ -833,5 +835,186 @@ describe('inferCurrentStepNumber — stale-snapshot guard (bug-26)', () => {
       }),
       5
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectStep12PlusContent / detectStep10Skipped (bug-27)
+// ---------------------------------------------------------------------------
+
+describe('detectStep12PlusContent', () => {
+  it('detects obstacle re-ask phrasing (Step 12)', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        'What do you feel is the main thing holding you back that you would ideally want some guidance on?'
+      ),
+      true
+    );
+  });
+
+  it('detects belief-break opener (Step 13)', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        "Bro what if I told you 99% of traders don't know what the real problem is?"
+      ),
+      true
+    );
+  });
+
+  it('detects buy-in confirmation phrasing (Step 14)', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        'Now if you had a system like that, would that kind of structure help your trading?'
+      ),
+      true
+    );
+  });
+
+  it('detects urgency ask (Step 15)', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        'I mean bro — is now the time to actually overcome these obstacles?'
+      ),
+      true
+    );
+  });
+
+  it('detects call proposal language (Step 16)', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        'Let me set you up with my right hand guy Anthony to break down a roadmap.'
+      ),
+      true
+    );
+  });
+
+  it('does NOT trigger on Step 10 deep-why ask', () => {
+    assert.equal(
+      detectStep12PlusContent(
+        'But why is providing for your family so important to you though? Asking since the more I know the better I can help.'
+      ),
+      false
+    );
+  });
+
+  it('does NOT trigger on neutral discovery questions', () => {
+    assert.equal(detectStep12PlusContent('What do you do for work?'), false);
+    assert.equal(
+      detectStep12PlusContent('How long you been doing that?'),
+      false
+    );
+  });
+});
+
+describe('detectStep10Skipped', () => {
+  it('fires when incomeGoal captured + deepWhy missing + reply contains Step 12+ content', () => {
+    const captured = { incomeGoal: '15000', early_obstacle: 'emotions' };
+    const reply =
+      'What do you feel is the main thing holding you back from getting where you want to be?';
+    assert.equal(detectStep10Skipped(reply, captured), true);
+  });
+
+  it('fires for call-proposal language too (Step 16 jump)', () => {
+    const captured = { incomeGoal: '15000' };
+    const reply =
+      'Let me set you up with my right hand guy Anthony to break down a roadmap for you.';
+    assert.equal(detectStep10Skipped(reply, captured), true);
+  });
+
+  it('does NOT fire when deepWhy is captured', () => {
+    const captured = {
+      incomeGoal: '15000',
+      deepWhy: 'wants to retire mom'
+    };
+    const reply = 'What do you feel is the main thing holding you back?';
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('accepts desiredOutcome as substitute for deepWhy', () => {
+    const captured = {
+      incomeGoal: '15000',
+      desiredOutcome: 'family freedom'
+    };
+    const reply = 'What do you feel is the main thing holding you back?';
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('does NOT fire before incomeGoal is captured (still in Step 9 or earlier)', () => {
+    const captured = { early_obstacle: 'emotions' };
+    const reply = 'What do you feel is the main thing holding you back?';
+    // Without incomeGoal captured yet, skip-detection is inactive —
+    // the gate only enforces Step 10 AFTER Step 9 has completed.
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('does NOT fire on Step 10 deep-why ask itself', () => {
+    const captured = { incomeGoal: '15000' };
+    const reply =
+      'But why is providing for your family so important to you though?';
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('does NOT fire on neutral non-step-12+ replies', () => {
+    const captured = { incomeGoal: '15000' };
+    assert.equal(detectStep10Skipped('appreciate that bro.', captured), false);
+    assert.equal(
+      detectStep10Skipped('how do you feel about all that?', captured),
+      false
+    );
+  });
+
+  it('handles null capturedDataPoints safely', () => {
+    assert.equal(
+      detectStep10Skipped('what is the main thing holding you back?', null),
+      false
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-27 acceptance: @tegaumukoro_-style Step 9 → Step 12 jump
+// ---------------------------------------------------------------------------
+
+describe('bug-27-step-10-deep-why-enforcement (acceptance)', () => {
+  it('@tegaumukoro_ scenario: incomeGoal=4k captured, AI tries to obstacle re-ask → BLOCKED', () => {
+    const captured = {
+      incomeGoal: '4000',
+      early_obstacle: "can't follow my rules, emotions"
+    };
+    const offendingReply =
+      'alright, what do you feel is the main thing holding you back from getting where you want to be?';
+    assert.equal(detectStep10Skipped(offendingReply, captured), true);
+  });
+
+  it('valid Step 10 ask passes', () => {
+    const captured = {
+      incomeGoal: '4000',
+      early_obstacle: "can't follow my rules, emotions"
+    };
+    const validReply =
+      'I respect that bro, I truly do. But why is making 4k a month from trading so important to you though?';
+    assert.equal(detectStep10Skipped(validReply, captured), false);
+  });
+
+  it('after deepWhy is captured, Step 12 progression is allowed', () => {
+    const captured = {
+      incomeGoal: '4000',
+      early_obstacle: "can't follow my rules, emotions",
+      deepWhy: 'want to retire my parents and have time freedom'
+    };
+    const step12Reply = 'What do you feel is the main thing holding you back?';
+    assert.equal(detectStep10Skipped(step12Reply, captured), false);
+  });
+
+  it('CALL_PROPOSAL_PREREQS contains the Step 10 prereq', () => {
+    const step10Prereq = CALL_PROPOSAL_PREREQS.find((p) => p.stepNumber === 10);
+    assert.ok(step10Prereq);
+    assert.equal(step10Prereq!.id, 'desired_outcome_or_deep_why');
+    assert.deepEqual(step10Prereq!.acceptableKeys, [
+      'desiredOutcome',
+      'desired_outcome',
+      'deepWhy',
+      'deep_why'
+    ]);
   });
 });

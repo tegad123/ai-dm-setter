@@ -10,6 +10,7 @@ import {
   countQuestionMarks,
   detectAcknowledgmentOpener,
   detectCallProposalAttempt,
+  detectStep10Skipped,
   maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
 
@@ -1227,6 +1228,25 @@ export function scoreVoiceQuality(
       .join(', ');
     hardFails.push(
       `silent_branch_violated_with_question: The script's current step has an acknowledgment-only branch (${silentLabels || 'unnamed silent branch'}) — [MSG]+[WAIT] with NO [ASK]. Your reply opened with an acknowledgment phrase but contained a question. The operator's intent on that branch is to sit in the moment and let the lead keep talking. Send the acknowledgment ONLY. End with a statement (period), not a question (?).`
+    );
+  }
+
+  // Step-10 (Deep Why) skip guard: when the lead's incomeGoal is
+  // captured but deepWhy / desiredOutcome is NOT, the AI must not
+  // advance to Step 12+ content (obstacle re-ask, belief break,
+  // buy-in confirmation, urgency, call proposal). Fires the regen
+  // override that points the LLM at Step 10's verbatim [MSG] + [ASK].
+  // (@tegaumukoro_ 2026-05-08: AI jumped Step 9 → Step 12, dropping
+  // the emotional hook the call proposal needs.)
+  if (detectStep10Skipped(reply, options?.capturedDataPoints)) {
+    hardFails.push(
+      `step_10_deep_why_skipped: incomeGoal is captured but deepWhy / desiredOutcome is not. ` +
+        `The lead has not yet shared the emotional reason behind their goal. ` +
+        `Resume the script at Step 10 — send the verbatim [MSG] ("I respect that bro, I truly do. ` +
+        `I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha.") ` +
+        `then the [ASK] ("But why is {{their stated goal}} so important to you though? ` +
+        `Asking since the more I know the better I'll be able to help."). ` +
+        `Do NOT advance to obstacle re-ask, belief break, urgency, or call proposal until deep why is captured.`
     );
   }
 
