@@ -41,6 +41,12 @@ import {
   type ScriptStateSnapshot
 } from '@/lib/script-state-recovery';
 import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
+import {
+  buildPriorCapturedSignalsBlock,
+  mergeCapturedDataPoints,
+  parseCapturedDataPointsFromResponse
+} from '@/lib/runtime-judgment-evaluator';
+import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1271,13 +1277,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     lastSetterMsg?.isHumanCorrection === true
       ? `\n\n===== OPERATOR CORRECTION =====\nThe operator unsent the previous AI message and replaced it with the most recent setter message you see in the history. The unsent message is GONE — it was retracted before the lead acted on it. Treat the operator's correction as the canonical prior turn. Do NOT reference the unsent message's content. Do NOT apologise for the prior message. Continue the conversation forward from the operator's correction as if that's exactly what was sent.\n=====`
       : '';
+  // Prior captured signals — surface variables the LLM captured on
+  // earlier turns via runtime_judgment so it keeps referencing them
+  // (e.g. early_obstacle, willingness_to_invest). Filtered to keys the
+  // active script's runtime judgments actually define so unrelated
+  // structured fields don't pollute the block.
+  let priorCapturedSignalsDirective = '';
+  try {
+    const knownVariableNames =
+      await collectRuntimeJudgmentVariableNames(accountId);
+    const block = buildPriorCapturedSignalsBlock(
+      scriptStateSnapshot?.capturedDataPoints ?? null,
+      knownVariableNames
+    );
+    if (block) {
+      priorCapturedSignalsDirective = '\n\n' + block;
+    }
+  } catch (err) {
+    console.error(
+      '[ai-engine] prior captured signals block build failed (non-fatal):',
+      err
+    );
+  }
+
   const baseSystemPrompt =
     systemPrompt +
     unqualifiedGuard +
     botDetectionDirective +
     earlyCapitalGateDirective +
     nextSlotIsCapitalDirective +
-    operatorCorrectionDirective;
+    operatorCorrectionDirective +
+    priorCapturedSignalsDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -3483,6 +3513,35 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       );
   }
 
+  // Persist runtime-judgment captures into Conversation.capturedDataPoints
+  // so subsequent turns can reference them via the prior-captured-signals
+  // block. Fire-and-forget — a persist failure should never block the
+  // ship of an otherwise valid reply. Merging preserves any keys the
+  // structured extractDataPoints pipeline (script-state-recovery)
+  // already wrote on this turn; new captures from the LLM overwrite
+  // matching keys with the freshest signal.
+  if (
+    activeConversationId &&
+    parsed.capturedDataPoints &&
+    Object.keys(parsed.capturedDataPoints).length > 0
+  ) {
+    const merged = mergeCapturedDataPoints(
+      scriptStateSnapshot?.capturedDataPoints ?? null,
+      parsed.capturedDataPoints
+    );
+    prisma.conversation
+      .update({
+        where: { id: activeConversationId },
+        data: { capturedDataPoints: merged as Prisma.InputJsonValue }
+      })
+      .catch((err) =>
+        console.error(
+          '[ai-engine] capturedDataPoints persist failed (non-fatal):',
+          err
+        )
+      );
+  }
+
   return {
     reply: parsed.message,
     messages: parsed.messages,
@@ -4102,6 +4161,16 @@ interface ParsedAIResponse {
     matchedText: string | null;
     originalMessages: string[];
   } | null;
+  /**
+   * Variable captures emitted by the LLM when a runtime_judgment fires.
+   * Keys match {{variable_name}} placeholders that operators wrote into
+   * ScriptAction.content for runtime_judgment actions; values are the
+   * lead's captured phrases. Persisted into Conversation.capturedDataPoints
+   * post-generation so subsequent turns can reference the signal.
+   * Null when the LLM did not detect any judgment-relevant signals on
+   * this turn.
+   */
+  capturedDataPoints?: Record<string, string> | null;
 }
 
 class InvalidLLMOutputError extends Error {
@@ -4139,7 +4208,8 @@ function buildR34BlockedFallbackParsed(): ParsedAIResponse {
     suggestedTag: '',
     suggestedTags: [],
     voiceNoteAction: null,
-    parserMetadataLeak: null
+    parserMetadataLeak: null,
+    capturedDataPoints: null
   };
 }
 
@@ -4240,7 +4310,8 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     suggestedTag: '',
     suggestedTags: [],
     voiceNoteAction: null,
-    parserMetadataLeak: null
+    parserMetadataLeak: null,
+    capturedDataPoints: null
   };
 
   try {
@@ -4390,7 +4461,10 @@ function parseAIResponse(raw: string): ParsedAIResponse {
         ? obj.suggested_tags
         : [],
       voiceNoteAction: obj.voice_note_action || null,
-      parserMetadataLeak
+      parserMetadataLeak,
+      capturedDataPoints: parseCapturedDataPointsFromResponse(
+        obj.captured_data_points
+      )
     };
   } catch (err) {
     if (err instanceof InvalidLLMOutputError) {

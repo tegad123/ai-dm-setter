@@ -10,6 +10,12 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
+import {
+  buildRuntimeJudgmentBlock,
+  extractVariableNames,
+  parseRuntimeJudgments,
+  type RuntimeJudgmentInput
+} from '@/lib/runtime-judgment-evaluator';
 
 // Action type → prompt tag mapping
 const ACTION_TAG: Record<string, string> = {
@@ -300,18 +306,50 @@ export async function serializeScriptForPrompt(
   }
 
   // ── Runtime Judgment Instructions ─────────────────────────
+  // Two flavours of runtime judgments:
+  //   1. Judgments with NO {{variable}} placeholders → kept in the
+  //      pre-existing "Runtime Judgment Instructions" block. No behavior
+  //      change for these (they were already injected into the prompt
+  //      and used as soft guidance).
+  //   2. Judgments WITH {{variable}} placeholders → rendered as a
+  //      separate "Variable Capture & Behavioral Adaptation" block that
+  //      instructs the LLM to populate `captured_data_points` in its
+  //      JSON response when the judgment fires AND to pause linear
+  //      script advancement to go deeper on the signal.
+  // Without this split, judgments like "store as {{early_obstacle}}"
+  // were just words in the prompt — the LLM had no schema slot to record
+  // the captured value and no directive to react to the signal.
   const judgments: { step: string; instruction: string }[] = [];
+  const variableJudgments: RuntimeJudgmentInput[] = [];
 
   for (const step of script.steps) {
-    const allActions = [
-      ...step.actions,
-      ...step.branches.flatMap((b) => b.actions)
-    ];
-    for (const action of allActions) {
-      if (action.actionType === 'runtime_judgment' && action.content) {
+    const directRuntimeActions = step.actions
+      .filter((a) => a.actionType === 'runtime_judgment' && a.content)
+      .map((a) => ({
+        stepNumber: step.stepNumber,
+        branchLabel: null,
+        content: a.content as string
+      }));
+    for (const j of directRuntimeActions) {
+      variableJudgments.push(j);
+      judgments.push({
+        step: `Step ${step.stepNumber} (${step.title})`,
+        instruction: j.content
+      });
+    }
+    for (const branch of step.branches) {
+      const branchRuntimeActions = branch.actions
+        .filter((a) => a.actionType === 'runtime_judgment' && a.content)
+        .map((a) => ({
+          stepNumber: step.stepNumber,
+          branchLabel: branch.branchLabel,
+          content: a.content as string
+        }));
+      for (const j of branchRuntimeActions) {
+        variableJudgments.push(j);
         judgments.push({
-          step: `Step ${step.stepNumber} (${step.title})`,
-          instruction: action.content
+          step: `Step ${step.stepNumber} (${step.title}) — branch "${branch.branchLabel}"`,
+          instruction: j.content
         });
       }
     }
@@ -322,6 +360,13 @@ export async function serializeScriptForPrompt(
     parts.push(
       `## Runtime Judgment Instructions\nAt these points, use your judgment based on the conversation context:\n${rjLines.join('\n')}`
     );
+  }
+
+  const variableBlock = buildRuntimeJudgmentBlock(
+    parseRuntimeJudgments(variableJudgments)
+  );
+  if (variableBlock) {
+    parts.push(variableBlock);
   }
 
   return parts.join('\n\n');
@@ -391,4 +436,49 @@ function serializeAction(
     default:
       return `${indent}[${action.actionType}] ${action.content || ''}`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// collectRuntimeJudgmentVariableNames
+// ---------------------------------------------------------------------------
+// Returns the set of {{variable}} names referenced by ANY runtime_judgment
+// action in the account's active Script. Used by ai-engine to render the
+// "Prior Captured Signals" prompt block — we only surface keys the script
+// itself defines so unrelated structured fields (verifiedCapitalUsd, etc.)
+// don't pollute the block.
+//
+// Returns [] when there is no active script or no runtime_judgment
+// actions with variable placeholders.
+// ---------------------------------------------------------------------------
+
+export async function collectRuntimeJudgmentVariableNames(
+  accountId: string
+): Promise<string[]> {
+  const script = await prisma.script.findFirst({
+    where: { accountId, isActive: true },
+    include: {
+      steps: {
+        include: {
+          actions: { where: { branchId: null } },
+          branches: { include: { actions: true } }
+        }
+      }
+    }
+  });
+  if (!script) return [];
+  const seen = new Set<string>();
+  for (const step of script.steps) {
+    const allActions = [
+      ...step.actions,
+      ...step.branches.flatMap((b) => b.actions)
+    ];
+    for (const action of allActions) {
+      if (action.actionType !== 'runtime_judgment') continue;
+      if (typeof action.content !== 'string') continue;
+      for (const name of extractVariableNames(action.content)) {
+        seen.add(name);
+      }
+    }
+  }
+  return Array.from(seen);
 }
