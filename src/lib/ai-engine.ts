@@ -47,6 +47,10 @@ import {
   parseCapturedDataPointsFromResponse
 } from '@/lib/runtime-judgment-evaluator';
 import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
+import {
+  detectBeliefBreakInMessage,
+  hasCapturedDataPoint
+} from '@/lib/script-step-progression';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1874,6 +1878,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     const manyChatEarlyCapitalFailed = quality.hardFails.some((f) =>
       f.includes('manychat_early_capital_question:')
     );
+    const callProposalPrereqsMissingFailed = quality.hardFails.some((f) =>
+      f.includes('call_proposal_prereqs_missing:')
+    );
 
     if (
       quality.passed &&
@@ -2567,6 +2574,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + callBeforeCapitalOverride;
         console.warn(
           `[ai-engine] Call pitch before capital verification detected — forcing capital question (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (callProposalPrereqsMissingFailed) {
+        // Pull the gate's own diagnostic message — it lists every missing
+        // prereq and names the first missing step. Pass it through to the
+        // LLM verbatim so the regen knows exactly which step to resume on.
+        const prereqHardFail = quality.hardFails.find((f) =>
+          f.includes('call_proposal_prereqs_missing:')
+        );
+        const prereqDetail = prereqHardFail
+          ? prereqHardFail
+              .replace(/^call_proposal_prereqs_missing:\s*/i, '')
+              .trim()
+          : 'Required script prerequisites have not been captured yet.';
+        const prereqOverride = `\n\n===== CALL PROPOSAL PREREQUISITES MISSING =====\nYou tried to propose the call before the script's qualification prerequisites were captured. ${prereqDetail}\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Any call/chat/booking proposal language ("set up a call", "hop on a quick chat", "let me get you on with Anthony", "book the call", "Typeform", "booking link")\n  ✗ Pretending the script's earlier steps already happened\n\nREQUIRED:\n  ✓ Resume the script from the first missing step described above\n  ✓ Ask the question for that step (use the exact wording from the script's [ASK] action when one is defined)\n  ✓ Do NOT skip ahead — even if the lead's last reply "feels ready", the missing data points are non-negotiable for a productive call\n=====`;
+        systemPromptForLLM = baseSystemPrompt + prereqOverride;
+        console.warn(
+          `[ai-engine] Call proposal prereqs missing — forcing regen back to script (attempt ${attempt + 1}/${MAX_RETRIES + 1}). detail="${prereqDetail.slice(0, 160)}"`
         );
       }
 
@@ -3520,14 +3546,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // structured extractDataPoints pipeline (script-state-recovery)
   // already wrote on this turn; new captures from the LLM overwrite
   // matching keys with the freshest signal.
+  //
+  // Also synthesise `beliefBreakDelivered: true` when the AI's reply
+  // matches the daetradez Step 13 reframe trigger phrases ("99% of
+  // traders ...", "Brother that's totally normal ..."). This is a
+  // call-proposal prereq the LLM doesn't explicitly emit — the
+  // post-generation detector watches the actual ship content so the
+  // gate clears correctly on the next turn.
+  const llmCaptures = parsed.capturedDataPoints || null;
+  let synthesisedCaptures: Record<string, string> | null = null;
+  const replyForBeliefDetection = parsed.messages.join('\n');
+  if (
+    detectBeliefBreakInMessage(replyForBeliefDetection) &&
+    !hasCapturedDataPoint(
+      scriptStateSnapshot?.capturedDataPoints ?? null,
+      'beliefBreakDelivered'
+    )
+  ) {
+    synthesisedCaptures = { beliefBreakDelivered: 'true' };
+  }
+  const totalCaptures =
+    llmCaptures || synthesisedCaptures
+      ? { ...(llmCaptures ?? {}), ...(synthesisedCaptures ?? {}) }
+      : null;
   if (
     activeConversationId &&
-    parsed.capturedDataPoints &&
-    Object.keys(parsed.capturedDataPoints).length > 0
+    totalCaptures &&
+    Object.keys(totalCaptures).length > 0
   ) {
     const merged = mergeCapturedDataPoints(
       scriptStateSnapshot?.capturedDataPoints ?? null,
-      parsed.capturedDataPoints
+      totalCaptures
     );
     prisma.conversation
       .update({

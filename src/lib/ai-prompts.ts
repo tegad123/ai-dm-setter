@@ -2448,7 +2448,20 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
   // 2. Script-first (legacy) — if rawScript exists
   // 3. Field-by-field (legacy) — fallback
   // Try new Script template system first, fall back to old PersonaBreakdown
-  const scriptText = await serializeScriptForPrompt(accountId);
+  // Compute the current script step number from prior AI message count.
+  // Each scripted [ASK]+[WAIT] pair consumes one AI turn, so the floor
+  // = priorAIMessages.length + 1. The serializer clamps to the script's
+  // last step internally. Passing this enables FOCUS MODE — only the
+  // current + next step appear in the rendered Script Framework block,
+  // preventing the LLM from pattern-matching to a later stage like the
+  // call proposal (@daniel_elumelu 2026-05-08 incident).
+  const inferredCurrentStepNumber = Array.isArray(priorAIMessages)
+    ? Math.max(1, priorAIMessages.length + 1)
+    : null;
+  const scriptText = await serializeScriptForPrompt(
+    accountId,
+    inferredCurrentStepNumber
+  );
   const breakdownText =
     scriptText || (await serializeBreakdownForPrompt(accountId));
   const hasRawScript =

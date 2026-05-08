@@ -1,9 +1,14 @@
 // ---------------------------------------------------------------------------
 // voice-quality-gate.ts
 // ---------------------------------------------------------------------------
-// Post-generation quality scoring to enforce Daniel's texting voice.
-// Runs on every AI response. Hard fails trigger regeneration.
+// Post-generation quality scoring. Runs on every AI response. Hard fails
+// trigger regeneration.
 // ---------------------------------------------------------------------------
+
+import {
+  checkCallProposalPrereqs,
+  detectCallProposalAttempt
+} from '@/lib/script-step-progression';
 
 export interface QualityResult {
   score: number; // 0.0 – 1.0
@@ -1134,6 +1139,28 @@ export function scoreVoiceQuality(
 
   if (shouldBlockManyChatEarlyCapitalQuestion(reply, options)) {
     hardFails.push(MANYCHAT_EARLY_CAPITAL_HARDFAIL);
+  }
+
+  // Step-progression gate: block call-proposal language when the eight
+  // prerequisites from the daetradez script (work, income, replace-vs-
+  // supplement, income goal, deeper why, obstacle, belief break,
+  // buy-in) have not been captured. Without this gate the LLM
+  // collapses the 22-step flow into 4 exchanges (@daniel_elumelu
+  // 2026-05-08). The regen directive in ai-engine references the
+  // first missing prereq so the model resumes from the right step.
+  if (detectCallProposalAttempt(reply)) {
+    const missing = checkCallProposalPrereqs(options?.capturedDataPoints);
+    if (missing.length > 0) {
+      const firstMissing = missing[0];
+      const summary = missing
+        .map((p) => `step ${p.stepNumber} (${p.id})`)
+        .join(', ');
+      hardFails.push(
+        `call_proposal_prereqs_missing: missing=${summary}. ` +
+          `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
+          `Do NOT propose a call until every prerequisite is captured.`
+      );
+    }
   }
 
   // R34. Metadata leak guard — internal JSON fields, confidence scores,

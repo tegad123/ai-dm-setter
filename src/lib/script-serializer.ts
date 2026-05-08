@@ -31,7 +31,16 @@ const ACTION_TAG: Record<string, string> = {
 };
 
 export async function serializeScriptForPrompt(
-  accountId: string
+  accountId: string,
+  /**
+   * Optional: when provided, the "Script Framework" block in the
+   * prompt renders ONLY the current + next step instead of dumping
+   * all 22 steps. This stops the LLM from pattern-matching ahead to
+   * the call proposal step. When omitted, falls back to legacy
+   * full-script rendering for backward compatibility with callers
+   * that haven't been updated to plumb step state through.
+   */
+  currentStepNumber?: number | null
 ): Promise<string | null> {
   const script = await prisma.script.findFirst({
     where: { accountId, isActive: true },
@@ -122,10 +131,42 @@ export async function serializeScriptForPrompt(
   const parts: string[] = [];
 
   // ── Script Framework ──────────────────────────────────────
+  // When currentStepNumber is provided, render ONLY current step +
+  // next step. The legacy behavior (all 22 steps in one prompt) lets
+  // the LLM pattern-match its way to call proposal after only a few
+  // exchanges (@daniel_elumelu 2026-05-08 incident). Showing only the
+  // immediate task scope forces sequential progression.
   const stepLines: string[] = [];
 
-  for (const step of script.steps) {
+  const focusModeActive =
+    typeof currentStepNumber === 'number' &&
+    currentStepNumber > 0 &&
+    script.steps.length > 1;
+  // Clamp to the last step so a runaway aiMessageCount (or a snapshot
+  // that points past the script) still surfaces the final step instead
+  // of rendering nothing.
+  const lastStepNumber = script.steps[script.steps.length - 1].stepNumber;
+  const clampedCurrent = focusModeActive
+    ? Math.min(currentStepNumber as number, lastStepNumber)
+    : null;
+  const focusedSteps = focusModeActive
+    ? script.steps.filter(
+        (s) =>
+          s.stepNumber === clampedCurrent ||
+          s.stepNumber === (clampedCurrent as number) + 1
+      )
+    : script.steps;
+
+  for (const step of focusedSteps) {
     stepLines.push('');
+    if (focusModeActive) {
+      const isCurrent = step.stepNumber === clampedCurrent;
+      stepLines.push(
+        isCurrent
+          ? `### CURRENT STEP — focus here:`
+          : `### NEXT STEP (preview — fire only AFTER current step's [WAIT] resolves):`
+      );
+    }
     stepLines.push(`Step ${step.stepNumber}: ${step.title}`);
     if (step.objective) {
       stepLines.push(`Objective: ${step.objective}`);
@@ -188,9 +229,17 @@ export async function serializeScriptForPrompt(
     }
   }
 
-  parts.push(
-    `## Script Framework (Follow this sequence)\nIMPORTANT: Text inside {{double curly braces}} is a runtime placeholder. Replace it with contextually appropriate content based on the conversation so far. For example, "{{customize to their stated goal}}" means you should insert language specific to what the prospect told you about their goal.\n${stepLines.join('\n')}`
-  );
+  if (focusModeActive) {
+    parts.push(
+      `## Script Framework — CURRENT STEP ONLY\n` +
+        `You are working through a multi-step qualification script. Below is your CURRENT step and a brief preview of the NEXT step. Subsequent steps are intentionally hidden — do NOT improvise your way to a later stage of the script. Complete the current step's [JUDGE]/[MSG]/[ASK] actions, wait for the lead's reply, then advance one step on the next turn.\n\n` +
+        `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).\n${stepLines.join('\n')}`
+    );
+  } else {
+    parts.push(
+      `## Script Framework (Follow this sequence)\nIMPORTANT: Text inside {{double curly braces}} is a runtime placeholder. Replace it with contextually appropriate content based on the conversation so far. For example, "{{customize to their stated goal}}" means you should insert language specific to what the prospect told you about their goal.\n${stepLines.join('\n')}`
+    );
+  }
 
   // ── Voice Notes ───────────────────────────────────────────
   const voiceNotes: {
