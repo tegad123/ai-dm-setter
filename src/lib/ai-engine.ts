@@ -148,6 +148,104 @@ function buildStep10DeepWhyDirective(goalText: string): string {
   return `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, capital question, or call proposal.\n\nFORBIDDEN ON THIS TURN:\n  ✗ "what's your capital situation" / any question about budget, capital, savings, or how much they have\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS TURN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is ${goalText} so important to you though? Asking since the more I know the better I'll be able to help."\n\nDo NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
 }
 
+export function shouldForceColdStartStep1Inbound(params: {
+  conversationHistory: ConversationMessage[];
+  hasActiveScript: boolean;
+  conversationSource?: string | null;
+  leadSource?: string | null;
+  systemStage?: string | null;
+  currentScriptStep?: number | null;
+  conversationMessageCount?: number | null;
+}): boolean {
+  if (!params.hasActiveScript) return false;
+
+  const conversationSource = (params.conversationSource || '').toUpperCase();
+  const leadSource = (params.leadSource || '').toUpperCase();
+  const inbound =
+    conversationSource === 'INBOUND' ||
+    leadSource === 'INBOUND' ||
+    (!conversationSource &&
+      !leadSource &&
+      params.conversationHistory.length === 1 &&
+      params.conversationHistory[0]?.sender === 'LEAD');
+  if (!inbound) return false;
+
+  const hasSetterMessage = params.conversationHistory.some(
+    (m) => m.sender === 'AI' || m.sender === 'HUMAN'
+  );
+  if (hasSetterMessage) return false;
+
+  const historyLooksLikeFirstInbound =
+    params.conversationHistory.length === 0 ||
+    (params.conversationHistory.length === 1 &&
+      params.conversationHistory[0]?.sender === 'LEAD');
+  if (!historyLooksLikeFirstInbound) return false;
+
+  const dbCount = params.conversationMessageCount;
+  if (typeof dbCount === 'number' && dbCount > 1) return false;
+  return true;
+}
+
+function buildColdStartStep1InboundDirective(): string {
+  return `\n\n===== COLD START SCRIPT OVERRIDE — FIRE BEFORE ALL OTHER SCRIPT LOGIC =====\nCOLD START DETECTED. Fire Step 1 Inbound now. Do not deviate.\n\nIf this is the FIRST message in the conversation (messageCount === 0 or 1, or conversationStage is null/INIT) AND the direction is INBOUND, immediately execute Step 1 Inbound regardless of the lead's message content.\n\nThe lead's opening message is an inbound trigger, not small talk. Do NOT mirror, echo, or respond conversationally to the opener. Do NOT reply with a greeting-only message like "yo bro" / "hey man" / "what's up". Use the active script's Step 1 Inbound wording and then wait for the lead's answer.\n\nReturn the normal JSON response schema, but the lead-facing message/messages MUST be Step 1 Inbound.\n=====`;
+}
+
+async function persistColdStartStep1InboundState(params: {
+  conversationId: string;
+  snapshot: ScriptStateSnapshot;
+}): Promise<void> {
+  const firstStep =
+    params.snapshot.script?.steps.find((step) => step.stepNumber === 1) ?? null;
+
+  await prisma.conversation
+    .update({
+      where: { id: params.conversationId },
+      data: {
+        currentScriptStep: 1,
+        systemStage: 'STEP_1_INBOUND'
+      }
+    })
+    .catch((err) =>
+      console.error(
+        '[ai-engine] cold-start Step 1 state persist failed (non-fatal):',
+        err
+      )
+    );
+
+  if (firstStep && params.snapshot.leadId) {
+    await prisma.leadScriptPosition
+      .upsert({
+        where: {
+          leadId_scriptId: {
+            leadId: params.snapshot.leadId,
+            scriptId: firstStep.scriptId
+          }
+        },
+        create: {
+          leadId: params.snapshot.leadId,
+          scriptId: firstStep.scriptId,
+          currentStepId: firstStep.id,
+          status: 'active'
+        },
+        update: {
+          currentStepId: firstStep.id,
+          currentBranchId: null,
+          status: 'active'
+        }
+      })
+      .catch((err) =>
+        console.error(
+          '[ai-engine] cold-start lead script position persist failed (non-fatal):',
+          err
+        )
+      );
+  }
+
+  params.snapshot.currentStep = firstStep ?? params.snapshot.currentStep;
+  params.snapshot.currentScriptStep = 1;
+  params.snapshot.systemStage = 'STEP_1_INBOUND';
+}
+
 type LLMTextContentPart = {
   type: 'text';
   text: string;
@@ -887,10 +985,83 @@ export async function generateReply(
       );
     }
   }
+
+  // Resolve the active conversationId once. Prefer the explicit
+  // leadContext.conversationId so first-turn / empty-history paths can still
+  // persist script state before generation; fall back to the last persisted
+  // Message row for older callers that only pass message ids.
+  const lastHistoryMsgWithId = [...conversationHistory]
+    .reverse()
+    .find((m) => m.id);
+  let activeConversationId: string | null = leadContext.conversationId ?? null;
+  if (!activeConversationId && lastHistoryMsgWithId?.id) {
+    const msgRow = await prisma.message.findUnique({
+      where: { id: lastHistoryMsgWithId.id },
+      select: { conversationId: true }
+    });
+    activeConversationId = msgRow?.conversationId || null;
+  }
+
+  const conversationCallState = activeConversationId
+    ? await prisma.conversation.findUnique({
+        where: { id: activeConversationId },
+        select: {
+          scheduledCallAt: true,
+          source: true,
+          leadSource: true,
+          currentScriptStep: true,
+          systemStage: true,
+          manyChatOpenerMessage: true,
+          manyChatTriggerType: true,
+          manyChatCommentText: true,
+          manyChatFiredAt: true,
+          typeformSubmittedAt: true,
+          typeformCapitalConfirmed: true,
+          typeformCallScheduledAt: true,
+          typeformAnswers: true,
+          _count: { select: { messages: true } }
+        }
+      })
+    : null;
+
+  const activeScriptForColdStart = await prisma.script.findFirst({
+    where: { accountId, isActive: true },
+    select: { id: true }
+  });
+  const coldStartStep1Inbound = shouldForceColdStartStep1Inbound({
+    conversationHistory,
+    hasActiveScript: !!activeScriptForColdStart,
+    conversationSource: conversationCallState?.source ?? null,
+    leadSource: conversationCallState?.leadSource ?? leadContext.source ?? null,
+    systemStage: conversationCallState?.systemStage ?? null,
+    currentScriptStep: conversationCallState?.currentScriptStep ?? null,
+    conversationMessageCount: conversationCallState?._count.messages ?? null
+  });
+  if (coldStartStep1Inbound && activeConversationId) {
+    await prisma.conversation
+      .update({
+        where: { id: activeConversationId },
+        data: {
+          currentScriptStep: 1,
+          systemStage: 'STEP_1_INBOUND'
+        }
+      })
+      .catch((err) =>
+        console.error(
+          '[ai-engine] cold-start pre-prompt state persist failed (non-fatal):',
+          err
+        )
+      );
+  }
+  const leadContextForPrompt =
+    coldStartStep1Inbound && leadContext.preQualified
+      ? { ...leadContext, preQualified: undefined }
+      : leadContext;
+
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     personaId,
-    leadContext,
+    leadContextForPrompt,
     fewShotBlock || undefined,
     priorAIMessages,
     priorHumanMessages,
@@ -990,22 +1161,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // 3. Format conversation history for the LLM
   const messages = formatConversationForLLM(conversationHistory);
 
-  // Resolve the active conversationId once — reused by the R24 gate
-  // below to look up prior AI messages in this same thread. We use
-  // the last history message that has an id (persisted rows do; the
-  // live just-incoming message may not yet).
-  const lastHistoryMsgWithId = [...conversationHistory]
-    .reverse()
-    .find((m) => m.id);
-  let activeConversationId: string | null = null;
-  if (lastHistoryMsgWithId?.id) {
-    const msgRow = await prisma.message.findUnique({
-      where: { id: lastHistoryMsgWithId.id },
-      select: { conversationId: true }
-    });
-    activeConversationId = msgRow?.conversationId || null;
-  }
-
   // R24 — capital verification gate data. We fetch the persona's
   // threshold + optional custom phrasing ONCE, reuse inside the retry
   // loop. When the threshold is null, the gate is disabled entirely
@@ -1061,23 +1216,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     /^https?:\/\//i.test(promptConfigForGate.homeworkUrl.trim())
       ? promptConfigForGate.homeworkUrl.trim()
       : null;
-  const conversationCallState = activeConversationId
-    ? await prisma.conversation.findUnique({
-        where: { id: activeConversationId },
-        select: {
-          scheduledCallAt: true,
-          source: true,
-          manyChatOpenerMessage: true,
-          manyChatTriggerType: true,
-          manyChatCommentText: true,
-          manyChatFiredAt: true,
-          typeformSubmittedAt: true,
-          typeformCapitalConfirmed: true,
-          typeformCallScheduledAt: true,
-          typeformAnswers: true
-        }
-      })
-    : null;
 
   // Script-state self-recovery pre-pass. This persists confidence-scored
   // captured data points and the authoritative current script step before
@@ -1096,6 +1234,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         err
       );
     }
+  }
+
+  if (coldStartStep1Inbound && activeConversationId && scriptStateSnapshot) {
+    await persistColdStartStep1InboundState({
+      conversationId: activeConversationId,
+      snapshot: scriptStateSnapshot
+    });
+    console.warn('[ai-engine] cold-start Step 1 Inbound forced', {
+      conversationId: activeConversationId,
+      messageCount:
+        conversationCallState?._count.messages ?? conversationHistory.length,
+      source: conversationCallState?.source ?? leadContext.source ?? null
+    });
   }
 
   // Path B(1): suppress legacy pacing gates when an active relational
@@ -1395,8 +1546,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           )
         )
       : '';
+  const coldStartStep1Directive = coldStartStep1Inbound
+    ? buildColdStartStep1InboundDirective()
+    : '';
 
   const baseSystemPrompt =
+    coldStartStep1Directive +
     systemPrompt +
     unqualifiedGuard +
     botDetectionDirective +

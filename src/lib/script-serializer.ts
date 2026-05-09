@@ -137,6 +137,9 @@ export async function serializeScriptForPrompt(
   // exchanges (@daniel_elumelu 2026-05-08 incident). Showing only the
   // immediate task scope forces sequential progression.
   const stepLines: string[] = [];
+  stepLines.push(
+    'RULE: If conversationStage is STEP_1_INBOUND or this is the first message, fire Step 1 Inbound immediately regardless of what the lead said. Their opening message is never small talk — it is always an inbound trigger.'
+  );
 
   const focusModeActive =
     typeof currentStepNumber === 'number' &&
