@@ -1392,6 +1392,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       currentStepShape?.scriptedQuestionContents ?? [],
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
     currentScriptStepNumber: inferredStepNumberForGate,
+    aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
     skipLegacyPacingGates,
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
@@ -1946,6 +1947,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const stepDistanceViolationFailed = quality.hardFails.some((f) =>
       f.includes('step_distance_violation:')
+    );
+    const mandatoryAskSkippedFailed = quality.hardFails.some((f) =>
+      f.includes('mandatory_ask_skipped:')
     );
 
     if (
@@ -2683,6 +2687,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + capQuestionOverride;
         console.warn(
           `[ai-engine] Capital question premature — forcing regen back to script (attempt ${attempt + 1}/${MAX_RETRIES + 1}). detail="${capDetail.slice(0, 160)}"`
+        );
+      }
+
+      if (mandatoryAskSkippedFailed) {
+        const askHardFail = quality.hardFails.find((f) =>
+          f.includes('mandatory_ask_skipped:')
+        );
+        const askDetail = askHardFail
+          ? askHardFail.replace(/^mandatory_ask_skipped:\s*/i, '').trim()
+          : 'Required discovery [ASK]s have not fired in AI history.';
+        const mandatoryAskOverride = `\n\n===== MANDATORY [ASK] SKIPPED — VOLUNTEERED DATA DOES NOT COMPLETE A STEP =====\nThe lead volunteered information that would normally be collected by a scripted [ASK]. Capturing volunteered data into capturedDataPoints is fine, but the scripted [ASK] question MUST still fire — step completion requires BOTH the question being asked AND the lead's answer to that specific question.\n\n${askDetail}\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Advancing to Step 9+ content (income goal from trading, deep why, obstacle, belief break, capital, call proposal)\n  ✗ Treating "I work as a {job}" or similar volunteered phrases as a complete answer to Steps 6, 7, or 8\n  ✗ Inferring monthly income from job title alone\n  ✗ Skipping replace-vs-supplement just because the goal context "feels obvious"\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the missing scripted [ASK] verbatim or near-verbatim — the lead has shared the data point but the question itself must be asked. The script captures the answer in TWO places: capturedDataPoints AND the conversation history.\n  ✓ Acknowledge what the lead volunteered first (one short line), THEN ask the missing scripted question. Example shape: "respect that bro, nurses do real work. {missing scripted [ASK]}".\n  ✓ One missing step at a time — fire the FIRST missing ask in script order, wait for the lead's reply, then advance.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + mandatoryAskOverride;
+        console.warn(
+          `[ai-engine] Mandatory ask skipped — forcing regen back to script (attempt ${attempt + 1}/${MAX_RETRIES + 1}). detail="${askDetail.slice(0, 200)}"`
         );
       }
 

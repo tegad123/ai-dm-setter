@@ -12,6 +12,7 @@ import {
   detectAcknowledgmentOpener,
   detectCallProposalAttempt,
   detectCapitalQuestionAttempt,
+  detectMandatoryAskSkipped,
   detectStep10Skipped,
   detectStepDistanceViolation,
   inferStepLabelFromReply,
@@ -742,6 +743,17 @@ export interface VoiceQualityOptions {
    * inferred step is more than 3 ahead of currentScriptStepNumber.
    */
   currentScriptStepNumber?: number | null;
+  /**
+   * Full content list of all prior AI messages on this conversation.
+   * Used by the mandatory-ask-skipped guard to verify that scripted
+   * [ASK] phrasings actually fired in history before the AI is allowed
+   * to advance to Step 9+. Distinct from `recentAIMessages` (last 3
+   * only) and `previousAIQuestions` (questions only) — this includes
+   * the full body so [MSG] phrasings (e.g. "how much is your job
+   * bringing in monthly") can be detected even when not phrased as
+   * questions.
+   */
+  aiMessageHistoryFull?: Array<{ content: string | null | undefined } | string>;
   /** Current LLM-reported stage for this generated turn. */
   currentStage?: string | null;
   /**
@@ -1295,6 +1307,35 @@ export function scoreVoiceQuality(
           `Capital question is the script's Step 18 — it cannot fire until the lead has accepted the call proposal AND the script's earlier steps have completed. ` +
           `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
           `Do NOT ask about capital, budget, or how much they have set aside until every prerequisite is captured.`
+      );
+    }
+  }
+
+  // Mandatory-ask guard (volunteered-data skip): when the lead
+  // volunteers info inline ("I trade futures and work as a nurse"), the
+  // AI may capture a data point AND skip the scripted [ASK] for the
+  // related step. Step completion requires the [ASK] to actually fire
+  // in AI history — capturing volunteered data does NOT short-circuit
+  // discovery. Steps 6, 7, 8 are the most common skip targets here
+  // (job, monthly income, replace-vs-supplement). When the reply
+  // matches Step 9+ content but those asks haven't fired in history,
+  // hard-fail and force a regen back to the first missing ask.
+  if (Array.isArray(options?.aiMessageHistoryFull)) {
+    const skippedAsks = detectMandatoryAskSkipped(
+      reply,
+      options.aiMessageHistoryFull,
+      options.capturedDataPoints
+    );
+    if (skippedAsks && skippedAsks.length > 0) {
+      const summary = skippedAsks
+        .map((req) => `step ${req.stepNumber}`)
+        .join(', ');
+      const firstMissing = skippedAsks[0];
+      hardFails.push(
+        `mandatory_ask_skipped: ${summary} ask(s) have not fired in AI history. ` +
+          `Volunteered data does NOT mark a step complete — the script's [ASK] must actually be sent. ` +
+          `Resume the script from ${firstMissing.label}. ` +
+          `Do NOT advance to Step 9+ content (income goal, deep why, obstacle, belief break, capital, etc.) until the discovery [ASK]s have fired.`
       );
     }
   }

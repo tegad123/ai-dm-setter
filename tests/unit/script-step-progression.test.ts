@@ -13,17 +13,21 @@ import { describe, it } from 'node:test';
 import {
   CALL_PROPOSAL_PREREQS,
   CAPITAL_QUESTION_PREREQS,
+  MANDATORY_ASK_STEPS,
   buildCurrentStepBlock,
   checkCallProposalPrereqs,
   checkCapitalQuestionPrereqs,
+  checkMandatoryAsksFired,
   containsQuestion,
   countQuestionMarks,
   detectAcknowledgmentOpener,
+  detectAskFiredInHistory,
   detectBeliefBreakDelivered,
   detectBeliefBreakInMessage,
   detectCallProposalAttempt,
   detectCapitalQuestionAttempt,
   detectCapitalQuestionPremature,
+  detectMandatoryAskSkipped,
   detectStep10Skipped,
   detectStep12PlusContent,
   detectStepDistanceViolation,
@@ -1347,5 +1351,239 @@ describe('bug-28-capital-question-and-step-distance (acceptance)', () => {
       ),
       13
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mandatory-ask enforcement (volunteered-data skip guard, bug-29)
+// ---------------------------------------------------------------------------
+
+describe('detectAskFiredInHistory', () => {
+  it('detects "how long you been doing that" in history', () => {
+    const history = [
+      { content: 'damn bro respect for that.' },
+      { content: 'how long you been doing that?' }
+    ];
+    const fragments = ['how long you been', 'how long have you been'];
+    assert.equal(detectAskFiredInHistory(history, fragments), true);
+  });
+
+  it('handles fragments that include regex syntax (.{0,N})', () => {
+    const history = [{ content: 'how much you make in a month right now?' }];
+    const fragments = ['how much\\b.{0,20}\\bmonth(ly)?\\b'];
+    assert.equal(detectAskFiredInHistory(history, fragments), true);
+  });
+
+  it('falls back to substring when regex parse fails', () => {
+    const history = [{ content: 'replace your job completely with trading' }];
+    // Even if the fragment isn\'t valid regex, substring match wins.
+    assert.equal(detectAskFiredInHistory(history, ['replace your job']), true);
+  });
+
+  it('returns false when no AI message contains any fragment', () => {
+    const history = [
+      { content: 'yo bro' },
+      { content: 'what brought you to trading?' }
+    ];
+    assert.equal(
+      detectAskFiredInHistory(history, ['how much capital', 'set aside']),
+      false
+    );
+  });
+
+  it('handles plain string entries (not just {content:...} objects)', () => {
+    const history = ['how long you been doing that?'];
+    assert.equal(detectAskFiredInHistory(history, ['how long you been']), true);
+  });
+});
+
+describe('checkMandatoryAsksFired', () => {
+  it('returns ALL three when no asks have fired and no skip flags', () => {
+    const missing = checkMandatoryAsksFired([], {});
+    assert.equal(missing.length, MANDATORY_ASK_STEPS.length);
+    assert.deepEqual(
+      missing.map((m) => m.stepNumber),
+      [6, 7, 8]
+    );
+  });
+
+  it('returns empty when all three asks have fired', () => {
+    const history = [
+      { content: 'how long you been doing that?' },
+      { content: 'how much is your job bringing in on a monthly basis?' },
+      {
+        content:
+          'are you thinking of replacing your job completely with trading?'
+      }
+    ];
+    assert.deepEqual(checkMandatoryAsksFired(history, {}), []);
+  });
+
+  it('honors monthlyIncomeSkipped judgeSkipKey for Step 7', () => {
+    // Step 7 ASK didn't fire BUT operator script's judge condition
+    // explicitly skipped it for an "obvious high earner" (engineer/doctor).
+    const history = [
+      { content: 'how long you been doing that?' },
+      {
+        content:
+          'are you thinking of replacing your job completely with trading?'
+      }
+    ];
+    const captured = { monthlyIncomeSkipped: 'true' };
+    assert.deepEqual(checkMandatoryAsksFired(history, captured), []);
+  });
+
+  it('detects partial-firing and returns only missing steps', () => {
+    const history = [
+      { content: 'how long you been doing that?' }
+      // Step 7, 8 asks not fired
+    ];
+    const missing = checkMandatoryAsksFired(history, {});
+    assert.deepEqual(
+      missing.map((m) => m.stepNumber),
+      [7, 8]
+    );
+  });
+});
+
+describe('detectMandatoryAskSkipped', () => {
+  it('@tegaumukoro_ scenario — lead volunteers nurse + AI jumps to income goal: BLOCKED', () => {
+    // Lead said "I trade futures and work as a nurse"
+    // AI's only history: opener + ack of nurse
+    const aiHistory = [
+      {
+        content:
+          'yo bro, you new in the markets or have you been trading for a while?'
+      },
+      {
+        content: 'damn bro, respect for that. nurses be carrying a lot.'
+      }
+    ];
+    const captured = { job: 'nurse' };
+    // AI jumps to Step 9 income-goal-from-trading
+    const reply =
+      'so how much money are you trying to make from trading on a monthly basis?';
+    const skipped = detectMandatoryAskSkipped(reply, aiHistory, captured);
+    assert.ok(skipped, 'expected mandatory-ask skip detected');
+    // All three asks (6, 7, 8) missing
+    assert.equal(skipped!.length, 3);
+    assert.equal(skipped![0].stepNumber, 6);
+  });
+
+  it('does NOT fire when reply is on Steps 6/7/8 themselves', () => {
+    // AI is correctly asking the missing step right now — that's the
+    // right behavior, gate must not fire.
+    const aiHistory = [{ content: 'opener' }];
+    assert.equal(
+      detectMandatoryAskSkipped('how long you been doing that?', aiHistory, {}),
+      null
+    );
+    assert.equal(
+      detectMandatoryAskSkipped(
+        'how much is your job bringing in on a monthly basis?',
+        aiHistory,
+        {}
+      ),
+      null
+    );
+  });
+
+  it('does NOT fire on early discovery / opener', () => {
+    const aiHistory: Array<{ content: string }> = [];
+    assert.equal(
+      detectMandatoryAskSkipped(
+        'yo bro, you new in the markets or trading for a while?',
+        aiHistory,
+        {}
+      ),
+      null
+    );
+  });
+
+  it('fires when reply contains capital question without any discovery asks', () => {
+    const aiHistory = [{ content: 'opener' }];
+    const captured = { job: 'engineer' };
+    const reply = "what's your capital situation like?";
+    const skipped = detectMandatoryAskSkipped(reply, aiHistory, captured);
+    assert.ok(skipped);
+    assert.equal(skipped!.length, 3); // all 3 asks missing
+  });
+
+  it('fires when reply contains Step 12 obstacle re-ask without discovery asks', () => {
+    const aiHistory = [{ content: 'opener' }];
+    const reply = 'what do you feel is the main thing holding you back?';
+    const skipped = detectMandatoryAskSkipped(reply, aiHistory, {});
+    assert.ok(skipped);
+  });
+
+  it('does NOT fire when 6/7/8 asks have all fired', () => {
+    const aiHistory = [
+      { content: 'how long you been doing that?' },
+      { content: 'how much is your job bringing in on a monthly basis?' },
+      { content: 'replace your job completely with trading or supplement?' }
+    ];
+    const reply =
+      'how much would you need to be making from trading to replace it?';
+    assert.equal(detectMandatoryAskSkipped(reply, aiHistory, {}), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-29 acceptance: nurse-volunteered-job scenario
+// ---------------------------------------------------------------------------
+
+describe('bug-29-mandatory-ask-enforcement (acceptance)', () => {
+  it('volunteered job title + AI jumps to income goal → BLOCKED', () => {
+    // Reproduces the exact production drift.
+    const history = [
+      {
+        content:
+          'yo bro, you new in the markets or have you been trading for a while?'
+      },
+      { content: 'gotchu, respect that bro. nurses do real work.' }
+    ];
+    const captured = { workBackground: 'nurse', job: 'nurse' };
+    const reply =
+      'And how much would you need to be making from trading to replace it?';
+    assert.ok(detectMandatoryAskSkipped(reply, history, captured));
+  });
+
+  it('after Step 6/7/8 asks fire normally, Step 9 advance is allowed', () => {
+    const history = [
+      { content: 'opener' },
+      { content: 'gotchu, what do you do for work?' },
+      { content: 'respect that bro. how long you been doing that?' },
+      {
+        content: 'and on a monthly basis, how much is your job bringing in?'
+      },
+      {
+        content:
+          'gotchu — are you thinking of replacing your job completely with trading?'
+      }
+    ];
+    const captured = {
+      workBackground: 'nurse',
+      monthlyIncome: '4000',
+      replaceOrSupplement: 'replace'
+    };
+    const reply = 'how much would you need to be making from trading?';
+    assert.equal(detectMandatoryAskSkipped(reply, history, captured), null);
+  });
+
+  it('monthlyIncomeSkipped judge-condition still works (high earner exception)', () => {
+    // Operator script's Step 7 judge condition: "If their job makes it
+    // obvious they earn well (engineer, doctor) → skip to STEP 8".
+    // monthlyIncomeSkipped flag in capturedDataPoints honors that.
+    const history = [
+      { content: 'how long you been doing that?' },
+      {
+        content:
+          'are you thinking of replacing your job completely with trading?'
+      }
+    ];
+    const captured = { monthlyIncomeSkipped: 'true' };
+    const reply =
+      'how much would you need to be making from trading to replace it?';
+    assert.equal(detectMandatoryAskSkipped(reply, history, captured), null);
   });
 });

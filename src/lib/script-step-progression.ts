@@ -557,6 +557,187 @@ export function detectStep10Skipped(
 }
 
 // ---------------------------------------------------------------------------
+// Mandatory-ask enforcement (volunteered-data skip guard)
+// ---------------------------------------------------------------------------
+// Step completion requires BOTH:
+//   1. The [ASK] question was sent by the AI
+//   2. The lead responded to it
+//
+// Volunteered data should be stored in capturedDataPoints but MUST NOT
+// short-circuit the [ASK]. Production drift (@tegaumukoro_ 2026-05-08,
+// fourth skip incident today): lead said "I trade futures and work as a
+// nurse" — AI captured `job=nurse` from the volunteered answer and
+// jumped from Step 5 directly to Step 9 (income goal), skipping Step 6
+// (how long?), Step 7 (monthly income), and Step 8 (replace vs
+// supplement) entirely.
+//
+// The existing call-proposal prereq gate checks whether
+// capturedDataPoints contains the data — but volunteered data passes
+// that check without the [ASK] ever firing. This guard requires the
+// [ASK] phrasing to actually appear in AI message history before the
+// step is considered complete.
+//
+// Steps 6, 7, 8 are the most common skip targets (job-related discovery
+// often gets volunteered together). Other steps may need similar
+// treatment as new skip classes emerge.
+
+export interface MandatoryAskRequirement {
+  stepNumber: number;
+  /** Human label for the regen directive. */
+  label: string;
+  /**
+   * Phrase fragments that signal the [ASK] for this step fired in AI
+   * history. Each fragment is treated as a regex (with `.{0,N}` etc.
+   * supported) and falls back to plain substring match if regex parse
+   * fails. ANY fragment matching ANY AI message satisfies the check.
+   */
+  askPhraseFragments: string[];
+  /**
+   * Optional skip-key list. If any of these capturedDataPoints keys is
+   * present (and truthy), the requirement is treated as satisfied even
+   * if the [ASK] hasn't fired. Used for explicit judge-condition skips
+   * (e.g. Step 7's "skip if job makes it obvious they earn well" sets
+   * monthlyIncomeSkipped=true).
+   */
+  judgeSkipKeys?: string[];
+}
+
+/**
+ * Steps whose [ASK] must fire before Step 9+ content is allowed. These
+ * are the discovery steps the operator script asks about the lead's job
+ * situation — they get skipped most often when the lead volunteers
+ * info inline with another answer.
+ */
+export const MANDATORY_ASK_STEPS: MandatoryAskRequirement[] = [
+  {
+    stepNumber: 6,
+    label: 'Step 6 (Job Acknowledgment) — "How long you been doing that?"',
+    askPhraseFragments: [
+      'how long you been',
+      'how long have you been',
+      "how long\\s+(have\\s+)?you'?ve\\s+been"
+    ]
+  },
+  {
+    stepNumber: 7,
+    label:
+      'Step 7 (Monthly Income) — "How much is your job bringing in monthly?"',
+    askPhraseFragments: [
+      'how much is your job',
+      'bringing in on a monthly',
+      'on a monthly basis',
+      'how much\\b.{0,20}\\bmonth(ly)?\\b',
+      'what.{0,15}you make.{0,10}month',
+      'monthly income'
+    ],
+    judgeSkipKeys: ['monthlyIncomeSkipped', 'monthly_income_skipped']
+  },
+  {
+    stepNumber: 8,
+    label: 'Step 8 (Replace vs Supplement) — "Replace your job or supplement?"',
+    askPhraseFragments: [
+      'replacing your job',
+      'replace your job',
+      'replace.{0,15}completely with trading',
+      'extra income on the side',
+      'supplement',
+      'replace.{0,30}\\bor\\b.{0,30}\\bextra\\b'
+    ]
+  }
+];
+
+/**
+ * Returns true if ANY AI message in history matches ANY of the phrase
+ * fragments. Each fragment is tried as a regex first (supports
+ * `.{0,N}` quantifier syntax), falling back to case-insensitive
+ * substring match.
+ */
+export function detectAskFiredInHistory(
+  aiMessages: Array<{ content: string | null | undefined } | string>,
+  fragments: string[]
+): boolean {
+  const messages: string[] = aiMessages
+    .map((m) => (typeof m === 'string' ? m : (m?.content ?? '')))
+    .filter((s): s is string => typeof s === 'string' && s.length > 0);
+  for (const msg of messages) {
+    const lower = msg.toLowerCase();
+    for (const fragment of fragments) {
+      try {
+        const re = new RegExp(fragment, 'i');
+        if (re.test(msg)) return true;
+      } catch {
+        if (lower.includes(fragment.toLowerCase())) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns the mandatory-ask requirements (in step order) that have NOT
+ * fired in AI history AND have not been explicitly skipped via
+ * judgeSkipKeys in capturedDataPoints. Empty array means all required
+ * asks have fired.
+ */
+export function checkMandatoryAsksFired(
+  aiMessages: Array<{ content: string | null | undefined } | string>,
+  capturedDataPoints: Record<string, unknown> | null | undefined
+): MandatoryAskRequirement[] {
+  return MANDATORY_ASK_STEPS.filter((req) => {
+    if (detectAskFiredInHistory(aiMessages, req.askPhraseFragments)) {
+      return false;
+    }
+    if (req.judgeSkipKeys && req.judgeSkipKeys.length > 0) {
+      const skipped = req.judgeSkipKeys.some((k) =>
+        hasCapturedDataPoint(capturedDataPoints, k)
+      );
+      if (skipped) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Returns the missing mandatory-ask requirements when the AI's reply
+ * is generating Step 9+ content but Steps 6/7/8 [ASK]s haven't fired.
+ * Returns null when the reply doesn't infer Step 9+ content (gate is
+ * inactive in early discovery).
+ *
+ * Step 9 income-goal-from-trading question has distinctive phrasings:
+ *   - "how much would you need to be making"
+ *   - "how much money are you trying to make with trading"
+ *   - "how much.*from trading"
+ *   - "monthly basis" combined with "trading"
+ */
+const STEP_9_PATTERNS: RegExp[] = [
+  /\bhow\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making\b/i,
+  /\bhow\s+much\s+(money)?\s*(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make\b.{0,40}\b(trading|markets?)\b/i,
+  /\bhow\s+much.{0,40}\b(from\s+trading|from\s+the\s+markets?)\b/i,
+  /\bmake\s+from\s+trading\b/i,
+  /\b(income|target|goal)\s+from\s+trading\b/i
+];
+
+function detectStep9OrLaterContent(reply: string): boolean {
+  if (!reply || typeof reply !== 'string') return false;
+  if (STEP_9_PATTERNS.some((p) => p.test(reply))) return true;
+  // Step 12+ patterns also imply we're past Step 8.
+  if (detectStep12PlusContent(reply)) return true;
+  // Capital question = Step 18 = past 8.
+  if (detectCapitalQuestionAttempt(reply)) return true;
+  return false;
+}
+
+export function detectMandatoryAskSkipped(
+  reply: string,
+  aiMessages: Array<{ content: string | null | undefined } | string>,
+  capturedDataPoints: Record<string, unknown> | null | undefined
+): MandatoryAskRequirement[] | null {
+  if (!detectStep9OrLaterContent(reply)) return null;
+  const missing = checkMandatoryAsksFired(aiMessages, capturedDataPoints);
+  return missing.length > 0 ? missing : null;
+}
+
+// ---------------------------------------------------------------------------
 // Capital-question premature detection (Step 18 skip guard)
 // ---------------------------------------------------------------------------
 // Capital question is the daetradez script's Step 18 ("Qualification — DQ
@@ -694,6 +875,17 @@ interface StepPatternMapping {
  * Add new patterns here when a new skip class is identified.
  */
 const STEP_PATTERN_MAP: StepPatternMapping[] = [
+  {
+    stepNumber: 9,
+    label: 'Step 9 — Income Goal from Trading',
+    patterns: [
+      /\bhow\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making\b/i,
+      /\bhow\s+much\s+(money)?\s*(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make\b.{0,40}\b(trading|markets?)\b/i,
+      /\bhow\s+much.{0,40}\b(from\s+trading|from\s+the\s+markets?)\b/i,
+      /\bmake\s+from\s+trading\b/i,
+      /\b(income|target|goal)\s+from\s+trading\b/i
+    ]
+  },
   {
     stepNumber: 10,
     label: 'Step 10 — Deep Why',
