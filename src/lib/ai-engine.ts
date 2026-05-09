@@ -1391,6 +1391,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepScriptedQuestions:
       currentStepShape?.scriptedQuestionContents ?? [],
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
+    currentScriptStepNumber: inferredStepNumberForGate,
     skipLegacyPacingGates,
     currentStage: parsed?.stage || null,
     incomeGoalAsked,
@@ -1939,6 +1940,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const step10DeepWhySkippedFailed = quality.hardFails.some((f) =>
       f.includes('step_10_deep_why_skipped:')
+    );
+    const capitalQuestionPrematureFailed = quality.hardFails.some((f) =>
+      f.includes('capital_question_premature:')
+    );
+    const stepDistanceViolationFailed = quality.hardFails.some((f) =>
+      f.includes('step_distance_violation:')
     );
 
     if (
@@ -2660,6 +2667,36 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + step10Override;
         console.warn(
           `[ai-engine] Step 10 (Deep Why) skip detected — forcing regen back to deep-why ask (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      if (capitalQuestionPrematureFailed) {
+        const capPrereqHardFail = quality.hardFails.find((f) =>
+          f.includes('capital_question_premature:')
+        );
+        const capDetail = capPrereqHardFail
+          ? capPrereqHardFail
+              .replace(/^capital_question_premature:\s*/i, '')
+              .trim()
+          : 'Required Step 18 prerequisites have not been captured yet.';
+        const capQuestionOverride = `\n\n===== CAPITAL QUESTION FIRED PREMATURELY (STEP 18) =====\nCapital question is the script's Step 18 — it is the FINANCIAL DQ CHECK that fires AFTER the lead has already accepted the call proposal. It cannot fire during discovery.\n\n${capDetail}\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "real quick, what's your capital situation"\n  ✗ "what's your capital like for the markets"\n  ✗ "how much do you have set aside"\n  ✗ "what budget can you put toward this"\n  ✗ ANY question about capital, budget, savings, or how much they have\n\nREQUIRED ON THIS REGEN:\n  ✓ Resume the script from the FIRST missing prerequisite (named in the diagnostic above).\n  ✓ Use the script's [ASK] content for that step verbatim.\n  ✓ Do NOT reference budget / capital / amount until the call is booked.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + capQuestionOverride;
+        console.warn(
+          `[ai-engine] Capital question premature — forcing regen back to script (attempt ${attempt + 1}/${MAX_RETRIES + 1}). detail="${capDetail.slice(0, 160)}"`
+        );
+      }
+
+      if (stepDistanceViolationFailed) {
+        const distHardFail = quality.hardFails.find((f) =>
+          f.includes('step_distance_violation:')
+        );
+        const distDetail = distHardFail
+          ? distHardFail.replace(/^step_distance_violation:\s*/i, '').trim()
+          : `Reply jumped multiple steps ahead of the AI's actual progress.`;
+        const stepDistanceOverride = `\n\n===== SCRIPT STEP DISTANCE VIOLATION =====\nYou are improvising content that belongs to a script step several positions ahead of where the conversation actually is. The script must progress one step per turn — skipping ahead breaks the qualification flow and invalidates downstream gates.\n\n${distDetail}\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Any phrasing that matches a step more than 3 ahead of the current step\n  ✗ Pattern-matching the lead's last reply to a later script stage and jumping there\n  ✗ Using captured early-stage signals (e.g. early_obstacle from Step 2) as license to skip Step 10/12/etc.\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the [JUDGE]/[MSG]/[ASK] for the AI's CURRENT step (named in the directive).\n  ✓ One step per turn — wait for the lead's reply before advancing.\n  ✓ If the lead has volunteered information for a later step, store it via captured_data_points but DO NOT jump to that step in your reply.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + stepDistanceOverride;
+        console.warn(
+          `[ai-engine] Step-distance violation detected — forcing regen back to current step (attempt ${attempt + 1}/${MAX_RETRIES + 1}). detail="${distDetail.slice(0, 160)}"`
         );
       }
 

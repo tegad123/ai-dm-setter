@@ -12,19 +12,26 @@ import { describe, it } from 'node:test';
 
 import {
   CALL_PROPOSAL_PREREQS,
+  CAPITAL_QUESTION_PREREQS,
   buildCurrentStepBlock,
   checkCallProposalPrereqs,
+  checkCapitalQuestionPrereqs,
   containsQuestion,
   countQuestionMarks,
   detectAcknowledgmentOpener,
   detectBeliefBreakDelivered,
   detectBeliefBreakInMessage,
   detectCallProposalAttempt,
+  detectCapitalQuestionAttempt,
+  detectCapitalQuestionPremature,
   detectStep10Skipped,
   detectStep12PlusContent,
+  detectStepDistanceViolation,
   getStepActionShape,
   hasCapturedDataPoint,
   inferCurrentStepNumber,
+  inferStepFromReply,
+  inferStepLabelFromReply,
   jaccardSimilarity,
   maxQuestionSimilarityToScript,
   type CompactScriptStep
@@ -1016,5 +1023,329 @@ describe('bug-27-step-10-deep-why-enforcement (acceptance)', () => {
       'deepWhy',
       'deep_why'
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectCapitalQuestionAttempt + Step 18 prereq gate (bug-28)
+// ---------------------------------------------------------------------------
+
+describe('detectCapitalQuestionAttempt', () => {
+  it('detects "what\'s your capital situation"', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt(
+        "real quick, what's your capital situation like for the markets right now?"
+      ),
+      true
+    );
+  });
+
+  it('detects "how much do you have set aside"', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt(
+        'gotcha, how much do you have set aside for trading?'
+      ),
+      true
+    );
+  });
+
+  it('detects "how much capital do you have"', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt(
+        'so how much capital do you have to start with?'
+      ),
+      true
+    );
+  });
+
+  it('detects "how much can you invest"', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt('how much can you invest in this?'),
+      true
+    );
+  });
+
+  it('detects "what budget can you put toward"', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt(
+        'what budget can you put toward getting started?'
+      ),
+      true
+    );
+  });
+
+  it('does NOT trigger on neutral discovery', () => {
+    assert.equal(
+      detectCapitalQuestionAttempt('how long you been at it?'),
+      false
+    );
+    assert.equal(
+      detectCapitalQuestionAttempt('what got you into trading?'),
+      false
+    );
+    assert.equal(
+      detectCapitalQuestionAttempt('What do you do for work?'),
+      false
+    );
+  });
+});
+
+describe('checkCapitalQuestionPrereqs', () => {
+  it('returns ALL 5 prereqs when capturedDataPoints is empty', () => {
+    const missing = checkCapitalQuestionPrereqs({});
+    assert.equal(missing.length, CAPITAL_QUESTION_PREREQS.length);
+    // First missing should be Step 10 (deepWhy)
+    assert.equal(missing[0].id, 'desired_outcome_or_deep_why');
+    assert.equal(missing[0].stepNumber, 10);
+  });
+
+  it('passes when all five prereqs are captured', () => {
+    const points = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'true',
+      buyInConfirmed: 'true',
+      callInterestConfirmed: 'true'
+    };
+    assert.deepEqual(checkCapitalQuestionPrereqs(points), []);
+  });
+
+  it('accepts callProposalAccepted as substitute for callInterestConfirmed', () => {
+    const points = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'true',
+      buyInConfirmed: 'true',
+      callProposalAccepted: 'true'
+    };
+    assert.deepEqual(checkCapitalQuestionPrereqs(points), []);
+  });
+
+  it('returns the FIRST missing prereq in script order (call_proposal_accepted)', () => {
+    const points = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'true',
+      buyInConfirmed: 'true'
+      // callInterestConfirmed missing
+    };
+    const missing = checkCapitalQuestionPrereqs(points);
+    assert.equal(missing.length, 1);
+    assert.equal(missing[0].id, 'call_proposal_accepted');
+    assert.equal(missing[0].stepNumber, 17);
+  });
+});
+
+describe('detectCapitalQuestionPremature', () => {
+  it('@tegaumukoro_ scenario — capital question after deep-why answer is BLOCKED', () => {
+    // Lead just answered the deep-why question. capturedDataPoints
+    // has incomeGoal but NOT yet deepWhy/obstacle/beliefBreak/etc.
+    const captured = { incomeGoal: '4000' };
+    const reply =
+      "real quick, what's your capital situation like for the markets right now?";
+    assert.equal(detectCapitalQuestionPremature(reply, captured), true);
+  });
+
+  it('capital question after just income goal is BLOCKED (Step 9 → Step 18 jump)', () => {
+    const captured = {
+      workBackground: 'engineer',
+      incomeGoal: '15000'
+    };
+    const reply = 'what budget can you put toward getting started?';
+    assert.equal(detectCapitalQuestionPremature(reply, captured), true);
+  });
+
+  it('capital question is ALLOWED only after callProposalAccepted = true (and all earlier prereqs)', () => {
+    const captured = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'true',
+      buyInConfirmed: 'true',
+      callProposalAccepted: 'true'
+    };
+    const reply =
+      "real quick, what's your capital situation like for the markets right now?";
+    assert.equal(detectCapitalQuestionPremature(reply, captured), false);
+  });
+
+  it('does NOT trigger on non-capital replies even when prereqs missing', () => {
+    const captured = { incomeGoal: '4000' };
+    assert.equal(
+      detectCapitalQuestionPremature(
+        'gotchu bro, replace or supplement your job?',
+        captured
+      ),
+      false
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inferStepFromReply / detectStepDistanceViolation (architectural skip guard)
+// ---------------------------------------------------------------------------
+
+describe('inferStepFromReply', () => {
+  it('returns 18 for capital question phrasing', () => {
+    assert.equal(
+      inferStepFromReply("real quick, what's your capital situation like?"),
+      18
+    );
+  });
+
+  it('returns 13 for "99% of traders" belief break', () => {
+    assert.equal(
+      inferStepFromReply(
+        "Bro 99% of traders don't know what the real problem is."
+      ),
+      13
+    );
+  });
+
+  it('returns 16 for call-proposal phrasing', () => {
+    assert.equal(
+      inferStepFromReply(
+        'set up a time with my right hand guy Anthony to break it down'
+      ),
+      16
+    );
+  });
+
+  it('returns the HIGHEST step when reply matches multiple patterns', () => {
+    // A reply that contains both belief-break (Step 13) and call-proposal
+    // (Step 16) language returns 16 — Step 18 capital question would
+    // win over Step 16 if present.
+    const reply =
+      "99% of traders don't know what the real problem is. Let me set up a time with Anthony for you.";
+    assert.equal(inferStepFromReply(reply), 16);
+  });
+
+  it('returns null for replies that match no step', () => {
+    assert.equal(inferStepFromReply('appreciate that bro.'), null);
+    assert.equal(inferStepFromReply('how long you been at it?'), null);
+  });
+
+  it('returns step label for the highest match', () => {
+    assert.equal(
+      inferStepLabelFromReply(
+        "real quick, what's your capital situation like?"
+      ),
+      'Step 18 — Capital / DQ Check'
+    );
+  });
+});
+
+describe('detectStepDistanceViolation', () => {
+  it('fires when reply jumps more than 3 steps ahead', () => {
+    // AI on Step 9, reply contains Step 18 capital question.
+    assert.equal(
+      detectStepDistanceViolation(
+        "real quick, what's your capital situation like?",
+        9
+      ),
+      18
+    );
+  });
+
+  it('does NOT fire when reply is at most 3 steps ahead', () => {
+    // AI on Step 9, reply contains Step 12 obstacle re-ask (3 ahead).
+    assert.equal(
+      detectStepDistanceViolation(
+        'what do you feel is the main thing holding you back?',
+        9
+      ),
+      null
+    );
+  });
+
+  it('does NOT fire when reply is at the current step', () => {
+    assert.equal(
+      detectStepDistanceViolation(
+        'But why is making 4k a month so important to you?',
+        10
+      ),
+      null
+    );
+  });
+
+  it('respects custom maxLookahead', () => {
+    // With maxLookahead=2, Step 12 (3 ahead of Step 9) WOULD violate.
+    assert.equal(
+      detectStepDistanceViolation(
+        'what do you feel is the main thing holding you back?',
+        9,
+        2
+      ),
+      12
+    );
+  });
+
+  it('does NOT fire when no step is inferred from reply', () => {
+    assert.equal(detectStepDistanceViolation('appreciate that bro.', 5), null);
+  });
+
+  it('does NOT fire with null/invalid currentStepNumber', () => {
+    assert.equal(detectStepDistanceViolation('capital situation?', null), null);
+    assert.equal(detectStepDistanceViolation('capital situation?', 0), null);
+  });
+
+  it('catches the @tegaumukoro_ Step 9 → Step 18 jump (architectural test)', () => {
+    // The actual production drift: AI was generating from Step 9
+    // (income goal context) and emitted capital question (Step 18).
+    assert.equal(
+      detectStepDistanceViolation(
+        "real quick, what's your capital situation like for the markets right now?",
+        9
+      ),
+      18
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-28 acceptance: Step 9 → Step 18 architectural skip
+// ---------------------------------------------------------------------------
+
+describe('bug-28-capital-question-and-step-distance (acceptance)', () => {
+  it('@tegaumukoro_ scenario: capital question after deep-why answer is blocked TWO ways', () => {
+    const captured = {
+      incomeGoal: '4000',
+      deepWhy: 'want to provide for kids'
+    };
+    const reply =
+      "real quick, what's your capital situation like for the markets right now?";
+    // (a) capital question premature gate: missing obstacle, beliefBreak, buyIn, callAccepted
+    assert.equal(detectCapitalQuestionPremature(reply, captured), true);
+    // (b) step-distance violation: AI on Step 11ish, reply infers Step 18
+    const inferred = inferStepFromReply(reply);
+    assert.equal(inferred, 18);
+    assert.equal(detectStepDistanceViolation(reply, 11), 18);
+  });
+
+  it('after callProposalAccepted is captured, capital question is allowed', () => {
+    const captured = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'true',
+      buyInConfirmed: 'true',
+      callProposalAccepted: 'true'
+    };
+    const reply =
+      "real quick, what's your capital situation like for the markets right now?";
+    assert.equal(detectCapitalQuestionPremature(reply, captured), false);
+    // step-distance check still has a current-step input — at Step 17/18,
+    // capital question (Step 18) is at-or-near current and does NOT violate.
+    assert.equal(detectStepDistanceViolation(reply, 17), null);
+  });
+
+  it('catches future skip categories without enumerating their patterns', () => {
+    // Even if a NEW skip class emerges (say belief-break right after
+    // opener), the step-distance check fires generically.
+    assert.equal(
+      detectStepDistanceViolation(
+        "Bro 99% of traders don't know what the real problem is.",
+        2
+      ),
+      13
+    );
   });
 });

@@ -557,6 +557,266 @@ export function detectStep10Skipped(
 }
 
 // ---------------------------------------------------------------------------
+// Capital-question premature detection (Step 18 skip guard)
+// ---------------------------------------------------------------------------
+// Capital question is the daetradez script's Step 18 ("Qualification — DQ
+// Check"). It MUST NOT fire during discovery — the prereq chain is:
+//   deepWhy / desiredOutcome captured (Step 10)
+//   obstacle / early_obstacle captured (Step 12)
+//   beliefBreakDelivered = true (Step 13)
+//   buyInConfirmed = true (Step 14)
+//   callInterestConfirmed / callProposalAccepted = true (Step 17 "Yes")
+//
+// Production drift (@tegaumukoro_ 2026-05-08, third skip incident today):
+// AI fired "real quick, what's your capital situation like for the markets
+// right now?" right after the lead's deep-why answer — Step 9 → Step 18
+// directly, skipping 9 steps. Earlier fixes only caught Step 12+ patterns
+// (Step 10 gate) but capital-question phrasing is a distinct shape that
+// the obstacle / belief-break / buy-in regex set didn't cover.
+
+const CAPITAL_QUESTION_PATTERNS: RegExp[] = [
+  /\bcapital\s+situation\b/i,
+  /\bwhat'?s\s+your\s+capital\b/i,
+  /\bhow\s+much\s+(do\s+you\s+have\s+)?(set\s+aside|saved|put\s+aside)\b/i,
+  /\bcapital.{0,20}\b(markets|trading|invest|started?)\b/i,
+  /\bhow\s+much\s+(capital|money|funds?)\s+(do\s+you\s+have|you\s+working\s+with|are\s+you\s+working\s+with)\b/i,
+  /\bwhat\s+(amount|level)\s+of\s+capital\b/i,
+  // "budget" used in any investment/start-up context. Catches "what
+  // budget can you put toward", "budget for getting started", "budget
+  // to invest", etc.
+  /\bbudget\b.{0,40}\b(put\s+toward|get\s+started|invest|trade|allocat|spare)\b/i,
+  /\b(what'?s|how\s+much\s+is)\s+your\s+budget\b/i,
+  /\bhow\s+much\s+can\s+you\s+(invest|put\s+(in|toward)|afford|spend)\b/i
+];
+
+export function detectCapitalQuestionAttempt(reply: string): boolean {
+  if (!reply || typeof reply !== 'string') return false;
+  return CAPITAL_QUESTION_PATTERNS.some((p) => p.test(reply));
+}
+
+/**
+ * Capital-question prerequisites (Step 18). Mirrors call-proposal prereqs
+ * but adds the call-acceptance signal — capital can only be asked AFTER
+ * the lead has affirmed the call proposal.
+ */
+export interface CapitalQuestionPrereq {
+  id: string;
+  label: string;
+  stepNumber: number;
+  acceptableKeys: string[];
+}
+
+export const CAPITAL_QUESTION_PREREQS: CapitalQuestionPrereq[] = [
+  {
+    id: 'desired_outcome_or_deep_why',
+    label: "lead's deeper why / desired outcome (Step 10)",
+    stepNumber: 10,
+    acceptableKeys: ['desiredOutcome', 'desired_outcome', 'deepWhy', 'deep_why']
+  },
+  {
+    id: 'obstacle',
+    label: "lead's main obstacle (Step 12 — specific, not surface)",
+    stepNumber: 12,
+    acceptableKeys: ['obstacle', 'early_obstacle', 'earlyObstacle']
+  },
+  {
+    id: 'belief_break_delivered',
+    label: 'belief-break / reframe message delivered (Step 13)',
+    stepNumber: 13,
+    acceptableKeys: ['beliefBreakDelivered', 'belief_break_delivered']
+  },
+  {
+    id: 'buy_in_confirmed',
+    label: 'buy-in confirmed (Step 14)',
+    stepNumber: 14,
+    acceptableKeys: ['buyInConfirmed', 'buy_in_confirmed']
+  },
+  {
+    id: 'call_proposal_accepted',
+    label: 'call proposal accepted by the lead (Step 17 "Yes" branch)',
+    stepNumber: 17,
+    acceptableKeys: [
+      'callInterestConfirmed',
+      'call_interest_confirmed',
+      'callProposalAccepted',
+      'call_proposal_accepted'
+    ]
+  }
+];
+
+export function checkCapitalQuestionPrereqs(
+  points: Record<string, unknown> | null | undefined
+): CapitalQuestionPrereq[] {
+  return CAPITAL_QUESTION_PREREQS.filter(
+    (prereq) =>
+      !prereq.acceptableKeys.some((key) => hasCapturedDataPoint(points, key))
+  );
+}
+
+/**
+ * Returns true when the AI's reply contains a capital-question shape
+ * AND any of the five Step 18 prereqs is missing. Combines the pattern
+ * detector with the prereq check so the gate can hard-fail in one
+ * call.
+ */
+export function detectCapitalQuestionPremature(
+  reply: string,
+  capturedDataPoints: Record<string, unknown> | null | undefined
+): boolean {
+  if (!detectCapitalQuestionAttempt(reply)) return false;
+  return checkCapitalQuestionPrereqs(capturedDataPoints).length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Step-distance violation (architectural skip guard)
+// ---------------------------------------------------------------------------
+// Three distinct skips caught today (Step 10, Step 12, Step 18) prove the
+// LLM will keep finding new ways to jump ahead. Rather than enumerate
+// every future-step pattern, this generic check maps the reply's content
+// to the highest matching step number and hard-fails when that step is
+// MORE THAN 3 ahead of the AI's actual current step. Architectural fix —
+// catches all skip attempts regardless of which specific shape the LLM
+// improvises.
+
+interface StepPatternMapping {
+  stepNumber: number;
+  patterns: RegExp[];
+  /** Human label for the regen directive. */
+  label: string;
+}
+
+/**
+ * Patterns that signal a reply belongs to a specific script step. A
+ * single reply may match multiple — inferStepFromReply returns the
+ * HIGHEST matching step number so a Step 18 capital question doesn't
+ * get masked by an earlier-step phrase coincidence.
+ *
+ * Add new patterns here when a new skip class is identified.
+ */
+const STEP_PATTERN_MAP: StepPatternMapping[] = [
+  {
+    stepNumber: 10,
+    label: 'Step 10 — Deep Why',
+    patterns: [
+      /\bwhy\s+is\s+(.{0,60}?)\s+(so\s+)?important\s+to\s+you\b/i,
+      /\bwhat'?s\s+(it|that)\s+about\s+(.{0,40}?)\s+that\s+(matters|drives|pushes)\b/i
+    ]
+  },
+  {
+    stepNumber: 12,
+    label: 'Step 12 — Obstacle Identification',
+    patterns: [
+      /\bwhat\s+(do\s+you\s+feel|would\s+you\s+say)\s+is\s+(the\s+)?main\s+(thing|obstacle)\s+holding\s+you\s+back\b/i,
+      /\bmain\s+(thing|obstacle)\s+(stopping|holding)\s+you\b/i
+    ]
+  },
+  {
+    stepNumber: 13,
+    label: 'Step 13 — Belief Break',
+    patterns: [
+      /\b99%\s+of\s+traders\b/i,
+      /\bdon'?t\s+know\s+what\s+the\s+real\s+problem\s+is\b/i,
+      /\bsystems?\s+you\s+have\s+in\s+place\b/i,
+      /\bthat'?s\s+totally\s+normal\b.{0,80}\bbad\s+habits\b/i
+    ]
+  },
+  {
+    stepNumber: 14,
+    label: 'Step 14 — Buy-In Confirmation',
+    patterns: [
+      /\bwould\s+(that|having)\s+(kind\s+of\s+)?(structure|system|guidance)\s+(help|change)\b/i
+    ]
+  },
+  {
+    stepNumber: 15,
+    label: 'Step 15 — Urgency',
+    patterns: [/\bis\s+now\s+the\s+time\s+to\s+(actually\s+)?overcome\b/i]
+  },
+  {
+    stepNumber: 16,
+    label: 'Step 16 — Call Proposal',
+    patterns: [
+      /\bset\s+up\s+a\s+(quick\s+)?(call|chat|convo|conversation|zoom|time)\b/i,
+      /\b(book(ing)?|schedule|hop(ping)?\s*on|jump(ing)?\s*on|get\s*you\s*on|get\s*on)\s+a?\s*(quick\s+)?(call|chat|convo|conversation|zoom)\b/i,
+      /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
+      /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+    ]
+  },
+  {
+    stepNumber: 17,
+    label: 'Step 17 — Booking Link',
+    patterns: [
+      /\b(typeform|booking\s+link|application\s+link)\b/i,
+      /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+    ]
+  },
+  {
+    stepNumber: 18,
+    label: 'Step 18 — Capital / DQ Check',
+    patterns: CAPITAL_QUESTION_PATTERNS
+  }
+];
+
+/**
+ * Returns the highest step number whose patterns match the reply, or
+ * null if no patterns match. Multi-match: a Step 18 capital question
+ * always wins over an earlier-step coincidence.
+ */
+export function inferStepFromReply(reply: string): number | null {
+  if (!reply || typeof reply !== 'string') return null;
+  let highest: number | null = null;
+  for (const mapping of STEP_PATTERN_MAP) {
+    if (mapping.patterns.some((p) => p.test(reply))) {
+      if (highest === null || mapping.stepNumber > highest) {
+        highest = mapping.stepNumber;
+      }
+    }
+  }
+  return highest;
+}
+
+/**
+ * Returns the matched step pattern label for the highest-step match,
+ * or null. Used by the regen override to name the offending shape in
+ * the directive.
+ */
+export function inferStepLabelFromReply(reply: string): string | null {
+  if (!reply || typeof reply !== 'string') return null;
+  let bestMapping: StepPatternMapping | null = null;
+  for (const mapping of STEP_PATTERN_MAP) {
+    if (mapping.patterns.some((p) => p.test(reply))) {
+      if (!bestMapping || mapping.stepNumber > bestMapping.stepNumber) {
+        bestMapping = mapping;
+      }
+    }
+  }
+  return bestMapping?.label ?? null;
+}
+
+/**
+ * Detects when a reply's content jumps MORE THAN `maxLookahead` steps
+ * past the AI's current step. Returns the inferred step (the offending
+ * step number) when violated, or null otherwise.
+ *
+ * Default lookahead = 3 (current + next + buffer). Operator scripts
+ * with multi-bubble [MSG] + [ASK] patterns may legitimately straddle
+ * +1 or +2; a +3 or higher leap is always a skip.
+ */
+export function detectStepDistanceViolation(
+  reply: string,
+  currentStepNumber: number | null | undefined,
+  maxLookahead = 3
+): number | null {
+  if (typeof currentStepNumber !== 'number' || currentStepNumber <= 0) {
+    return null;
+  }
+  const inferred = inferStepFromReply(reply);
+  if (inferred === null) return null;
+  if (inferred > currentStepNumber + maxLookahead) return inferred;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Acknowledgment-opener detection
 // ---------------------------------------------------------------------------
 // When a reply starts with an emotional acknowledgment phrase AND the

@@ -7,10 +7,14 @@
 
 import {
   checkCallProposalPrereqs,
+  checkCapitalQuestionPrereqs,
   countQuestionMarks,
   detectAcknowledgmentOpener,
   detectCallProposalAttempt,
+  detectCapitalQuestionAttempt,
   detectStep10Skipped,
+  detectStepDistanceViolation,
+  inferStepLabelFromReply,
   maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
 
@@ -731,6 +735,13 @@ export interface VoiceQualityOptions {
   currentStepScriptedQuestions?: string[];
   /** True when the current step has at least one [ASK] action in any branch. */
   currentStepHasAnyAskAction?: boolean;
+  /**
+   * The step number the AI is currently working on (inferred from
+   * priorAIMessages.length + the script's snapshot). Used by the
+   * step-distance violation detector to hard-fail when the reply's
+   * inferred step is more than 3 ahead of currentScriptStepNumber.
+   */
+  currentScriptStepNumber?: number | null;
   /** Current LLM-reported stage for this generated turn. */
   currentStage?: string | null;
   /**
@@ -1260,6 +1271,56 @@ export function scoreVoiceQuality(
     hardFails.push(
       `multiple_questions_in_reply: reply contained ${replyQuestionCount} question marks. Send ONE question per turn. Pick the most important one for the current script step and drop the rest.`
     );
+  }
+
+  // Capital-question premature guard (Step 18 skip): capital question
+  // is the daetradez script's Step 18 ("Qualification — DQ Check"). It
+  // CANNOT fire during discovery — the prereq chain is deepWhy +
+  // obstacle + beliefBreakDelivered + buyInConfirmed +
+  // callProposalAccepted (5 prereqs across Steps 10/12/13/14/17).
+  // Production drift (@tegaumukoro_ 2026-05-08): AI fired
+  // "real quick, what's your capital situation like..." right after the
+  // lead's deep-why answer — Step 9 → Step 18, skipping 9 steps.
+  if (detectCapitalQuestionAttempt(reply)) {
+    const missingCapPrereqs = checkCapitalQuestionPrereqs(
+      options?.capturedDataPoints
+    );
+    if (missingCapPrereqs.length > 0) {
+      const firstMissing = missingCapPrereqs[0];
+      const summary = missingCapPrereqs
+        .map((p) => `step ${p.stepNumber} (${p.id})`)
+        .join(', ');
+      hardFails.push(
+        `capital_question_premature: missing=${summary}. ` +
+          `Capital question is the script's Step 18 — it cannot fire until the lead has accepted the call proposal AND the script's earlier steps have completed. ` +
+          `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
+          `Do NOT ask about capital, budget, or how much they have set aside until every prerequisite is captured.`
+      );
+    }
+  }
+
+  // Step-distance architectural guard: catches ALL future skip attempts
+  // regardless of which specific phrasing the LLM improvises. When the
+  // reply's inferred step (highest-matching pattern in STEP_PATTERN_MAP)
+  // is more than 3 ahead of the AI's actual current step, hard-fail
+  // and force a regen back to the current step's content.
+  // Three skips caught individually today (Step 10, Step 12, Step 18)
+  // motivated this generic check — enumerating every future-step
+  // pattern manually doesn't scale.
+  if (typeof options?.currentScriptStepNumber === 'number') {
+    const violatedStep = detectStepDistanceViolation(
+      reply,
+      options.currentScriptStepNumber
+    );
+    if (violatedStep !== null) {
+      const violatedLabel =
+        inferStepLabelFromReply(reply) ?? `Step ${violatedStep}`;
+      hardFails.push(
+        `step_distance_violation: reply matches ${violatedLabel} content but the AI is currently on Step ${options.currentScriptStepNumber}. ` +
+          `Skipping more than 3 steps ahead at once is not allowed. ` +
+          `Return to Step ${options.currentScriptStepNumber} and follow the script's natural progression — one step per turn.`
+      );
+    }
   }
 
   // Off-script question soft signal: when the current step DOES define
