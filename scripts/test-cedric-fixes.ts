@@ -63,6 +63,22 @@ function main() {
     true
   );
 
+  const parsedScriptPacing = scoreVoiceQualityGroup(
+    ["gotchu bro, gold moves clean when you're patient"],
+    {
+      aiMessageCount: 13,
+      currentStage: 'URGENCY',
+      incomeGoalAsked: true,
+      capitalQuestionAsked: false,
+      skipLegacyPacingGates: true
+    }
+  );
+  expect(
+    'capital_question_overdue is suppressed for parsed-script pacing',
+    hasHardFail(parsedScriptPacing.hardFails, 'capital_question_overdue'),
+    false
+  );
+
   const capitalAsked = scoreVoiceQualityGroup(
     [
       "real quick, what's your capital situation like for the markets right now?"
@@ -78,6 +94,31 @@ function main() {
     'capital overdue does not fire when current reply asks capital',
     hasHardFail(capitalAsked.hardFails, 'capital_question_overdue'),
     false
+  );
+
+  const parsedScriptPrematureCapital = scoreVoiceQualityGroup(
+    [
+      "real quick, what's your capital situation like for the markets right now?"
+    ],
+    {
+      aiMessageCount: 13,
+      currentStage: 'FINANCIAL_SCREENING',
+      incomeGoalAsked: true,
+      capitalQuestionAsked: false,
+      skipLegacyPacingGates: true,
+      capturedDataPoints: {
+        incomeGoal: 6000,
+        early_obstacle: 'emotions'
+      }
+    }
+  );
+  expect(
+    'parsed-script capital ask after income goal hard-fails Step 18 prereqs',
+    hasHardFail(
+      parsedScriptPrematureCapital.hardFails,
+      'capital_question_premature'
+    ),
+    true
   );
 
   console.log('\n[TEST 3] Validation loop detected');

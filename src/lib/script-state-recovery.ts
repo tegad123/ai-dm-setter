@@ -763,6 +763,7 @@ function extractValueAfterPrompt<T>(params: {
  * from-trading question. Patterns the AI typically uses:
  *   - "how much would you need to be making"
  *   - "how much money are you trying to make from trading"
+ *   - "what are you tryna get to with trading"
  *   - "what would you want trading to bring you each month"
  *   - "what would you need from trading"
  */
@@ -775,7 +776,7 @@ function extractIncomeGoal(params: {
     field: 'incomeGoal',
     method: 'amount_after_step_9_prompt',
     promptPattern:
-      /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
+      /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+(are|do)\s+you\s+(?:(?:trying|wanting|hoping|looking)\s+to|tryna)\s+(get\s+to|make|hit|reach).{0,50}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
     parse: (content) => {
       const amount = extractAmountUSD(content);
       return amount !== null ? amount : null;

@@ -761,9 +761,12 @@ export interface VoiceQualityOptions {
    * built for the old collapsed-script structure:
    *   - income_goal_overdue ("by the 4th AI message, ask income goal")
    *   - qualification_stalled ("if still in Goal/Why by message 8, advance")
+   *   - capital_question_overdue ("by message 12, ask capital")
    * These gates conflict with the parsed 22-step relational Script
    * pacing (e.g. daetradez asks income from JOB at Step 7 and income
-   * goal from TRADING at Step 9 — both legitimately past message 4).
+   * goal from TRADING at Step 9, and capital is Step 18 after call
+   * proposal acceptance — all legitimately later than the legacy
+   * message-count deadlines).
    * Defaulted true in ai-engine when an active relational Script is
    * present for the account; left false for legacy rawScript-only
    * accounts so existing behavior is preserved. Set explicitly via
@@ -1293,7 +1296,14 @@ export function scoreVoiceQuality(
   // Production drift (@tegaumukoro_ 2026-05-08): AI fired
   // "real quick, what's your capital situation like..." right after the
   // lead's deep-why answer — Step 9 → Step 18, skipping 9 steps.
-  if (detectCapitalQuestionAttempt(reply)) {
+  const hasCapitalQuestionPattern = detectCapitalQuestionAttempt(reply);
+  if (hasCapitalQuestionPattern) {
+    console.warn('[gate-debug] capital check reached:', {
+      replyFirst100: reply.slice(0, 100),
+      deepWhy: options?.capturedDataPoints?.deepWhy,
+      incomeGoal: options?.capturedDataPoints?.incomeGoal,
+      hasCapitalPattern: hasCapitalQuestionPattern
+    });
     const missingCapPrereqs = checkCapitalQuestionPrereqs(
       options?.capturedDataPoints
     );
@@ -2355,7 +2365,8 @@ export function scoreVoiceQuality(
     typeof aiMsgCount === 'number' &&
     aiMsgCount > 12 &&
     !options?.capitalQuestionAsked &&
-    !capitalAskedThisTurn
+    !capitalAskedThisTurn &&
+    !options?.skipLegacyPacingGates
   ) {
     hardFails.push(
       'capital_question_overdue: capital question has not been asked by message 12'

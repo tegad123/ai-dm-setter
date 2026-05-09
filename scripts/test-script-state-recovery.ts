@@ -87,6 +87,108 @@ function run() {
     'uncertain capital must not become HIGH-confidence capital'
   );
 
+  const incomeGoalPoints = extractCapturedDataPointsForTest({
+    history: [
+      {
+        id: 'ai_income_goal_q',
+        sender: 'AI',
+        content: 'what are you tryna get to with trading?',
+        timestamp: new Date('2026-05-09T02:43:00Z')
+      },
+      {
+        id: 'lead_income_goal',
+        sender: 'LEAD',
+        content: 'I’d need at least 6k a month to replace my nursing income',
+        timestamp: new Date('2026-05-09T02:44:00Z')
+      }
+    ]
+  });
+  assertHigh(
+    incomeGoalPoints,
+    'incomeGoal',
+    6000,
+    'income goal after tryna-get-to prompt'
+  );
+
+  const tegaSequencePoints = extractCapturedDataPointsForTest({
+    history: [
+      {
+        id: 'ai_work_q',
+        sender: 'AI',
+        content: 'yeah bro, that’s the real issue. what do you do for work rn?',
+        timestamp: new Date('2026-05-09T02:38:00Z')
+      },
+      {
+        id: 'lead_work',
+        sender: 'LEAD',
+        content: 'I work as a nurse',
+        timestamp: new Date('2026-05-09T02:39:00Z')
+      },
+      {
+        id: 'ai_tenure_q',
+        sender: 'AI',
+        content: 'damn bro, respect to you fr. how long you been doing that?',
+        timestamp: new Date('2026-05-09T02:40:00Z')
+      },
+      {
+        id: 'lead_tenure',
+        sender: 'LEAD',
+        content: '3 yrs now',
+        timestamp: new Date('2026-05-09T02:41:00Z')
+      },
+      {
+        id: 'ai_monthly_q',
+        sender: 'AI',
+        content:
+          'respect bro, 3 years in nursing is no joke. what’s the monthly income looking like for you rn?',
+        timestamp: new Date('2026-05-09T02:42:00Z')
+      },
+      {
+        id: 'lead_monthly',
+        sender: 'LEAD',
+        content: 'Around 4k a month',
+        timestamp: new Date('2026-05-09T02:43:00Z')
+      },
+      {
+        id: 'ai_goal_q',
+        sender: 'AI',
+        content:
+          'respect bro, 4k a month is solid. what are you tryna get to with trading?',
+        timestamp: new Date('2026-05-09T02:44:00Z')
+      },
+      {
+        id: 'lead_goal',
+        sender: 'LEAD',
+        content: 'I’d need at least 6k a month to replace my nursing income',
+        timestamp: new Date('2026-05-09T02:45:00Z')
+      }
+    ]
+  });
+  assertHigh(tegaSequencePoints, 'workBackground', 'nurse', 'Tega work');
+  assertHigh(tegaSequencePoints, 'monthlyIncome', 4000, 'Tega monthly income');
+  assertHigh(tegaSequencePoints, 'incomeGoal', 6000, 'Tega income goal');
+  assert.equal(
+    point(tegaSequencePoints, 'deepWhy'),
+    undefined,
+    'Tega sequence has not captured deepWhy yet'
+  );
+  const prematureCapitalAfterIncomeGoal = scoreVoiceQualityGroup(
+    [
+      "real quick, what's your capital situation like for the markets right now?"
+    ],
+    {
+      aiMessageCount: 13,
+      skipLegacyPacingGates: true,
+      capturedDataPoints: tegaSequencePoints
+    }
+  );
+  assert.ok(
+    prematureCapitalAfterIncomeGoal.hardFails.some((failure) =>
+      failure.includes('capital_question_premature:')
+    ),
+    'Tega sequence blocks capital immediately after income goal'
+  );
+
   assert.equal(
     hasExplicitCapitalConstraintSignal(
       'capital and lack of knowledge is my problem'
@@ -242,10 +344,24 @@ function run() {
     'soft pitch is allowed after high-confidence capital capture'
   );
 
-  const recoveryQuality = scoreVoiceQualityGroup([
-    "bet bro, here's the application: https://form.typeform.com/to/AGUtPdmb",
-    "fill it out and lmk once it's sent through"
-  ]);
+  const recoveryQuality = scoreVoiceQualityGroup(
+    [
+      "bet bro, here's the application: https://form.typeform.com/to/AGUtPdmb",
+      "fill it out and lmk once it's sent through"
+    ],
+    {
+      capturedDataPoints: {
+        workBackground: 'nurse',
+        monthlyIncome: 4000,
+        replaceOrSupplement: 'replace',
+        incomeGoal: 6000,
+        deepWhy: 'family freedom',
+        obstacle: 'emotions',
+        beliefBreakDelivered: true,
+        buyInConfirmed: true
+      }
+    }
+  );
   assert.equal(
     recoveryQuality.hardFails.length,
     0,
@@ -338,7 +454,15 @@ function run() {
       jeffersonPositiveDisclosure
     );
     if (!draft) continue;
-    const q = scoreVoiceQualityGroup(draft.messages);
+    const q = scoreVoiceQualityGroup(draft.messages, {
+      capturedDataPoints: {
+        deepWhy: 'family freedom',
+        obstacle: 'needs structure',
+        beliefBreakDelivered: true,
+        buyInConfirmed: true,
+        callProposalAccepted: true
+      }
+    });
     assert.equal(
       q.hardFails.length,
       0,

@@ -101,6 +101,53 @@ function isLeadCapitalParseCandidate(message: {
   return true;
 }
 
+function capturedPointRawValue(
+  points: Record<string, unknown> | null | undefined,
+  keys: string[]
+): unknown {
+  if (!points) return null;
+  for (const key of keys) {
+    const raw = points[key];
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      const value = (raw as { value?: unknown }).value;
+      if (value !== null && value !== undefined && value !== '') {
+        return value;
+      }
+      continue;
+    }
+    if (raw !== '') return raw;
+  }
+  return null;
+}
+
+function formatGoalForDeepWhyAsk(
+  rawGoal: unknown,
+  fallbackLeadMessage?: string | null
+): string {
+  const leadGoal = (fallbackLeadMessage ?? '').match(
+    /\b\d+(?:[.,]\d+)?\s*k\b(?:\s*(?:a|per)\s*month)?|\b\d{1,3}(?:,\d{3})+\b(?:\s*(?:a|per)\s*month)?/i
+  )?.[0];
+  if (leadGoal) return leadGoal.replace(/\s+/g, ' ').trim();
+
+  if (typeof rawGoal === 'number' && Number.isFinite(rawGoal)) {
+    if (rawGoal >= 1000 && rawGoal % 1000 === 0) {
+      return `${rawGoal / 1000}k a month`;
+    }
+    return `${rawGoal.toLocaleString('en-US')} a month`;
+  }
+
+  if (typeof rawGoal === 'string' && rawGoal.trim()) {
+    return rawGoal.trim();
+  }
+
+  return 'that goal';
+}
+
+function buildStep10DeepWhyDirective(goalText: string): string {
+  return `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, capital question, or call proposal.\n\nFORBIDDEN ON THIS TURN:\n  ✗ "what's your capital situation" / any question about budget, capital, savings, or how much they have\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS TURN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is ${goalText} so important to you though? Asking since the more I know the better I'll be able to help."\n\nDo NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
+}
+
 type LLMTextContentPart = {
   type: 'text';
   text: string;
@@ -1051,6 +1098,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
   }
 
+  // Path B(1): suppress legacy pacing gates when an active relational
+  // Script is present. Those message-count gates were tuned for the old
+  // collapsed script and conflict with the parsed 22-step flow where
+  // capital is Step 18 after call-proposal acceptance.
+  const personaPromptConfig =
+    (scriptStateSnapshot?.persona?.promptConfig as Record<
+      string,
+      unknown
+    > | null) || null;
+  const explicitSkipLegacyPacingGates =
+    personaPromptConfig &&
+    typeof personaPromptConfig.skipLegacyPacingGates === 'boolean'
+      ? (personaPromptConfig.skipLegacyPacingGates as boolean)
+      : null;
+  const hasParsedScript = !!scriptStateSnapshot?.script;
+  const skipLegacyPacingGates =
+    explicitSkipLegacyPacingGates !== null
+      ? explicitSkipLegacyPacingGates
+      : hasParsedScript;
+
   // R24 early exit: if the lead has explicitly named capital as the
   // blocker, treat it as the capital answer. Do not ask a verification
   // question on top of it, and do not let the model pitch a call.
@@ -1240,6 +1307,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // the next turn to ask for capital instead of continuing discovery.
   // Off by default — preserves current pacing behaviour.
   const earlyCapitalGateDirective =
+    !skipLegacyPacingGates &&
     earlyCapitalGateEnabled &&
     typeof capitalThreshold === 'number' &&
     capitalThreshold > 0 &&
@@ -1263,6 +1331,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     ? containsUrgencyQuestion(lastAiMsg.content)
     : false;
   const nextSlotIsCapitalDirective =
+    !skipLegacyPacingGates &&
     lastAiAskedUrgency &&
     !capitalQuestionAsked &&
     typeof capitalThreshold === 'number' &&
@@ -1305,6 +1374,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       err
     );
   }
+  const capturedDataPointsForGate = scriptStateSnapshot?.capturedDataPoints;
+  const incomeGoalCapturedForStep10 =
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'incomeGoal') ||
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'income_goal');
+  const deepWhyCapturedForStep10 =
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deepWhy') ||
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deep_why') ||
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'desiredOutcome') ||
+    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'desired_outcome');
+  const step10DeepWhyDirective =
+    incomeGoalCapturedForStep10 && !deepWhyCapturedForStep10
+      ? buildStep10DeepWhyDirective(
+          formatGoalForDeepWhyAsk(
+            capturedPointRawValue(capturedDataPointsForGate ?? null, [
+              'incomeGoal',
+              'income_goal'
+            ]),
+            lastLeadMsg?.content ?? null
+          )
+        )
+      : '';
 
   const baseSystemPrompt =
     systemPrompt +
@@ -1313,7 +1403,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     earlyCapitalGateDirective +
     nextSlotIsCapitalDirective +
     operatorCorrectionDirective +
-    priorCapturedSignalsDirective;
+    priorCapturedSignalsDirective +
+    step10DeepWhyDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -1342,31 +1433,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         inferredStepNumberForGate
       )
     : null;
-
-  // Path B(1): suppress legacy income_goal_overdue + qualification_stalled
-  // hard fails when an active relational Script is present. Those gates
-  // were tuned for the old collapsed Daniel-script and conflict with
-  // multi-step parsed scripts (daetradez asks income from JOB at Step 7
-  // and income GOAL from TRADING at Step 9 — both legitimately past
-  // message 4). The 22-step focus-mode + call-proposal prereq gate
-  // shipped in cca9a94 already enforces pacing for parsed scripts via
-  // the script's own structure. Operators can override with
-  // AIPersona.promptConfig.skipLegacyPacingGates to force a value.
-  const personaPromptConfig =
-    (scriptStateSnapshot?.persona?.promptConfig as Record<
-      string,
-      unknown
-    > | null) || null;
-  const explicitSkipLegacyPacingGates =
-    personaPromptConfig &&
-    typeof personaPromptConfig.skipLegacyPacingGates === 'boolean'
-      ? (personaPromptConfig.skipLegacyPacingGates as boolean)
-      : null;
-  const hasParsedScript = !!scriptStateSnapshot?.script;
-  const skipLegacyPacingGates =
-    explicitSkipLegacyPacingGates !== null
-      ? explicitSkipLegacyPacingGates
-      : hasParsedScript;
 
   const buildVoiceQualityOptions = (
     candidateMessageCount: number,
@@ -2667,7 +2733,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
 
       if (step10DeepWhySkippedFailed) {
-        const step10Override = `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, or call proposal.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS REGEN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is {their stated income goal / what they want from trading} so important to you though? Asking since the more I know the better I'll be able to help."\n\nUse the lead's actual stated goal/income number to fill the {their stated goal} slot. Do NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
+        const step10Override = buildStep10DeepWhyDirective(
+          formatGoalForDeepWhyAsk(
+            capturedPointRawValue(scriptStateSnapshot?.capturedDataPoints, [
+              'incomeGoal',
+              'income_goal'
+            ]),
+            lastLeadMsg?.content ?? null
+          )
+        );
         systemPromptForLLM = baseSystemPrompt + step10Override;
         console.warn(
           `[ai-engine] Step 10 (Deep Why) skip detected — forcing regen back to deep-why ask (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
