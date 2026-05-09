@@ -1297,6 +1297,9 @@ export function scoreVoiceQuality(
     const missingCapPrereqs = checkCapitalQuestionPrereqs(
       options?.capturedDataPoints
     );
+    console.warn(
+      `[voice-quality-gate] capital_question_premature CHECK: detected=true, missingPrereqs=${missingCapPrereqs.length}, capturedKeys=${JSON.stringify(Object.keys(options?.capturedDataPoints || {}))}`
+    );
     if (missingCapPrereqs.length > 0) {
       const firstMissing = missingCapPrereqs[0];
       const summary = missingCapPrereqs
@@ -1326,6 +1329,9 @@ export function scoreVoiceQuality(
       options.aiMessageHistoryFull,
       options.capturedDataPoints
     );
+    console.warn(
+      `[voice-quality-gate] mandatory_ask_skipped CHECK: aiHistoryLen=${options.aiMessageHistoryFull.length}, skipped=${skippedAsks ? skippedAsks.map((r) => r.stepNumber).join(',') : 'null'}`
+    );
     if (skippedAsks && skippedAsks.length > 0) {
       const summary = skippedAsks
         .map((req) => `step ${req.stepNumber}`)
@@ -1338,6 +1344,13 @@ export function scoreVoiceQuality(
           `Do NOT advance to Step 9+ content (income goal, deep why, obstacle, belief break, capital, etc.) until the discovery [ASK]s have fired.`
       );
     }
+  } else {
+    // Diagnostic: aiMessageHistoryFull missing means ai-engine isn't
+    // plumbing it through. Fire-and-forget warning so production logs
+    // surface the gap without affecting score.
+    console.warn(
+      `[voice-quality-gate] mandatory_ask_skipped SKIPPED — aiMessageHistoryFull is not provided in options`
+    );
   }
 
   // Step-distance architectural guard: catches ALL future skip attempts
@@ -1353,6 +1366,9 @@ export function scoreVoiceQuality(
       reply,
       options.currentScriptStepNumber
     );
+    console.warn(
+      `[voice-quality-gate] step_distance_violation CHECK: currentStep=${options.currentScriptStepNumber}, violatedStep=${violatedStep ?? 'null'}`
+    );
     if (violatedStep !== null) {
       const violatedLabel =
         inferStepLabelFromReply(reply) ?? `Step ${violatedStep}`;
@@ -1362,6 +1378,10 @@ export function scoreVoiceQuality(
           `Return to Step ${options.currentScriptStepNumber} and follow the script's natural progression — one step per turn.`
       );
     }
+  } else {
+    console.warn(
+      `[voice-quality-gate] step_distance_violation SKIPPED — currentScriptStepNumber is not provided`
+    );
   }
 
   // Off-script question soft signal: when the current step DOES define

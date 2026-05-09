@@ -685,6 +685,233 @@ function extractArtifactDeliveryDataPoints(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Step-progression data extractors (bug-30 — incomeGoal, monthlyIncome,
+// workBackground, deepWhy not being captured because operator scripts may
+// not have runtime_judgment {{variable}} bindings for every discovery step)
+// ---------------------------------------------------------------------------
+
+const AMOUNT_PATTERN =
+  /\b\$?\s*(?:at\s+least\s+|need\s+|make\s+|earn\s+|around\s+|about\s+|roughly\s+|maybe\s+|like\s+|approximately\s+)?(\d+(?:[.,]\d+)?)\s*([km])?\b/i;
+
+/**
+ * Extract a dollar/number amount from a string. Returns the canonical
+ * dollar amount (k/m suffixes expanded) or null if no amount found.
+ *   "$6k a month" → 6000
+ *   "around 4k" → 4000
+ *   "I make 7000" → 7000
+ *   "at least 6k to replace my income" → 6000
+ *   "5m" → 5000000
+ */
+export function extractAmountUSD(text: string): number | null {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.match(AMOUNT_PATTERN);
+  if (!match) return null;
+  const raw = match[1].replace(/,/g, '');
+  const num = parseFloat(raw);
+  if (!Number.isFinite(num)) return null;
+  const suffix = match[2]?.toLowerCase();
+  if (suffix === 'k') return Math.round(num * 1000);
+  if (suffix === 'm') return Math.round(num * 1_000_000);
+  return Math.round(num);
+}
+
+/**
+ * Generic helper: find the most recent AI prompt matching `promptPattern`
+ * and capture the LEAD's next message into the named field via the given
+ * value extractor. Used for incomeGoal / monthlyIncome / workBackground
+ * etc. when the operator script doesn't have a runtime_judgment with a
+ * {{variable}} placeholder for the data point.
+ */
+function extractValueAfterPrompt<T>(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  field: string;
+  promptPattern: RegExp;
+  method: string;
+  parse: (leadContent: string) => T | null;
+}) {
+  const { points, history, field, promptPattern, method, parse } = params;
+  let prompt: ScriptHistoryMessage | null = null;
+  for (const msg of sortedHistory(history)) {
+    if (
+      (msg.sender === 'AI' || msg.sender === 'HUMAN') &&
+      promptPattern.test(msg.content)
+    ) {
+      prompt = msg;
+      continue;
+    }
+    if (!prompt || msg.sender !== 'LEAD') continue;
+    if (
+      new Date(msg.timestamp).getTime() <= new Date(prompt.timestamp).getTime()
+    ) {
+      continue;
+    }
+    const value = parse(msg.content);
+    if (value !== null && value !== undefined && value !== '') {
+      setPoint(points, field, value, 'HIGH', msg.id ?? null, method);
+      // After successful capture, reset prompt so we don't re-capture
+      // from later messages — the FIRST lead reply after the prompt
+      // is the canonical answer.
+      prompt = null;
+    }
+  }
+}
+
+/**
+ * Extract incomeGoal from the lead's response to a Step 9 income-goal-
+ * from-trading question. Patterns the AI typically uses:
+ *   - "how much would you need to be making"
+ *   - "how much money are you trying to make from trading"
+ *   - "what would you want trading to bring you each month"
+ *   - "what would you need from trading"
+ */
+function extractIncomeGoal(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  extractValueAfterPrompt({
+    ...params,
+    field: 'incomeGoal',
+    method: 'amount_after_step_9_prompt',
+    promptPattern:
+      /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
+    parse: (content) => {
+      const amount = extractAmountUSD(content);
+      return amount !== null ? amount : null;
+    }
+  });
+}
+
+/**
+ * Extract monthlyIncome (from JOB) from the lead's response to a Step 7
+ * income question. Distinct from incomeGoal — Step 7 asks about CURRENT
+ * job income, not goal from trading.
+ */
+function extractMonthlyIncomeFromJob(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  extractValueAfterPrompt({
+    ...params,
+    field: 'monthlyIncome',
+    method: 'amount_after_step_7_prompt',
+    promptPattern:
+      /\b(how\s+much\s+is\s+your\s+job\s+bringing\s+in|bringing\s+in\s+on\s+a\s+monthly|on\s+a\s+monthly\s+basis|monthly\s+income\s+looking|what'?s\s+your\s+monthly\s+income|how\s+much\s+(do\s+)?you\s+make\s+(monthly|per\s+month|a\s+month))/i,
+    parse: (content) => {
+      const amount = extractAmountUSD(content);
+      return amount !== null ? amount : null;
+    }
+  });
+}
+
+/**
+ * Extract workBackground (job title / type of work) from the lead's
+ * response to a Step 5 "what do you do for work" question.
+ */
+function extractWorkBackground(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  const { points, history } = params;
+  const promptPattern =
+    /\b(what\s+do\s+you\s+do\s+for\s+work|what'?s\s+your\s+(job|day\s+job)|how\s+do\s+you\s+make\s+(money|a\s+living)|what\s+is\s+it\s+you\s+do|what'?s\s+your\s+9.5)\b/i;
+  let prompt: ScriptHistoryMessage | null = null;
+  for (const msg of sortedHistory(history)) {
+    if (
+      (msg.sender === 'AI' || msg.sender === 'HUMAN') &&
+      promptPattern.test(msg.content)
+    ) {
+      prompt = msg;
+      continue;
+    }
+    if (!prompt || msg.sender !== 'LEAD') continue;
+    if (
+      new Date(msg.timestamp).getTime() <= new Date(prompt.timestamp).getTime()
+    ) {
+      continue;
+    }
+    // The lead's answer to "what do you do for work" is captured as a
+    // brief noun phrase. Strip leading "I work as / I'm a / I do" so
+    // capturedDataPoints.workBackground stays clean ("nurse" not
+    // "I work as a nurse").
+    const trimmed = msg.content
+      .trim()
+      .replace(
+        /^(i\s+work\s+as\s+(an?\s+)?|i'?m\s+(an?\s+|a\s+)?|i\s+do\s+|i'?m\s+in\s+|i\s+am\s+(an?\s+)?)/i,
+        ''
+      )
+      .replace(/[.!,]+$/, '')
+      .slice(0, 80);
+    if (trimmed.length >= 2) {
+      setPoint(
+        points,
+        'workBackground',
+        trimmed,
+        'HIGH',
+        msg.id ?? null,
+        'phrase_after_step_5_prompt'
+      );
+      prompt = null;
+    }
+  }
+}
+
+/**
+ * Extract replaceOrSupplement decision from the lead's response to a
+ * Step 8 "replace or supplement" question.
+ */
+function extractReplaceOrSupplement(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  const { points, history } = params;
+  const promptPattern =
+    /\b(replac(e|ing)\s+your\s+job|extra\s+income\s+on\s+the\s+side|supplement|replace.{0,30}\bor\b.{0,30}\bextra\b)/i;
+  let prompt: ScriptHistoryMessage | null = null;
+  for (const msg of sortedHistory(history)) {
+    if (
+      (msg.sender === 'AI' || msg.sender === 'HUMAN') &&
+      promptPattern.test(msg.content)
+    ) {
+      prompt = msg;
+      continue;
+    }
+    if (!prompt || msg.sender !== 'LEAD') continue;
+    if (
+      new Date(msg.timestamp).getTime() <= new Date(prompt.timestamp).getTime()
+    ) {
+      continue;
+    }
+    const lower = msg.content.toLowerCase();
+    let decision: 'replace' | 'supplement' | null = null;
+    if (
+      /\breplac(e|ing)\b|\bquit\b|\bleave\s+(my\s+)?job\b|\bfull[-\s]?time\b/i.test(
+        lower
+      )
+    ) {
+      decision = 'replace';
+    } else if (
+      /\bsupplement\b|\bextra\b|\bon\s+the\s+side\b|\bpart[-\s]?time\b|\bin\s+addition\b/i.test(
+        lower
+      )
+    ) {
+      decision = 'supplement';
+    }
+    if (decision) {
+      setPoint(
+        points,
+        'replaceOrSupplement',
+        decision,
+        'HIGH',
+        msg.id ?? null,
+        'decision_after_step_8_prompt'
+      );
+      prompt = null;
+    }
+  }
+}
+
 function extractDataPoints(params: {
   existing: Prisma.JsonValue | null | undefined;
   history: ScriptHistoryMessage[];
@@ -720,6 +947,16 @@ function extractDataPoints(params: {
     promptPattern: /\b(course|whop|downsell|lower.ticket|497|self.paced)\b/i,
     method: 'affirmed_downsell_interest'
   });
+
+  // Step-progression captures (bug-30): operator scripts may not have
+  // runtime_judgment {{variable}} bindings for every discovery step.
+  // These code-level extractors backfill the most common ones so the
+  // call-proposal / capital-question / mandatory-ask gates have
+  // accurate state.
+  extractWorkBackground({ points, history: params.history });
+  extractMonthlyIncomeFromJob({ points, history: params.history });
+  extractReplaceOrSupplement({ points, history: params.history });
+  extractIncomeGoal({ points, history: params.history });
 
   extractArtifactDeliveryDataPoints(
     points,

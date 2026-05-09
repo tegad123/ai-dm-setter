@@ -3279,7 +3279,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
             f.includes('call_pitch_before_capital_verification:') ||
-            f.includes('closer_or_call_in_downsell:')
+            f.includes('closer_or_call_in_downsell:') ||
+            // Step-progression gates (2026-05-08): when the LLM keeps
+            // emitting future-step content despite 3 regen attempts,
+            // shipping best-effort would deliver a script-violating
+            // reply. Escalate to operator instead so they manually
+            // continue the conversation from the right step.
+            f.includes('capital_question_premature:') ||
+            f.includes('mandatory_ask_skipped:') ||
+            f.includes('step_distance_violation:') ||
+            f.includes('step_10_deep_why_skipped:') ||
+            f.includes('call_proposal_prereqs_missing:') ||
+            f.includes('silent_branch_violated_with_question:')
         );
         const softUnshippable = quality.hardFails.find(
           (f) =>
