@@ -1,7 +1,12 @@
 /* eslint-disable no-console */
 
 import { readFileSync } from 'fs';
-import { shouldForceColdStartStep1Inbound } from '../src/lib/ai-engine';
+import {
+  buildJudgeClassificationDirective,
+  detectJudgeBranchViolation,
+  resolveOrStripTemplateVariables,
+  shouldForceColdStartStep1Inbound
+} from '../src/lib/ai-engine';
 
 let pass = 0;
 let fail = 0;
@@ -140,6 +145,96 @@ function main() {
       'Their opening message is never small talk'
     ),
     true
+  );
+
+  const cleanedPrompt = resolveOrStripTemplateVariables(
+    'Goal: {{incomeGoal}}. Unknown: {{customize to their stated goal}}. Lead: {{leadName}}.',
+    {
+      capturedDataPoints: {
+        incomeGoal: {
+          value: '6k a month',
+          confidence: 'HIGH',
+          extractedFromMessageId: 'm2',
+          extractionMethod: 'test',
+          extractedAt: new Date().toISOString()
+        }
+      },
+      leadContext: { leadName: 'Nick' }
+    }
+  );
+
+  expect(
+    'template sanitizer resolves known script variables',
+    cleanedPrompt.text.includes('6k a month'),
+    true
+  );
+  expect(
+    'template sanitizer strips unresolved script variables',
+    /\{\{[^}]+\}\}/.test(cleanedPrompt.text),
+    false
+  );
+
+  const judgeStep = {
+    stepNumber: 3,
+    title: 'Experience Branch',
+    canonicalQuestion: null,
+    actions: [
+      {
+        actionType: 'runtime_judgment',
+        content: 'Classify whether the lead is beginner or already active.'
+      }
+    ],
+    branches: [
+      {
+        branchLabel: 'Beginner',
+        conditionDescription:
+          'Lead is new, not currently active, or looking to start',
+        actions: [
+          {
+            actionType: 'send_message',
+            content: 'Hell yeah man, good spot to be in.'
+          },
+          {
+            actionType: 'ask_question',
+            content: 'What do you do for work right now?'
+          }
+        ]
+      },
+      {
+        branchLabel: 'Already Active',
+        conditionDescription: 'Lead is already currently active',
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: "What's been the main thing taking you out?"
+          }
+        ]
+      }
+    ]
+  };
+
+  const judgeDirective = buildJudgeClassificationDirective({
+    step: judgeStep,
+    latestLeadMessage: 'looking to start'
+  });
+
+  expect(
+    'judge directive classifies start signal into matching branch',
+    judgeDirective.includes('matches "Beginner"'),
+    true
+  );
+
+  const judgeViolation = detectJudgeBranchViolation({
+    step: judgeStep,
+    latestLeadMessage: 'looking to start',
+    generatedMessages: ["What's been the main thing taking you out?"]
+  });
+
+  expect('judge gate blocks wrong branch action', judgeViolation.blocked, true);
+  expect(
+    'judge gate provides deterministic matched-branch fallback',
+    judgeViolation.fallbackMessages[0],
+    'Hell yeah man, good spot to be in.'
   );
 
   console.log('\n----');

@@ -259,6 +259,421 @@ type LLMImageContentPart = {
   };
 };
 
+type TemplateVariableContext = {
+  capturedDataPoints?: Record<string, unknown> | null;
+  leadContext?: Partial<LeadContext> | null;
+  lastLeadMessage?: string | null;
+};
+
+export type TemplateVariableResolution = {
+  text: string;
+  resolvedVariables: string[];
+  strippedVariables: string[];
+};
+
+function normalizeTemplateKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function unwrapCapturedPoint(raw: unknown): unknown {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'value' in raw) {
+    return (raw as { value?: unknown }).value;
+  }
+  return raw;
+}
+
+function stringifyTemplateValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (value instanceof Date) return value.toISOString();
+  return null;
+}
+
+function resolveTemplateVariable(
+  rawName: string,
+  context: TemplateVariableContext
+): string | null {
+  const normalizedName = normalizeTemplateKey(rawName);
+  const points = context.capturedDataPoints || {};
+
+  for (const [key, raw] of Object.entries(points)) {
+    if (normalizeTemplateKey(key) !== normalizedName) continue;
+    const value = stringifyTemplateValue(unwrapCapturedPoint(raw));
+    if (value) return value;
+  }
+
+  const leadContext = context.leadContext || {};
+  const leadContextValues: Record<string, unknown> = {
+    leadName: leadContext.leadName,
+    name: leadContext.leadName,
+    handle: leadContext.handle,
+    platform: leadContext.platform,
+    status: leadContext.status,
+    source: leadContext.source,
+    triggerType: leadContext.triggerType,
+    triggerSource: leadContext.triggerSource,
+    experience: leadContext.experience,
+    incomeLevel: leadContext.incomeLevel,
+    geography: leadContext.geography,
+    timezone: leadContext.timezone,
+    lastLeadMessage: context.lastLeadMessage
+  };
+
+  for (const [key, value] of Object.entries(leadContextValues)) {
+    if (normalizeTemplateKey(key) !== normalizedName) continue;
+    const resolved = stringifyTemplateValue(value);
+    if (resolved) return resolved;
+  }
+
+  return null;
+}
+
+export function resolveOrStripTemplateVariables(
+  input: string,
+  context: TemplateVariableContext = {}
+): TemplateVariableResolution {
+  const resolvedVariables: string[] = [];
+  const strippedVariables: string[] = [];
+
+  const text = input
+    .replace(/\{\{\s*([^{}]{1,160})\s*\}\}/g, (_match, rawName: string) => {
+      const variableName = rawName.trim();
+      const value = resolveTemplateVariable(variableName, context);
+      if (value !== null) {
+        resolvedVariables.push(variableName);
+        return value;
+      }
+      strippedVariables.push(variableName);
+      return '';
+    })
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
+
+  return { text, resolvedVariables, strippedVariables };
+}
+
+type JudgeActionLike = {
+  actionType: string;
+  content?: string | null;
+};
+
+type JudgeBranchLike = {
+  branchLabel: string;
+  conditionDescription?: string | null;
+  actions: JudgeActionLike[];
+};
+
+type JudgeStepLike = {
+  stepNumber: number;
+  title: string;
+  canonicalQuestion?: string | null;
+  actions: JudgeActionLike[];
+  branches: JudgeBranchLike[];
+};
+
+type JudgeBranchMatch = {
+  branchLabel: string | null;
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  score: number;
+};
+
+export type JudgeBranchViolation = {
+  blocked: boolean;
+  reason: string | null;
+  matchedBranchLabel: string | null;
+  fallbackMessages: string[];
+};
+
+const JUDGE_MATCH_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'be',
+  'been',
+  'but',
+  'for',
+  'from',
+  'has',
+  'have',
+  'if',
+  'in',
+  'is',
+  'it',
+  'its',
+  'of',
+  'on',
+  'or',
+  'that',
+  'the',
+  'their',
+  'they',
+  'this',
+  'to',
+  'with',
+  'you',
+  'your'
+]);
+
+function hasRuntimeJudgmentAction(step: JudgeStepLike | null | undefined) {
+  if (!step) return false;
+  return [...step.actions, ...step.branches.flatMap((b) => b.actions)].some(
+    (action) => action.actionType === 'runtime_judgment'
+  );
+}
+
+function tokenizeForJudgeMatch(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9']+/g) || [])
+    .map((token) => token.replace(/^'+|'+$/g, ''))
+    .filter((token) => token.length >= 3 && !JUDGE_MATCH_STOPWORDS.has(token));
+}
+
+function scoreJudgeBranch(
+  branch: JudgeBranchLike,
+  leadMessage: string
+): number {
+  const leadTokens = new Set(tokenizeForJudgeMatch(leadMessage));
+  if (leadTokens.size === 0) return 0;
+
+  const branchText =
+    `${branch.branchLabel} ${branch.conditionDescription || ''}`.toLowerCase();
+  const branchTokens = tokenizeForJudgeMatch(branchText);
+  let score = 0;
+
+  for (const token of branchTokens) {
+    if (leadTokens.has(token)) score += 2;
+  }
+
+  const normalizedLead = leadMessage.toLowerCase();
+  if (/\b(start|beginner|new|never|learning|learn)\b/.test(branchText)) {
+    if (
+      /\b(start|starting|started|beginner|new|never|learning|learn)\b/.test(
+        normalizedLead
+      )
+    ) {
+      score += 4;
+    }
+  }
+  if (/\b(not|no|never|haven'?t|hasn'?t|isn'?t|aren'?t)\b/.test(branchText)) {
+    if (
+      /\b(not|no|never|haven'?t|hasn'?t|isn'?t|aren'?t|don'?t)\b/.test(
+        normalizedLead
+      )
+    ) {
+      score += 3;
+    }
+  }
+  if (
+    /\b(already|currently|active|experienced|doing|done)\b/.test(branchText)
+  ) {
+    if (
+      /\b(already|currently|active|been|doing|done|experience|experienced)\b/.test(
+        normalizedLead
+      )
+    ) {
+      score += 3;
+    }
+  }
+
+  return score;
+}
+
+function selectJudgeBranchForLead(
+  step: JudgeStepLike | null | undefined,
+  leadMessage: string | null | undefined
+): JudgeBranchMatch {
+  if (!step || !hasRuntimeJudgmentAction(step) || !leadMessage?.trim()) {
+    return { branchLabel: null, confidence: 'none', score: 0 };
+  }
+
+  const scored = step.branches
+    .map((branch) => ({
+      branch,
+      score: scoreJudgeBranch(branch, leadMessage)
+    }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+
+  if (!best || best.score < 3 || (second && best.score === second.score)) {
+    return { branchLabel: null, confidence: 'none', score: best?.score ?? 0 };
+  }
+
+  const confidence =
+    best.score >= 7 || !second || best.score - second.score >= 4
+      ? 'high'
+      : 'medium';
+
+  return {
+    branchLabel: best.branch.branchLabel,
+    confidence,
+    score: best.score
+  };
+}
+
+function scriptedBranchActions(branch: JudgeBranchLike): JudgeActionLike[] {
+  return branch.actions.filter(
+    (action) =>
+      (action.actionType === 'send_message' ||
+        action.actionType === 'ask_question' ||
+        action.actionType === 'send_link' ||
+        action.actionType === 'send_video') &&
+      typeof action.content === 'string' &&
+      action.content.trim().length > 0
+  );
+}
+
+function actionSimilarityScore(actionContent: string, generated: string) {
+  const actionTokens = new Set(tokenizeForJudgeMatch(actionContent));
+  if (actionTokens.size === 0) return 0;
+  const generatedTokens = new Set(tokenizeForJudgeMatch(generated));
+  let matches = 0;
+  for (const token of Array.from(actionTokens)) {
+    if (generatedTokens.has(token)) matches++;
+  }
+  return matches / actionTokens.size;
+}
+
+function generatedMatchesAnyAction(
+  actions: JudgeActionLike[],
+  generated: string,
+  threshold = 0.45
+) {
+  return actions.some((action) => {
+    const content = action.content?.trim();
+    if (!content) return false;
+    const normalizedGenerated = generated.toLowerCase();
+    const normalizedContent = content.toLowerCase();
+    if (
+      normalizedContent.length >= 18 &&
+      normalizedGenerated.includes(normalizedContent.slice(0, 40).trim())
+    ) {
+      return true;
+    }
+    return actionSimilarityScore(content, generated) >= threshold;
+  });
+}
+
+export function buildJudgeClassificationDirective(params: {
+  step: JudgeStepLike | null | undefined;
+  latestLeadMessage?: string | null;
+}): string {
+  const { step, latestLeadMessage } = params;
+  if (!step || !hasRuntimeJudgmentAction(step)) return '';
+
+  const branchLines = step.branches.map((branch) => {
+    const condition = branch.conditionDescription?.trim()
+      ? ` — ${branch.conditionDescription.trim()}`
+      : '';
+    return `- ${branch.branchLabel}${condition}`;
+  });
+  const match = selectJudgeBranchForLead(step, latestLeadMessage);
+  const matchedBranch = match.branchLabel
+    ? step.branches.find((branch) => branch.branchLabel === match.branchLabel)
+    : null;
+  const matchedActions =
+    matchedBranch && scriptedBranchActions(matchedBranch).length > 0
+      ? scriptedBranchActions(matchedBranch)
+          .map((action) => {
+            const tag =
+              action.actionType === 'ask_question'
+                ? 'ASK'
+                : action.actionType === 'send_message'
+                  ? 'MSG'
+                  : 'ACTION';
+            return `  [${tag}] ${action.content?.trim()}`;
+          })
+          .join('\n')
+      : null;
+
+  return `\n\n===== SCRIPT [JUDGE] CLASSIFICATION GATE =====\nThe CURRENT script step contains a [JUDGE] action. This is a mandatory branch-classification gate, not optional guidance.\n\nCurrent step: Step ${step.stepNumber}: ${step.title}\nLatest lead message: "${(latestLeadMessage || '').slice(0, 500)}"\n\nBranch candidates:\n${branchLines.join('\n') || '- (no branches configured)'}\n\nEngine classification: ${
+    match.branchLabel
+      ? `the latest lead message matches "${match.branchLabel}" (${match.confidence} confidence). Run that branch's actions now.`
+      : 'no branch matched with enough confidence. Ask ONE concise clarification from the current step instead of defaulting to any branch.'
+  }${
+    matchedActions
+      ? `\n\nMatched branch actions to use:\n${matchedActions}`
+      : ''
+  }\n\nRules:\n- Choose a branch before proceeding.\n- Do not default to the first, loudest, or most common branch.\n- Do not jump to the NEXT STEP preview until the selected branch's [MSG]/[ASK]/[WAIT] actions have been completed.\n- If the lead has already supplied enough information for a branch, do not ask the skipped branch's question.\n=====`;
+}
+
+export function detectJudgeBranchViolation(params: {
+  step: JudgeStepLike | null | undefined;
+  latestLeadMessage?: string | null;
+  generatedMessages: string[];
+}): JudgeBranchViolation {
+  const { step, latestLeadMessage, generatedMessages } = params;
+  if (!step || !hasRuntimeJudgmentAction(step)) {
+    return {
+      blocked: false,
+      reason: null,
+      matchedBranchLabel: null,
+      fallbackMessages: []
+    };
+  }
+
+  const match = selectJudgeBranchForLead(step, latestLeadMessage);
+  if (!match.branchLabel) {
+    return {
+      blocked: false,
+      reason: null,
+      matchedBranchLabel: null,
+      fallbackMessages: []
+    };
+  }
+
+  const expectedBranch = step.branches.find(
+    (branch) => branch.branchLabel === match.branchLabel
+  );
+  if (!expectedBranch) {
+    return {
+      blocked: false,
+      reason: null,
+      matchedBranchLabel: null,
+      fallbackMessages: []
+    };
+  }
+
+  const expectedActions = scriptedBranchActions(expectedBranch);
+  if (expectedActions.length === 0) {
+    return {
+      blocked: false,
+      reason: null,
+      matchedBranchLabel: match.branchLabel,
+      fallbackMessages: []
+    };
+  }
+
+  const generated = generatedMessages.join('\n');
+  const matchesExpected = generatedMatchesAnyAction(expectedActions, generated);
+  if (matchesExpected) {
+    return {
+      blocked: false,
+      reason: null,
+      matchedBranchLabel: match.branchLabel,
+      fallbackMessages: []
+    };
+  }
+
+  return {
+    blocked: true,
+    reason: `Current [JUDGE] step matched branch "${match.branchLabel}", but the generated reply did not use that branch's scripted actions.`,
+    matchedBranchLabel: match.branchLabel,
+    fallbackMessages: expectedActions
+      .map((action) => action.content?.trim())
+      .filter((content): content is string => !!content)
+      .slice(0, 3)
+  };
+}
+
 type LLMContentPart = LLMTextContentPart | LLMImageContentPart;
 type LLMMessageContent = string | LLMContentPart[];
 type LLMMessage = {
@@ -1549,6 +1964,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const coldStartStep1Directive = coldStartStep1Inbound
     ? buildColdStartStep1InboundDirective()
     : '';
+  const judgeClassificationDirective = buildJudgeClassificationDirective({
+    step: scriptStateSnapshot?.currentStep ?? null,
+    latestLeadMessage: lastLeadMsg?.content ?? null
+  });
 
   const baseSystemPrompt =
     coldStartStep1Directive +
@@ -1559,7 +1978,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     nextSlotIsCapitalDirective +
     operatorCorrectionDirective +
     priorCapturedSignalsDirective +
-    step10DeepWhyDirective;
+    step10DeepWhyDirective +
+    judgeClassificationDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -1716,11 +2136,33 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
+    const sanitizedPrompt = resolveOrStripTemplateVariables(
+      systemPromptForLLM,
+      {
+        capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? null,
+        leadContext: leadContextForPrompt,
+        lastLeadMessage: lastLeadMsg?.content ?? null
+      }
+    );
+    if (
+      sanitizedPrompt.resolvedVariables.length > 0 ||
+      sanitizedPrompt.strippedVariables.length > 0
+    ) {
+      console.warn('[ai-engine] sanitized template variables before LLM call', {
+        resolvedVariables: Array.from(
+          new Set(sanitizedPrompt.resolvedVariables)
+        ),
+        strippedVariables: Array.from(
+          new Set(sanitizedPrompt.strippedVariables)
+        ),
+        attempt: attempt + 1
+      });
+    }
     const callResult = await callLLM(
       provider,
       apiKey,
       model,
-      systemPromptForLLM,
+      sanitizedPrompt.text,
       messages,
       fallback
     );
@@ -1829,6 +2271,39 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         parsed = buildR34BlockedFallbackParsed();
         finalQualityScore = 0;
         break;
+      }
+    }
+
+    const judgeBranchViolation = detectJudgeBranchViolation({
+      step: scriptStateSnapshot?.currentStep ?? null,
+      latestLeadMessage: lastLeadMsg?.content ?? null,
+      generatedMessages:
+        parsed.messages && parsed.messages.length > 0
+          ? parsed.messages
+          : [parsed.message]
+    });
+    if (judgeBranchViolation.blocked) {
+      const judgeOverride = `\n\n===== [JUDGE] BRANCH MISMATCH — REGENERATE CURRENT BRANCH =====\n${judgeBranchViolation.reason}\n\nThe script engine already classified the latest lead reply into branch "${judgeBranchViolation.matchedBranchLabel}". You must run that branch's scripted actions now.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Using a different branch's [ASK] or [MSG]\n  ✗ Advancing to the NEXT STEP preview before the matched branch completes\n  ✗ Defaulting to a branch just because it appears later in the script\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the matched branch's [MSG]/[ASK] content verbatim or near-verbatim\n  ✓ Then wait for the lead's reply before advancing\n=====`;
+      if (attempt < MAX_RETRIES) {
+        systemPromptForLLM = baseSystemPrompt + judgeOverride;
+        console.warn(
+          `[ai-engine] [JUDGE] branch mismatch — forcing regen (attempt ${attempt + 1}/${MAX_RETRIES + 1}). reason="${judgeBranchViolation.reason}"`
+        );
+        continue;
+      }
+
+      if (judgeBranchViolation.fallbackMessages.length > 0) {
+        parsed = {
+          ...parsed,
+          message: judgeBranchViolation.fallbackMessages[0],
+          messages: judgeBranchViolation.fallbackMessages,
+          stageConfidence: 1,
+          stallType: null,
+          escalateToHuman: false
+        };
+        console.warn(
+          `[ai-engine] [JUDGE] branch mismatch persisted through retries — shipping deterministic matched-branch fallback for "${judgeBranchViolation.matchedBranchLabel}"`
+        );
       }
     }
 
