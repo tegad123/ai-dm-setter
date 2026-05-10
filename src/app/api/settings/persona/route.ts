@@ -2,6 +2,10 @@ import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
@@ -201,8 +205,8 @@ export async function PUT(req: NextRequest) {
     data.contextUpdatedByUserId = auth.userId || null;
 
     // AI engine settings (optional, only set if provided).
-    // Validate against floor/ceiling — instant replies (<30s) read as bot.
-    const RESPONSE_DELAY_MIN_FLOOR = 30;
+    // Validate against floor/ceiling. Zero is allowed for testing mode.
+    const RESPONSE_DELAY_MIN_FLOOR = 0;
     const RESPONSE_DELAY_MAX_CEILING = 3600;
     if (responseDelayMin !== undefined) {
       if (
@@ -213,7 +217,7 @@ export async function PUT(req: NextRequest) {
       ) {
         return NextResponse.json(
           {
-            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds (instant replies look like a bot)`
+            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds`
           },
           { status: 400 }
         );
@@ -237,11 +241,20 @@ export async function PUT(req: NextRequest) {
       data.responseDelayMax = Math.floor(responseDelayMax);
     }
     if (
-      typeof data.responseDelayMin === 'number' &&
-      typeof data.responseDelayMax === 'number' &&
-      data.responseDelayMax < data.responseDelayMin
+      data.responseDelayMin !== undefined ||
+      data.responseDelayMax !== undefined
     ) {
-      data.responseDelayMax = data.responseDelayMin;
+      const effectiveDelayMin =
+        (data.responseDelayMin as number | undefined) ??
+        existing?.responseDelayMin ??
+        300;
+      const effectiveDelayMax =
+        (data.responseDelayMax as number | undefined) ??
+        existing?.responseDelayMax ??
+        600;
+      if (effectiveDelayMax < effectiveDelayMin) {
+        data.responseDelayMax = effectiveDelayMin;
+      }
     }
     if (voiceNotesEnabled !== undefined)
       data.voiceNotesEnabled = voiceNotesEnabled;
@@ -278,7 +291,7 @@ export async function PUT(req: NextRequest) {
     }
     console.error('PUT /api/settings/persona error:', error);
     return NextResponse.json(
-      { error: 'Failed to update persona' },
+      { error: `Failed to update persona: ${errorMessage(error)}` },
       { status: 500 }
     );
   }

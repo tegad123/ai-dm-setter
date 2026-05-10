@@ -115,8 +115,10 @@ export default function AccountSettingsPage() {
       );
       setAccount(updated.account);
       toast.success('Account settings saved');
-    } catch {
-      toast.error('Failed to save account settings');
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to save account settings'
+      );
     } finally {
       setSaving(false);
     }
@@ -141,8 +143,10 @@ export default function AccountSettingsPage() {
       );
       setAccount(updated.account);
       toast.success('Response timing saved');
-    } catch {
-      toast.error('Failed to save response timing');
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to save response timing'
+      );
     } finally {
       setSavingTiming(false);
     }

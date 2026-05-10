@@ -2,6 +2,10 @@ import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown error';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
@@ -72,7 +76,7 @@ export async function PUT(req: NextRequest) {
       responseDelayMax
     } = body;
 
-    const RESPONSE_DELAY_MIN_FLOOR = 30;
+    const RESPONSE_DELAY_MIN_FLOOR = 0;
     const RESPONSE_DELAY_MAX_CEILING = 3600;
 
     const data: Record<string, unknown> = {};
@@ -94,7 +98,7 @@ export async function PUT(req: NextRequest) {
       ) {
         return NextResponse.json(
           {
-            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds (instant replies look like a bot)`
+            error: `responseDelayMin must be between ${RESPONSE_DELAY_MIN_FLOOR} and ${RESPONSE_DELAY_MAX_CEILING} seconds`
           },
           { status: 400 }
         );
@@ -130,6 +134,34 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    const existingAccount = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: {
+        responseDelayMin: true,
+        responseDelayMax: true
+      }
+    });
+
+    if (!existingAccount) {
+      return NextResponse.json({ error: 'Account not found' }, { status: 404 });
+    }
+
+    const effectiveDelayMin =
+      (data.responseDelayMin as number | undefined) ??
+      existingAccount.responseDelayMin ??
+      300;
+    const effectiveDelayMax =
+      (data.responseDelayMax as number | undefined) ??
+      existingAccount.responseDelayMax ??
+      600;
+    if (
+      (data.responseDelayMin !== undefined ||
+        data.responseDelayMax !== undefined) &&
+      effectiveDelayMax < effectiveDelayMin
+    ) {
+      data.responseDelayMax = effectiveDelayMin;
+    }
+
     const account = await prisma.account.update({
       where: { id: auth.accountId },
       data,
@@ -163,7 +195,7 @@ export async function PUT(req: NextRequest) {
     }
     console.error('PUT /api/settings/account error:', error);
     return NextResponse.json(
-      { error: 'Failed to update account' },
+      { error: `Failed to update account: ${errorMessage(error)}` },
       { status: 500 }
     );
   }
