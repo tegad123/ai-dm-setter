@@ -922,9 +922,20 @@ export async function processIncomingMessage(
           const { findSubscriberByInstagramUsername } = await import(
             '@/lib/manychat'
           );
+          // Tighten ManyChat-handoff detection to a 10-minute recency
+          // window. The default 7-day window in the helper was tagging
+          // any prior-campaign subscriber as MANYCHAT — including leads
+          // who were in the subscriber list from months ago and are
+          // now sending a fresh direct DM. A real ManyChat → IG
+          // handoff completes in seconds-to-minutes; 10 minutes is a
+          // generous upper bound. Anything older is a stale subscriber
+          // and the current DM is INBOUND, not a ManyChat-fired event.
+          // (Bug-fix 2026-05-10 — Stella @atstellagram + Step 1 branch
+          // misrouting / "Outbound" tag on direct DMs.)
           const sub = await findSubscriberByInstagramUsername(
             creds.apiKey,
-            lookupHandle
+            lookupHandle,
+            { windowMinutes: 10 }
           );
           if (sub) {
             initialSource = 'MANYCHAT';

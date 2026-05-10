@@ -131,7 +131,7 @@ export async function verifyApiKey(apiKey: string): Promise<{
 export async function findSubscriberByInstagramUsername(
   apiKey: string,
   igUsername: string,
-  options?: { windowDays?: number }
+  options?: { windowDays?: number; windowMinutes?: number }
 ): Promise<SubscriberInfo | null> {
   if (!apiKey || !igUsername) return null;
   const cleanedUsername = igUsername.replace(/^@/, '').trim();
@@ -143,16 +143,33 @@ export async function findSubscriberByInstagramUsername(
   if (!data) return null;
 
   // Window check — only treat the subscriber as a recent ManyChat
-  // contact when their last interaction was within `windowDays`. A
-  // cold-store hit from 6 months ago is NOT evidence ManyChat just
-  // sent the opener; treat that as INBOUND.
-  const windowMs = (options?.windowDays ?? 7) * 24 * 60 * 60 * 1000;
+  // contact when their last interaction was within the configured
+  // window. A cold-store hit from 6 months (or even 6 days) ago is
+  // NOT evidence ManyChat just sent the opener; treat that as INBOUND.
+  //
+  // windowMinutes (preferred for handoff detection) takes precedence
+  // over windowDays. Default is 7 days for backward compat — but the
+  // webhook-processor handoff path now passes windowMinutes=10 since
+  // a real ManyChat → IG handoff flow completes in < 5 minutes.
+  // Anything older is a stale subscriber from a prior campaign and
+  // their current direct DM is INBOUND, not a ManyChat-fired event.
+  // (Bug-fix 2026-05-10 — Stella @atstellagram was tagged MANYCHAT
+  // because she was in the subscriber list from a prior campaign,
+  // which routed her direct DM into the wrong Step 1 branch.)
+  const windowMs =
+    options?.windowMinutes != null
+      ? options.windowMinutes * 60 * 1000
+      : (options?.windowDays ?? 7) * 24 * 60 * 60 * 1000;
   if (data.last_interaction) {
     const lastMs = Date.parse(data.last_interaction);
     if (!Number.isNaN(lastMs)) {
       if (Date.now() - lastMs > windowMs) {
+        const windowLabel =
+          options?.windowMinutes != null
+            ? `${options.windowMinutes}min`
+            : `${options?.windowDays ?? 7}d`;
         console.log(
-          `[manychat] subscriber ${cleanedUsername} found but last interaction ${data.last_interaction} is outside ${options?.windowDays ?? 7}-day window — treating as INBOUND`
+          `[manychat] subscriber ${cleanedUsername} found but last interaction ${data.last_interaction} is outside ${windowLabel} window — treating as INBOUND`
         );
         return null;
       }
@@ -169,7 +186,7 @@ export async function findSubscriberByInstagramUsername(
 export async function looksLikeManyChatHandoff(
   apiKey: string,
   igUsername: string,
-  options?: { windowDays?: number }
+  options?: { windowDays?: number; windowMinutes?: number }
 ): Promise<boolean> {
   const sub = await findSubscriberByInstagramUsername(
     apiKey,
