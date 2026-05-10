@@ -150,11 +150,46 @@ function buildStep10DeepWhyDirective(goalText: string): string {
   return `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, capital question, or call proposal.\n\nFORBIDDEN ON THIS TURN:\n  ✗ "what's your capital situation" / any question about budget, capital, savings, or how much they have\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS TURN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is ${goalText} so important to you though? Asking since the more I know the better I'll be able to help."\n\nDo NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
 }
 
+/**
+ * ManyChat-recency gate (bug-fix 2026-05-10).
+ *
+ * `Conversation.source` is set once at creation and never updated. When a
+ * lead originally came in via a ManyChat automation weeks ago and now
+ * sends a fresh direct DM on the same conversation, source=MANYCHAT is
+ * stale for THIS turn — the ManyChat sequence is long gone and the lead's
+ * current message is a warm inbound. Use this helper everywhere we'd
+ * normally branch on "is this a ManyChat-sourced conversation" to also
+ * require recent ManyChat activity.
+ *
+ * Window: 2 hours. Matches a typical ManyChat sequence duration
+ * (opener → video → 30-min delay → follow-up ≈ 1–2 hours). Anything
+ * older is a re-engagement, not a continuation.
+ */
+export function isManyChatRecentlyActive(
+  source: string | null | undefined,
+  manyChatFiredAt: Date | string | null | undefined,
+  windowMs: number = 2 * 60 * 60 * 1000
+): boolean {
+  if ((source || '').toUpperCase() !== 'MANYCHAT') return false;
+  // No firedAt timestamp recorded → trust the source attribution.
+  // (Won't happen for conversations created after manychat-handoff
+  // shipped, but legacy rows may lack it. Default to "active" so we
+  // don't accidentally flip legitimate MANYCHAT conversations.)
+  if (!manyChatFiredAt) return true;
+  const firedMs =
+    manyChatFiredAt instanceof Date
+      ? manyChatFiredAt.getTime()
+      : Date.parse(String(manyChatFiredAt));
+  if (!Number.isFinite(firedMs)) return true;
+  return Date.now() - firedMs < windowMs;
+}
+
 export function shouldForceColdStartStep1Inbound(params: {
   conversationHistory: ConversationMessage[];
   hasActiveScript: boolean;
   conversationSource?: string | null;
   leadSource?: string | null;
+  manyChatFiredAt?: Date | string | null;
   systemStage?: string | null;
   currentScriptStep?: number | null;
   conversationMessageCount?: number | null;
@@ -163,8 +198,16 @@ export function shouldForceColdStartStep1Inbound(params: {
 
   const conversationSource = (params.conversationSource || '').toUpperCase();
   const leadSource = (params.leadSource || '').toUpperCase();
+  // ManyChat counts as "explicitly outbound" only when the handoff is
+  // recent (within 2 hours). Stale MANYCHAT attribution on a long-
+  // dormant conversation should NOT block Step 1 Inbound cold-start
+  // when the lead sends a fresh direct DM.
+  const manyChatIsLive = isManyChatRecentlyActive(
+    conversationSource,
+    params.manyChatFiredAt
+  );
   const explicitlyOutbound =
-    conversationSource === 'MANYCHAT' ||
+    manyChatIsLive ||
     conversationSource === 'MANUAL_UPLOAD' ||
     leadSource === 'OUTBOUND';
   if (explicitlyOutbound) return false;
@@ -1500,6 +1543,7 @@ export async function generateReply(
     hasActiveScript: hasConfiguredScriptForColdStartGate,
     conversationSource: conversationCallState?.source ?? null,
     leadSource: conversationCallState?.leadSource ?? leadContext.source ?? null,
+    manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null,
     systemStage: conversationCallState?.systemStage ?? null,
     currentScriptStep: conversationCallState?.currentScriptStep ?? null,
     conversationMessageCount: conversationCallState?._count.messages ?? null
@@ -1791,19 +1835,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // Reads metadata (openerMessage, entryStep) from the persona-level
   // MANYCHAT integration credential. Fail-closed: any read error
   // skips the block, AI uses its default opener flow.
-  if (conversationCallState?.source === 'MANYCHAT') {
+  // Outbound-context injection gate: only fire when the ManyChat
+  // handoff is RECENT (within 2 hours). A conversation that originally
+  // came in via ManyChat weeks ago and is now receiving a fresh direct
+  // DM should NOT get this outbound-context block — the lead isn't
+  // responding to the old ManyChat opener, they're sending a new
+  // message. (Bug-fix 2026-05-10 — tegaumukoro_ stuck on CTA Inbound
+  // branch because May 4 ManyChat opener fired the block on every
+  // subsequent DM.)
+  if (
+    isManyChatRecentlyActive(
+      conversationCallState?.source,
+      conversationCallState?.manyChatFiredAt
+    )
+  ) {
     try {
       const { getCredentials } = await import('@/lib/credential-store');
       const mcCreds = await getCredentials(accountId, 'MANYCHAT');
       const opener =
-        conversationCallState.manyChatOpenerMessage?.trim() ||
+        conversationCallState?.manyChatOpenerMessage?.trim() ||
         (typeof mcCreds?.openerMessage === 'string'
           ? mcCreds.openerMessage.trim()
           : '');
       const triggerType =
-        conversationCallState.manyChatTriggerType || 'new_follower';
+        conversationCallState?.manyChatTriggerType || 'new_follower';
       const commentText =
-        conversationCallState.manyChatCommentText?.trim() || '';
+        conversationCallState?.manyChatCommentText?.trim() || '';
       const entryStep =
         typeof mcCreds?.entryStep === 'number' && mcCreds.entryStep >= 1
           ? mcCreds.entryStep
@@ -3796,8 +3853,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // hard-escalate — those cases (deep qualification, R24
             // hitting after several turns) genuinely need operator
             // review.
-            const isOutboundSourced =
-              conversationCallState?.source === 'MANYCHAT';
+            // R24 soft-recovery is only appropriate while ManyChat
+            // outbound is actively in play. After 2 hours, the
+            // outbound classification is stale — defer to the normal
+            // escalation path. (Same recency gate as the
+            // outbound_context block + cold-start logic.)
+            const isOutboundSourced = isManyChatRecentlyActive(
+              conversationCallState?.source,
+              conversationCallState?.manyChatFiredAt
+            );
             const isEarlyTurn = conversationHistory.length < 6;
             if (isOutboundSourced && isEarlyTurn) {
               parsed.message =
