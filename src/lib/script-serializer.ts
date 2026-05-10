@@ -40,7 +40,8 @@ export async function serializeScriptForPrompt(
    * full-script rendering for backward compatibility with callers
    * that haven't been updated to plumb step state through.
    */
-  currentStepNumber?: number | null
+  currentStepNumber?: number | null,
+  routingContext?: ScriptRoutingContext
 ): Promise<string | null> {
   const script = await prisma.script.findFirst({
     where: { accountId, isActive: true },
@@ -188,8 +189,9 @@ export async function serializeScriptForPrompt(
       stepLines.push(...serializeActionSequence(step.actions, '    '));
     }
 
-    if (step.branches.length > 0) {
-      for (const branch of step.branches) {
+    const stepBranches = selectBranchesForPrompt(step, routingContext);
+    if (stepBranches.length > 0) {
+      for (const branch of stepBranches) {
         const condition = branch.conditionDescription
           ? ` (${branch.conditionDescription})`
           : '';
@@ -240,7 +242,11 @@ export async function serializeScriptForPrompt(
     );
     const silentBranchLabels: string[] = [];
     if (currentStepRow) {
-      for (const branch of currentStepRow.branches) {
+      const currentStepBranches = selectBranchesForPrompt(
+        currentStepRow,
+        routingContext
+      );
+      for (const branch of currentStepBranches) {
         const acts = branch.actions;
         const hasAsk = acts.some((a) => a.actionType === 'ask_question');
         const hasMsg = acts.some((a) => a.actionType === 'send_message');
@@ -468,6 +474,108 @@ type SerializableAction = {
     fields: { fieldLabel: string; fieldValue: string | null }[];
   } | null;
 };
+
+export interface ScriptRoutingContext {
+  conversationSource?: string | null;
+  leadSource?: string | null;
+  manyChatFiredAt?: Date | string | null;
+  nowMs?: number;
+  manyChatActiveWindowMs?: number;
+}
+
+type SerializableBranch = {
+  branchLabel: string;
+  conditionDescription?: string | null;
+  actions: SerializableAction[];
+};
+
+type SerializableStepWithBranches = {
+  stepNumber: number;
+  branches: SerializableBranch[];
+};
+
+export function isManyChatRoutingRecent(
+  source: string | null | undefined,
+  manyChatFiredAt: Date | string | null | undefined,
+  options?: { nowMs?: number; windowMs?: number }
+): boolean {
+  if ((source || '').toUpperCase() !== 'MANYCHAT') return false;
+  if (!manyChatFiredAt) return true;
+
+  const firedMs =
+    manyChatFiredAt instanceof Date
+      ? manyChatFiredAt.getTime()
+      : Date.parse(String(manyChatFiredAt));
+  if (!Number.isFinite(firedMs)) return true;
+
+  return (
+    (options?.nowMs ?? Date.now()) - firedMs <
+    (options?.windowMs ?? 2 * 60 * 60 * 1000)
+  );
+}
+
+export function resolveStep1BranchMode(
+  context?: ScriptRoutingContext | null
+): 'manychat_cta' | 'warm_inbound' | null {
+  if (!context) return null;
+
+  const source = (context.conversationSource || '').toUpperCase();
+  const leadSource = (context.leadSource || '').toUpperCase();
+  const manyChatIsRecent = isManyChatRoutingRecent(
+    source,
+    context.manyChatFiredAt,
+    {
+      nowMs: context.nowMs,
+      windowMs: context.manyChatActiveWindowMs
+    }
+  );
+
+  if (manyChatIsRecent) return 'manychat_cta';
+  if (source === 'MANYCHAT') return 'warm_inbound';
+  if (source === 'INBOUND' || source === 'DIRECT' || leadSource === 'INBOUND') {
+    return 'warm_inbound';
+  }
+
+  return null;
+}
+
+export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
+  branches: T[],
+  context?: ScriptRoutingContext | null
+): T[] {
+  const mode = resolveStep1BranchMode(context);
+  if (!mode) return branches;
+
+  const selected =
+    mode === 'manychat_cta'
+      ? branches.filter((branch) => {
+          const label = branch.branchLabel.toLowerCase();
+          return (
+            label.includes('cta') &&
+            (label.includes('manychat') || label.includes('clicked')) &&
+            !/\bdid(?:n'?t| not)\b/.test(label)
+          );
+        })
+      : branches.filter((branch) => {
+          const label = branch.branchLabel.toLowerCase();
+          return (
+            label.includes('warm') ||
+            label.includes('dm') ||
+            label.includes('direct') ||
+            label.includes('reached out')
+          );
+        });
+
+  return selected.length > 0 ? selected : branches;
+}
+
+function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
+  step: T,
+  routingContext?: ScriptRoutingContext
+): T['branches'] {
+  if (step.stepNumber !== 1) return step.branches;
+  return selectStep1BranchesForPrompt(step.branches, routingContext);
+}
 
 function serializeActionSequence(
   actions: SerializableAction[],

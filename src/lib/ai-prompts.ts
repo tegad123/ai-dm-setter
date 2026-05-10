@@ -3,7 +3,10 @@ import {
   serializeBreakdownForPrompt,
   buildDualLayerBlock
 } from '@/lib/persona-breakdown-serializer';
-import { serializeScriptForPrompt } from '@/lib/script-serializer';
+import {
+  serializeScriptForPrompt,
+  type ScriptRoutingContext
+} from '@/lib/script-serializer';
 import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
 
 // ---------------------------------------------------------------------------
@@ -1724,7 +1727,8 @@ export async function buildDynamicSystemPrompt(
    * Pass null/undefined to skip the block (short conversations don't
    * need it; the full message history is enough context).
    */
-  establishedFactsBlock?: string | null
+  establishedFactsBlock?: string | null,
+  scriptRoutingContext?: ScriptRoutingContext
 ): Promise<string> {
   // F3.2: load the EXACT persona the caller named, not a guess.
   // Cross-account FK is impossible at this point — generateReply's
@@ -2460,7 +2464,8 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     : null;
   const scriptText = await serializeScriptForPrompt(
     accountId,
-    inferredCurrentStepNumber
+    inferredCurrentStepNumber,
+    scriptRoutingContext
   );
   const breakdownText =
     scriptText || (await serializeBreakdownForPrompt(accountId));

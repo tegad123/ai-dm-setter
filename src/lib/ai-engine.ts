@@ -206,10 +206,14 @@ export function shouldForceColdStartStep1Inbound(params: {
     conversationSource,
     params.manyChatFiredAt
   );
+  const staleManyChatConversation =
+    conversationSource === 'MANYCHAT' && !manyChatIsLive;
+  const leadSourceIsOutbound =
+    leadSource === 'OUTBOUND' && !staleManyChatConversation;
   const explicitlyOutbound =
     manyChatIsLive ||
     conversationSource === 'MANUAL_UPLOAD' ||
-    leadSource === 'OUTBOUND';
+    leadSourceIsOutbound;
   if (explicitlyOutbound) return false;
 
   const hasSetterMessage = params.conversationHistory.some(
@@ -1577,7 +1581,13 @@ export async function generateReply(
     priorAIMessages,
     priorHumanMessages,
     conversationCurrency,
-    establishedFactsBlock
+    establishedFactsBlock,
+    {
+      conversationSource: conversationCallState?.source ?? null,
+      leadSource:
+        conversationCallState?.leadSource ?? leadContext.source ?? null,
+      manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
+    }
   );
 
   // 1b. Append scoring intelligence if available

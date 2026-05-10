@@ -4,9 +4,14 @@ import { readFileSync } from 'fs';
 import {
   buildJudgeClassificationDirective,
   detectJudgeBranchViolation,
+  isManyChatRecentlyActive,
   resolveOrStripTemplateVariables,
   shouldForceColdStartStep1Inbound
 } from '../src/lib/ai-engine';
+import {
+  resolveStep1BranchMode,
+  selectStep1BranchesForPrompt
+} from '../src/lib/script-serializer';
 
 let pass = 0;
 let fail = 0;
@@ -136,6 +141,94 @@ function main() {
     false
   );
 
+  const nowMs = Date.parse('2026-05-10T12:00:00.000Z');
+  const staleManyChatFiredAt = '2026-05-04T12:00:00.000Z';
+  const recentManyChatFiredAt = '2026-05-10T11:30:00.000Z';
+
+  expect(
+    'stale ManyChat (>2h) is not recently active',
+    isManyChatRecentlyActive(
+      'MANYCHAT',
+      staleManyChatFiredAt,
+      2 * 60 * 60 * 1000
+    ),
+    false
+  );
+
+  expect(
+    'stale MANYCHAT + leadSource OUTBOUND still forces warm Step 1 when lead re-engages',
+    shouldForceColdStartStep1Inbound({
+      conversationHistory: [
+        {
+          id: 'm1',
+          sender: 'LEAD',
+          content: 'hey bro',
+          timestamp: new Date()
+        }
+      ],
+      hasActiveScript: true,
+      conversationSource: 'MANYCHAT',
+      leadSource: 'OUTBOUND',
+      manyChatFiredAt: staleManyChatFiredAt,
+      conversationMessageCount: 1
+    }),
+    true
+  );
+
+  expect(
+    'Step 1 branch mode: recent MANYCHAT routes to CTA branch',
+    resolveStep1BranchMode({
+      conversationSource: 'MANYCHAT',
+      leadSource: 'OUTBOUND',
+      manyChatFiredAt: recentManyChatFiredAt,
+      nowMs
+    }),
+    'manychat_cta'
+  );
+
+  expect(
+    'Step 1 branch mode: stale MANYCHAT routes to Warm Inbound',
+    resolveStep1BranchMode({
+      conversationSource: 'MANYCHAT',
+      leadSource: 'OUTBOUND',
+      manyChatFiredAt: staleManyChatFiredAt,
+      nowMs
+    }),
+    'warm_inbound'
+  );
+
+  const step1Branches = [
+    {
+      branchLabel: 'CTA Inbound (clicked ManyChat automation)',
+      actions: []
+    },
+    { branchLabel: "CTA Inbound — didn't click button", actions: [] },
+    { branchLabel: 'Outbound (story views / post likes)', actions: [] },
+    { branchLabel: "Warm Inbound (DM'd directly)", actions: [] }
+  ];
+
+  expect(
+    'Step 1 branch filter: stale MANYCHAT shows only Warm Inbound branch',
+    selectStep1BranchesForPrompt(step1Branches, {
+      conversationSource: 'MANYCHAT',
+      leadSource: 'OUTBOUND',
+      manyChatFiredAt: staleManyChatFiredAt,
+      nowMs
+    }).map((b) => b.branchLabel),
+    ["Warm Inbound (DM'd directly)"]
+  );
+
+  expect(
+    'Step 1 branch filter: recent MANYCHAT shows clicked CTA branch',
+    selectStep1BranchesForPrompt(step1Branches, {
+      conversationSource: 'MANYCHAT',
+      leadSource: 'OUTBOUND',
+      manyChatFiredAt: recentManyChatFiredAt,
+      nowMs
+    }).map((b) => b.branchLabel),
+    ['CTA Inbound (clicked ManyChat automation)']
+  );
+
   expect(
     'does not force once a setter message exists',
     shouldForceColdStartStep1Inbound({
@@ -193,7 +286,8 @@ function main() {
   );
   expect(
     'script serializer injects ask_question as REQUIRED QUESTION',
-    serializerSource.includes('REQUIRED QUESTION (use this exact'),
+    serializerSource.includes('REQUIRED QUESTION (') &&
+      serializerSource.includes('use this exact'),
     true
   );
 
