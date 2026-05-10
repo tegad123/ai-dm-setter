@@ -1573,6 +1573,11 @@ export async function generateReply(
       ? { ...leadContext, preQualified: undefined }
       : leadContext;
 
+  console.warn('[engine-debug] buildDynamicSystemPrompt called:', {
+    source: conversationCallState?.source,
+    manyChatFiredAt: conversationCallState?.manyChatFiredAt,
+    currentScriptStep: conversationCallState?.currentScriptStep
+  });
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     personaId,

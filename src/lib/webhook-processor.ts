@@ -2988,6 +2988,11 @@ export async function scheduleAIReply(
 
   let result: GenerateReplyResult;
   try {
+    console.warn('[webhook-debug] generateReply starting:', {
+      conversationId,
+      source: conversation.source,
+      currentScriptStep: conversation.currentScriptStep
+    });
     result = (await generateReply(
       accountId,
       conversation.personaId,
