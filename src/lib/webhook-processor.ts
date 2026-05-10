@@ -6077,6 +6077,12 @@ export async function processScheduledReply(
         console.log(
           `[webhook-processor] Stale pre-generated result for ${conversationId} — lead sent new message, regenerating`
         );
+        console.warn('[stale-regen] processScheduledReply regenerating fresh', {
+          conversationId,
+          storedCreatedAt: storedResult.createdAt?.toISOString(),
+          newerLeadMsgId: newerLeadMsg.id,
+          messageType: storedResult.messageType
+        });
         await scheduleAIReply(conversationId, accountId, {
           skipDelayQueue: true
         });
