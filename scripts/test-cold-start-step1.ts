@@ -61,6 +61,27 @@ function main() {
   );
 
   expect(
+    'first lead-only history forces Step 1 even when source metadata is absent',
+    shouldForceColdStartStep1Inbound({
+      conversationHistory: [
+        {
+          id: 'm1',
+          sender: 'LEAD',
+          content: 'Hey bro',
+          timestamp: new Date()
+        }
+      ],
+      hasActiveScript: true,
+      conversationSource: null,
+      leadSource: null,
+      systemStage: null,
+      currentScriptStep: 1,
+      conversationMessageCount: 1
+    }),
+    true
+  );
+
+  expect(
     'does not force without an active script',
     shouldForceColdStartStep1Inbound({
       conversationHistory: [
@@ -73,6 +94,24 @@ function main() {
       ],
       hasActiveScript: false,
       conversationSource: 'INBOUND',
+      conversationMessageCount: 1
+    }),
+    false
+  );
+
+  expect(
+    'does not force manual upload conversations',
+    shouldForceColdStartStep1Inbound({
+      conversationHistory: [
+        {
+          id: 'm1',
+          sender: 'LEAD',
+          content: 'imported message',
+          timestamp: new Date()
+        }
+      ],
+      hasActiveScript: true,
+      conversationSource: 'MANUAL_UPLOAD',
       conversationMessageCount: 1
     }),
     false

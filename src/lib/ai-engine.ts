@@ -161,14 +161,11 @@ export function shouldForceColdStartStep1Inbound(params: {
 
   const conversationSource = (params.conversationSource || '').toUpperCase();
   const leadSource = (params.leadSource || '').toUpperCase();
-  const inbound =
-    conversationSource === 'INBOUND' ||
-    leadSource === 'INBOUND' ||
-    (!conversationSource &&
-      !leadSource &&
-      params.conversationHistory.length === 1 &&
-      params.conversationHistory[0]?.sender === 'LEAD');
-  if (!inbound) return false;
+  const explicitlyOutbound =
+    conversationSource === 'MANYCHAT' ||
+    conversationSource === 'MANUAL_UPLOAD' ||
+    leadSource === 'OUTBOUND';
+  if (explicitlyOutbound) return false;
 
   const hasSetterMessage = params.conversationHistory.some(
     (m) => m.sender === 'AI' || m.sender === 'HUMAN'
@@ -183,7 +180,53 @@ export function shouldForceColdStartStep1Inbound(params: {
 
   const dbCount = params.conversationMessageCount;
   if (typeof dbCount === 'number' && dbCount > 1) return false;
-  return true;
+  return (
+    conversationSource === 'INBOUND' ||
+    leadSource === 'INBOUND' ||
+    historyLooksLikeFirstInbound
+  );
+}
+
+async function hasConfiguredScriptForColdStart(params: {
+  accountId: string;
+  personaId: string;
+}): Promise<boolean> {
+  const [activeRelationalScript, persona] = await Promise.all([
+    prisma.script.findFirst({
+      where: { accountId: params.accountId, isActive: true },
+      select: { id: true }
+    }),
+    prisma.aIPersona.findUnique({
+      where: { id: params.personaId },
+      select: {
+        rawScript: true,
+        qualificationFlow: true,
+        breakdowns: {
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+          take: 1
+        }
+      }
+    })
+  ]);
+
+  if (activeRelationalScript) return true;
+  if (!persona) return false;
+
+  if (
+    typeof persona.rawScript === 'string' &&
+    persona.rawScript.trim().length > 100
+  ) {
+    return true;
+  }
+
+  if (persona.breakdowns.length > 0) return true;
+
+  if (Array.isArray(persona.qualificationFlow)) {
+    return persona.qualificationFlow.length > 0;
+  }
+
+  return false;
 }
 
 function buildColdStartStep1InboundDirective(): string {
@@ -1445,13 +1488,14 @@ export async function generateReply(
       })
     : null;
 
-  const activeScriptForColdStart = await prisma.script.findFirst({
-    where: { accountId, isActive: true },
-    select: { id: true }
-  });
+  const hasConfiguredScriptForColdStartGate =
+    await hasConfiguredScriptForColdStart({
+      accountId,
+      personaId
+    });
   const coldStartStep1Inbound = shouldForceColdStartStep1Inbound({
     conversationHistory,
-    hasActiveScript: !!activeScriptForColdStart,
+    hasActiveScript: hasConfiguredScriptForColdStartGate,
     conversationSource: conversationCallState?.source ?? null,
     leadSource: conversationCallState?.leadSource ?? leadContext.source ?? null,
     systemStage: conversationCallState?.systemStage ?? null,
