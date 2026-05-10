@@ -742,6 +742,16 @@ export interface VoiceQualityOptions {
   /** True when the current step has at least one [ASK] action in any branch. */
   currentStepHasAnyAskAction?: boolean;
   /**
+   * True when the active/selected branch for the current step contains
+   * an [ASK]. Falls back to currentStepHasAnyAskAction when routing
+   * cannot identify the active branch.
+   */
+  currentStepHasAskBranch?: boolean;
+  /** True when the active/selected branch is [MSG]+[WAIT] with no [ASK]. */
+  currentStepActiveBranchIsSilent?: boolean;
+  /** True when the active/selected branch contains only [JUDGE] actions. */
+  currentStepActiveBranchIsJudgeOnly?: boolean;
+  /**
    * The step number the AI is currently working on (inferred from
    * priorAIMessages.length + the script's snapshot). Used by the
    * step-distance violation detector to hard-fail when the reply's
@@ -1372,6 +1382,31 @@ export function scoreVoiceQuality(
       .join(', ');
     hardFails.push(
       `silent_branch_violated_with_question: The script's current step has an acknowledgment-only branch (${silentLabels || 'unnamed silent branch'}) — [MSG]+[WAIT] with NO [ASK]. Your reply opened with an acknowledgment phrase but contained a question. The operator's intent on that branch is to sit in the moment and let the lead keep talking. Send the acknowledgment ONLY. End with a statement (period), not a question (?).`
+    );
+  }
+
+  const currentStepHasAskBranch =
+    options?.currentStepHasAskBranch ?? options?.currentStepHasAnyAskAction;
+  const stepNumber = options?.currentScriptStepNumber ?? null;
+  const isBookingOrLinkStep =
+    typeof stepNumber === 'number' && stepNumber >= 17;
+  if (
+    currentStepHasAskBranch === true &&
+    replyQuestionCount === 0 &&
+    options?.currentStepActiveBranchIsSilent !== true &&
+    options?.currentStepActiveBranchIsJudgeOnly !== true &&
+    !isBookingOrLinkStep
+  ) {
+    console.warn(
+      '[voice-quality-gate] missing_required_question_on_ask_step:',
+      {
+        currentStepHasAskBranch,
+        replyHasQuestion: countQuestionMarks(reply) > 0,
+        replyFirst100: reply.slice(0, 100)
+      }
+    );
+    hardFails.push(
+      'missing_required_question_on_ask_step: Your reply must end with a question to advance the conversation. The current step requires you to ask the lead something. Add the required question from the script before sending.'
     );
   }
 

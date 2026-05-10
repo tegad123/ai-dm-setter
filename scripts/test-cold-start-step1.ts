@@ -29,7 +29,7 @@ function expect(label: string, actual: unknown, expected: unknown) {
   }
 }
 
-function main() {
+async function main() {
   console.log('\n[TEST] Cold-start Step 1 Inbound gate');
 
   expect(
@@ -357,7 +357,7 @@ function main() {
     ]
   };
 
-  const judgeDirective = buildJudgeClassificationDirective({
+  const judgeDirective = await buildJudgeClassificationDirective({
     step: judgeStep,
     latestLeadMessage: 'looking to start'
   });
@@ -368,7 +368,7 @@ function main() {
     true
   );
 
-  const judgeViolation = detectJudgeBranchViolation({
+  const judgeViolation = await detectJudgeBranchViolation({
     step: judgeStep,
     latestLeadMessage: 'looking to start',
     generatedMessages: ["What's been the main thing taking you out?"]
@@ -381,7 +381,7 @@ function main() {
     'Hell yeah man, good spot to be in.'
   );
 
-  const skippedAffirmationViolation = detectJudgeBranchViolation({
+  const skippedAffirmationViolation = await detectJudgeBranchViolation({
     step: judgeStep,
     latestLeadMessage: 'looking to start',
     generatedMessages: [
@@ -400,7 +400,7 @@ function main() {
     'Hell yeah man, good spot to be in.'
   );
 
-  const completeBranchViolation = detectJudgeBranchViolation({
+  const completeBranchViolation = await detectJudgeBranchViolation({
     step: judgeStep,
     latestLeadMessage: 'looking to start',
     generatedMessages: [

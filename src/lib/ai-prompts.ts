@@ -2462,19 +2462,10 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
   const inferredCurrentStepNumber = Array.isArray(priorAIMessages)
     ? Math.max(1, priorAIMessages.length + 1)
     : null;
-  console.warn('[prompt-debug] BEFORE serializeScript:', {
-    accountId,
-    inferredStep: inferredCurrentStepNumber,
-    hasRoutingContext: !!scriptRoutingContext
-  });
   const scriptText = await serializeScriptForPrompt(
     accountId,
     inferredCurrentStepNumber,
     scriptRoutingContext
-  );
-  console.warn(
-    '[prompt-debug] AFTER serializeScript, length:',
-    scriptText?.length ?? 0
   );
   const breakdownText =
     scriptText || (await serializeBreakdownForPrompt(accountId));

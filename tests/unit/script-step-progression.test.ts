@@ -42,6 +42,7 @@ import {
   maxQuestionSimilarityToScript,
   type CompactScriptStep
 } from '../../src/lib/script-step-progression';
+import { selectJudgeBranchForLead } from '../../src/lib/ai-engine';
 import {
   detectMsgBubbleSequenceViolation,
   detectMsgVerbatimViolation,
@@ -952,6 +953,177 @@ describe('bug-25-silent-branch-enforcement (acceptance criteria)', () => {
       'alright so give me a bit of context bro. What do you do for work?';
     const scripted = ['What do you do for work?'];
     assert.ok(maxQuestionSimilarityToScript(reply, scripted) > 0.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-34-llm-branch-classifier (Path B classifier fallback)
+// ---------------------------------------------------------------------------
+
+const bug34JudgeStep = {
+  stepNumber: 4,
+  title: 'How are the markets going?',
+  canonicalQuestion: 'how are the markets going?',
+  actions: [{ actionType: 'runtime_judgment', content: null }],
+  branches: [
+    {
+      branchLabel: 'Going well',
+      conditionDescription: 'positive current performance no major problems',
+      actions: [
+        { actionType: 'send_message', content: 'love to see it bro.' },
+        {
+          actionType: 'ask_question',
+          content: 'what has been helping you stay consistent?'
+        }
+      ]
+    },
+    {
+      branchLabel: 'Obstacle given — detailed and emotional',
+      conditionDescription: 'lead gives a painful detailed trading challenge',
+      actions: [
+        {
+          actionType: 'send_message',
+          content: 'that is real bro, revenge can spiral fast.'
+        },
+        { actionType: 'wait_for_response', content: null }
+      ]
+    }
+  ]
+};
+
+describe('bug-34-llm-branch-classifier', () => {
+  it('bug-34-llm-branch-classifier-obstacle: revenge trading routes to obstacle branch', async () => {
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      bug34JudgeStep,
+      "It's revenge trading mostly, I lose a trade and then i jump back in trying to make it back",
+      {
+        classifier: async () => {
+          calls++;
+          return 'Obstacle given — detailed and emotional';
+        }
+      }
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(match.branchLabel, 'Obstacle given — detailed and emotional');
+    assert.equal(match.confidence, 'llm_classified');
+  });
+
+  it('bug-34-llm-branch-classifier-going-well: profitable statement routes to going-well branch', async () => {
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      bug34JudgeStep,
+      'markets going great, been profitable',
+      {
+        classifier: async () => {
+          calls++;
+          return 'Going well';
+        }
+      }
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(match.branchLabel, 'Going well');
+    assert.equal(match.confidence, 'llm_classified');
+  });
+
+  it('bug-34-llm-branch-classifier-timeout: classifier failure falls back gracefully', async () => {
+    const match = await selectJudgeBranchForLead(
+      bug34JudgeStep,
+      'none of those words line up',
+      {
+        classifier: async () => {
+          throw new Error('aborted');
+        }
+      }
+    );
+
+    assert.equal(match.branchLabel, null);
+    assert.equal(match.confidence, 'none');
+  });
+
+  it('does not call classifier for medium/high token confidence', async () => {
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      bug34JudgeStep,
+      'positive current performance with no major problems',
+      {
+        classifier: async () => {
+          calls++;
+          return 'Obstacle given — detailed and emotional';
+        }
+      }
+    );
+
+    assert.equal(calls, 0);
+    assert.equal(match.branchLabel, 'Going well');
+    assert.ok(match.confidence === 'medium' || match.confidence === 'high');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bug-35-missing-question-on-ask-step
+// ---------------------------------------------------------------------------
+
+describe('bug-35-missing-question-on-ask-step', () => {
+  it('hard-fails when an active ask branch ships no question', () => {
+    const quality = scoreVoiceQualityGroup(['love to see it bro.'], {
+      currentStepHasAskBranch: true,
+      currentStepActiveBranchIsSilent: false,
+      currentStepActiveBranchIsJudgeOnly: false,
+      currentScriptStepNumber: 4
+    });
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      )
+    );
+  });
+
+  it('[MSG]+[WAIT] silent branch does not fire missing-question gate', () => {
+    const quality = scoreVoiceQualityGroup(['that is real bro.'], {
+      currentStepHasAskBranch: false,
+      currentStepActiveBranchIsSilent: true,
+      currentScriptStepNumber: 4
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
+  });
+
+  it('JUDGE-only branch with no ask_question does not fire', () => {
+    const quality = scoreVoiceQualityGroup(['checking that now bro.'], {
+      currentStepHasAskBranch: false,
+      currentStepActiveBranchIsJudgeOnly: true,
+      currentScriptStepNumber: 4
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
+  });
+
+  it('Step 17+ booking/link-sending steps do not fire', () => {
+    const quality = scoreVoiceQualityGroup(['sending that over now bro.'], {
+      currentStepHasAskBranch: true,
+      currentScriptStepNumber: 17
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
   });
 });
 

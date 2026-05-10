@@ -470,11 +470,35 @@ type JudgeStepLike = {
   branches: JudgeBranchLike[];
 };
 
-type JudgeBranchMatch = {
-  branchLabel: string | null;
-  confidence: 'high' | 'medium' | 'low' | 'none';
-  score: number;
+type JudgeBranchConfidence =
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'none'
+  | 'llm_classified';
+
+type JudgeTokenScoringResult = {
+  selectedBranchLabel: string | null;
+  confidence: Exclude<JudgeBranchConfidence, 'llm_classified'>;
+  bestScore: number;
+  secondScore: number | null;
+  tied: boolean;
 };
+
+export type JudgeBranchMatch = {
+  branchLabel: string | null;
+  confidence: JudgeBranchConfidence;
+  score: number;
+  tokenScoringResult?: JudgeTokenScoringResult;
+};
+
+export type JudgeBranchSelectionCache = Map<string, Promise<JudgeBranchMatch>>;
+
+type JudgeBranchClassifier = (params: {
+  step: JudgeStepLike;
+  leadMessage: string;
+  accountId?: string | null;
+}) => Promise<string | null>;
 
 export type JudgeBranchViolation = {
   blocked: boolean;
@@ -578,12 +602,23 @@ function scoreJudgeBranch(
   return score;
 }
 
-function selectJudgeBranchForLead(
+function scoreJudgeBranchesForLead(
   step: JudgeStepLike | null | undefined,
   leadMessage: string | null | undefined
 ): JudgeBranchMatch {
   if (!step || !hasRuntimeJudgmentAction(step) || !leadMessage?.trim()) {
-    return { branchLabel: null, confidence: 'none', score: 0 };
+    return {
+      branchLabel: null,
+      confidence: 'none',
+      score: 0,
+      tokenScoringResult: {
+        selectedBranchLabel: null,
+        confidence: 'none',
+        bestScore: 0,
+        secondScore: null,
+        tied: false
+      }
+    };
   }
 
   const scored = step.branches
@@ -594,9 +629,36 @@ function selectJudgeBranchForLead(
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
   const second = scored[1];
+  const tied = !!second && best?.score === second.score;
 
-  if (!best || best.score < 3 || (second && best.score === second.score)) {
-    return { branchLabel: null, confidence: 'none', score: best?.score ?? 0 };
+  if (!best || best.score <= 0) {
+    return {
+      branchLabel: null,
+      confidence: 'none',
+      score: best?.score ?? 0,
+      tokenScoringResult: {
+        selectedBranchLabel: null,
+        confidence: 'none',
+        bestScore: best?.score ?? 0,
+        secondScore: second?.score ?? null,
+        tied
+      }
+    };
+  }
+
+  if (best.score < 3 || tied) {
+    return {
+      branchLabel: null,
+      confidence: 'low',
+      score: best.score,
+      tokenScoringResult: {
+        selectedBranchLabel: best.branch.branchLabel,
+        confidence: 'low',
+        bestScore: best.score,
+        secondScore: second?.score ?? null,
+        tied
+      }
+    };
   }
 
   const confidence =
@@ -607,8 +669,167 @@ function selectJudgeBranchForLead(
   return {
     branchLabel: best.branch.branchLabel,
     confidence,
-    score: best.score
+    score: best.score,
+    tokenScoringResult: {
+      selectedBranchLabel: best.branch.branchLabel,
+      confidence,
+      bestScore: best.score,
+      secondScore: second?.score ?? null,
+      tied
+    }
   };
+}
+
+function buildJudgeBranchSelectionCacheKey(
+  step: JudgeStepLike,
+  leadMessage: string
+) {
+  const branchSignature = step.branches
+    .map(
+      (branch) =>
+        `${branch.branchLabel.trim()}:${(branch.conditionDescription || '').trim()}`
+    )
+    .join('|');
+  return [
+    step.stepNumber,
+    leadMessage.trim().toLowerCase().replace(/\s+/g, ' '),
+    branchSignature
+  ].join('::');
+}
+
+async function resolveAnthropicApiKey(accountId?: string | null) {
+  if (accountId) {
+    const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
+    if (typeof anthropicCreds?.apiKey === 'string') {
+      const byokKey = anthropicCreds.apiKey.trim();
+      if (byokKey) return byokKey;
+    }
+  }
+  return process.env.ANTHROPIC_API_KEY?.trim() || null;
+}
+
+async function classifyJudgeBranchWithHaiku(params: {
+  step: JudgeStepLike;
+  leadMessage: string;
+  accountId?: string | null;
+}): Promise<string | null> {
+  const { step, leadMessage, accountId } = params;
+  const apiKey = await resolveAnthropicApiKey(accountId);
+  if (!apiKey) return null;
+
+  const branchLines = step.branches
+    .map(
+      (branch) =>
+        `- ${branch.branchLabel}: ${branch.conditionDescription || ''}`
+    )
+    .join('\n');
+  const prompt = `You are a branch router for a sales conversation.
+Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
+
+Lead message: ${leadMessage}
+
+Branches:
+${branchLines}
+
+Respond with ONLY the exact branchLabel of the best match. No explanation. No punctuation. Just the label.`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }]
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const text = data.content
+      ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim();
+    return text || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function selectJudgeBranchForLead(
+  step: JudgeStepLike | null | undefined,
+  leadMessage: string | null | undefined,
+  options?: {
+    accountId?: string | null;
+    cache?: JudgeBranchSelectionCache;
+    classifier?: JudgeBranchClassifier;
+  }
+): Promise<JudgeBranchMatch> {
+  const tokenMatch = scoreJudgeBranchesForLead(step, leadMessage);
+  if (
+    !step ||
+    !hasRuntimeJudgmentAction(step) ||
+    !leadMessage?.trim() ||
+    (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
+  ) {
+    return tokenMatch;
+  }
+
+  const cacheKey = buildJudgeBranchSelectionCacheKey(step, leadMessage);
+  const cached = options?.cache?.get(cacheKey);
+  if (cached) return cached;
+
+  const classifier = options?.classifier ?? classifyJudgeBranchWithHaiku;
+  const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
+    const selectedLabel = await classifier({
+      step,
+      leadMessage,
+      accountId: options?.accountId
+    });
+    const selectedBranch = selectedLabel
+      ? step.branches.find((branch) => branch.branchLabel === selectedLabel)
+      : null;
+
+    if (!selectedBranch) return tokenMatch;
+
+    console.warn('[branch-classifier] LLM fallback:', {
+      step: step.stepNumber,
+      leadMessageFirst100: leadMessage.slice(0, 100),
+      tokenScore: tokenMatch.tokenScoringResult ?? {
+        selectedBranchLabel: tokenMatch.branchLabel,
+        confidence: tokenMatch.confidence,
+        bestScore: tokenMatch.score,
+        secondScore: null,
+        tied: false
+      },
+      llmSelected: selectedLabel,
+      confidence: 'llm_classified'
+    });
+
+    return {
+      branchLabel: selectedBranch.branchLabel,
+      confidence: 'llm_classified',
+      score: tokenMatch.score,
+      tokenScoringResult: tokenMatch.tokenScoringResult
+    };
+  })().catch(() => tokenMatch);
+
+  options?.cache?.set(cacheKey, selectionPromise);
+  return selectionPromise;
 }
 
 function scriptedBranchActions(branch: JudgeBranchLike): JudgeActionLike[] {
@@ -620,6 +841,37 @@ function scriptedBranchActions(branch: JudgeBranchLike): JudgeActionLike[] {
         action.actionType === 'send_video') &&
       typeof action.content === 'string' &&
       action.content.trim().length > 0
+  );
+}
+
+function branchHasAskAction(branch: JudgeBranchLike | null | undefined) {
+  return !!branch?.actions.some(
+    (action) => action.actionType === 'ask_question'
+  );
+}
+
+function branchHasWaitAction(branch: JudgeBranchLike | null | undefined) {
+  return !!branch?.actions.some(
+    (action) => action.actionType === 'wait_for_response'
+  );
+}
+
+function branchHasRuntimeJudgmentOnly(
+  branch: JudgeBranchLike | null | undefined
+) {
+  if (!branch) return false;
+  return (
+    branch.actions.length > 0 &&
+    branch.actions.every((action) => action.actionType === 'runtime_judgment')
+  );
+}
+
+function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
+  if (!branch) return false;
+  return (
+    branchHasWaitAction(branch) &&
+    !branchHasAskAction(branch) &&
+    branch.actions.some((action) => action.actionType === 'send_message')
   );
 }
 
@@ -657,11 +909,13 @@ function missingRequiredBranchActions(
     .filter((content): content is string => !!content);
 }
 
-export function buildJudgeClassificationDirective(params: {
+export async function buildJudgeClassificationDirective(params: {
   step: JudgeStepLike | null | undefined;
   latestLeadMessage?: string | null;
-}): string {
-  const { step, latestLeadMessage } = params;
+  accountId?: string | null;
+  cache?: JudgeBranchSelectionCache;
+}): Promise<string> {
+  const { step, latestLeadMessage, accountId, cache } = params;
   if (!step || !hasRuntimeJudgmentAction(step)) return '';
 
   const branchLines = step.branches.map((branch) => {
@@ -670,7 +924,10 @@ export function buildJudgeClassificationDirective(params: {
       : '';
     return `- ${branch.branchLabel}${condition}`;
   });
-  const match = selectJudgeBranchForLead(step, latestLeadMessage);
+  const match = await selectJudgeBranchForLead(step, latestLeadMessage, {
+    accountId,
+    cache
+  });
   const matchedBranch = match.branchLabel
     ? step.branches.find((branch) => branch.branchLabel === match.branchLabel)
     : null;
@@ -700,12 +957,15 @@ export function buildJudgeClassificationDirective(params: {
   }\n\nRules:\n- Choose a branch before proceeding.\n- Do not default to the first, loudest, or most common branch.\n- Do not jump to the NEXT STEP preview until the selected branch's [MSG]/[ASK]/[WAIT] actions have been completed.\n- If the lead has already supplied enough information for a branch, do not ask the skipped branch's question.\n=====`;
 }
 
-export function detectJudgeBranchViolation(params: {
+export async function detectJudgeBranchViolation(params: {
   step: JudgeStepLike | null | undefined;
   latestLeadMessage?: string | null;
   generatedMessages: string[];
-}): JudgeBranchViolation {
-  const { step, latestLeadMessage, generatedMessages } = params;
+  accountId?: string | null;
+  cache?: JudgeBranchSelectionCache;
+}): Promise<JudgeBranchViolation> {
+  const { step, latestLeadMessage, generatedMessages, accountId, cache } =
+    params;
   if (!step || !hasRuntimeJudgmentAction(step)) {
     return {
       blocked: false,
@@ -715,7 +975,10 @@ export function detectJudgeBranchViolation(params: {
     };
   }
 
-  const match = selectJudgeBranchForLead(step, latestLeadMessage);
+  const match = await selectJudgeBranchForLead(step, latestLeadMessage, {
+    accountId,
+    cache
+  });
   if (!match.branchLabel) {
     return {
       blocked: false,
@@ -1573,11 +1836,6 @@ export async function generateReply(
       ? { ...leadContext, preQualified: undefined }
       : leadContext;
 
-  console.warn('[engine-debug] buildDynamicSystemPrompt called:', {
-    source: conversationCallState?.source,
-    manyChatFiredAt: conversationCallState?.manyChatFiredAt,
-    currentScriptStep: conversationCallState?.currentScriptStep
-  });
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     personaId,
@@ -2088,9 +2346,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const coldStartStep1Directive = coldStartStep1Inbound
     ? buildColdStartStep1InboundDirective()
     : '';
-  const judgeClassificationDirective = buildJudgeClassificationDirective({
+  const judgeBranchSelectionCache: JudgeBranchSelectionCache = new Map();
+  const judgeClassificationDirective = await buildJudgeClassificationDirective({
     step: scriptStateSnapshot?.currentStep ?? null,
-    latestLeadMessage: lastLeadMsg?.content ?? null
+    latestLeadMessage: lastLeadMsg?.content ?? null,
+    accountId,
+    cache: judgeBranchSelectionCache
   });
 
   const baseSystemPrompt =
@@ -2132,6 +2393,30 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         inferredStepNumberForGate
       )
     : null;
+  const currentJudgeBranchMatch = await selectJudgeBranchForLead(
+    scriptStateSnapshot?.currentStep ?? null,
+    lastLeadMsg?.content ?? null,
+    {
+      accountId,
+      cache: judgeBranchSelectionCache
+    }
+  );
+  const selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
+    ? scriptStateSnapshot?.currentStep?.branches.find(
+        (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
+      )
+    : null;
+  const currentStepHasAskBranch =
+    selectedCurrentJudgeBranch !== null &&
+    selectedCurrentJudgeBranch !== undefined
+      ? branchHasAskAction(selectedCurrentJudgeBranch)
+      : (currentStepShape?.hasAnyAskAction ?? false);
+  const currentStepActiveBranchIsSilent = selectedCurrentJudgeBranch
+    ? branchIsSilent(selectedCurrentJudgeBranch)
+    : false;
+  const currentStepActiveBranchIsJudgeOnly = selectedCurrentJudgeBranch
+    ? branchHasRuntimeJudgmentOnly(selectedCurrentJudgeBranch)
+    : false;
   if (scriptStateSnapshot?.script) {
     const selectedStep = scriptStateSnapshot.script.steps.find(
       (step) => step.stepNumber === inferredStepNumberForGate
@@ -2173,6 +2458,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepRequiredMessages:
       currentStepShape?.requiredMessageContents ?? [],
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
+    currentStepHasAskBranch,
+    currentStepActiveBranchIsSilent,
+    currentStepActiveBranchIsJudgeOnly,
     currentScriptStepNumber: inferredStepNumberForGate,
     aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
     skipLegacyPacingGates,
@@ -2415,13 +2703,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
     }
 
-    const judgeBranchViolation = detectJudgeBranchViolation({
+    const judgeBranchViolation = await detectJudgeBranchViolation({
       step: scriptStateSnapshot?.currentStep ?? null,
       latestLeadMessage: lastLeadMsg?.content ?? null,
       generatedMessages:
         parsed.messages && parsed.messages.length > 0
           ? parsed.messages
-          : [parsed.message]
+          : [parsed.message],
+      accountId,
+      cache: judgeBranchSelectionCache
     });
     if (judgeBranchViolation.blocked) {
       const judgeOverride = `\n\n===== [JUDGE] BRANCH MISMATCH — REGENERATE CURRENT BRANCH =====\n${judgeBranchViolation.reason}\n\nThe script engine already classified the latest lead reply into branch "${judgeBranchViolation.matchedBranchLabel}". You must run that branch's scripted actions now.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Using a different branch's [ASK] or [MSG]\n  ✗ Advancing to the NEXT STEP preview before the matched branch completes\n  ✗ Defaulting to a branch just because it appears later in the script\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the matched branch's [MSG]/[ASK] content verbatim or near-verbatim\n  ✓ Then wait for the lead's reply before advancing\n=====`;
@@ -2790,6 +3080,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const msgVerbatimViolationFailed = quality.hardFails.some((f) =>
       f.includes('msg_verbatim_violation:')
+    );
+    const missingRequiredQuestionFailed = quality.hardFails.some((f) =>
+      f.includes('missing_required_question_on_ask_step:')
     );
 
     if (
@@ -3498,6 +3791,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      if (missingRequiredQuestionFailed) {
+        const missingQuestionOverride = `\n\n===== REQUIRED QUESTION MISSING =====\nYour reply must end with a question to advance the conversation. The current step requires you to ask the lead something. Add the required question from the script before sending.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + missingQuestionOverride;
+        console.warn(
+          `[ai-engine] Required question missing on [ASK] branch — forcing regen (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       if (multipleQuestionsFailed) {
         const multiQOverride = `\n\n===== MULTIPLE QUESTIONS — ONE ONLY =====\nYour previous draft contained more than one question mark. Send ONE question per turn — pick the most important one for the current script step and drop the rest. The script's [ASK] actions all contain exactly one question; mirror that shape.\n=====`;
         systemPromptForLLM = baseSystemPrompt + multiQOverride;
@@ -4156,7 +4457,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('step_distance_violation:') ||
             f.includes('step_10_deep_why_skipped:') ||
             f.includes('call_proposal_prereqs_missing:') ||
-            f.includes('silent_branch_violated_with_question:')
+            f.includes('silent_branch_violated_with_question:') ||
+            f.includes('missing_required_question_on_ask_step:')
         );
         const softUnshippable = quality.hardFails.find(
           (f) =>
