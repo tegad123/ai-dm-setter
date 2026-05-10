@@ -544,7 +544,20 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
   context?: ScriptRoutingContext | null
 ): T[] {
   const mode = resolveStep1BranchMode(context);
-  if (!mode) return branches;
+  if (!mode) {
+    console.warn('[branch-debug] Step 1 selection:', {
+      source: context?.conversationSource ?? null,
+      leadSource: context?.leadSource ?? null,
+      manyChatFiredAt: context?.manyChatFiredAt ?? null,
+      msSinceManyChat: context?.manyChatFiredAt
+        ? (context.nowMs ?? Date.now()) -
+          new Date(context.manyChatFiredAt).getTime()
+        : null,
+      mode: null,
+      selectedBranch: branches.map((branch) => branch.branchLabel).join(' | ')
+    });
+    return branches;
+  }
 
   const selected =
     mode === 'manychat_cta'
@@ -566,7 +579,22 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
           );
         });
 
-  return selected.length > 0 ? selected : branches;
+  const finalSelection = selected.length > 0 ? selected : branches;
+  console.warn('[branch-debug] Step 1 selection:', {
+    source: context?.conversationSource ?? null,
+    leadSource: context?.leadSource ?? null,
+    manyChatFiredAt: context?.manyChatFiredAt ?? null,
+    msSinceManyChat: context?.manyChatFiredAt
+      ? (context.nowMs ?? Date.now()) -
+        new Date(context.manyChatFiredAt).getTime()
+      : null,
+    mode,
+    selectedBranch: finalSelection
+      .map((branch) => branch.branchLabel)
+      .join(' | ')
+  });
+
+  return finalSelection;
 }
 
 function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
