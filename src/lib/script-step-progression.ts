@@ -331,16 +331,23 @@ const ACTION_TAG: Record<string, string> = {
   wait_duration: 'WAIT'
 };
 
-function formatCompactAction(action: CompactScriptAction): string {
+function formatCompactAction(
+  action: CompactScriptAction,
+  context?: { previousAction?: CompactScriptAction | null }
+): string {
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
   switch (action.actionType) {
     case 'send_message':
       return `[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): ${action.content || '(empty)'}`;
     case 'ask_question':
+      const sameReplyPrefix =
+        context?.previousAction?.actionType === 'send_message'
+          ? 'ask immediately after the preceding [MSG], in the same reply; '
+          : '';
       if (/\{\{[^}]+\}\}/.test(action.content || '')) {
-        return `[${tag}] REQUIRED QUESTION (use this exact question, substituting the variable with what the lead actually said): ${action.content || '(empty)'}`;
+        return `[${tag}] REQUIRED QUESTION (${sameReplyPrefix}use this exact question, substituting the variable with what the lead actually said): ${action.content || '(empty)'}`;
       }
-      return `[${tag}] REQUIRED QUESTION (use this exact wording): ${action.content || '(empty)'}`;
+      return `[${tag}] REQUIRED QUESTION (${sameReplyPrefix}use this exact wording): ${action.content || '(empty)'}`;
     case 'runtime_judgment':
       return `[${tag}] ${action.content || 'Use your judgment'}`;
     case 'send_link':
@@ -358,6 +365,30 @@ function formatCompactAction(action: CompactScriptAction): string {
   }
 }
 
+function formatCompactActions(
+  actions: CompactScriptAction[],
+  indent: string
+): string[] {
+  const lines: string[] = [];
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    const previousAction = actions[i - 1] || null;
+    const nextAction = actions[i + 1] || null;
+
+    if (
+      action.actionType === 'send_message' &&
+      nextAction?.actionType === 'ask_question'
+    ) {
+      lines.push(
+        `${indent}[TURN] REQUIRED SAME-REPLY SEQUENCE: No [WAIT] appears between this [MSG] and [ASK], so send both in the same reply. Use the [MSG] as the opening and the [ASK] as the closing question.`
+      );
+    }
+
+    lines.push(`${indent}${formatCompactAction(action, { previousAction })}`);
+  }
+  return lines;
+}
+
 function renderStepLines(step: CompactScriptStep, indent = '  '): string[] {
   const lines: string[] = [];
   lines.push(`${indent}Step ${step.stepNumber}: ${step.title}`);
@@ -368,18 +399,14 @@ function renderStepLines(step: CompactScriptStep, indent = '  '): string[] {
     lines.push(`${indent}Canonical question: ${step.canonicalQuestion.trim()}`);
   }
   if (step.directActions.length > 0) {
-    for (const a of step.directActions) {
-      lines.push(`${indent}  ${formatCompactAction(a)}`);
-    }
+    lines.push(...formatCompactActions(step.directActions, `${indent}  `));
   }
   for (const branch of step.branches) {
     const cond = branch.conditionDescription
       ? ` (${branch.conditionDescription})`
       : '';
     lines.push(`${indent}  IF ${branch.branchLabel}${cond}:`);
-    for (const a of branch.actions) {
-      lines.push(`${indent}    ${formatCompactAction(a)}`);
-    }
+    lines.push(...formatCompactActions(branch.actions, `${indent}    `));
   }
   return lines;
 }
@@ -400,7 +427,7 @@ export function buildCurrentStepBlock(
     '',
     "You are working through a multi-step qualification script. Below is your CURRENT step and a brief preview of the NEXT step. Subsequent steps are intentionally hidden — DO NOT improvise your way to a later stage of the script. Complete the current step, wait for the lead's reply, then advance to the next step on the next turn.",
     '',
-    'IMPORTANT: When a [MSG] action has explicit content, use that content verbatim or near-verbatim — do not paraphrase into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments OK to match flow). Do not skip a step\'s [JUDGE], [MSG], or [ASK] just because the lead\'s last message could "pattern-match" a later stage.',
+    'IMPORTANT: When a [MSG] action has explicit content, use that content verbatim or near-verbatim — do not paraphrase into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments OK to match flow). A [WAIT] action is what separates turns. If [MSG] is followed immediately by [ASK] with no [WAIT] between them, send BOTH in the same reply: [MSG] as the opening and [ASK] as the closing question. Do not skip a step\'s [JUDGE], [MSG], or [ASK] just because the lead\'s last message could "pattern-match" a later stage.',
     ''
   ];
 

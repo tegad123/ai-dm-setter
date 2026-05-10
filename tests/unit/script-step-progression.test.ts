@@ -494,6 +494,59 @@ describe('buildCurrentStepBlock', () => {
     assert.match(block!, /Step 22/);
     assert.equal(block!.includes('NEXT STEP'), false);
   });
+
+  it('renders immediate [MSG] + [ASK] as one same-reply turn', () => {
+    const current = makeStep({
+      stepNumber: 1,
+      title: 'Warm Inbound',
+      directActions: [
+        {
+          actionType: 'send_message',
+          content:
+            "Hey, respect for reaching out! Let's see if I can help you out here"
+        },
+        {
+          actionType: 'ask_question',
+          content:
+            'So are you new in the markets or have you been trading for a while?'
+        },
+        { actionType: 'wait_for_response' }
+      ]
+    });
+
+    const block = buildCurrentStepBlock(current, null);
+    assert.ok(block);
+    assert.match(block!, /REQUIRED SAME-REPLY SEQUENCE/);
+    assert.match(
+      block!,
+      /No \[WAIT\] appears between this \[MSG\] and \[ASK\]/
+    );
+    assert.match(
+      block!,
+      /REQUIRED QUESTION \(ask immediately after the preceding \[MSG\], in the same reply; use this exact wording\)/
+    );
+    assert.match(block!, /\[WAIT\] Wait for response/);
+  });
+
+  it('does not mark [MSG] and [ASK] as same-reply when [WAIT] separates them', () => {
+    const current = makeStep({
+      stepNumber: 1,
+      title: 'Separated Turns',
+      directActions: [
+        { actionType: 'send_message', content: 'Hey, quick one.' },
+        { actionType: 'wait_for_response' },
+        { actionType: 'ask_question', content: 'How long have you traded?' }
+      ]
+    });
+
+    const block = buildCurrentStepBlock(current, null);
+    assert.ok(block);
+    assert.equal(block!.includes('REQUIRED SAME-REPLY SEQUENCE'), false);
+    assert.equal(
+      block!.includes('ask immediately after the preceding [MSG]'),
+      false
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -185,9 +185,7 @@ export async function serializeScriptForPrompt(
     }
 
     if (step.actions.length > 0) {
-      for (const action of step.actions) {
-        stepLines.push(serializeAction(action, '    '));
-      }
+      stepLines.push(...serializeActionSequence(step.actions, '    '));
     }
 
     if (step.branches.length > 0) {
@@ -226,9 +224,7 @@ export async function serializeScriptForPrompt(
           );
         }
 
-        for (const action of branch.actions) {
-          stepLines.push(serializeAction(action, '    '));
-        }
+        stepLines.push(...serializeActionSequence(branch.actions, '    '));
       }
     }
   }
@@ -263,7 +259,7 @@ export async function serializeScriptForPrompt(
     parts.push(
       `## Script Framework — CURRENT STEP ONLY\n` +
         `You are working through a multi-step qualification script. Below is your CURRENT step and a brief preview of the NEXT step. Subsequent steps are intentionally hidden — do NOT improvise your way to a later stage of the script. Complete the current step's [JUDGE]/[MSG]/[ASK] actions, wait for the lead's reply, then advance one step on the next turn.\n\n` +
-        `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). When a step's branch contains [MSG] + [WAIT] but NO [ASK], you must ACKNOWLEDGE ONLY — do not append a question. Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).${silentBranchDirective}\n${stepLines.join('\n')}`
+        `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). A [WAIT] action is what separates turns. If [MSG] is followed immediately by [ASK] with no [WAIT] between them, send BOTH in the same reply: [MSG] as the opening and [ASK] as the closing question. When a step's branch contains [MSG] + [WAIT] but NO [ASK], you must ACKNOWLEDGE ONLY — do not append a question. Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).${silentBranchDirective}\n${stepLines.join('\n')}`
     );
     console.log(
       '[serializer-debug] injected prompt segment:',
@@ -271,7 +267,7 @@ export async function serializeScriptForPrompt(
     );
   } else {
     parts.push(
-      `## Script Framework (Follow this sequence)\nIMPORTANT: Text inside {{double curly braces}} is a runtime placeholder. Replace it with contextually appropriate content based on the conversation so far. For example, "{{customize to their stated goal}}" means you should insert language specific to what the prospect told you about their goal.\n${stepLines.join('\n')}`
+      `## Script Framework (Follow this sequence)\nIMPORTANT: Text inside {{double curly braces}} is a runtime placeholder. Replace it with contextually appropriate content based on the conversation so far. For example, "{{customize to their stated goal}}" means you should insert language specific to what the prospect told you about their goal. A [WAIT] action is what separates turns. If [MSG] is followed immediately by [ASK] with no [WAIT] between them, send BOTH in the same reply: [MSG] as the opening and [ASK] as the closing question.\n${stepLines.join('\n')}`
     );
   }
 
@@ -459,21 +455,53 @@ export async function serializeScriptForPrompt(
 // Helper: serialize a single action into a prompt line
 // ---------------------------------------------------------------------------
 
-function serializeAction(
-  action: {
-    actionType: string;
-    content?: string | null;
-    linkUrl?: string | null;
-    linkLabel?: string | null;
-    waitDuration?: number | null;
-    bindingMode?: string | null;
-    voiceNote?: { id: string; userLabel: string | null } | null;
-    form?: {
-      name: string;
-      fields: { fieldLabel: string; fieldValue: string | null }[];
-    } | null;
-  },
+type SerializableAction = {
+  actionType: string;
+  content?: string | null;
+  linkUrl?: string | null;
+  linkLabel?: string | null;
+  waitDuration?: number | null;
+  bindingMode?: string | null;
+  voiceNote?: { id: string; userLabel: string | null } | null;
+  form?: {
+    name: string;
+    fields: { fieldLabel: string; fieldValue: string | null }[];
+  } | null;
+};
+
+function serializeActionSequence(
+  actions: SerializableAction[],
   indent: string
+): string[] {
+  const lines: string[] = [];
+
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    const previousAction = actions[i - 1] || null;
+    const nextAction = actions[i + 1] || null;
+
+    if (
+      action.actionType === 'send_message' &&
+      nextAction?.actionType === 'ask_question'
+    ) {
+      lines.push(
+        `${indent}[TURN] REQUIRED SAME-REPLY SEQUENCE: No [WAIT] appears between this [MSG] and [ASK], so send both in the same reply. Use the [MSG] as the opening and the [ASK] as the closing question.`
+      );
+    }
+
+    lines.push(serializeAction(action, indent, { previousAction, nextAction }));
+  }
+
+  return lines;
+}
+
+function serializeAction(
+  action: SerializableAction,
+  indent: string,
+  context?: {
+    previousAction?: SerializableAction | null;
+    nextAction?: SerializableAction | null;
+  }
 ): string {
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
 
@@ -483,9 +511,13 @@ function serializeAction(
 
     case 'ask_question': {
       const content = action.content || '(empty)';
+      const sameReplyPrefix =
+        context?.previousAction?.actionType === 'send_message'
+          ? 'ask immediately after the preceding [MSG], in the same reply; '
+          : '';
       const requirement = /\{\{[^}]+\}\}/.test(content)
-        ? 'REQUIRED QUESTION (use this exact question, substituting the variable with what the lead actually said)'
-        : 'REQUIRED QUESTION (use this exact wording)';
+        ? `REQUIRED QUESTION (${sameReplyPrefix}use this exact question, substituting the variable with what the lead actually said)`
+        : `REQUIRED QUESTION (${sameReplyPrefix}use this exact wording)`;
       return `${indent}[${tag}] ${requirement}: "${content}"`;
     }
 
