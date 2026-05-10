@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
 // script-serializer.ts
+// force-redeploy: step1-branch-filter-active
 // ---------------------------------------------------------------------------
 // Reads the active Script for an account and generates a structured text
 // block suitable for injection into the AI system prompt.
