@@ -542,24 +542,27 @@ function actionSimilarityScore(actionContent: string, generated: string) {
   return matches / actionTokens.size;
 }
 
-function generatedMatchesAnyAction(
+function missingRequiredBranchActions(
   actions: JudgeActionLike[],
   generated: string,
   threshold = 0.45
-) {
-  return actions.some((action) => {
-    const content = action.content?.trim();
-    if (!content) return false;
-    const normalizedGenerated = generated.toLowerCase();
-    const normalizedContent = content.toLowerCase();
-    if (
-      normalizedContent.length >= 18 &&
-      normalizedGenerated.includes(normalizedContent.slice(0, 40).trim())
-    ) {
-      return true;
-    }
-    return actionSimilarityScore(content, generated) >= threshold;
-  });
+): string[] {
+  return actions
+    .filter((action) => {
+      const content = action.content?.trim();
+      if (!content) return false;
+      const normalizedGenerated = generated.toLowerCase();
+      const normalizedContent = content.toLowerCase();
+      if (
+        normalizedContent.length >= 18 &&
+        normalizedGenerated.includes(normalizedContent.slice(0, 40).trim())
+      ) {
+        return false;
+      }
+      return actionSimilarityScore(content, generated) < threshold;
+    })
+    .map((action) => action.content?.trim())
+    .filter((content): content is string => !!content);
 }
 
 export function buildJudgeClassificationDirective(params: {
@@ -653,8 +656,11 @@ export function detectJudgeBranchViolation(params: {
   }
 
   const generated = generatedMessages.join('\n');
-  const matchesExpected = generatedMatchesAnyAction(expectedActions, generated);
-  if (matchesExpected) {
+  const missingActions = missingRequiredBranchActions(
+    expectedActions,
+    generated
+  );
+  if (missingActions.length === 0) {
     return {
       blocked: false,
       reason: null,
@@ -665,7 +671,7 @@ export function detectJudgeBranchViolation(params: {
 
   return {
     blocked: true,
-    reason: `Current [JUDGE] step matched branch "${match.branchLabel}", but the generated reply did not use that branch's scripted actions.`,
+    reason: `Current [JUDGE] step matched branch "${match.branchLabel}", but the generated reply skipped required scripted action(s): ${missingActions.map((action) => `"${action}"`).join(', ')}.`,
     matchedBranchLabel: match.branchLabel,
     fallbackMessages: expectedActions
       .map((action) => action.content?.trim())

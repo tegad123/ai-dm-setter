@@ -237,6 +237,40 @@ function main() {
     'Hell yeah man, good spot to be in.'
   );
 
+  const skippedAffirmationViolation = detectJudgeBranchViolation({
+    step: judgeStep,
+    latestLeadMessage: 'looking to start',
+    generatedMessages: [
+      'gotchu bro, are you doing this full time or do you have something on the side too?'
+    ]
+  });
+
+  expect(
+    'judge gate blocks matched branch when first required message is skipped',
+    skippedAffirmationViolation.blocked,
+    true
+  );
+  expect(
+    'judge gate fallback restores the skipped beginner affirmation',
+    skippedAffirmationViolation.fallbackMessages[0],
+    'Hell yeah man, good spot to be in.'
+  );
+
+  const completeBranchViolation = detectJudgeBranchViolation({
+    step: judgeStep,
+    latestLeadMessage: 'looking to start',
+    generatedMessages: [
+      'Hell yeah man, good spot to be in.',
+      'What do you do for work right now?'
+    ]
+  });
+
+  expect(
+    'judge gate allows complete matched branch action sequence',
+    completeBranchViolation.blocked,
+    false
+  );
+
   console.log('\n----');
   console.log(`PASS ${pass}  FAIL ${fail}`);
   process.exit(fail === 0 ? 0 : 1);
