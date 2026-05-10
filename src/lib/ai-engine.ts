@@ -48,6 +48,7 @@ import {
 } from '@/lib/runtime-judgment-evaluator';
 import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
 import {
+  detectBeliefBreakDeliveryStage,
   detectBeliefBreakInMessage,
   getStepActionShape,
   hasCapturedDataPoint,
@@ -2081,6 +2082,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepSilentBranchLabels: currentStepShape?.silentBranchLabels ?? [],
     currentStepScriptedQuestions:
       currentStepShape?.scriptedQuestionContents ?? [],
+    currentStepRequiredMessages:
+      currentStepShape?.requiredMessageContents ?? [],
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
     currentScriptStepNumber: inferredStepNumberForGate,
     aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
@@ -2696,6 +2699,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     const mandatoryAskSkippedFailed = quality.hardFails.some((f) =>
       f.includes('mandatory_ask_skipped:')
+    );
+    const msgVerbatimViolationFailed = quality.hardFails.some((f) =>
+      f.includes('msg_verbatim_violation:')
     );
 
     if (
@@ -3444,6 +3450,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      if (msgVerbatimViolationFailed) {
+        const requiredMsg =
+          currentStepShape?.requiredMessageContents?.[0]?.trim() || '';
+        const msgOverride = `\n\n===== REQUIRED SCRIPT MESSAGE NOT FOLLOWED =====\nYour reply does not match the required script message for this step.\n\nYou must open with this EXACT text:\n"${requiredMsg}"\n\nDo not paraphrase. Do not reorder. Copy it word for word. If this step contains more required [MSG] actions after pauses, send each required [MSG] as its own separate bubble in script order before the [ASK].\n=====`;
+        systemPromptForLLM = baseSystemPrompt + msgOverride;
+        console.warn(
+          `[ai-engine] Required [MSG] verbatim violation — forcing regen (attempt ${attempt + 1}/${MAX_RETRIES + 1}). expected="${requiredMsg.slice(0, 120)}"`
+        );
+      }
+
       if (mandatoryAskSkippedFailed) {
         const askHardFail = quality.hardFails.find((f) =>
           f.includes('mandatory_ask_skipped:')
@@ -4040,6 +4056,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // reply. Escalate to operator instead so they manually
             // continue the conversation from the right step.
             f.includes('capital_question_premature:') ||
+            f.includes('msg_verbatim_violation:') ||
             f.includes('mandatory_ask_skipped:') ||
             f.includes('step_distance_violation:') ||
             f.includes('step_10_deep_why_skipped:') ||
@@ -4453,23 +4470,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // already wrote on this turn; new captures from the LLM overwrite
   // matching keys with the freshest signal.
   //
-  // Also synthesise `beliefBreakDelivered: true` when the AI's reply
-  // matches the daetradez Step 13 reframe trigger phrases ("99% of
-  // traders ...", "Brother that's totally normal ..."). This is a
-  // call-proposal prereq the LLM doesn't explicitly emit — the
-  // post-generation detector watches the actual ship content so the
-  // gate clears correctly on the next turn.
+  // Also synthesise `beliefBreakDelivered` when the AI's reply matches
+  // the Step 13 reframe. This prereq must progress through bubble1 ->
+  // bubble2 -> complete; a single "99% of traders" opener is not
+  // enough to clear call/capital gates.
   const llmCaptures = parsed.capturedDataPoints || null;
   let synthesisedCaptures: Record<string, string> | null = null;
   const replyForBeliefDetection = parsed.messages.join('\n');
-  if (
+  const beliefBreakStage = detectBeliefBreakDeliveryStage(
+    parsed.messages.map((content) => ({ content }))
+  );
+  if (beliefBreakStage) {
+    synthesisedCaptures = { beliefBreakDelivered: beliefBreakStage };
+  } else if (
     detectBeliefBreakInMessage(replyForBeliefDetection) &&
     !hasCapturedDataPoint(
       scriptStateSnapshot?.capturedDataPoints ?? null,
       'beliefBreakDelivered'
     )
   ) {
-    synthesisedCaptures = { beliefBreakDelivered: 'true' };
+    synthesisedCaptures = { beliefBreakDelivered: 'bubble1' };
   }
   const totalCaptures =
     llmCaptures || synthesisedCaptures

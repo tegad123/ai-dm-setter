@@ -19,7 +19,7 @@ import {
 
 // Action type → prompt tag mapping
 const ACTION_TAG: Record<string, string> = {
-  send_message: 'SEND',
+  send_message: 'MSG',
   ask_question: 'ASK',
   send_voice_note: 'VOICE NOTE',
   send_link: 'LINK',
@@ -474,8 +474,15 @@ function serializeAction(
 
   switch (action.actionType) {
     case 'send_message':
-    case 'ask_question':
-      return `${indent}[${tag}] ${action.content || '(empty)'}`;
+      return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${action.content || '(empty)'}"`;
+
+    case 'ask_question': {
+      const content = action.content || '(empty)';
+      const requirement = /\{\{[^}]+\}\}/.test(content)
+        ? 'REQUIRED QUESTION (use this exact question, substituting the variable with what the lead actually said)'
+        : 'REQUIRED QUESTION (use this exact wording)';
+      return `${indent}[${tag}] ${requirement}: "${content}"`;
+    }
 
     case 'send_voice_note':
       // Specific binding: use the bound voice note ID
@@ -492,7 +499,7 @@ function serializeAction(
     case 'send_link':
     case 'send_video':
       if (action.linkUrl) {
-        return `${indent}[${tag}] ${action.linkLabel || action.content || 'Link'}: ${action.linkUrl}`;
+        return `${indent}[${tag}] REQUIRED LINK: Send this URL: ${action.linkUrl}\n${indent}Do not alter, shorten, or paraphrase this URL.`;
       }
       return `${indent}[${tag}] ${action.content || '(URL not yet configured)'}`;
 
@@ -509,7 +516,7 @@ function serializeAction(
       return `${indent}[${tag}] Wait for response`;
 
     case 'wait_duration':
-      return `${indent}[${tag}] Wait ${action.waitDuration || 0} seconds`;
+      return `${indent}[${tag}] PAUSE: Send the previous message as its own bubble, wait ${action.waitDuration || 0} seconds, then continue to the next message.`;
 
     default:
       return `${indent}[${action.actionType}] ${action.content || ''}`;

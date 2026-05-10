@@ -56,6 +56,20 @@ export function hasCapturedDataPoint(
   return false;
 }
 
+function capturedPointValue(
+  points: Record<string, unknown> | null | undefined,
+  key: string
+): unknown {
+  if (!points) return null;
+  const raw = points[key];
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const wrapped = raw as Record<string, unknown>;
+    return 'value' in wrapped ? wrapped.value : raw;
+  }
+  return raw;
+}
+
 // ---------------------------------------------------------------------------
 // Call-proposal prereq gate
 // ---------------------------------------------------------------------------
@@ -154,7 +168,15 @@ export function checkCallProposalPrereqs(
 ): CallProposalPrereq[] {
   return CALL_PROPOSAL_PREREQS.filter(
     (prereq) =>
-      !prereq.acceptableKeys.some((key) => hasCapturedDataPoint(points, key))
+      !prereq.acceptableKeys.some((key) => {
+        if (
+          key === 'beliefBreakDelivered' ||
+          key === 'belief_break_delivered'
+        ) {
+          return capturedPointValue(points, key) === 'complete';
+        }
+        return hasCapturedDataPoint(points, key);
+      })
   );
 }
 
@@ -206,9 +228,9 @@ export function detectCallProposalAttempt(reply: string): boolean {
 //       discipline reframe.
 //   (b) Beginner branch: "Brother that's totally normal ... you're not
 //       carrying all the bad habits..."
-// We watch the AI's emitted history; once either fires, set
-// capturedDataPoints.beliefBreakDelivered = true so the call-proposal
-// gate can clear that prereq.
+// We watch the AI's emitted history and require the full multi-message
+// belief break to land before capturedDataPoints.beliefBreakDelivered
+// reaches "complete". A single "99% of traders" opener is only bubble1.
 
 const BELIEF_BREAK_TRIGGER_PATTERNS: RegExp[] = [
   // Psychology/Discipline branch
@@ -240,6 +262,30 @@ export function detectBeliefBreakDelivered(
     }
   }
   return false;
+}
+
+export type BeliefBreakDeliveryStage = 'bubble1' | 'bubble2' | 'complete';
+
+const BELIEF_BREAK_BUBBLE_1 = /\b99%\s+of\s+traders\b/i;
+const BELIEF_BREAK_BUBBLE_2 =
+  /\bdiscipline\s+takes\s+time\s+to\s+build\b|\bperson\s+behind\s+them\b/i;
+const BELIEF_BREAK_BUBBLE_3 =
+  /\bwhat'?s\s+really\s+the\s+bottleneck\b|\bsystems?\s+you\s+have\s+in\s+place\b/i;
+const BELIEF_BREAK_FINAL_ASK =
+  /\bwhat\s+would\s+that\s+do\s+for\s+your\s+trading\b|\bwhat\s+would\s+that\s+do\b/i;
+
+export function detectBeliefBreakDeliveryStage(
+  aiMessages: Array<{ content: string | null | undefined }>
+): BeliefBreakDeliveryStage | null {
+  if (!Array.isArray(aiMessages)) return null;
+  const joined = aiMessages
+    .map((m) => m.content || '')
+    .join('\n')
+    .toLowerCase();
+  if (!BELIEF_BREAK_BUBBLE_1.test(joined)) return null;
+  if (!BELIEF_BREAK_BUBBLE_2.test(joined)) return 'bubble1';
+  if (!BELIEF_BREAK_BUBBLE_3.test(joined)) return 'bubble2';
+  return BELIEF_BREAK_FINAL_ASK.test(joined) ? 'complete' : 'bubble2';
 }
 
 // ---------------------------------------------------------------------------
@@ -289,20 +335,24 @@ function formatCompactAction(action: CompactScriptAction): string {
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
   switch (action.actionType) {
     case 'send_message':
+      return `[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): ${action.content || '(empty)'}`;
     case 'ask_question':
-      return `[${tag}] ${action.content || '(empty)'}`;
+      if (/\{\{[^}]+\}\}/.test(action.content || '')) {
+        return `[${tag}] REQUIRED QUESTION (use this exact question, substituting the variable with what the lead actually said): ${action.content || '(empty)'}`;
+      }
+      return `[${tag}] REQUIRED QUESTION (use this exact wording): ${action.content || '(empty)'}`;
     case 'runtime_judgment':
       return `[${tag}] ${action.content || 'Use your judgment'}`;
     case 'send_link':
     case 'send_video':
       if (action.linkUrl) {
-        return `[${tag}] ${action.linkLabel || action.content || 'Link'}: ${action.linkUrl}`;
+        return `[${tag}] REQUIRED LINK: Send this URL: ${action.linkUrl}. Do not alter, shorten, or paraphrase this URL.`;
       }
       return `[${tag}] ${action.content || '(URL not yet configured)'}`;
     case 'wait_for_response':
       return `[${tag}] Wait for response`;
     case 'wait_duration':
-      return `[${tag}] Wait ${action.waitDuration ?? 0} seconds`;
+      return `[${tag}] PAUSE: Send the previous message as its own bubble, wait ${action.waitDuration ?? 0} seconds, then continue to the next message.`;
     default:
       return `[${tag}] ${action.content || ''}`;
   }
@@ -402,6 +452,8 @@ export interface StepActionShape {
   hasAnyAskAction: boolean;
   /** Concatenated [ASK] content strings across branches (for off-script comparison). */
   scriptedQuestionContents: string[];
+  /** Direct current-step [MSG] contents that must be sent verbatim. */
+  requiredMessageContents: string[];
   /** Branch labels that are silent (for prompt directive + audit log). */
   silentBranchLabels: string[];
 }
@@ -447,7 +499,18 @@ export function getStepActionShape(
 
   const silentBranchLabels: string[] = [];
   const scriptedQuestionContents: string[] = [];
+  const requiredMessageContents: string[] = [];
   let hasAnyAskAction = false;
+
+  for (const action of step.actions) {
+    if (
+      action.actionType === 'send_message' &&
+      typeof action.content === 'string' &&
+      action.content.trim().length > 0
+    ) {
+      requiredMessageContents.push(action.content.trim());
+    }
+  }
 
   for (const branch of allBranches) {
     const askActions = branch.actions.filter(
@@ -480,6 +543,7 @@ export function getStepActionShape(
     hasSilentBranch: silentBranchLabels.length > 0,
     hasAnyAskAction,
     scriptedQuestionContents,
+    requiredMessageContents,
     silentBranchLabels
   };
 }
@@ -637,10 +701,14 @@ export const MANDATORY_ASK_STEPS: MandatoryAskRequirement[] = [
     label: 'Step 8 (Replace vs Supplement) — "Replace your job or supplement?"',
     askPhraseFragments: [
       'replacing your job',
+      'replacing your job completely',
       'replace your job',
+      'replace.*job.*trading',
       'replace.{0,15}completely with trading',
       'extra income on the side',
+      'supplement.*income',
       'supplement',
+      'replace.*completely.*trading',
       'replace.{0,30}\\bor\\b.{0,30}\\bextra\\b'
     ]
   }
@@ -830,7 +898,15 @@ export function checkCapitalQuestionPrereqs(
 ): CapitalQuestionPrereq[] {
   return CAPITAL_QUESTION_PREREQS.filter(
     (prereq) =>
-      !prereq.acceptableKeys.some((key) => hasCapturedDataPoint(points, key))
+      !prereq.acceptableKeys.some((key) => {
+        if (
+          key === 'beliefBreakDelivered' ||
+          key === 'belief_break_delivered'
+        ) {
+          return capturedPointValue(points, key) === 'complete';
+        }
+        return hasCapturedDataPoint(points, key);
+      })
   );
 }
 

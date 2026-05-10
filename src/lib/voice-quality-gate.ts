@@ -734,6 +734,11 @@ export interface VoiceQualityOptions {
    * scripted asks is below threshold.
    */
   currentStepScriptedQuestions?: string[];
+  /**
+   * Direct current-step [MSG] action contents that must be delivered
+   * verbatim or near-verbatim before the model advances.
+   */
+  currentStepRequiredMessages?: string[];
   /** True when the current step has at least one [ASK] action in any branch. */
   currentStepHasAnyAskAction?: boolean;
   /**
@@ -932,6 +937,119 @@ export interface VoiceQualityOptions {
    * and ignores the rest.
    */
   conversationHistory?: ReadonlyArray<{ sender: string; content: string }>;
+}
+
+export interface MsgVerbatimViolation {
+  expected: string;
+  generated: string;
+  overlap: number;
+}
+
+function stripScriptVariables(text: string): string {
+  return text.replace(/\{\{\s*[^}]+\s*\}\}/g, ' ');
+}
+
+function normalizeForVerbatimCompare(text: string): string {
+  return stripScriptVariables(text)
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenSetForVerbatimCompare(text: string): Set<string> {
+  return new Set(
+    normalizeForVerbatimCompare(text)
+      .split(/\s+/)
+      .filter((token) => token.length > 1)
+  );
+}
+
+function wordOverlapRatio(required: string, generated: string): number {
+  const requiredTokens = tokenSetForVerbatimCompare(required);
+  if (requiredTokens.size === 0) return 1;
+  const generatedTokens = tokenSetForVerbatimCompare(generated);
+  let matches = 0;
+  for (const token of Array.from(requiredTokens)) {
+    if (generatedTokens.has(token)) matches++;
+  }
+  return matches / requiredTokens.size;
+}
+
+function requiredMessageMatchesGenerated(
+  required: string,
+  generated: string,
+  overlapThreshold = 0.6
+): boolean {
+  const normalizedRequired = normalizeForVerbatimCompare(required);
+  if (normalizedRequired.length === 0) return true;
+  const normalizedGenerated = normalizeForVerbatimCompare(generated);
+  if (normalizedGenerated.includes(normalizedRequired)) return true;
+  return wordOverlapRatio(required, generated) >= overlapThreshold;
+}
+
+export function detectMsgVerbatimViolation(
+  generatedReply: string,
+  currentStepMsgActions: Array<{ content?: string | null } | string>
+): MsgVerbatimViolation | null {
+  const requiredMessages = currentStepMsgActions
+    .map((action) => (typeof action === 'string' ? action : action.content))
+    .filter((content): content is string =>
+      Boolean(content && content.trim().length > 0)
+    );
+
+  for (const required of requiredMessages) {
+    if (!requiredMessageMatchesGenerated(required, generatedReply)) {
+      return {
+        expected: required,
+        generated: generatedReply,
+        overlap: wordOverlapRatio(required, generatedReply)
+      };
+    }
+  }
+
+  return null;
+}
+
+export function detectMsgBubbleSequenceViolation(
+  messages: string[],
+  currentStepMsgActions: Array<{ content?: string | null } | string>
+): MsgVerbatimViolation | null {
+  const requiredMessages = currentStepMsgActions
+    .map((action) => (typeof action === 'string' ? action : action.content))
+    .filter((content): content is string =>
+      Boolean(content && content.trim().length > 0)
+    );
+  if (requiredMessages.length <= 1) return null;
+
+  let nextBubbleIndex = 0;
+  for (const required of requiredMessages) {
+    let matchedIndex = -1;
+    let bestOverlap = 0;
+
+    for (let i = nextBubbleIndex; i < messages.length; i++) {
+      const bubble = messages[i] || '';
+      const overlap = wordOverlapRatio(required, bubble);
+      bestOverlap = Math.max(bestOverlap, overlap);
+      if (requiredMessageMatchesGenerated(required, bubble)) {
+        matchedIndex = i;
+        break;
+      }
+    }
+
+    if (matchedIndex === -1) {
+      return {
+        expected: required,
+        generated: messages.join(' '),
+        overlap: bestOverlap
+      };
+    }
+
+    nextBubbleIndex = matchedIndex + 1;
+  }
+
+  return null;
 }
 
 // ─── R37 burst extension (Jefferson @namejeffe 2026-05-03) ────────
@@ -3370,6 +3488,37 @@ export function scoreVoiceQualityGroup(
   // "yo bro caught the story 💪🏿" stall without false-firing on legit
   // multi-bubble splits where bubble 1 carries the question.
   const joined = messages.join(' ');
+  const msgViolation =
+    Array.isArray(options?.currentStepRequiredMessages) &&
+    options.currentStepRequiredMessages.length > 0
+      ? detectMsgVerbatimViolation(joined, options.currentStepRequiredMessages)
+      : null;
+  if (msgViolation) {
+    console.warn(
+      `[voice-quality-gate] msg_verbatim_violation: expected '${msgViolation.expected.slice(0, 50)}', got '${msgViolation.generated.slice(0, 50)}'`
+    );
+    hardFails.push(
+      `[group] msg_verbatim_violation: expected="${msgViolation.expected.slice(0, 160)}" overlap=${msgViolation.overlap.toFixed(2)}`
+    );
+  }
+  const msgSequenceViolation =
+    !msgViolation &&
+    Array.isArray(options?.currentStepRequiredMessages) &&
+    options.currentStepRequiredMessages.length > 1
+      ? detectMsgBubbleSequenceViolation(
+          messages,
+          options.currentStepRequiredMessages
+        )
+      : null;
+  if (msgSequenceViolation) {
+    console.warn(
+      `[voice-quality-gate] msg_verbatim_violation: expected separate bubble '${msgSequenceViolation.expected.slice(0, 50)}', got '${msgSequenceViolation.generated.slice(0, 50)}'`
+    );
+    hardFails.push(
+      `[group] msg_verbatim_violation: required_message_not_in_separate_bubble expected="${msgSequenceViolation.expected.slice(0, 160)}" overlap=${msgSequenceViolation.overlap.toFixed(2)}`
+    );
+  }
+
   const ackFailure = checkCtaAckOnlyTruncation(joined);
   if (ackFailure) {
     hardFails.push(`[group] ${ackFailure}`);

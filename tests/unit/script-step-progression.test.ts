@@ -22,6 +22,7 @@ import {
   countQuestionMarks,
   detectAcknowledgmentOpener,
   detectAskFiredInHistory,
+  detectBeliefBreakDeliveryStage,
   detectBeliefBreakDelivered,
   detectBeliefBreakInMessage,
   detectCallProposalAttempt,
@@ -40,6 +41,11 @@ import {
   maxQuestionSimilarityToScript,
   type CompactScriptStep
 } from '../../src/lib/script-step-progression';
+import {
+  detectMsgBubbleSequenceViolation,
+  detectMsgVerbatimViolation,
+  scoreVoiceQualityGroup
+} from '../../src/lib/voice-quality-gate';
 
 // ---------------------------------------------------------------------------
 // hasCapturedDataPoint — accepts both flat and {value,confidence} shapes
@@ -165,10 +171,26 @@ describe('checkCallProposalPrereqs', () => {
       incomeGoal: '15000',
       desiredOutcome: 'family freedom',
       obstacle: "can't stick to a system",
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
     };
     assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('requires beliefBreakDelivered to be complete, not merely truthy', () => {
+    const points = {
+      workBackground: 'engineer',
+      monthlyIncome: '5000',
+      replaceOrSupplement: 'replace',
+      incomeGoal: '15000',
+      desiredOutcome: 'family freedom',
+      obstacle: "can't stick to a system",
+      beliefBreakDelivered: 'bubble1',
+      buyInConfirmed: 'true'
+    };
+    const missing = checkCallProposalPrereqs(points);
+    assert.equal(missing.length, 1);
+    assert.equal(missing[0].id, 'belief_break_delivered');
   });
 
   it('accepts early_obstacle as a substitute for obstacle', () => {
@@ -179,7 +201,7 @@ describe('checkCallProposalPrereqs', () => {
       incomeGoal: '15000',
       desiredOutcome: 'family freedom',
       early_obstacle: 'blowing accounts',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
     };
     assert.deepEqual(checkCallProposalPrereqs(points), []);
@@ -193,7 +215,7 @@ describe('checkCallProposalPrereqs', () => {
       incomeGoal: '4000',
       deepWhy: 'want to retire my mom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
     };
     assert.deepEqual(checkCallProposalPrereqs(points), []);
@@ -224,7 +246,7 @@ describe('checkCallProposalPrereqs', () => {
       incomeGoal: { value: '15000', confidence: 'HIGH' },
       desiredOutcome: { value: 'family', confidence: 'HIGH' },
       obstacle: { value: 'no system', confidence: 'HIGH' },
-      beliefBreakDelivered: { value: true, confidence: 'HIGH' },
+      beliefBreakDelivered: { value: 'complete', confidence: 'HIGH' },
       buyInConfirmed: { value: true, confidence: 'HIGH' }
     };
     assert.deepEqual(checkCallProposalPrereqs(points), []);
@@ -238,7 +260,7 @@ describe('checkCallProposalPrereqs', () => {
       incomeGoal: '20000',
       desiredOutcome: 'family',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
     };
     assert.deepEqual(checkCallProposalPrereqs(points), []);
@@ -311,6 +333,38 @@ describe('detectBeliefBreakDelivered', () => {
   it('handles null/empty content safely', () => {
     const messages = [{ content: null }, { content: '' }];
     assert.equal(detectBeliefBreakDelivered(messages), false);
+  });
+});
+
+describe('bug-31-belief-break-three-bubbles', () => {
+  it('tracks the three-message belief break through bubble1, bubble2, complete', () => {
+    const bubble1 = {
+      content:
+        "Bro what if I told you 99% of traders that say that actually don't know what the real problem is? Let me explain."
+    };
+    const bubble2 = {
+      content:
+        "When people come into the markets, they believe they need more discipline or the best strategy in the world to be successful. But here's the thing discipline takes time to build, and almost all strategies work. It's the person behind them using it that matters."
+    };
+    const bubble3 = {
+      content:
+        "So what's really the bottleneck? It's the systems you have in place. A detailed, structured system that tells you every single thing to do from point A to point B."
+    };
+    const ask = {
+      content:
+        'Now if you had a system like that, one that guided you from A to B and removed the guesswork. what would that do for your trading bro?'
+    };
+
+    assert.equal(detectBeliefBreakDeliveryStage([bubble1]), 'bubble1');
+    assert.equal(detectBeliefBreakDeliveryStage([bubble1, bubble2]), 'bubble2');
+    assert.equal(
+      detectBeliefBreakDeliveryStage([bubble1, bubble2, bubble3]),
+      'bubble2'
+    );
+    assert.equal(
+      detectBeliefBreakDeliveryStage([bubble1, bubble2, bubble3, ask]),
+      'complete'
+    );
   });
 });
 
@@ -467,7 +521,7 @@ describe('bug-24-script-step-enforcement (acceptance criteria)', () => {
       incomeGoal: '20000',
       deepWhy: 'want to retire my parents',
       early_obstacle: 'blowing accounts',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
     };
     const aiReply =
@@ -601,6 +655,33 @@ describe('getStepActionShape', () => {
     assert.equal(shape!.hasAnyAskAction, true);
     assert.deepEqual(shape!.scriptedQuestionContents, [
       'What do you do for work?'
+    ]);
+    assert.deepEqual(shape!.requiredMessageContents, []);
+  });
+
+  it('collects direct [MSG] content as required verbatim text', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 10,
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'I respect that bro, I truly do.'
+            },
+            {
+              actionType: 'ask_question',
+              content: 'But why is {{their stated goal}} so important?'
+            }
+          ],
+          branches: []
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 10);
+    assert.ok(shape);
+    assert.deepEqual(shape!.requiredMessageContents, [
+      'I respect that bro, I truly do.'
     ]);
   });
 
@@ -1107,18 +1188,31 @@ describe('checkCapitalQuestionPrereqs', () => {
     const points = {
       deepWhy: 'family freedom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true',
       callInterestConfirmed: 'true'
     };
     assert.deepEqual(checkCapitalQuestionPrereqs(points), []);
   });
 
+  it('does not allow capital question until belief break is complete', () => {
+    const points = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'bubble2',
+      buyInConfirmed: 'true',
+      callInterestConfirmed: 'true'
+    };
+    const missing = checkCapitalQuestionPrereqs(points);
+    assert.equal(missing.length, 1);
+    assert.equal(missing[0].id, 'belief_break_delivered');
+  });
+
   it('accepts callProposalAccepted as substitute for callInterestConfirmed', () => {
     const points = {
       deepWhy: 'family freedom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true',
       callProposalAccepted: 'true'
     };
@@ -1129,7 +1223,7 @@ describe('checkCapitalQuestionPrereqs', () => {
     const points = {
       deepWhy: 'family freedom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true'
       // callInterestConfirmed missing
     };
@@ -1163,7 +1257,7 @@ describe('detectCapitalQuestionPremature', () => {
     const captured = {
       deepWhy: 'family freedom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true',
       callProposalAccepted: 'true'
     };
@@ -1329,7 +1423,7 @@ describe('bug-28-capital-question-and-step-distance (acceptance)', () => {
     const captured = {
       deepWhy: 'family freedom',
       obstacle: 'no system',
-      beliefBreakDelivered: 'true',
+      beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true',
       callProposalAccepted: 'true'
     };
@@ -1446,6 +1540,79 @@ describe('checkMandatoryAsksFired', () => {
   });
 });
 
+describe('bug-30-msg-verbatim-violation', () => {
+  it('detects when required [MSG] text is skipped', () => {
+    const violation = detectMsgVerbatimViolation(
+      'if nothing changes and you keep grinding another year, how would that hit you mentally?',
+      ['I respect that bro, I truly do.']
+    );
+    assert.ok(violation);
+    assert.equal(violation!.expected, 'I respect that bro, I truly do.');
+  });
+
+  it('allows punctuation/case variation and strong word overlap', () => {
+    assert.equal(
+      detectMsgVerbatimViolation('i respect that bro i truly do', [
+        'I respect that bro, I truly do.'
+      ]),
+      null
+    );
+  });
+
+  it('hard-fails the group gate for missing required [MSG]', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['what would getting 50k a month do for you and your sons?'],
+      {
+        currentStepRequiredMessages: [
+          'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.'
+        ]
+      }
+    );
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('hard-fails when multiple required [MSG] actions are merged into one bubble', () => {
+    const requiredMessages = [
+      'Bro what if I told you 99% of traders that say that actually do not know what the real problem is?',
+      'When people come into the markets, they believe they need more discipline.',
+      'So what is really the bottleneck? It is the systems you have in place.'
+    ];
+    const merged = requiredMessages.join(' ');
+
+    const directViolation = detectMsgBubbleSequenceViolation(
+      [merged],
+      requiredMessages
+    );
+    assert.ok(directViolation);
+
+    const quality = scoreVoiceQualityGroup([merged], {
+      currentStepRequiredMessages: requiredMessages
+    });
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('required_message_not_in_separate_bubble')
+      )
+    );
+  });
+
+  it('allows multiple required [MSG] actions when each appears in order as its own bubble', () => {
+    const requiredMessages = [
+      'Bro what if I told you 99% of traders that say that actually do not know what the real problem is?',
+      'When people come into the markets, they believe they need more discipline.',
+      'So what is really the bottleneck? It is the systems you have in place.'
+    ];
+
+    assert.equal(
+      detectMsgBubbleSequenceViolation(requiredMessages, requiredMessages),
+      null
+    );
+  });
+});
+
 describe('detectMandatoryAskSkipped', () => {
   it('@tegaumukoro_ scenario — lead volunteers nurse + AI jumps to income goal: BLOCKED', () => {
     // Lead said "I trade futures and work as a nurse"
@@ -1481,6 +1648,14 @@ describe('detectMandatoryAskSkipped', () => {
     assert.equal(
       detectMandatoryAskSkipped(
         'how much is your job bringing in on a monthly basis?',
+        aiHistory,
+        {}
+      ),
+      null
+    );
+    assert.equal(
+      detectMandatoryAskSkipped(
+        'are you trying to replace your job with trading or just supplement income on the side?',
         aiHistory,
         {}
       ),
@@ -1525,6 +1700,25 @@ describe('detectMandatoryAskSkipped', () => {
     const reply =
       'how much would you need to be making from trading to replace it?';
     assert.equal(detectMandatoryAskSkipped(reply, aiHistory, {}), null);
+  });
+
+  it('bug-32-step8-mandatory-ask blocks Step 9 when replace/supplement ask never fired', () => {
+    const aiHistory = [
+      { content: 'how long you been doing that?' },
+      { content: 'how much is your job bringing in on a monthly basis?' }
+    ];
+    const reply =
+      'how much would you need to be making from trading on a monthly basis?';
+    const skipped = detectMandatoryAskSkipped(reply, aiHistory, {
+      workBackground: 'nurse',
+      monthlyIncome: '4000',
+      replaceOrSupplement: 'replace'
+    });
+    assert.ok(skipped);
+    assert.deepEqual(
+      skipped!.map((req) => req.stepNumber),
+      [8]
+    );
   });
 });
 

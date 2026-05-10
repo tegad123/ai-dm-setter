@@ -185,6 +185,17 @@ function main() {
     ),
     true
   );
+  const serializerSource = readFileSync('src/lib/script-serializer.ts', 'utf8');
+  expect(
+    'script serializer injects send_message as REQUIRED MESSAGE',
+    serializerSource.includes('REQUIRED MESSAGE (send verbatim'),
+    true
+  );
+  expect(
+    'script serializer injects ask_question as REQUIRED QUESTION',
+    serializerSource.includes('REQUIRED QUESTION (use this exact'),
+    true
+  );
 
   const cleanedPrompt = resolveOrStripTemplateVariables(
     'Goal: {{incomeGoal}}. Unknown: {{customize to their stated goal}}. Lead: {{leadName}}.',
