@@ -184,6 +184,12 @@ export async function serializeScriptForPrompt(
       stepLines.push(`Canonical question: ${step.canonicalQuestion.trim()}`);
     }
 
+    if (step.actions.length > 0) {
+      for (const action of step.actions) {
+        stepLines.push(serializeAction(action, '    '));
+      }
+    }
+
     if (step.branches.length > 0) {
       for (const branch of step.branches) {
         const condition = branch.conditionDescription
@@ -224,11 +230,6 @@ export async function serializeScriptForPrompt(
           stepLines.push(serializeAction(action, '    '));
         }
       }
-    } else {
-      // Direct actions
-      for (const action of step.actions) {
-        stepLines.push(serializeAction(action, '    '));
-      }
     }
   }
 
@@ -263,6 +264,10 @@ export async function serializeScriptForPrompt(
       `## Script Framework — CURRENT STEP ONLY\n` +
         `You are working through a multi-step qualification script. Below is your CURRENT step and a brief preview of the NEXT step. Subsequent steps are intentionally hidden — do NOT improvise your way to a later stage of the script. Complete the current step's [JUDGE]/[MSG]/[ASK] actions, wait for the lead's reply, then advance one step on the next turn.\n\n` +
         `IMPORTANT: When a [MSG] action has explicit content, send it verbatim or near-verbatim — do not rewrite into a different shape. When [ASK] has explicit content, use that exact question (light wording adjustments are OK to match the conversational flow). When a step's branch contains [MSG] + [WAIT] but NO [ASK], you must ACKNOWLEDGE ONLY — do not append a question. Text inside {{double curly braces}} is a runtime placeholder you fill from conversation context (e.g. "{{customize to their stated goal}}" — insert language specific to what the lead told you).${silentBranchDirective}\n${stepLines.join('\n')}`
+    );
+    console.log(
+      '[serializer-debug] injected prompt segment:',
+      stepLines.join('\n').slice(0, 4000)
     );
   } else {
     parts.push(

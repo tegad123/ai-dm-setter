@@ -135,6 +135,10 @@ function pointIsPresent(points: CapturedDataPoints, key: string): boolean {
   return point.confidence === HIGH_CONFIDENCE && point.value !== null;
 }
 
+function anyPointPresent(points: CapturedDataPoints, keys: string[]): boolean {
+  return keys.some((key) => pointIsPresent(points, key));
+}
+
 function setPoint<T>(
   points: CapturedDataPoints,
   key: string,
@@ -180,6 +184,188 @@ function sortedHistory(
       (a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
+}
+
+function collectAllStepActions(step: ScriptStepWithRecovery): Array<{
+  actionType: string;
+  content: string | null;
+}> {
+  return [
+    ...step.actions.map((action) => ({
+      actionType: action.actionType,
+      content: action.content
+    })),
+    ...step.branches.flatMap((branch) =>
+      branch.actions.map((action) => ({
+        actionType: action.actionType,
+        content: action.content
+      }))
+    )
+  ];
+}
+
+function stripTemplateVariables(text: string): string {
+  return text.replace(/\{\{\s*[^}]+\s*\}\}/g, ' ');
+}
+
+function normalizeForStepCompletion(text: string): string {
+  return stripTemplateVariables(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function completionTokenSet(text: string): Set<string> {
+  return new Set(
+    normalizeForStepCompletion(text)
+      .split(/\s+/)
+      .filter((token) => token.length > 2)
+  );
+}
+
+function completionOverlap(required: string, actual: string): number {
+  const requiredTokens = completionTokenSet(required);
+  if (requiredTokens.size === 0) return 1;
+  const actualTokens = completionTokenSet(actual);
+  let matches = 0;
+  for (const token of Array.from(requiredTokens)) {
+    if (actualTokens.has(token)) matches++;
+  }
+  return matches / requiredTokens.size;
+}
+
+function actionContentMatches(
+  required: string | null | undefined,
+  actual: string | null | undefined
+): boolean {
+  if (!required || !actual) return false;
+  const normalizedRequired = normalizeForStepCompletion(required);
+  if (!normalizedRequired) return false;
+  const normalizedActual = normalizeForStepCompletion(actual);
+  if (normalizedActual.includes(normalizedRequired)) return true;
+  return completionOverlap(required, actual) >= 0.35;
+}
+
+function hasLeadReplyAfter(
+  history: ScriptHistoryMessage[],
+  setterMessage: ScriptHistoryMessage
+): boolean {
+  const sentAt = new Date(setterMessage.timestamp).getTime();
+  return history.some(
+    (message) =>
+      message.sender === 'LEAD' &&
+      new Date(message.timestamp).getTime() > sentAt
+  );
+}
+
+function findSetterMessageForContent(
+  history: ScriptHistoryMessage[],
+  requiredContent: string | null | undefined
+): ScriptHistoryMessage | null {
+  if (!requiredContent) return null;
+  return (
+    history.find(
+      (message) =>
+        (message.sender === 'AI' || message.sender === 'HUMAN') &&
+        actionContentMatches(requiredContent, message.content)
+    ) ?? null
+  );
+}
+
+function stepCompleteFromHistory(
+  step: ScriptStepWithRecovery,
+  history: ScriptHistoryMessage[]
+): boolean {
+  if (history.length === 0) return false;
+  const sorted = sortedHistory(history);
+  const actions = collectAllStepActions(step);
+  const askActions = actions.filter(
+    (action) =>
+      action.actionType === 'ask_question' &&
+      typeof action.content === 'string' &&
+      action.content.trim().length > 0
+  );
+  const msgActions = actions.filter(
+    (action) =>
+      action.actionType === 'send_message' &&
+      typeof action.content === 'string' &&
+      action.content.trim().length > 0
+  );
+  const waitActions = actions.filter(
+    (action) =>
+      action.actionType === 'wait_for_response' ||
+      action.actionType === 'wait_duration'
+  );
+
+  const canonicalCandidates =
+    step.canonicalQuestion && step.canonicalQuestion.trim().length > 0
+      ? [{ actionType: 'ask_question', content: step.canonicalQuestion }]
+      : [];
+
+  for (const action of [...askActions, ...canonicalCandidates]) {
+    const sent = findSetterMessageForContent(sorted, action.content);
+    if (sent && hasLeadReplyAfter(sorted, sent)) return true;
+  }
+
+  if (askActions.length === 0 && msgActions.length > 0 && waitActions.length) {
+    for (const action of msgActions) {
+      const sent = findSetterMessageForContent(sorted, action.content);
+      if (sent && hasLeadReplyAfter(sorted, sent)) return true;
+    }
+  }
+
+  return false;
+}
+
+function impliedCurrentStepFromCapturedData(
+  points: CapturedDataPoints
+): number {
+  let step = 1;
+  if (anyPointPresent(points, ['workBackground', 'work_background', 'job'])) {
+    step = Math.max(step, 6);
+  }
+  if (
+    anyPointPresent(points, [
+      'monthlyIncome',
+      'monthly_income',
+      'incomeMonthly',
+      'monthlyIncomeSkipped',
+      'monthly_income_skipped'
+    ])
+  ) {
+    step = Math.max(step, 8);
+  }
+  if (
+    anyPointPresent(points, ['replaceOrSupplement', 'replace_or_supplement'])
+  ) {
+    step = Math.max(step, 9);
+  }
+  if (anyPointPresent(points, ['incomeGoal', 'income_goal'])) {
+    step = Math.max(step, 10);
+  }
+  if (
+    anyPointPresent(points, [
+      'deepWhy',
+      'deep_why',
+      'desiredOutcome',
+      'desired_outcome'
+    ])
+  ) {
+    step = Math.max(step, 11);
+  }
+  if (anyPointPresent(points, ['obstacle'])) {
+    step = Math.max(step, 12);
+  }
+  if (
+    anyPointPresent(points, ['beliefBreakDelivered', 'belief_break_delivered'])
+  ) {
+    step = Math.max(step, 14);
+  }
+  if (anyPointPresent(points, ['buyInConfirmed', 'buy_in_confirmed'])) {
+    step = Math.max(step, 15);
+  }
+  return step;
 }
 
 function firstUrl(text: string | null | undefined): string | null {
@@ -776,7 +962,7 @@ function extractIncomeGoal(params: {
     field: 'incomeGoal',
     method: 'amount_after_step_9_prompt',
     promptPattern:
-      /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+(are|do)\s+you\s+(?:(?:trying|wanting|hoping|looking)\s+to|tryna)\s+(get\s+to|make|hit|reach).{0,50}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
+      /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+(are|do)\s+you\s+(?:(?:trying|wanting|hoping|looking)\s+to|tryna)\s+(get\s+to|make|hit|reach).{0,50}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|if\s+trading.{0,80}how\s+much.{0,40}\bbring\b|how\s+much.{0,40}\bbring\s+in\s+monthly\b|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
     parse: (content) => {
       const amount = extractAmountUSD(content);
       return amount !== null ? amount : null;
@@ -868,7 +1054,7 @@ function extractReplaceOrSupplement(params: {
 }) {
   const { points, history } = params;
   const promptPattern =
-    /\b(replac(e|ing)\s+your\s+job|extra\s+income\s+on\s+the\s+side|supplement|replace.{0,30}\bor\b.{0,30}\bextra\b)/i;
+    /\b(replac(e|ing)\s+your\s+job|extra\s+income\s+on\s+the\s+side|supplement|replace.{0,30}\bor\b.{0,30}\bextra\b|fully\s+replace.{0,50}\bincome\b|replace.{0,50}\bincome.{0,50}\bstart\b|would\s+that\s+just\s+be\s+the\s+start)\b/i;
   let prompt: ScriptHistoryMessage | null = null;
   for (const msg of sortedHistory(history)) {
     if (
@@ -1019,10 +1205,15 @@ export function isStepComplete(
 
 export function computeSystemStage(
   script: ScriptWithRecovery | null,
-  points: CapturedDataPoints
+  points: CapturedDataPoints,
+  history: ScriptHistoryMessage[] = []
 ): { step: ScriptStepWithRecovery | null; reason: string } {
   const steps = script?.steps ?? [];
+  const impliedCurrentStep = impliedCurrentStepFromCapturedData(points);
   for (const step of steps) {
+    if (step.stepNumber < impliedCurrentStep) continue;
+    if (isStepComplete(step, points)) continue;
+    if (stepCompleteFromHistory(step, history)) continue;
     if (!isStepComplete(step, points)) {
       return { step, reason: 'first_incomplete_step' };
     }
@@ -1438,7 +1629,11 @@ export async function prepareScriptState(params: {
     durableStatus: conversation.capitalVerificationStatus,
     durableAmount: conversation.capitalVerifiedAmount
   });
-  const systemStage = computeSystemStage(script, capturedDataPoints);
+  const systemStage = computeSystemStage(
+    script,
+    capturedDataPoints,
+    params.history
+  );
   const currentStep = systemStage.step;
   const currentScriptStep = currentStep?.stepNumber ?? 1;
   const systemStageName = currentStep?.stateKey || currentStep?.title || null;

@@ -48,6 +48,7 @@ import {
 } from '@/lib/runtime-judgment-evaluator';
 import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
 import {
+  countConversationTurns,
   detectBeliefBreakDeliveryStage,
   detectBeliefBreakInMessage,
   getStepActionShape,
@@ -2050,7 +2051,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const inferredStepNumberForGate = inferCurrentStepNumber({
     snapshotCurrentStep: scriptStateSnapshot?.currentScriptStep ?? null,
     totalSteps: scriptStateSnapshot?.script?.steps.length ?? 0,
-    aiMessageCount: priorAIMessages.length
+    aiMessageCount: Math.max(0, countConversationTurns(conversationHistory) - 1)
   });
   const currentStepShape = scriptStateSnapshot?.script
     ? getStepActionShape(
@@ -2059,6 +2060,21 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         inferredStepNumberForGate
       )
     : null;
+  if (scriptStateSnapshot?.script) {
+    const selectedStep = scriptStateSnapshot.script.steps.find(
+      (step) => step.stepNumber === inferredStepNumberForGate
+    );
+    console.log('[script-debug] current step selection:', {
+      conversationId: activeConversationId,
+      snapshotCurrentScriptStep: scriptStateSnapshot.currentScriptStep,
+      inferredStepNumberForGate,
+      conversationTurnCount: countConversationTurns(conversationHistory),
+      currentStepTitle: selectedStep?.title ?? null,
+      capturedKeys: Object.keys(scriptStateSnapshot.capturedDataPoints ?? {}),
+      requiredMessageFirst100:
+        currentStepShape?.requiredMessageContents?.[0]?.slice(0, 100) ?? null
+    });
+  }
 
   const buildVoiceQualityOptions = (
     candidateMessageCount: number,

@@ -502,7 +502,9 @@ export function getStepActionShape(
   const requiredMessageContents: string[] = [];
   let hasAnyAskAction = false;
 
-  for (const action of step.actions) {
+  const allStepActions = collectAllStepActions(step);
+
+  for (const action of allStepActions) {
     if (
       action.actionType === 'send_message' &&
       typeof action.content === 'string' &&
@@ -546,6 +548,28 @@ export function getStepActionShape(
     requiredMessageContents,
     silentBranchLabels
   };
+}
+
+export function collectAllStepActions(
+  step: MinimalStep | null | undefined
+): Array<{ actionType: string; content?: string | null }> {
+  if (!step) return [];
+  const actions: Array<{ actionType: string; content?: string | null }> = [];
+  actions.push(...(step.actions ?? []));
+  for (const branch of step.branches ?? []) {
+    actions.push(...(branch.actions ?? []));
+  }
+  return actions;
+}
+
+export function countConversationTurns(
+  messages: Array<{ sender: string | null | undefined }>
+): number {
+  let turns = 0;
+  for (const msg of messages) {
+    if (msg.sender === 'LEAD') turns++;
+  }
+  return turns;
 }
 
 // ---------------------------------------------------------------------------

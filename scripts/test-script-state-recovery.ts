@@ -11,6 +11,7 @@ import {
   extractCapturedDataPointsForTest,
   hasExplicitCapitalConstraintSignal,
   isStepComplete,
+  computeSystemStage,
   validateSoftPitchPrerequisites
 } from '@/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
@@ -172,6 +173,130 @@ function run() {
     undefined,
     'Tega sequence has not captured deepWhy yet'
   );
+
+  const reorderedStep8Step9Points = extractCapturedDataPointsForTest({
+    history: [
+      {
+        id: 'ai_work_q',
+        sender: 'AI',
+        content: 'what do you do for work rn?',
+        timestamp: new Date('2026-05-10T16:38:30Z')
+      },
+      {
+        id: 'lead_work',
+        sender: 'LEAD',
+        content: 'I work as a nurse',
+        timestamp: new Date('2026-05-10T16:39:08Z')
+      },
+      {
+        id: 'ai_monthly_q',
+        sender: 'AI',
+        content:
+          'and as of right now, how much is your job bringing in on a monthly basis?',
+        timestamp: new Date('2026-05-10T16:39:40Z')
+      },
+      {
+        id: 'lead_monthly',
+        sender: 'LEAD',
+        content: 'Around 4k a month',
+        timestamp: new Date('2026-05-10T16:40:15Z')
+      },
+      {
+        id: 'ai_goal_q',
+        sender: 'AI',
+        content:
+          'and if trading actually clicked for you, how much would you want it to bring in monthly?',
+        timestamp: new Date('2026-05-10T16:40:52Z')
+      },
+      {
+        id: 'lead_goal',
+        sender: 'LEAD',
+        content: 'I’d need at least 6k a month to replace my nursing income',
+        timestamp: new Date('2026-05-10T16:42:13Z')
+      },
+      {
+        id: 'ai_replace_q',
+        sender: 'AI',
+        content:
+          'is that to fully replace the nursing income, or would that just be the start for you?',
+        timestamp: new Date('2026-05-10T16:42:48Z')
+      },
+      {
+        id: 'lead_replace',
+        sender: 'LEAD',
+        content: 'Replace it completely, I’m tired of these 12 hour shifts',
+        timestamp: new Date('2026-05-10T16:43:29Z')
+      }
+    ]
+  });
+  assertHigh(
+    reorderedStep8Step9Points,
+    'incomeGoal',
+    6000,
+    'income goal from "trading clicked / bring in monthly" prompt'
+  );
+  assertHigh(
+    reorderedStep8Step9Points,
+    'replaceOrSupplement',
+    'replace',
+    'replace/supplement from fully-replace-income prompt'
+  );
+
+  const nullRuleScript = {
+    id: 'script_null_rules',
+    steps: Array.from({ length: 10 }, (_, idx) => {
+      const stepNumber = idx + 1;
+      return {
+        stepNumber,
+        title:
+          stepNumber === 10
+            ? 'Desired Outcome — Deep Why'
+            : `Step ${stepNumber}`,
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [],
+        branches:
+          stepNumber === 10
+            ? [
+                {
+                  branchLabel: 'Default',
+                  conditionDescription: null,
+                  sortOrder: 0,
+                  actions: [
+                    {
+                      actionType: 'send_message',
+                      content:
+                        'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.'
+                    },
+                    {
+                      actionType: 'ask_question',
+                      content:
+                        'But why is {{their stated goal}} so important to you though?'
+                    },
+                    { actionType: 'wait_for_response', content: null }
+                  ]
+                }
+              ]
+            : []
+      };
+    })
+  } as any;
+  const nullRuleStage = computeSystemStage(
+    nullRuleScript,
+    reorderedStep8Step9Points,
+    []
+  );
+  assert.equal(
+    nullRuleStage.step?.stepNumber,
+    10,
+    'null completionRule script advances to Step 10 from captured history-derived data'
+  );
+
   const prematureCapitalAfterIncomeGoal = scoreVoiceQualityGroup(
     [
       "real quick, what's your capital situation like for the markets right now?"
@@ -357,7 +482,7 @@ function run() {
         incomeGoal: 6000,
         deepWhy: 'family freedom',
         obstacle: 'emotions',
-        beliefBreakDelivered: true,
+        beliefBreakDelivered: 'complete',
         buyInConfirmed: true
       }
     }
@@ -458,7 +583,7 @@ function run() {
       capturedDataPoints: {
         deepWhy: 'family freedom',
         obstacle: 'needs structure',
-        beliefBreakDelivered: true,
+        beliefBreakDelivered: 'complete',
         buyInConfirmed: true,
         callProposalAccepted: true
       }

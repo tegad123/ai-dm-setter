@@ -18,6 +18,7 @@ import {
   checkCallProposalPrereqs,
   checkCapitalQuestionPrereqs,
   checkMandatoryAsksFired,
+  countConversationTurns,
   containsQuestion,
   countQuestionMarks,
   detectAcknowledgmentOpener,
@@ -656,7 +657,7 @@ describe('getStepActionShape', () => {
     assert.deepEqual(shape!.scriptedQuestionContents, [
       'What do you do for work?'
     ]);
-    assert.deepEqual(shape!.requiredMessageContents, []);
+    assert.deepEqual(shape!.requiredMessageContents, ['context bro']);
   });
 
   it('collects direct [MSG] content as required verbatim text', () => {
@@ -683,6 +684,55 @@ describe('getStepActionShape', () => {
     assert.deepEqual(shape!.requiredMessageContents, [
       'I respect that bro, I truly do.'
     ]);
+  });
+
+  it('collects branch-contained [MSG] content as required verbatim text', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 10,
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Default',
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content: 'Use judgment'
+                },
+                {
+                  actionType: 'send_message',
+                  content: 'I respect that bro, I truly do.'
+                },
+                {
+                  actionType: 'ask_question',
+                  content: 'But why is {{their stated goal}} so important?'
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 10);
+    assert.ok(shape);
+    assert.deepEqual(shape!.requiredMessageContents, [
+      'I respect that bro, I truly do.'
+    ]);
+  });
+
+  it('counts conversation turns by lead turns, not AI bubble rows', () => {
+    const messages = [
+      { sender: 'LEAD' },
+      { sender: 'AI' },
+      { sender: 'AI' },
+      { sender: 'AI' },
+      { sender: 'LEAD' },
+      { sender: 'AI' },
+      { sender: 'AI' },
+      { sender: 'LEAD' }
+    ];
+    assert.equal(countConversationTurns(messages), 3);
   });
 
   it('handles a step with mixed branches (some silent, some with ASK)', () => {
