@@ -833,6 +833,71 @@ async function persistJudgeClassifierTrace(params: {
   });
 }
 
+async function persistGenerateReplyTrace(params: {
+  conversationId: string | null;
+  patch: Record<string, unknown>;
+}) {
+  if (!params.conversationId) return;
+
+  try {
+    const row = await prisma.conversation.findUnique({
+      where: { id: params.conversationId },
+      select: { capturedDataPoints: true }
+    });
+    const capturedDataPoints = asJsonObject(row?.capturedDataPoints);
+    const existingTrace = asJsonObject(
+      capturedDataPoints.generateReplyTrace as Prisma.JsonValue
+    );
+    const generateReplyTrace = {
+      ...existingTrace,
+      ...params.patch,
+      timestamp: new Date().toISOString()
+    };
+
+    await prisma.conversation.update({
+      where: { id: params.conversationId },
+      data: {
+        capturedDataPoints: {
+          ...capturedDataPoints,
+          generateReplyTrace
+        } as Prisma.InputJsonValue
+      }
+    });
+  } catch (err) {
+    console.error('[ai-engine] generateReplyTrace persist failed:', {
+      conversationId: params.conversationId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+async function persistCapturedDataPointMerge(params: {
+  conversationId: string | null;
+  incoming: Record<string, string> | null;
+}) {
+  if (
+    !params.conversationId ||
+    !params.incoming ||
+    Object.keys(params.incoming).length === 0
+  ) {
+    return;
+  }
+
+  const row = await prisma.conversation.findUnique({
+    where: { id: params.conversationId },
+    select: { capturedDataPoints: true }
+  });
+  const merged = mergeCapturedDataPoints(
+    asJsonObject(row?.capturedDataPoints),
+    params.incoming
+  );
+
+  await prisma.conversation.update({
+    where: { id: params.conversationId },
+    data: { capturedDataPoints: merged as Prisma.InputJsonValue }
+  });
+}
+
 async function resolveAnthropicApiKeyWithSource(accountId?: string | null) {
   if (accountId) {
     const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
@@ -2094,6 +2159,28 @@ export async function generateReply(
     });
     activeConversationId = msgRow?.conversationId || null;
   }
+  const writeGenerateReplyTrace = (patch: Record<string, unknown>) =>
+    persistGenerateReplyTrace({
+      conversationId: activeConversationId,
+      patch
+    });
+  await writeGenerateReplyTrace({
+    checkpoint1_entryReached: true,
+    checkpoint2_prepareScriptStateComplete: false,
+    checkpoint3_promptBuilt: false,
+    checkpoint4_classifierBlockReached: false,
+    checkpoint5_llmCallStarted: false,
+    checkpoint6_responseGenerated: false,
+    checkpoint7_qualityGateRun: false,
+    checkpoint8_aiSuggestionWritten: false,
+    earlyExitReason: null,
+    lastCheckpoint: 'checkpoint1_entryReached',
+    accountId,
+    personaId,
+    leadMessageId: lastLeadMsg?.id ?? null,
+    leadMessageFirst100: lastLeadMsg?.content?.slice(0, 100) ?? null,
+    historyMessageCount: conversationHistory.length
+  });
 
   const conversationCallState = activeConversationId
     ? await prisma.conversation.findUnique({
@@ -2153,6 +2240,7 @@ export async function generateReply(
   // built so serializeScriptForPrompt focuses on the authoritative step from
   // conversation history instead of inferring from raw AI message count.
   let scriptStateSnapshot: ScriptStateSnapshot | null = null;
+  let scriptStateError: string | null = null;
   if (activeConversationId) {
     try {
       scriptStateSnapshot = await prepareScriptState({
@@ -2161,12 +2249,27 @@ export async function generateReply(
         history: conversationHistory
       });
     } catch (err) {
+      scriptStateError = err instanceof Error ? err.message : String(err);
       console.error(
         '[ai-engine] script-state pre-pass failed (non-fatal):',
         err
       );
     }
   }
+  await writeGenerateReplyTrace({
+    checkpoint2_prepareScriptStateComplete: true,
+    lastCheckpoint: 'checkpoint2_prepareScriptStateComplete',
+    prepareScriptStateError: scriptStateError,
+    snapshotCurrentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
+    snapshotSystemStage: scriptStateSnapshot?.systemStage ?? null,
+    snapshotCurrentStepNumber:
+      scriptStateSnapshot?.currentStep?.stepNumber ?? null,
+    snapshotCurrentStepTitle: scriptStateSnapshot?.currentStep?.title ?? null,
+    snapshotBranchLabels:
+      scriptStateSnapshot?.currentStep?.branches.map(
+        (branch) => branch.branchLabel
+      ) ?? []
+  });
 
   if (coldStartStep1Inbound && activeConversationId && scriptStateSnapshot) {
     await persistColdStartStep1InboundState({
@@ -2203,6 +2306,13 @@ export async function generateReply(
     },
     scriptStateSnapshot?.currentScriptStep ?? null
   );
+  await writeGenerateReplyTrace({
+    checkpoint3_promptBuilt: true,
+    lastCheckpoint: 'checkpoint3_promptBuilt',
+    promptLength: systemPrompt.length,
+    authoritativeCurrentScriptStep:
+      scriptStateSnapshot?.currentScriptStep ?? null
+  });
 
   // 1b. Append scoring intelligence if available
   if (scoringContext) {
@@ -2391,6 +2501,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     const reply = buildExplicitCapitalConstraintSoftExit(personaForGate);
+    await writeGenerateReplyTrace({
+      earlyExitReason: 'explicit_capital_constraint',
+      lastCheckpoint: 'early_exit_explicit_capital_constraint',
+      checkpoint5_llmCallStarted: false,
+      checkpoint6_responseGenerated: true,
+      responseFirst100: reply.slice(0, 100),
+      responseStage: 'FINANCIAL_SCREENING',
+      responseSubStage: 'LOW_TICKET'
+    });
     return {
       reply,
       messages: [reply],
@@ -2712,6 +2831,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         inferredStepNumberForGate
       )
     : null;
+  await writeGenerateReplyTrace({
+    checkpoint4_classifierBlockReached: true,
+    lastCheckpoint: 'checkpoint4_classifierBlockReached',
+    inferredStepNumberForGate,
+    snapshotCurrentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
+    classifierStepNumber: scriptStateSnapshot?.currentStep?.stepNumber ?? null,
+    classifierStepTitle: scriptStateSnapshot?.currentStep?.title ?? null,
+    classifierBranchLabels:
+      scriptStateSnapshot?.currentStep?.branches.map(
+        (branch) => branch.branchLabel
+      ) ?? []
+  });
   const currentJudgeBranchMatch = await selectJudgeBranchForLead(
     scriptStateSnapshot?.currentStep ?? null,
     lastLeadMsg?.content ?? null,
@@ -2923,6 +3054,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         attempt: attempt + 1
       });
     }
+    await writeGenerateReplyTrace({
+      checkpoint5_llmCallStarted: true,
+      lastCheckpoint: 'checkpoint5_llmCallStarted',
+      llmAttempt: attempt + 1,
+      provider,
+      model,
+      sanitizedPromptLength: sanitizedPrompt.text.length
+    });
     const callResult = await callLLM(
       provider,
       apiKey,
@@ -2968,6 +3107,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
       throw err;
     }
+    await writeGenerateReplyTrace({
+      checkpoint6_responseGenerated: true,
+      lastCheckpoint: 'checkpoint6_responseGenerated',
+      llmAttempt: attempt + 1,
+      modelUsed: modelUsedFinal,
+      responseFirst100: parsed.message?.slice(0, 100) ?? null,
+      responseStage: parsed.stage ?? null,
+      responseSubStage: parsed.subStage ?? null,
+      responseMessageCount: parsed.messages?.length ?? 0
+    });
 
     const parsedMetadataLeak = parsed.parserMetadataLeak;
     const generatedTextForLeakCheck = parsed.messages.join('\n');
@@ -3227,6 +3376,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
     }
     finalQualityScore = quality.score;
+    await writeGenerateReplyTrace({
+      checkpoint7_qualityGateRun: true,
+      lastCheckpoint: 'checkpoint7_qualityGateRun',
+      llmAttempt: attempt + 1,
+      qualityPassed: quality.passed,
+      qualityScore: quality.score,
+      qualityHardFails: quality.hardFails,
+      qualitySoftSignalKeys: Object.keys(quality.softSignals ?? {})
+    });
 
     // R37 acceptance bypass — when the lead's last message is an explicit
     // acceptance ("Yes bro", "lfg", "bet") AND the AI's previous turn
@@ -5101,8 +5259,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       });
       suggestionId = suggestion.id;
+      await writeGenerateReplyTrace({
+        checkpoint8_aiSuggestionWritten: true,
+        lastCheckpoint: 'checkpoint8_aiSuggestionWritten',
+        suggestionId,
+        suggestionResponseFirst100: parsed.message?.slice(0, 100) ?? null,
+        suggestionStage: parsed.stage ?? null,
+        suggestionSubStage: parsed.subStage ?? null,
+        qualityGateAttempts,
+        finalQualityScore,
+        modelUsed: modelUsedFinal
+      });
     }
   } catch (err) {
+    await writeGenerateReplyTrace({
+      checkpoint8_aiSuggestionWritten: false,
+      lastCheckpoint: 'ai_suggestion_write_failed',
+      aiSuggestionWriteError: err instanceof Error ? err.message : String(err)
+    });
     console.error('[ai-engine] AISuggestion write failed (non-fatal):', err);
   }
 
@@ -5233,21 +5407,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     totalCaptures &&
     Object.keys(totalCaptures).length > 0
   ) {
-    const merged = mergeCapturedDataPoints(
-      scriptStateSnapshot?.capturedDataPoints ?? null,
-      totalCaptures
+    persistCapturedDataPointMerge({
+      conversationId: activeConversationId,
+      incoming: totalCaptures
+    }).catch((err) =>
+      console.error(
+        '[ai-engine] capturedDataPoints persist failed (non-fatal):',
+        err
+      )
     );
-    prisma.conversation
-      .update({
-        where: { id: activeConversationId },
-        data: { capturedDataPoints: merged as Prisma.InputJsonValue }
-      })
-      .catch((err) =>
-        console.error(
-          '[ai-engine] capturedDataPoints persist failed (non-fatal):',
-          err
-        )
-      );
   }
 
   return {
