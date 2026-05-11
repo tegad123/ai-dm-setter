@@ -53,6 +53,7 @@ import {
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
 import { computeSystemStage } from '../../src/lib/script-state-recovery';
+import { selectStep1BranchesForPrompt } from '../../src/lib/script-serializer';
 import {
   getCurrentlyRelevantUrlsFromScript,
   shouldExposePersonaAssetUrl
@@ -1279,6 +1280,29 @@ describe('bug-35-missing-question-on-ask-step', () => {
       false
     );
   });
+
+  it('allows multi-bubble [MSG]+[ASK] replies when any bubble contains the required question', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        "Hey bro, respect for reaching out! Let's see if I can help you out here 💪🏿",
+        'So are you new in the markets or have you been trading for a while?'
+      ],
+      {
+        currentStepHasAskBranch: true,
+        activeBranchHasAskAction: true,
+        currentStepActiveBranchIsSilent: false,
+        currentStepActiveBranchIsJudgeOnly: false,
+        currentScriptStepNumber: 1
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1400,6 +1424,74 @@ describe('active-branch-scoped quality gates', () => {
       quality.hardFails.some((failure) =>
         failure.includes('msg_verbatim_violation:')
       )
+    );
+  });
+
+  it('Step 1 warm inbound active branch does not enforce outbound opener', () => {
+    const warmMessage =
+      "Hey bro, respect for reaching out! Let's see if I can help you out here 💪🏿";
+    const warmQuestion =
+      'So are you new in the markets or have you been trading for a while?';
+
+    const quality = scoreVoiceQualityGroup([warmMessage, warmQuestion], {
+      activeBranchRequiredMessages: [
+        { content: warmMessage, isPlaceholder: false }
+      ],
+      currentStepRequiredMessages: [
+        "{{NAME}}, I see you've been rocking with the content! Respect my guy"
+      ],
+      currentStepHasAskBranch: true,
+      activeBranchHasAskAction: true,
+      currentScriptStepNumber: 1
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('rocking with the content')
+      ),
+      false
+    );
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+  });
+
+  it('selects Step 1 warm inbound branch for an inbound first message', () => {
+    const branches = [
+      {
+        branchLabel: "Warm Inbound (DM'd directly)",
+        actions: []
+      },
+      {
+        branchLabel: 'outbound',
+        actions: []
+      }
+    ];
+
+    const selected = selectStep1BranchesForPrompt(branches, {
+      conversationSource: 'INBOUND',
+      leadSource: 'INBOUND'
+    });
+
+    assert.deepEqual(
+      selected.map((branch) => branch.branchLabel),
+      ["Warm Inbound (DM'd directly)"]
+    );
+  });
+
+  it('title_case_opener is never hard-unshippable for natural sentence starters', () => {
+    const quality = scoreVoiceQualityGroup([
+      'Hey bro, respect for reaching out!'
+    ]);
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('title_case_opener:')
+      ),
+      false
     );
   });
 

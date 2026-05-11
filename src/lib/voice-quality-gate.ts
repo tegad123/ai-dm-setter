@@ -2439,15 +2439,17 @@ export function scoreVoiceQuality(
       firstWord.length <= 3 &&
       firstWord === firstWord.toUpperCase();
     const isStandaloneI = firstWord === 'I';
+    const isLikelyTitleCaseOpener =
+      ['The', 'A', 'An'].includes(firstWord) ||
+      (firstWord.length > 3 && /^[A-Z]{2}/.test(firstWord));
     if (
+      isLikelyTitleCaseOpener &&
       ch === ch.toUpperCase() &&
       ch !== ch.toLowerCase() &&
       !isAllCapsShort &&
       !isStandaloneI
     ) {
-      hardFails.push(
-        `title_case_opener: starts with "${firstWord}" — voice requires lowercase openers`
-      );
+      softSignals.title_case_opener = -0.05;
     }
   }
 
@@ -3669,6 +3671,9 @@ export function scoreVoiceQualityGroup(
       ) {
         continue;
       }
+      if (failure.startsWith('missing_required_question_on_ask_step:')) {
+        continue;
+      }
       hardFails.push(`[bubble=${i}] ${failure}`);
     }
   });
@@ -3677,6 +3682,34 @@ export function scoreVoiceQualityGroup(
   // "yo bro caught the story 💪🏿" stall without false-firing on legit
   // multi-bubble splits where bubble 1 carries the question.
   const joined = messages.join(' ');
+  const groupReplyQuestionCount = countQuestionMarks(joined);
+  const groupCurrentStepHasAskBranch =
+    options?.activeBranchHasAskAction ??
+    options?.currentStepHasAskBranch ??
+    options?.currentStepHasAnyAskAction;
+  const groupStepNumber = options?.currentScriptStepNumber ?? null;
+  const groupIsBookingOrLinkStep =
+    typeof groupStepNumber === 'number' && groupStepNumber >= 17;
+  if (
+    groupCurrentStepHasAskBranch === true &&
+    groupReplyQuestionCount === 0 &&
+    options?.currentStepActiveBranchIsSilent !== true &&
+    options?.currentStepActiveBranchIsJudgeOnly !== true &&
+    !groupIsBookingOrLinkStep
+  ) {
+    console.warn(
+      '[voice-quality-gate] missing_required_question_on_ask_step:',
+      {
+        currentStepHasAskBranch: groupCurrentStepHasAskBranch,
+        replyHasQuestion: false,
+        replyFirst100: joined.slice(0, 100)
+      }
+    );
+    hardFails.push(
+      '[group] missing_required_question_on_ask_step: Your reply must end with a question to advance the conversation. The current step requires you to ask the lead something. Add the required question from the script before sending.'
+    );
+  }
+
   const requiredMessagesForGate = Array.isArray(
     options?.activeBranchRequiredMessages
   )

@@ -49,7 +49,10 @@ import {
   mergeCapturedDataPoints,
   parseCapturedDataPointsFromResponse
 } from '@/lib/runtime-judgment-evaluator';
-import { collectRuntimeJudgmentVariableNames } from '@/lib/script-serializer';
+import {
+  collectRuntimeJudgmentVariableNames,
+  selectStep1BranchesForPrompt
+} from '@/lib/script-serializer';
 import {
   countConversationTurns,
   detectBeliefBreakDeliveryStage,
@@ -3136,11 +3139,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       error: err instanceof Error ? err.message : String(err)
     });
   }
-  const selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
+  let selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
     ? scriptStateSnapshot?.currentStep?.branches.find(
         (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
       )
     : null;
+  if (
+    !selectedCurrentJudgeBranch &&
+    scriptStateSnapshot?.currentStep?.stepNumber === 1 &&
+    scriptStateSnapshot.currentStep.branches.length > 0
+  ) {
+    const selectedStep1Branches = selectStep1BranchesForPrompt(
+      scriptStateSnapshot.currentStep.branches,
+      {
+        conversationSource: coldStartStep1Inbound
+          ? 'INBOUND'
+          : (conversationCallState?.source ?? null),
+        leadSource: coldStartStep1Inbound
+          ? 'INBOUND'
+          : (conversationCallState?.leadSource ?? leadContext.source ?? null),
+        manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
+      }
+    );
+    if (selectedStep1Branches.length === 1) {
+      selectedCurrentJudgeBranch = selectedStep1Branches[0];
+    }
+  }
   if (scriptStateSnapshot) {
     scriptStateSnapshot = {
       ...scriptStateSnapshot,
