@@ -823,69 +823,102 @@ export async function selectJudgeBranchForLead(
     classifier?: JudgeBranchClassifier;
   }
 ): Promise<JudgeBranchMatch> {
-  console.warn('[branch-classifier] ENTRY:', {
-    stepNumber: step?.stepNumber ?? null,
-    branchCount: step?.branches.length ?? 0,
-    leadMessageFirst50: leadMessage?.slice(0, 50) ?? null
-  });
-  const tokenMatch = scoreJudgeBranchesForLead(step, leadMessage);
-  console.warn('[branch-classifier] TOKEN RESULT:', {
-    stepNumber: step?.stepNumber ?? null,
-    confidence: tokenMatch.confidence,
-    selectedLabel: tokenMatch.branchLabel ?? null,
-    willAttemptLLM:
-      tokenMatch.confidence === 'none' || tokenMatch.confidence === 'low'
-  });
-  if (
-    !step ||
-    !hasRuntimeJudgmentAction(step) ||
-    !leadMessage?.trim() ||
-    (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
-  ) {
-    return tokenMatch;
-  }
+  const safeFallback: JudgeBranchMatch = {
+    branchLabel: null,
+    confidence: 'none',
+    score: 0,
+    tokenScoringResult: {
+      selectedBranchLabel: null,
+      confidence: 'none',
+      bestScore: 0,
+      secondScore: null,
+      tied: false
+    }
+  };
 
-  const cacheKey = buildJudgeBranchSelectionCacheKey(step, leadMessage);
-  const cached = options?.cache?.get(cacheKey);
-  if (cached) return cached;
-
-  const classifier = options?.classifier ?? classifyJudgeBranchWithHaiku;
-  const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
-    const selectedLabel = await classifier({
-      step,
-      leadMessage,
-      accountId: options?.accountId
+  try {
+    console.warn('[branch-classifier] ENTRY:', {
+      stepNumber: step?.stepNumber ?? null,
+      branchCount: step?.branches.length ?? 0,
+      leadMessageFirst50: leadMessage?.slice(0, 50) ?? null
     });
-    const selectedBranch = selectedLabel
-      ? step.branches.find((branch) => branch.branchLabel === selectedLabel)
-      : null;
 
-    if (!selectedBranch) return tokenMatch;
-
-    console.warn('[branch-classifier] LLM fallback:', {
-      step: step.stepNumber,
-      leadMessageFirst100: leadMessage.slice(0, 100),
-      tokenScore: tokenMatch.tokenScoringResult ?? {
-        selectedBranchLabel: tokenMatch.branchLabel,
+    let tokenMatch: JudgeBranchMatch;
+    try {
+      tokenMatch = scoreJudgeBranchesForLead(step, leadMessage);
+      console.warn('[branch-classifier] TOKEN RESULT:', {
+        stepNumber: step?.stepNumber ?? null,
         confidence: tokenMatch.confidence,
-        bestScore: tokenMatch.score,
-        secondScore: null,
-        tied: false
-      },
-      llmSelected: selectedLabel,
-      confidence: 'llm_classified'
+        selectedLabel: tokenMatch.branchLabel ?? null,
+        willAttemptLLM:
+          tokenMatch.confidence === 'none' || tokenMatch.confidence === 'low'
+      });
+    } catch (err) {
+      console.error('[branch-classifier] TOKEN SCORE ERROR:', {
+        stepNumber: step?.stepNumber ?? null,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      tokenMatch = safeFallback;
+    }
+
+    if (
+      !step ||
+      !hasRuntimeJudgmentAction(step) ||
+      !leadMessage?.trim() ||
+      (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
+    ) {
+      return tokenMatch;
+    }
+
+    const cacheKey = buildJudgeBranchSelectionCacheKey(step, leadMessage);
+    const cached = options?.cache?.get(cacheKey);
+    if (cached) return cached;
+
+    const classifier = options?.classifier ?? classifyJudgeBranchWithHaiku;
+    const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
+      const selectedLabel = await classifier({
+        step,
+        leadMessage,
+        accountId: options?.accountId
+      });
+      const selectedBranch = selectedLabel
+        ? step.branches.find((branch) => branch.branchLabel === selectedLabel)
+        : null;
+
+      if (!selectedBranch) return tokenMatch;
+
+      console.warn('[branch-classifier] LLM fallback:', {
+        step: step.stepNumber,
+        leadMessageFirst100: leadMessage.slice(0, 100),
+        tokenScore: tokenMatch.tokenScoringResult ?? {
+          selectedBranchLabel: tokenMatch.branchLabel,
+          confidence: tokenMatch.confidence,
+          bestScore: tokenMatch.score,
+          secondScore: null,
+          tied: false
+        },
+        llmSelected: selectedLabel,
+        confidence: 'llm_classified'
+      });
+
+      return {
+        branchLabel: selectedBranch.branchLabel,
+        confidence: 'llm_classified',
+        score: tokenMatch.score,
+        tokenScoringResult: tokenMatch.tokenScoringResult
+      };
+    })().catch(() => tokenMatch);
+
+    options?.cache?.set(cacheKey, selectionPromise);
+    return selectionPromise;
+  } catch (err) {
+    console.error('[branch-classifier] UNCAUGHT ERROR:', {
+      stepNumber: step?.stepNumber ?? null,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack?.slice(0, 500) : undefined
     });
-
-    return {
-      branchLabel: selectedBranch.branchLabel,
-      confidence: 'llm_classified',
-      score: tokenMatch.score,
-      tokenScoringResult: tokenMatch.tokenScoringResult
-    };
-  })().catch(() => tokenMatch);
-
-  options?.cache?.set(cacheKey, selectionPromise);
-  return selectionPromise;
+    return safeFallback;
+  }
 }
 
 function scriptedBranchActions(branch: JudgeBranchLike): JudgeActionLike[] {
