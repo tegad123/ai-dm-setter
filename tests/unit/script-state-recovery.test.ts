@@ -1,7 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { computeSystemStage } from '../../src/lib/script-state-recovery';
+import {
+  computeSystemStage,
+  readBranchHistoryEvents
+} from '../../src/lib/script-state-recovery';
 
 const baseStep = {
   stateKey: null,
@@ -140,5 +143,195 @@ describe('computeSystemStage generic sequencing', () => {
 
     assert.equal(noReply.step?.stepNumber, 1);
     assert.equal(withReply.step?.stepNumber, 2);
+  });
+});
+
+describe('durable per-step branch history', () => {
+  const mixedBranchStep = {
+    ...baseStep,
+    stepNumber: 4,
+    title: 'Market Response Routing',
+    actions: [],
+    branches: [
+      {
+        branchLabel: 'Generic obstacle ask',
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: "What's the main obstacle holding you back?"
+          },
+          { actionType: 'wait_for_response', content: null }
+        ]
+      },
+      {
+        branchLabel: 'Obstacle given — detailed and emotional',
+        actions: [
+          {
+            actionType: 'runtime_judgment',
+            content: 'store obstacle'
+          },
+          {
+            actionType: 'send_message',
+            content:
+              '{{acknowledge in their words. Then add: "give me a bit more context"}}'
+          },
+          { actionType: 'wait_for_response', content: null }
+        ]
+      }
+    ]
+  };
+  const jobStep = askStep(
+    5,
+    'Current Situation — Job',
+    'What do you do for work?'
+  );
+  const step12 = askStep(
+    12,
+    'Obstacle Identification',
+    'What do you feel is holding you back?'
+  );
+  const step13 = {
+    ...baseStep,
+    stepNumber: 13,
+    title: 'Belief Break',
+    actions: [{ actionType: 'send_message', content: 'Belief break copy' }]
+  };
+  const branchScript = {
+    id: 'branch_history_sequence',
+    steps: [mixedBranchStep, jobStep, step12, step13]
+  } as any;
+
+  it('bug-45-branch-history-persisted', () => {
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 4,
+          stepTitle: 'Market Response Routing',
+          selectedBranchLabel: 'Obstacle given — detailed and emotional',
+          suggestionId: 'sug_4',
+          aiMessageId: null,
+          aiMessageIds: [],
+          leadMessageId: 'lead_obstacle',
+          sentAt: null,
+          completedAt: null,
+          createdAt: '2026-05-11T00:00:00.000Z'
+        }
+      ]
+    };
+
+    const stage = computeSystemStage(branchScript, points as any, [
+      {
+        id: 'ai_step4',
+        suggestionId: 'sug_4',
+        sender: 'AI',
+        content: 'I hear you. give me a bit more context',
+        timestamp: '2026-05-11T00:01:00.000Z'
+      },
+      {
+        id: 'lead_step4_reply',
+        sender: 'LEAD',
+        content: 'I get tilted and keep adding more',
+        timestamp: '2026-05-11T00:02:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 5);
+    const completed = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed'
+    );
+    assert.equal(completed?.stepNumber, 4);
+    assert.equal(
+      completed?.selectedBranchLabel,
+      'Obstacle given — detailed and emotional'
+    );
+    assert.equal(completed?.aiMessageId, 'ai_step4');
+    assert.equal(completed?.leadMessageId, 'lead_step4_reply');
+  });
+
+  it('bug-46-state-no-rollback', () => {
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 12,
+          stepTitle: 'Obstacle Identification',
+          selectedBranchLabel: 'Default',
+          suggestionId: 'sug_12',
+          aiMessageId: 'ai_12',
+          aiMessageIds: ['ai_12'],
+          leadMessageId: 'lead_12',
+          sentAt: '2026-05-11T00:11:00.000Z',
+          completedAt: '2026-05-11T00:12:00.000Z',
+          createdAt: '2026-05-11T00:12:01.000Z'
+        }
+      ]
+    };
+
+    const stage = computeSystemStage(branchScript, points as any, [], {
+      previousCurrentScriptStep: 5,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 13);
+    assert.match(stage.reason, /branch_history_floor/);
+  });
+
+  it('bug-47-cross-branch-contamination-prevented', () => {
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 4,
+          stepTitle: 'Market Response Routing',
+          selectedBranchLabel: 'Obstacle given — detailed and emotional',
+          suggestionId: 'sug_4',
+          aiMessageId: null,
+          aiMessageIds: [],
+          leadMessageId: 'lead_obstacle',
+          sentAt: null,
+          completedAt: null,
+          createdAt: '2026-05-11T00:00:00.000Z'
+        }
+      ]
+    };
+
+    const stage = computeSystemStage(branchScript, points as any, [
+      {
+        id: 'ai_step12',
+        suggestionId: 'sug_12',
+        sender: 'AI',
+        content: 'What do you feel is holding you back?',
+        timestamp: '2026-05-11T00:12:00.000Z'
+      },
+      {
+        id: 'lead_step12',
+        sender: 'LEAD',
+        content: 'Honestly my biggest issue is emotional control',
+        timestamp: '2026-05-11T00:13:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 4);
+  });
+
+  it('bug-48-fallback-no-history', () => {
+    const stage = computeSystemStage(branchScript, {}, [
+      {
+        id: 'ai_step12',
+        suggestionId: 'sug_12',
+        sender: 'AI',
+        content: 'What do you feel is holding you back?',
+        timestamp: '2026-05-11T00:12:00.000Z'
+      },
+      {
+        id: 'lead_step12',
+        sender: 'LEAD',
+        content: 'Honestly my biggest issue is emotional control',
+        timestamp: '2026-05-11T00:13:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 5);
   });
 });

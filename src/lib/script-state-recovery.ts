@@ -7,6 +7,7 @@ export type RecoveryPriority = 'HOT' | 'MEDIUM' | 'LOW';
 
 export interface ScriptHistoryMessage {
   id?: string | null;
+  suggestionId?: string | null;
   sender: string;
   content: string;
   timestamp: Date | string;
@@ -21,6 +22,20 @@ export interface CapturedDataPoint<T = unknown> {
 }
 
 export type CapturedDataPoints = Record<string, CapturedDataPoint | undefined>;
+
+export interface BranchHistoryEvent {
+  eventType: 'branch_selected' | 'step_completed';
+  stepNumber: number;
+  stepTitle: string | null;
+  selectedBranchLabel: string | null;
+  suggestionId: string | null;
+  aiMessageId: string | null;
+  aiMessageIds: string[];
+  leadMessageId: string | null;
+  sentAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
 
 export type ScriptWithRecovery = Prisma.ScriptGetPayload<{
   include: {
@@ -108,6 +123,146 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function nullableIsoString(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function nullableStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function parseBranchHistoryEvent(value: unknown): BranchHistoryEvent | null {
+  const record = asRecord(value);
+  const eventType =
+    record.eventType === 'branch_selected' ||
+    record.eventType === 'step_completed'
+      ? record.eventType
+      : null;
+  const stepNumber =
+    typeof record.stepNumber === 'number'
+      ? record.stepNumber
+      : typeof record.stepNumber === 'string'
+        ? Number.parseInt(record.stepNumber, 10)
+        : NaN;
+
+  if (!eventType || !Number.isFinite(stepNumber) || stepNumber <= 0) {
+    return null;
+  }
+
+  return {
+    eventType,
+    stepNumber,
+    stepTitle: nullableString(record.stepTitle),
+    selectedBranchLabel: nullableString(record.selectedBranchLabel),
+    suggestionId: nullableString(record.suggestionId),
+    aiMessageId: nullableString(record.aiMessageId),
+    aiMessageIds: nullableStringArray(record.aiMessageIds),
+    leadMessageId: nullableString(record.leadMessageId),
+    sentAt: nullableIsoString(record.sentAt),
+    completedAt: nullableIsoString(record.completedAt),
+    createdAt: nullableIsoString(record.createdAt) ?? new Date().toISOString()
+  };
+}
+
+export function readBranchHistoryEvents(
+  points: CapturedDataPoints | Prisma.JsonValue | null | undefined
+): BranchHistoryEvent[] {
+  const raw = asRecord(points).branchHistory;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(parseBranchHistoryEvent)
+    .filter((event): event is BranchHistoryEvent => event !== null);
+}
+
+function branchHistoryEventTime(event: BranchHistoryEvent): number {
+  const raw =
+    event.completedAt ?? event.sentAt ?? event.createdAt ?? new Date(0);
+  const time = Date.parse(raw);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function hasEquivalentBranchHistoryEvent(
+  events: BranchHistoryEvent[],
+  event: BranchHistoryEvent
+): boolean {
+  return events.some((existing) => {
+    if (
+      existing.eventType !== event.eventType ||
+      existing.stepNumber !== event.stepNumber
+    ) {
+      return false;
+    }
+
+    if (
+      event.eventType === 'branch_selected' &&
+      existing.suggestionId &&
+      event.suggestionId
+    ) {
+      return existing.suggestionId === event.suggestionId;
+    }
+
+    if (
+      event.eventType === 'step_completed' &&
+      existing.leadMessageId &&
+      event.leadMessageId
+    ) {
+      return existing.leadMessageId === event.leadMessageId;
+    }
+
+    return (
+      existing.selectedBranchLabel === event.selectedBranchLabel &&
+      existing.completedAt === event.completedAt &&
+      existing.sentAt === event.sentAt
+    );
+  });
+}
+
+function appendBranchHistoryEventToPoints(
+  points: CapturedDataPoints,
+  event: BranchHistoryEvent
+): boolean {
+  const existing = readBranchHistoryEvents(points);
+  if (hasEquivalentBranchHistoryEvent(existing, event)) return false;
+  (points as Record<string, unknown>).branchHistory = [...existing, event];
+  return true;
+}
+
+export async function appendBranchHistoryEvent(params: {
+  conversationId: string;
+  event: Omit<BranchHistoryEvent, 'createdAt'> & { createdAt?: string | null };
+}) {
+  const row = await prisma.conversation.findUnique({
+    where: { id: params.conversationId },
+    select: { capturedDataPoints: true }
+  });
+  const capturedDataPoints = {
+    ...asRecord(row?.capturedDataPoints)
+  } as CapturedDataPoints;
+  const event: BranchHistoryEvent = {
+    ...params.event,
+    createdAt: params.event.createdAt ?? new Date().toISOString()
+  };
+
+  if (!appendBranchHistoryEventToPoints(capturedDataPoints, event)) return;
+
+  await prisma.conversation.update({
+    where: { id: params.conversationId },
+    data: {
+      capturedDataPoints: capturedDataPoints as Prisma.InputJsonValue
+    }
+  });
+}
+
 function isCapturedDataPoint(value: unknown): value is CapturedDataPoint {
   return (
     !!value &&
@@ -191,6 +346,15 @@ type StepCompletionAction = {
   content: string | null;
 };
 
+type StepCompletionResult = {
+  complete: boolean;
+  completedAt: number;
+  aiMessageId: string | null;
+  aiMessageIds: string[];
+  leadMessageId: string | null;
+  sentAt: string | null;
+};
+
 function stepActionRef(action: {
   actionType: string;
   content: string | null;
@@ -210,32 +374,84 @@ function collectAllStepActions(
   ];
 }
 
+function dedupeStepCompletionActions(
+  actions: StepCompletionAction[]
+): StepCompletionAction[] {
+  const seen = new Set<string>();
+  return actions.filter((action) => {
+    const key = `${action.actionType}:${action.content?.trim() ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function stepCompletionActionPaths(
   step: ScriptStepWithRecovery,
   selectedBranchLabel: string | null = null
 ): StepCompletionAction[][] {
   const directActions = step.actions.map(stepActionRef);
   if (step.branches.length === 0) {
-    return [directActions];
+    return [dedupeStepCompletionActions(directActions)];
   }
 
-  const branches = selectedBranchLabel
+  const branchActions = selectedBranchLabel
     ? step.branches.filter(
         (branch) => branch.branchLabel === selectedBranchLabel
       )
     : step.branches;
-  const branchActions = branches.length > 0 ? branches : step.branches;
+
+  if (selectedBranchLabel && branchActions.length === 0) {
+    return [dedupeStepCompletionActions(directActions)];
+  }
 
   return branchActions.map((branch) => [
-    ...directActions,
-    ...branch.actions.map(stepActionRef)
+    ...dedupeStepCompletionActions([
+      ...directActions,
+      ...branch.actions.map(stepActionRef)
+    ])
   ]);
+}
+
+function branchHistorySelectedLabelForStep(
+  points: CapturedDataPoints,
+  stepNumber: number
+): string | null {
+  const events = readBranchHistoryEvents(points)
+    .filter(
+      (event) => event.stepNumber === stepNumber && !!event.selectedBranchLabel
+    )
+    .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b));
+
+  return events.at(-1)?.selectedBranchLabel ?? null;
+}
+
+function branchHistorySelectionForStep(
+  points: CapturedDataPoints,
+  stepNumber: number
+): BranchHistoryEvent | null {
+  return (
+    readBranchHistoryEvents(points)
+      .filter(
+        (event) =>
+          event.eventType === 'branch_selected' &&
+          event.stepNumber === stepNumber
+      )
+      .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
+      .at(-1) ?? null
+  );
 }
 
 function selectedBranchLabelForStep(
   points: CapturedDataPoints,
   stepNumber: number
 ): string | null {
+  const branchHistoryLabel = branchHistorySelectedLabelForStep(
+    points,
+    stepNumber
+  );
+  if (branchHistoryLabel) return branchHistoryLabel;
+
   const trace = asRecord(points.lastClassifierTrace);
   const tracedStepNumber =
     typeof trace.stepNumber === 'number'
@@ -257,6 +473,41 @@ function selectedBranchLabelForStep(
   }
 
   return null;
+}
+
+function completedBranchHistoryForStep(
+  points: CapturedDataPoints,
+  stepNumber: number,
+  afterTimeMs: number
+): BranchHistoryEvent | null {
+  return (
+    readBranchHistoryEvents(points)
+      .filter((event) => {
+        if (event.eventType !== 'step_completed') return false;
+        if (event.stepNumber !== stepNumber || !event.completedAt) return false;
+        const completedAt = Date.parse(event.completedAt);
+        return Number.isFinite(completedAt) && completedAt > afterTimeMs;
+      })
+      .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
+      .at(0) ?? null
+  );
+}
+
+function durableMinimumStepNumber(
+  points: CapturedDataPoints,
+  steps: ScriptStepWithRecovery[]
+): number | null {
+  const maxCompletedStepNumber = readBranchHistoryEvents(points)
+    .filter((event) => event.eventType === 'step_completed')
+    .reduce(
+      (max, event) => Math.max(max, event.stepNumber),
+      Number.NEGATIVE_INFINITY
+    );
+  if (!Number.isFinite(maxCompletedStepNumber)) return null;
+  const nextStep = steps.find(
+    (step) => step.stepNumber > maxCompletedStepNumber
+  );
+  return nextStep?.stepNumber ?? maxCompletedStepNumber;
 }
 
 function stripTemplateVariables(text: string): string {
@@ -327,13 +578,25 @@ function hasLeadReplyAfter(
 function findSetterMessageForContent(
   history: ScriptHistoryMessage[],
   requiredContent: string | null | undefined,
-  afterTimeMs = Number.NEGATIVE_INFINITY
+  afterTimeMs = Number.NEGATIVE_INFINITY,
+  placeholderSuggestionId: string | null = null
 ): ScriptHistoryMessage | null {
   if (!requiredContent) {
     return null;
   }
 
   if (contentIsRuntimePlaceholderOnly(requiredContent)) {
+    if (placeholderSuggestionId) {
+      return (
+        history.find(
+          (message) =>
+            (message.sender === 'AI' || message.sender === 'HUMAN') &&
+            message.suggestionId === placeholderSuggestionId &&
+            new Date(message.timestamp).getTime() > afterTimeMs
+        ) ?? null
+      );
+    }
+
     return (
       history.find(
         (message) =>
@@ -410,13 +673,19 @@ function stepHasHistoryCompletionSignal(
 function findSetterMessagesForActions(
   history: ScriptHistoryMessage[],
   actions: StepCompletionAction[],
-  afterTimeMs = Number.NEGATIVE_INFINITY
+  afterTimeMs = Number.NEGATIVE_INFINITY,
+  placeholderSuggestionId: string | null = null
 ): ScriptHistoryMessage[] | null {
   const sentMessages: ScriptHistoryMessage[] = [];
   let cursor = afterTimeMs;
 
   for (const action of actions) {
-    const sent = findSetterMessageForContent(history, action.content, cursor);
+    const sent = findSetterMessageForContent(
+      history,
+      action.content,
+      cursor,
+      sentMessages.length === 0 ? placeholderSuggestionId : null
+    );
     if (!sent) return null;
     sentMessages.push(sent);
     cursor = new Date(sent.timestamp).getTime();
@@ -425,14 +694,25 @@ function findSetterMessagesForActions(
   return sentMessages;
 }
 
+function incompleteStepCompletion(afterTimeMs: number): StepCompletionResult {
+  return {
+    complete: false,
+    completedAt: afterTimeMs,
+    aiMessageId: null,
+    aiMessageIds: [],
+    leadMessageId: null,
+    sentAt: null
+  };
+}
+
 function stepCompletionFromHistory(
   step: ScriptStepWithRecovery,
   points: CapturedDataPoints,
   history: ScriptHistoryMessage[],
   afterTimeMs = Number.NEGATIVE_INFINITY
-): { complete: boolean; completedAt: number } {
+): StepCompletionResult {
   if (history.length === 0) {
-    return { complete: false, completedAt: afterTimeMs };
+    return incompleteStepCompletion(afterTimeMs);
   }
   const sorted = sortedHistory(history);
   const canonicalCandidates =
@@ -443,6 +723,11 @@ function stepCompletionFromHistory(
     points,
     step.stepNumber
   );
+  const selectedBranchHistory = branchHistorySelectionForStep(
+    points,
+    step.stepNumber
+  );
+  const selectedSuggestionId = selectedBranchHistory?.suggestionId ?? null;
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
     const { asks, messages, waits } = waitableActionsForPath(actions);
@@ -457,7 +742,11 @@ function stepCompletionFromHistory(
       if (sent && leadReply) {
         return {
           complete: true,
-          completedAt: new Date(leadReply.timestamp).getTime()
+          completedAt: new Date(leadReply.timestamp).getTime(),
+          aiMessageId: sent.id ?? null,
+          aiMessageIds: sent.id ? [sent.id] : [],
+          leadMessageId: leadReply.id ?? null,
+          sentAt: new Date(sent.timestamp).toISOString()
         };
       }
     }
@@ -466,20 +755,53 @@ function stepCompletionFromHistory(
       const sentMessages = findSetterMessagesForActions(
         sorted,
         messages,
-        afterTimeMs
+        afterTimeMs,
+        selectedSuggestionId
       );
       const lastSent = sentMessages?.at(-1) ?? null;
       const leadReply = lastSent ? hasLeadReplyAfter(sorted, lastSent) : null;
       if (lastSent && leadReply) {
         return {
           complete: true,
-          completedAt: new Date(leadReply.timestamp).getTime()
+          completedAt: new Date(leadReply.timestamp).getTime(),
+          aiMessageId: lastSent.id ?? null,
+          aiMessageIds:
+            sentMessages
+              ?.map((message) => message.id)
+              .filter((id): id is string => !!id) ?? [],
+          leadMessageId: leadReply.id ?? null,
+          sentAt: new Date(lastSent.timestamp).toISOString()
         };
       }
     }
   }
 
-  return { complete: false, completedAt: afterTimeMs };
+  return incompleteStepCompletion(afterTimeMs);
+}
+
+function appendStepCompletedBranchHistoryEvent(
+  points: CapturedDataPoints,
+  step: ScriptStepWithRecovery,
+  completion: StepCompletionResult
+) {
+  if (!completion.complete) return;
+  const selectedBranchLabel = selectedBranchLabelForStep(
+    points,
+    step.stepNumber
+  );
+  appendBranchHistoryEventToPoints(points, {
+    eventType: 'step_completed',
+    stepNumber: step.stepNumber,
+    stepTitle: step.title ?? null,
+    selectedBranchLabel,
+    suggestionId: null,
+    aiMessageId: completion.aiMessageId,
+    aiMessageIds: completion.aiMessageIds,
+    leadMessageId: completion.leadMessageId,
+    sentAt: completion.sentAt,
+    completedAt: new Date(completion.completedAt).toISOString(),
+    createdAt: new Date().toISOString()
+  });
 }
 
 function firstUrl(text: string | null | undefined): string | null {
@@ -1328,12 +1650,23 @@ export function computeSystemStage(
 ): { step: ScriptStepWithRecovery | null; reason: string } {
   const steps = script?.steps ?? [];
   let historyCursor = Number.NEGATIVE_INFINITY;
+  const durableMinStepNumber = durableMinimumStepNumber(points, steps);
   let candidate: {
     step: ScriptStepWithRecovery | null;
     reason: string;
   } | null = null;
 
   for (const step of steps) {
+    const durableCompletion = completedBranchHistoryForStep(
+      points,
+      step.stepNumber,
+      historyCursor
+    );
+    if (durableCompletion?.completedAt) {
+      historyCursor = Date.parse(durableCompletion.completedAt);
+      continue;
+    }
+
     if (stepHasHistoryCompletionSignal(step, points)) {
       const historyCompletion = stepCompletionFromHistory(
         step,
@@ -1343,6 +1676,7 @@ export function computeSystemStage(
       );
       if (historyCompletion.complete) {
         historyCursor = historyCompletion.completedAt;
+        appendStepCompletedBranchHistoryEvent(points, step, historyCompletion);
         continue;
       }
 
@@ -1363,6 +1697,24 @@ export function computeSystemStage(
     };
   }
 
+  if (
+    candidate.step &&
+    durableMinStepNumber !== null &&
+    candidate.step.stepNumber < durableMinStepNumber
+  ) {
+    const durableStep =
+      steps.find((step) => step.stepNumber === durableMinStepNumber) ??
+      steps.find((step) => step.stepNumber > durableMinStepNumber) ??
+      steps.at(-1) ??
+      candidate.step;
+    if (durableStep.stepNumber > candidate.step.stepNumber) {
+      candidate = {
+        step: durableStep,
+        reason: `branch_history_floor:${candidate.reason}`
+      };
+    }
+  }
+
   const previousCurrentScriptStep = options.previousCurrentScriptStep ?? null;
   const maxAdvanceSteps = options.maxAdvanceSteps ?? 1;
   if (
@@ -1372,7 +1724,10 @@ export function computeSystemStage(
     maxAdvanceSteps >= 0 &&
     candidate.step.stepNumber > previousCurrentScriptStep + maxAdvanceSteps
   ) {
-    const cappedStepNumber = previousCurrentScriptStep + maxAdvanceSteps;
+    const cappedStepNumber = Math.max(
+      previousCurrentScriptStep + maxAdvanceSteps,
+      durableMinStepNumber ?? Number.NEGATIVE_INFINITY
+    );
     const cappedStep =
       steps.find((step) => step.stepNumber === cappedStepNumber) ??
       steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??

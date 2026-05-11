@@ -32,6 +32,7 @@ import {
 } from '@/lib/media-processing';
 import {
   applyStageOverride,
+  appendBranchHistoryEvent,
   attemptSelfRecovery,
   attemptStepSkipRecovery,
   detectAttemptedStepSkip,
@@ -82,6 +83,7 @@ export interface ConversationMessage {
   messageGroupId?: string | null;
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;
+  suggestionId?: string | null;
   systemPromptVersion?: string | null;
   // True when an operator unsent the prior AI/HUMAN message and
   // replaced it with this one (within 2 min). The system prompt
@@ -5325,6 +5327,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       });
       suggestionId = suggestion.id;
+      if (scriptStateSnapshot?.currentStep) {
+        try {
+          await appendBranchHistoryEvent({
+            conversationId: convoId,
+            event: {
+              eventType: 'branch_selected',
+              stepNumber: scriptStateSnapshot.currentStep.stepNumber,
+              stepTitle: scriptStateSnapshot.currentStep.title ?? null,
+              selectedBranchLabel:
+                scriptStateSnapshot.selectedBranchLabel ?? null,
+              suggestionId,
+              aiMessageId: null,
+              aiMessageIds: [],
+              leadMessageId: lastLeadMsg?.id ?? null,
+              sentAt: null,
+              completedAt: null
+            }
+          });
+        } catch (err) {
+          console.error('[ai-engine] branchHistory selection persist failed:', {
+            conversationId: convoId,
+            suggestionId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
       await writeGenerateReplyTrace({
         checkpoint8_aiSuggestionWritten: true,
         lastCheckpoint: 'checkpoint8_aiSuggestionWritten',
