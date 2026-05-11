@@ -56,7 +56,6 @@ import {
   detectBeliefBreakInMessage,
   getStepActionShape,
   hasCapturedDataPoint,
-  inferCurrentStepNumber,
   isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
 
@@ -2878,26 +2877,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let r24WasEvaluatedThisTurn = false;
   let lastR24Override = '';
 
-  // Resolve the action shape of the current script step so the voice-
-  // quality-gate can enforce silent-branch + off-script-question rules.
-  // Pulls from scriptStateSnapshot.script (already loaded by
-  // prepareScriptState) so this stays a single DB query per turn.
-  const inferredStepNumberForGate = inferCurrentStepNumber({
-    snapshotCurrentStep: scriptStateSnapshot?.currentScriptStep ?? null,
-    totalSteps: scriptStateSnapshot?.script?.steps.length ?? 0,
-    aiMessageCount: Math.max(0, countConversationTurns(conversationHistory) - 1)
-  });
+  // Resolve the action shape from prepareScriptState's authoritative current
+  // step. Multi-bubble delivery means AI message count is not a reliable
+  // proxy for script position; the serializer and quality gates must inspect
+  // the same step.
+  const currentStepNumberForGate =
+    typeof scriptStateSnapshot?.currentScriptStep === 'number' &&
+    scriptStateSnapshot.currentScriptStep > 0
+      ? scriptStateSnapshot.currentScriptStep
+      : (scriptStateSnapshot?.currentStep?.stepNumber ?? null);
   const currentStepShape = scriptStateSnapshot?.script
     ? getStepActionShape(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         scriptStateSnapshot.script as any,
-        inferredStepNumberForGate
+        currentStepNumberForGate ?? 1
       )
     : null;
   await writeGenerateReplyTrace({
     checkpoint4_classifierBlockReached: true,
     lastCheckpoint: 'checkpoint4_classifierBlockReached',
-    inferredStepNumberForGate,
+    inferredStepNumberForGate: currentStepNumberForGate,
     snapshotCurrentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
     classifierStepNumber: scriptStateSnapshot?.currentStep?.stepNumber ?? null,
     classifierStepTitle: scriptStateSnapshot?.currentStep?.title ?? null,
@@ -2919,7 +2918,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       conversationId: activeConversationId,
       match: currentJudgeBranchMatch,
       snapshotCurrentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
-      inferredStepNumberForGate,
+      inferredStepNumberForGate: currentStepNumberForGate,
       step: scriptStateSnapshot?.currentStep ?? null
     });
   } catch (err) {
@@ -3001,12 +3000,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     selectedCurrentJudgeBranch?.branchLabel ?? null;
   if (scriptStateSnapshot?.script) {
     const selectedStep = scriptStateSnapshot.script.steps.find(
-      (step) => step.stepNumber === inferredStepNumberForGate
+      (step) => step.stepNumber === currentStepNumberForGate
     );
     console.log('[script-debug] current step selection:', {
       conversationId: activeConversationId,
       snapshotCurrentScriptStep: scriptStateSnapshot.currentScriptStep,
-      inferredStepNumberForGate,
+      inferredStepNumberForGate: currentStepNumberForGate,
       conversationTurnCount: countConversationTurns(conversationHistory),
       currentStepTitle: selectedStep?.title ?? null,
       capturedKeys: Object.keys(scriptStateSnapshot.capturedDataPoints ?? {}),
@@ -3051,7 +3050,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepActiveBranchIsSilent,
     currentStepActiveBranchIsJudgeOnly,
     currentStepActiveBranchLabel,
-    currentScriptStepNumber: inferredStepNumberForGate,
+    currentScriptStepNumber: currentStepNumberForGate ?? undefined,
     aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
     skipLegacyPacingGates,
     currentStage: parsed?.stage || null,

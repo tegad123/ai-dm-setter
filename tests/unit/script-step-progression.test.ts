@@ -829,6 +829,29 @@ describe('getStepActionShape', () => {
     ]);
   });
 
+  it('collects late-step literal [MSG] content the same as early steps', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 20,
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                'Send me your full name, email, phone number, and the best time to call.'
+            }
+          ],
+          branches: []
+        }
+      ]
+    };
+    const shape = getStepActionShape(script, 20);
+    assert.ok(shape);
+    assert.deepEqual(shape!.requiredMessageContents, [
+      'Send me your full name, email, phone number, and the best time to call.'
+    ]);
+  });
+
   it('collects branch-contained [MSG] content as required verbatim text', () => {
     const script = {
       steps: [
@@ -2424,12 +2447,85 @@ describe('bug-30-msg-verbatim-violation', () => {
     assert.equal(violation!.expected, 'I respect that bro, I truly do.');
   });
 
-  it('allows punctuation/case variation and strong word overlap', () => {
+  it('allows punctuation/case variation when the full literal message is present', () => {
     assert.equal(
       detectMsgVerbatimViolation('i respect that bro i truly do', [
         'I respect that bro, I truly do.'
       ]),
       null
+    );
+  });
+
+  it('bug-49-literal-info-collection-msg: hard-fails when required list items are omitted', () => {
+    const required =
+      'Perfect. Send me your full name, email, phone number, city, and the best time to call you.';
+
+    const quality = scoreVoiceQualityGroup(
+      ['Perfect. Send me your full name, email, and phone number.'],
+      {
+        currentStepRequiredMessages: [required]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-49-literal-link-msg: hard-fails when a required URL is omitted', () => {
+    const required =
+      'Here is the booking link: https://cal.com/example/strategy-call';
+
+    assert.ok(
+      detectMsgVerbatimViolation('Here is the booking link.', [required])
+    );
+
+    assert.equal(
+      detectMsgVerbatimViolation(
+        'Here is the booking link: https://cal.com/example/strategy-call',
+        [required]
+      ),
+      null
+    );
+  });
+
+  it('bug-49-literal-resource-msg: hard-fails when the wrong URL is sent', () => {
+    const required =
+      'Watch this before the call: https://youtube.com/watch?v=operator-script';
+
+    const quality = scoreVoiceQualityGroup(
+      ['Watch this before the call: https://youtube.com/watch?v=wrong-video'],
+      {
+        currentStepRequiredMessages: [required]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-49-verbatim-speech-msg: hard-fails on paraphrased operator speech', () => {
+    const required =
+      'When people come into the markets, they believe they need more discipline.';
+
+    const quality = scoreVoiceQualityGroup(
+      [
+        'Most traders think the answer is just becoming more disciplined in the markets.'
+      ],
+      {
+        currentStepRequiredMessages: [required]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
     );
   });
 

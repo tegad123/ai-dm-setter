@@ -981,10 +981,14 @@ function stripScriptVariables(text: string): string {
 function normalizeForVerbatimCompare(text: string): string {
   return stripScriptVariables(text)
     .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
     .replace(/[^a-z0-9\s']/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function extractUrlsForVerbatimCompare(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s"'<>]+/gi) ?? [];
+  return matches.map((url) => url.replace(/[.,;:!?)}\]]+$/g, '').toLowerCase());
 }
 
 function tokenSetForVerbatimCompare(text: string): Set<string> {
@@ -1009,13 +1013,24 @@ function wordOverlapRatio(required: string, generated: string): number {
 function requiredMessageMatchesGenerated(
   required: string,
   generated: string,
-  overlapThreshold = 0.6
+  options: { allowOverlapFallback?: boolean; overlapThreshold?: number } = {}
 ): boolean {
+  const requiredUrls = extractUrlsForVerbatimCompare(required);
+  if (requiredUrls.length > 0) {
+    const normalizedGeneratedWithUrls = generated.toLowerCase();
+    const allUrlsPresent = requiredUrls.every((url) =>
+      normalizedGeneratedWithUrls.includes(url)
+    );
+    if (!allUrlsPresent) return false;
+  }
+
   const normalizedRequired = normalizeForVerbatimCompare(required);
   if (normalizedRequired.length === 0) return true;
   const normalizedGenerated = normalizeForVerbatimCompare(generated);
   if (normalizedGenerated.includes(normalizedRequired)) return true;
-  return wordOverlapRatio(required, generated) >= overlapThreshold;
+  return options.allowOverlapFallback === true
+    ? wordOverlapRatio(required, generated) >= (options.overlapThreshold ?? 0.6)
+    : false;
 }
 
 export function extractEmbeddedQuotes(content: string): string[] {
@@ -1090,7 +1105,12 @@ export function detectMsgVerbatimViolation(
   for (const required of requiredMessages) {
     if (required.isPlaceholder) {
       for (const quote of required.embeddedQuotes ?? []) {
-        if (!requiredMessageMatchesGenerated(quote, generatedReply, 0.85)) {
+        if (
+          !requiredMessageMatchesGenerated(quote, generatedReply, {
+            allowOverlapFallback: true,
+            overlapThreshold: 0.85
+          })
+        ) {
           return {
             expected: quote,
             generated: generatedReply,
