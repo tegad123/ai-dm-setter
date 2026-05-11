@@ -32,6 +32,12 @@ import {
   sanitizeMessageGroupUrls
 } from '@/lib/url-allowlist';
 import {
+  appendAutoClearedStaleReviewEvent,
+  AUTO_CLEARED_STALE_REVIEW_EVENT,
+  type AutoClearedStaleReviewEvent,
+  shouldAutoClearAwaitingHumanReview
+} from '@/lib/stale-human-review';
+import {
   runPostMessageScoring,
   getScoringContextForPrompt,
   runPostAIReplyScoring
@@ -1288,6 +1294,7 @@ export async function processIncomingMessage(
         currentScriptStep: 1,
         capturedDataPoints: {},
         awaitingAiResponse: false,
+        awaitingHumanReview: false,
         awaitingSince: null,
         silentStopCount: 0,
         stageMismatchCount: 0,
@@ -1485,20 +1492,75 @@ export async function processIncomingMessage(
     }
   }
 
+  const autoClearAwaitingHumanReview = shouldAutoClearAwaitingHumanReview({
+    awaitingHumanReview: lead.conversation!.awaitingHumanReview,
+    aiActive: lead.conversation!.aiActive,
+    distressDetected: lead.conversation!.distressDetected
+  });
+  const awaitingHumanReviewAfterInbound =
+    lead.conversation!.awaitingHumanReview && !autoClearAwaitingHumanReview;
+  const shouldAwaitAiResponse =
+    lead.conversation!.aiActive && !awaitingHumanReviewAfterInbound;
+  const autoClearEvent = autoClearAwaitingHumanReview
+    ? ({
+        eventType: AUTO_CLEARED_STALE_REVIEW_EVENT,
+        conversationId,
+        leadMessageId: message.id,
+        leadMessagePreview: messageText.slice(0, 160),
+        clearedAt: now.toISOString(),
+        reason:
+          'Lead sent a new message while AI was active and the conversation was awaiting human review.'
+      } satisfies AutoClearedStaleReviewEvent)
+    : null;
+
+  if (autoClearEvent) {
+    console.warn('[webhook-processor] auto-cleared stale human review:', {
+      conversationId,
+      leadId: lead.id,
+      messageId: message.id
+    });
+  }
+
   await prisma.conversation.update({
     where: { id: conversationId },
     data: {
       lastMessageAt: now,
       unreadCount: { increment: 1 },
-      awaitingAiResponse:
-        lead.conversation!.aiActive && !lead.conversation!.awaitingHumanReview,
-      awaitingSince:
-        lead.conversation!.aiActive && !lead.conversation!.awaitingHumanReview
-          ? now
-          : null,
+      awaitingHumanReview: autoClearEvent ? false : undefined,
+      awaitingAiResponse: shouldAwaitAiResponse,
+      awaitingSince: shouldAwaitAiResponse ? now : null,
+      capturedDataPoints: autoClearEvent
+        ? appendAutoClearedStaleReviewEvent(
+            lead.conversation!.capturedDataPoints,
+            autoClearEvent
+          )
+        : undefined,
       ...(detectedEmail ? { leadEmail: detectedEmail } : {})
     }
   });
+
+  if (autoClearEvent) {
+    try {
+      const title = 'AI review auto-cleared after lead reply';
+      await prisma.notification.create({
+        data: {
+          accountId,
+          type: 'SYSTEM',
+          title,
+          body:
+            `${resolvedName} (@${resolvedHandle}) replied while this conversation was awaiting human review. ` +
+            'QualifyDMs cleared the stale review flag and resumed AI scheduling.',
+          leadId: lead.id
+        }
+      });
+      broadcastNotification(accountId, { type: 'SYSTEM', title });
+    } catch (notifyErr) {
+      console.error(
+        '[webhook-processor] stale review auto-clear notification failed:',
+        notifyErr
+      );
+    }
+  }
 
   // ── Step 3b: Distress / crisis detection (SAFETY GATE) ─────────
   // Scan the inbound message for suicidal ideation, self-harm, and
