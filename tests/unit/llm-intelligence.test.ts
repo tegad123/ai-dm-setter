@@ -32,6 +32,9 @@ describe('pre-prompt script variable resolution', () => {
     assert.equal(isValidTemplateVariableName('first name'), true);
     assert.equal(isValidTemplateVariableName('phone number'), true);
     assert.equal(isValidTemplateVariableName('incomeGoal'), true);
+    assert.equal(isValidTemplateVariableName('their stated goal'), true);
+    assert.equal(isValidTemplateVariableName('trading goal'), true);
+    assert.equal(isValidTemplateVariableName('income target'), true);
     assert.equal(
       isValidTemplateVariableName('acknowledge their experience'),
       false
@@ -46,9 +49,51 @@ describe('pre-prompt script variable resolution', () => {
     );
     assert.deepEqual(
       extractTemplateVariableNames(
-        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{acknowledge their experience}} {{deep_why}} {{day and time}}'
+        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{acknowledge their experience}} {{deep_why}} {{day and time}} {{their stated goal}}'
       ),
-      ['deep_why', 'day and time']
+      ['deep_why', 'day and time', 'their stated goal']
+    );
+  });
+
+  it('bug-58-semantic-variable-alias: resolves their stated goal from incomeGoal', async () => {
+    let calls = 0;
+    const resolutions = await resolveScriptVariablesForTexts(
+      [
+        'But why is {{their stated goal}} so important to you though?',
+        'What would {{income target}} mean for the family?'
+      ],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            incomeGoal: {
+              value: 1000,
+              confidence: 'HIGH',
+              sourceFieldName: 'incomeGoal'
+            }
+          }
+        },
+        extractor: async () => {
+          calls++;
+          return 'should not happen';
+        }
+      }
+    );
+
+    assert.equal(calls, 0);
+    assert.equal(
+      applyResolvedScriptVariables(
+        'But why is {{their stated goal}} so important to you though?',
+        resolutions
+      ),
+      'But why is $1k so important to you though?'
+    );
+    assert.equal(
+      applyResolvedScriptVariables(
+        'What would {{income target}} mean for the family?',
+        resolutions
+      ),
+      'What would $1k mean for the family?'
     );
   });
 

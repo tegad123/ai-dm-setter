@@ -74,6 +74,17 @@ const KNOWN_MULTI_WORD_TEMPLATE_VARIABLES = new Set([
   'time zone'
 ]);
 
+const SEMANTIC_TEMPLATE_VARIABLE_ALIASES = new Map<string, string>([
+  ['theirstatedgoal', 'incomeGoal'],
+  ['statedgoal', 'incomeGoal'],
+  ['theirgoal', 'incomeGoal'],
+  ['tradinggoal', 'incomeGoal'],
+  ['incometarget', 'incomeGoal'],
+  ['targetincome', 'incomeGoal'],
+  ['targettradingincome', 'incomeGoal'],
+  ['monthlytradinggoal', 'incomeGoal']
+]);
+
 const DIRECTIVE_FIRST_WORDS = new Set([
   'acknowledge',
   'address',
@@ -92,6 +103,14 @@ const DIRECTIVE_FIRST_WORDS = new Set([
   'use'
 ]);
 
+function canonicalTemplateVariableName(variableName: string): string {
+  return (
+    SEMANTIC_TEMPLATE_VARIABLE_ALIASES.get(
+      normalizeTemplateKey(variableName)
+    ) ?? variableName
+  );
+}
+
 export function isValidTemplateVariableName(
   rawName: string | null | undefined
 ): boolean {
@@ -102,6 +121,9 @@ export function isValidTemplateVariableName(
     return false;
   }
   if (/[{}()[\];:,]/.test(name)) return false;
+  if (SEMANTIC_TEMPLATE_VARIABLE_ALIASES.has(normalizeTemplateKey(name))) {
+    return true;
+  }
 
   const words = name.toLowerCase().split(/\s+/).filter(Boolean);
   const firstWord = words[0] ?? '';
@@ -109,7 +131,10 @@ export function isValidTemplateVariableName(
   if (/ing$/.test(firstWord)) return false;
 
   if (words.length > 1) {
-    return KNOWN_MULTI_WORD_TEMPLATE_VARIABLES.has(words.join(' '));
+    return (
+      KNOWN_MULTI_WORD_TEMPLATE_VARIABLES.has(words.join(' ')) ||
+      SEMANTIC_TEMPLATE_VARIABLE_ALIASES.has(normalizeTemplateKey(name))
+    );
   }
 
   return /^[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)*$/.test(name);
@@ -156,7 +181,9 @@ function hasEmoji(value: string): boolean {
 export function getVariableValueSpec(
   variableName: string
 ): ScriptVariableValueSpec {
-  const normalized = normalizeTemplateKey(variableName);
+  const normalized = normalizeTemplateKey(
+    canonicalTemplateVariableName(variableName)
+  );
 
   if (/^(name|firstname|leadname)$/.test(normalized)) {
     return {
@@ -292,6 +319,15 @@ function cleanMoneyValue(value: string): string | null {
   return /^\$/.test(value.trim()) ? `$${amount}` : amount;
 }
 
+function formatCompactMoneyAmount(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  const abs = Math.abs(value);
+  if (abs >= 1000 && value % 1000 === 0) {
+    return `$${value / 1000}k`;
+  }
+  return `$${value}`;
+}
+
 function normalizeResolvedVariableValue(
   variableName: string,
   rawValue: string | null
@@ -347,8 +383,14 @@ function normalizeResolvedVariableValue(
 }
 
 function variableAliases(variableName: string): string[] {
-  const normalized = normalizeTemplateKey(variableName);
-  const aliases = new Set([variableName, normalized]);
+  const canonicalName = canonicalTemplateVariableName(variableName);
+  const normalized = normalizeTemplateKey(canonicalName);
+  const aliases = new Set([
+    variableName,
+    normalizeTemplateKey(variableName),
+    canonicalName,
+    normalized
+  ]);
   const add = (items: string[]) => items.forEach((item) => aliases.add(item));
 
   if (/^(name|firstname|leadname)$/.test(normalized)) {
@@ -400,10 +442,13 @@ function resolveFromRecord(
 
   for (const [key, raw] of Object.entries(record)) {
     if (!normalizedAliases.has(normalizeTemplateKey(key))) continue;
-    const value = normalizeResolvedVariableValue(
-      variableName,
-      stringifyTemplateValue(unwrapCapturedPoint(raw))
-    );
+    const unwrapped = unwrapCapturedPoint(raw);
+    const spec = getVariableValueSpec(variableName);
+    const rawValue =
+      spec.kind === 'money' && typeof unwrapped === 'number'
+        ? formatCompactMoneyAmount(unwrapped)
+        : stringifyTemplateValue(unwrapped);
+    const value = normalizeResolvedVariableValue(variableName, rawValue);
     if (value) return value;
   }
 
@@ -495,7 +540,9 @@ function inferFromBranchHistory(
 }
 
 function fallbackForVariable(variableName: string): string {
-  const normalized = normalizeTemplateKey(variableName);
+  const normalized = normalizeTemplateKey(
+    canonicalTemplateVariableName(variableName)
+  );
   if (/^(name|firstname|leadname)$/.test(normalized)) return 'bro';
   if (normalized.includes('obstacle') || normalized.includes('struggle')) {
     return 'what you mentioned earlier';
@@ -718,9 +765,12 @@ export async function persistScriptVariableResolutions(params: {
   }
 
   for (const resolution of persistable) {
-    const alreadyPresent = resolveFromRecord(resolution.variableName, existing);
+    const persistenceName = canonicalTemplateVariableName(
+      resolution.variableName
+    );
+    const alreadyPresent = resolveFromRecord(persistenceName, existing);
     if (alreadyPresent) continue;
-    existing[resolution.variableName] = {
+    existing[persistenceName] = {
       value: resolution.value,
       confidence: resolution.confidence,
       extractedFromMessageId: null,
@@ -729,7 +779,7 @@ export async function persistScriptVariableResolutions(params: {
           ? 'branch_history_variable_resolution'
           : 'llm_variable_resolution',
       extractedAt: new Date().toISOString(),
-      variableName: resolution.variableName
+      variableName: persistenceName
     };
     changed = true;
   }
