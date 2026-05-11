@@ -135,10 +135,6 @@ function pointIsPresent(points: CapturedDataPoints, key: string): boolean {
   return point.confidence === HIGH_CONFIDENCE && point.value !== null;
 }
 
-function anyPointPresent(points: CapturedDataPoints, keys: string[]): boolean {
-  return keys.some((key) => pointIsPresent(points, key));
-}
-
 function setPoint<T>(
   points: CapturedDataPoints,
   key: string,
@@ -247,125 +243,132 @@ function actionContentMatches(
   return completionOverlap(required, actual) >= 0.35;
 }
 
+function contentIsRuntimePlaceholderOnly(
+  content: string | null | undefined
+): boolean {
+  return (
+    typeof content === 'string' && /^\s*\{\{[\s\S]+?\}\}\s*$/.test(content)
+  );
+}
+
 function hasLeadReplyAfter(
   history: ScriptHistoryMessage[],
   setterMessage: ScriptHistoryMessage
-): boolean {
+): ScriptHistoryMessage | null {
   const sentAt = new Date(setterMessage.timestamp).getTime();
-  return history.some(
-    (message) =>
-      message.sender === 'LEAD' &&
-      new Date(message.timestamp).getTime() > sentAt
+  return (
+    history.find(
+      (message) =>
+        message.sender === 'LEAD' &&
+        new Date(message.timestamp).getTime() > sentAt
+    ) ?? null
   );
 }
 
 function findSetterMessageForContent(
   history: ScriptHistoryMessage[],
-  requiredContent: string | null | undefined
+  requiredContent: string | null | undefined,
+  afterTimeMs = Number.NEGATIVE_INFINITY
 ): ScriptHistoryMessage | null {
-  if (!requiredContent) return null;
+  if (!requiredContent || contentIsRuntimePlaceholderOnly(requiredContent)) {
+    return null;
+  }
   return (
     history.find(
       (message) =>
         (message.sender === 'AI' || message.sender === 'HUMAN') &&
+        new Date(message.timestamp).getTime() > afterTimeMs &&
         actionContentMatches(requiredContent, message.content)
     ) ?? null
   );
 }
 
-function stepCompleteFromHistory(
-  step: ScriptStepWithRecovery,
-  history: ScriptHistoryMessage[]
-): boolean {
-  if (history.length === 0) return false;
-  const sorted = sortedHistory(history);
+function waitableStepActions(step: ScriptStepWithRecovery): {
+  asks: Array<{ actionType: string; content: string | null }>;
+  messages: Array<{ actionType: string; content: string | null }>;
+  waits: Array<{ actionType: string; content: string | null }>;
+} {
   const actions = collectAllStepActions(step);
-  const askActions = actions.filter(
+  const asks = actions.filter(
     (action) =>
       action.actionType === 'ask_question' &&
       typeof action.content === 'string' &&
-      action.content.trim().length > 0
+      action.content.trim().length > 0 &&
+      !contentIsRuntimePlaceholderOnly(action.content)
   );
-  const msgActions = actions.filter(
+  const messages = actions.filter(
     (action) =>
       action.actionType === 'send_message' &&
       typeof action.content === 'string' &&
-      action.content.trim().length > 0
+      action.content.trim().length > 0 &&
+      !contentIsRuntimePlaceholderOnly(action.content)
   );
-  const waitActions = actions.filter(
+  const waits = actions.filter(
     (action) =>
       action.actionType === 'wait_for_response' ||
       action.actionType === 'wait_duration'
   );
 
+  return { asks, messages, waits };
+}
+
+function stepHasHistoryCompletionSignal(step: ScriptStepWithRecovery): boolean {
+  const { asks, messages, waits } = waitableStepActions(step);
+  return (
+    asks.length > 0 ||
+    !!step.canonicalQuestion?.trim() ||
+    (messages.length > 0 && waits.length > 0)
+  );
+}
+
+function stepCompletionFromHistory(
+  step: ScriptStepWithRecovery,
+  history: ScriptHistoryMessage[],
+  afterTimeMs = Number.NEGATIVE_INFINITY
+): { complete: boolean; completedAt: number } {
+  if (history.length === 0) {
+    return { complete: false, completedAt: afterTimeMs };
+  }
+  const sorted = sortedHistory(history);
+  const { asks, messages, waits } = waitableStepActions(step);
   const canonicalCandidates =
     step.canonicalQuestion && step.canonicalQuestion.trim().length > 0
       ? [{ actionType: 'ask_question', content: step.canonicalQuestion }]
       : [];
 
-  for (const action of [...askActions, ...canonicalCandidates]) {
-    const sent = findSetterMessageForContent(sorted, action.content);
-    if (sent && hasLeadReplyAfter(sorted, sent)) return true;
-  }
-
-  if (askActions.length === 0 && msgActions.length > 0 && waitActions.length) {
-    for (const action of msgActions) {
-      const sent = findSetterMessageForContent(sorted, action.content);
-      if (sent && hasLeadReplyAfter(sorted, sent)) return true;
+  for (const action of [...asks, ...canonicalCandidates]) {
+    const sent = findSetterMessageForContent(
+      sorted,
+      action.content,
+      afterTimeMs
+    );
+    const leadReply = sent ? hasLeadReplyAfter(sorted, sent) : null;
+    if (sent && leadReply) {
+      return {
+        complete: true,
+        completedAt: new Date(leadReply.timestamp).getTime()
+      };
     }
   }
 
-  return false;
-}
+  if (asks.length === 0 && messages.length > 0 && waits.length) {
+    for (const action of messages) {
+      const sent = findSetterMessageForContent(
+        sorted,
+        action.content,
+        afterTimeMs
+      );
+      const leadReply = sent ? hasLeadReplyAfter(sorted, sent) : null;
+      if (sent && leadReply) {
+        return {
+          complete: true,
+          completedAt: new Date(leadReply.timestamp).getTime()
+        };
+      }
+    }
+  }
 
-function impliedCurrentStepFromCapturedData(
-  points: CapturedDataPoints
-): number {
-  let step = 1;
-  if (anyPointPresent(points, ['workBackground', 'work_background', 'job'])) {
-    step = Math.max(step, 6);
-  }
-  if (
-    anyPointPresent(points, [
-      'monthlyIncome',
-      'monthly_income',
-      'incomeMonthly',
-      'monthlyIncomeSkipped',
-      'monthly_income_skipped'
-    ])
-  ) {
-    step = Math.max(step, 8);
-  }
-  if (
-    anyPointPresent(points, ['replaceOrSupplement', 'replace_or_supplement'])
-  ) {
-    step = Math.max(step, 9);
-  }
-  if (anyPointPresent(points, ['incomeGoal', 'income_goal'])) {
-    step = Math.max(step, 10);
-  }
-  if (
-    anyPointPresent(points, [
-      'deepWhy',
-      'deep_why',
-      'desiredOutcome',
-      'desired_outcome'
-    ])
-  ) {
-    step = Math.max(step, 11);
-  }
-  if (anyPointPresent(points, ['obstacle'])) {
-    step = Math.max(step, 12);
-  }
-  if (
-    anyPointPresent(points, ['beliefBreakDelivered', 'belief_break_delivered'])
-  ) {
-    step = Math.max(step, 14);
-  }
-  if (anyPointPresent(points, ['buyInConfirmed', 'buy_in_confirmed'])) {
-    step = Math.max(step, 15);
-  }
-  return step;
+  return { complete: false, completedAt: afterTimeMs };
 }
 
 function firstUrl(text: string | null | undefined): string | null {
@@ -1206,22 +1209,71 @@ export function isStepComplete(
 export function computeSystemStage(
   script: ScriptWithRecovery | null,
   points: CapturedDataPoints,
-  history: ScriptHistoryMessage[] = []
+  history: ScriptHistoryMessage[] = [],
+  options: {
+    previousCurrentScriptStep?: number | null;
+    maxAdvanceSteps?: number;
+  } = {}
 ): { step: ScriptStepWithRecovery | null; reason: string } {
   const steps = script?.steps ?? [];
-  const impliedCurrentStep = impliedCurrentStepFromCapturedData(points);
+  let historyCursor = Number.NEGATIVE_INFINITY;
+  let candidate: {
+    step: ScriptStepWithRecovery | null;
+    reason: string;
+  } | null = null;
+
   for (const step of steps) {
-    if (step.stepNumber < impliedCurrentStep) continue;
+    if (stepHasHistoryCompletionSignal(step)) {
+      const historyCompletion = stepCompletionFromHistory(
+        step,
+        history,
+        historyCursor
+      );
+      if (historyCompletion.complete) {
+        historyCursor = historyCompletion.completedAt;
+        continue;
+      }
+
+      candidate = { step, reason: 'first_incomplete_step_from_history' };
+      break;
+    }
+
     if (isStepComplete(step, points)) continue;
-    if (stepCompleteFromHistory(step, history)) continue;
-    if (!isStepComplete(step, points)) {
-      return { step, reason: 'first_incomplete_step' };
+
+    candidate = { step, reason: 'first_incomplete_step' };
+    break;
+  }
+
+  if (!candidate) {
+    candidate = {
+      step: steps.length > 0 ? steps[steps.length - 1] : null,
+      reason: steps.length > 0 ? 'all_steps_complete' : 'no_active_script'
+    };
+  }
+
+  const previousCurrentScriptStep = options.previousCurrentScriptStep ?? null;
+  const maxAdvanceSteps = options.maxAdvanceSteps ?? 1;
+  if (
+    candidate.step &&
+    typeof previousCurrentScriptStep === 'number' &&
+    previousCurrentScriptStep > 0 &&
+    maxAdvanceSteps >= 0 &&
+    candidate.step.stepNumber > previousCurrentScriptStep + maxAdvanceSteps
+  ) {
+    const cappedStepNumber = previousCurrentScriptStep + maxAdvanceSteps;
+    const cappedStep =
+      steps.find((step) => step.stepNumber === cappedStepNumber) ??
+      steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??
+      candidate.step;
+    if (cappedStep.stepNumber < candidate.step.stepNumber) {
+      return {
+        step: cappedStep,
+        reason: `capped_to_one_step_advance:${candidate.reason}`
+      };
     }
   }
-  return {
-    step: steps.length > 0 ? steps[steps.length - 1] : null,
-    reason: steps.length > 0 ? 'all_steps_complete' : 'no_active_script'
-  };
+
+  return candidate;
 }
 
 const STEP_INFERENCE_PATTERNS: Record<string, RegExp[]> = {
@@ -1568,7 +1620,8 @@ export async function prepareScriptState(params: {
         leadId: true,
         capturedDataPoints: true,
         capitalVerificationStatus: true,
-        capitalVerifiedAmount: true
+        capitalVerifiedAmount: true,
+        currentScriptStep: true
       }
     }),
     prisma.script.findFirst({
@@ -1632,7 +1685,11 @@ export async function prepareScriptState(params: {
   const systemStage = computeSystemStage(
     script,
     capturedDataPoints,
-    params.history
+    params.history,
+    {
+      previousCurrentScriptStep: conversation.currentScriptStep,
+      maxAdvanceSteps: 1
+    }
   );
   const currentStep = systemStage.step;
   const currentScriptStep = currentStep?.stepNumber ?? 1;

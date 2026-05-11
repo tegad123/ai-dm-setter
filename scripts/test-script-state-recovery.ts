@@ -293,8 +293,181 @@ function run() {
   );
   assert.equal(
     nullRuleStage.step?.stepNumber,
-    10,
-    'null completionRule script advances to Step 10 from captured history-derived data'
+    1,
+    'null completionRule alone does not skip steps from captured data'
+  );
+
+  const genericSequentialScript = {
+    id: 'generic_sequence',
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Question One',
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: 'What do you do for work?'
+          },
+          { actionType: 'wait_for_response', content: null }
+        ],
+        branches: []
+      },
+      {
+        stepNumber: 2,
+        title: 'Question Two',
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: 'How long have you been doing that?'
+          },
+          { actionType: 'wait_for_response', content: null }
+        ],
+        branches: []
+      },
+      {
+        stepNumber: 3,
+        title: 'Question Three',
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: 'What are you trying to make each month?'
+          },
+          { actionType: 'wait_for_response', content: null }
+        ],
+        branches: []
+      }
+    ]
+  } as any;
+  const genericHistory = [
+    {
+      sender: 'AI',
+      content: 'What do you do for work?',
+      timestamp: new Date('2026-05-11T00:00:00Z')
+    },
+    {
+      sender: 'LEAD',
+      content: 'I work as a nurse',
+      timestamp: new Date('2026-05-11T00:01:00Z')
+    }
+  ];
+  assert.equal(
+    computeSystemStage(genericSequentialScript, {}, genericHistory).step
+      ?.stepNumber,
+    2,
+    'generic null-rule script advances from Step 1 to Step 2 only after Step 1 ask gets a lead reply'
+  );
+  assert.equal(
+    computeSystemStage(genericSequentialScript, {}, genericHistory, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    }).step?.stepNumber,
+    2,
+    'generic sequencer allows exactly one step of advancement per lead turn'
+  );
+  const twoCompletedStepsHistory = [
+    ...genericHistory,
+    {
+      sender: 'AI',
+      content: 'How long have you been doing that?',
+      timestamp: new Date('2026-05-11T00:02:00Z')
+    },
+    {
+      sender: 'LEAD',
+      content: '2 years',
+      timestamp: new Date('2026-05-11T00:03:00Z')
+    }
+  ];
+  assert.equal(
+    computeSystemStage(genericSequentialScript, {}, twoCompletedStepsHistory)
+      .step?.stepNumber,
+    3,
+    'generic sequencer can derive later position from ordered history when uncapped'
+  );
+  assert.equal(
+    computeSystemStage(genericSequentialScript, {}, twoCompletedStepsHistory, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    }).step?.stepNumber,
+    2,
+    'generic sequencer caps stale recomputation to one step beyond persisted state'
+  );
+
+  const msgWaitScript = {
+    id: 'generic_msg_wait_sequence',
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Silent Ack',
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [
+          { actionType: 'send_message', content: 'I hear you bro.' },
+          { actionType: 'wait_for_response', content: null }
+        ],
+        branches: []
+      },
+      {
+        stepNumber: 2,
+        title: 'Next Question',
+        stateKey: null,
+        recoveryActionType: null,
+        canonicalQuestion: null,
+        artifactField: null,
+        completionRule: null,
+        requiredDataPoints: null,
+        routingRules: null,
+        actions: [
+          {
+            actionType: 'ask_question',
+            content: 'What happened next?'
+          },
+          { actionType: 'wait_for_response', content: null }
+        ],
+        branches: []
+      }
+    ]
+  } as any;
+  assert.equal(
+    computeSystemStage(msgWaitScript, {}, [
+      {
+        sender: 'AI',
+        content: 'I hear you bro.',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah it was rough',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ]).step?.stepNumber,
+    2,
+    'generic [MSG]+[WAIT] step completes only after the lead replies'
   );
 
   const prematureCapitalAfterIncomeGoal = scoreVoiceQualityGroup(
