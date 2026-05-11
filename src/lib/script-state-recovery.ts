@@ -186,22 +186,77 @@ function sortedHistory(
     );
 }
 
-function collectAllStepActions(step: ScriptStepWithRecovery): Array<{
+type StepCompletionAction = {
   actionType: string;
   content: string | null;
-}> {
+};
+
+function stepActionRef(action: {
+  actionType: string;
+  content: string | null;
+}): StepCompletionAction {
+  return {
+    actionType: action.actionType,
+    content: action.content
+  };
+}
+
+function collectAllStepActions(
+  step: ScriptStepWithRecovery
+): StepCompletionAction[] {
   return [
-    ...step.actions.map((action) => ({
-      actionType: action.actionType,
-      content: action.content
-    })),
-    ...step.branches.flatMap((branch) =>
-      branch.actions.map((action) => ({
-        actionType: action.actionType,
-        content: action.content
-      }))
-    )
+    ...step.actions.map(stepActionRef),
+    ...step.branches.flatMap((branch) => branch.actions.map(stepActionRef))
   ];
+}
+
+function stepCompletionActionPaths(
+  step: ScriptStepWithRecovery,
+  selectedBranchLabel: string | null = null
+): StepCompletionAction[][] {
+  const directActions = step.actions.map(stepActionRef);
+  if (step.branches.length === 0) {
+    return [directActions];
+  }
+
+  const branches = selectedBranchLabel
+    ? step.branches.filter(
+        (branch) => branch.branchLabel === selectedBranchLabel
+      )
+    : step.branches;
+  const branchActions = branches.length > 0 ? branches : step.branches;
+
+  return branchActions.map((branch) => [
+    ...directActions,
+    ...branch.actions.map(stepActionRef)
+  ]);
+}
+
+function selectedBranchLabelForStep(
+  points: CapturedDataPoints,
+  stepNumber: number
+): string | null {
+  const trace = asRecord(points.lastClassifierTrace);
+  const tracedStepNumber =
+    typeof trace.stepNumber === 'number'
+      ? trace.stepNumber
+      : typeof trace.stepNumber === 'string'
+        ? Number.parseInt(trace.stepNumber, 10)
+        : null;
+  if (tracedStepNumber !== stepNumber) return null;
+
+  for (const key of [
+    'finalSelectedLabel',
+    'llmSelectedLabel',
+    'tokenSelectedLabel'
+  ]) {
+    const value = trace[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
 }
 
 function stripTemplateVariables(text: string): string {
@@ -274,9 +329,20 @@ function findSetterMessageForContent(
   requiredContent: string | null | undefined,
   afterTimeMs = Number.NEGATIVE_INFINITY
 ): ScriptHistoryMessage | null {
-  if (!requiredContent || contentIsRuntimePlaceholderOnly(requiredContent)) {
+  if (!requiredContent) {
     return null;
   }
+
+  if (contentIsRuntimePlaceholderOnly(requiredContent)) {
+    return (
+      history.find(
+        (message) =>
+          (message.sender === 'AI' || message.sender === 'HUMAN') &&
+          new Date(message.timestamp).getTime() > afterTimeMs
+      ) ?? null
+    );
+  }
+
   return (
     history.find(
       (message) =>
@@ -287,12 +353,11 @@ function findSetterMessageForContent(
   );
 }
 
-function waitableStepActions(step: ScriptStepWithRecovery): {
-  asks: Array<{ actionType: string; content: string | null }>;
-  messages: Array<{ actionType: string; content: string | null }>;
-  waits: Array<{ actionType: string; content: string | null }>;
+function waitableActionsForPath(actions: StepCompletionAction[]): {
+  asks: StepCompletionAction[];
+  messages: StepCompletionAction[];
+  waits: StepCompletionAction[];
 } {
-  const actions = collectAllStepActions(step);
   const asks = actions.filter(
     (action) =>
       action.actionType === 'ask_question' &&
@@ -304,8 +369,7 @@ function waitableStepActions(step: ScriptStepWithRecovery): {
     (action) =>
       action.actionType === 'send_message' &&
       typeof action.content === 'string' &&
-      action.content.trim().length > 0 &&
-      !contentIsRuntimePlaceholderOnly(action.content)
+      action.content.trim().length > 0
   );
   const waits = actions.filter(
     (action) =>
@@ -316,17 +380,54 @@ function waitableStepActions(step: ScriptStepWithRecovery): {
   return { asks, messages, waits };
 }
 
-function stepHasHistoryCompletionSignal(step: ScriptStepWithRecovery): boolean {
-  const { asks, messages, waits } = waitableStepActions(step);
-  return (
-    asks.length > 0 ||
-    !!step.canonicalQuestion?.trim() ||
-    (messages.length > 0 && waits.length > 0)
+function waitableStepActions(step: ScriptStepWithRecovery): {
+  asks: StepCompletionAction[];
+  messages: StepCompletionAction[];
+  waits: StepCompletionAction[];
+} {
+  return waitableActionsForPath(collectAllStepActions(step));
+}
+
+function stepHasHistoryCompletionSignal(
+  step: ScriptStepWithRecovery,
+  points: CapturedDataPoints
+): boolean {
+  if (step.canonicalQuestion?.trim()) return true;
+
+  const selectedBranchLabel = selectedBranchLabelForStep(
+    points,
+    step.stepNumber
   );
+
+  return stepCompletionActionPaths(step, selectedBranchLabel).some(
+    (actions) => {
+      const { asks, messages, waits } = waitableActionsForPath(actions);
+      return asks.length > 0 || (messages.length > 0 && waits.length > 0);
+    }
+  );
+}
+
+function findSetterMessagesForActions(
+  history: ScriptHistoryMessage[],
+  actions: StepCompletionAction[],
+  afterTimeMs = Number.NEGATIVE_INFINITY
+): ScriptHistoryMessage[] | null {
+  const sentMessages: ScriptHistoryMessage[] = [];
+  let cursor = afterTimeMs;
+
+  for (const action of actions) {
+    const sent = findSetterMessageForContent(history, action.content, cursor);
+    if (!sent) return null;
+    sentMessages.push(sent);
+    cursor = new Date(sent.timestamp).getTime();
+  }
+
+  return sentMessages;
 }
 
 function stepCompletionFromHistory(
   step: ScriptStepWithRecovery,
+  points: CapturedDataPoints,
   history: ScriptHistoryMessage[],
   afterTimeMs = Number.NEGATIVE_INFINITY
 ): { complete: boolean; completedAt: number } {
@@ -334,29 +435,19 @@ function stepCompletionFromHistory(
     return { complete: false, completedAt: afterTimeMs };
   }
   const sorted = sortedHistory(history);
-  const { asks, messages, waits } = waitableStepActions(step);
   const canonicalCandidates =
     step.canonicalQuestion && step.canonicalQuestion.trim().length > 0
       ? [{ actionType: 'ask_question', content: step.canonicalQuestion }]
       : [];
+  const selectedBranchLabel = selectedBranchLabelForStep(
+    points,
+    step.stepNumber
+  );
 
-  for (const action of [...asks, ...canonicalCandidates]) {
-    const sent = findSetterMessageForContent(
-      sorted,
-      action.content,
-      afterTimeMs
-    );
-    const leadReply = sent ? hasLeadReplyAfter(sorted, sent) : null;
-    if (sent && leadReply) {
-      return {
-        complete: true,
-        completedAt: new Date(leadReply.timestamp).getTime()
-      };
-    }
-  }
+  for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
+    const { asks, messages, waits } = waitableActionsForPath(actions);
 
-  if (asks.length === 0 && messages.length > 0 && waits.length) {
-    for (const action of messages) {
+    for (const action of [...asks, ...canonicalCandidates]) {
       const sent = findSetterMessageForContent(
         sorted,
         action.content,
@@ -364,6 +455,22 @@ function stepCompletionFromHistory(
       );
       const leadReply = sent ? hasLeadReplyAfter(sorted, sent) : null;
       if (sent && leadReply) {
+        return {
+          complete: true,
+          completedAt: new Date(leadReply.timestamp).getTime()
+        };
+      }
+    }
+
+    if (asks.length === 0 && messages.length > 0 && waits.length) {
+      const sentMessages = findSetterMessagesForActions(
+        sorted,
+        messages,
+        afterTimeMs
+      );
+      const lastSent = sentMessages?.at(-1) ?? null;
+      const leadReply = lastSent ? hasLeadReplyAfter(sorted, lastSent) : null;
+      if (lastSent && leadReply) {
         return {
           complete: true,
           completedAt: new Date(leadReply.timestamp).getTime()
@@ -1227,9 +1334,10 @@ export function computeSystemStage(
   } | null = null;
 
   for (const step of steps) {
-    if (stepHasHistoryCompletionSignal(step)) {
+    if (stepHasHistoryCompletionSignal(step, points)) {
       const historyCompletion = stepCompletionFromHistory(
         step,
+        points,
         history,
         historyCursor
       );

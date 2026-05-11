@@ -51,6 +51,7 @@ import {
   detectMsgVerbatimViolation,
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
+import { computeSystemStage } from '../../src/lib/script-state-recovery';
 
 // ---------------------------------------------------------------------------
 // hasCapturedDataPoint — accepts both flat and {value,confidence} shapes
@@ -1344,6 +1345,316 @@ describe('active-branch-scoped quality gates', () => {
         failure.includes('required_message_not_in_separate_bubble')
       )
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Placeholder [MSG]+[WAIT] step completion (bug-41 through bug-44)
+// ---------------------------------------------------------------------------
+
+type RecoveryScriptInput = NonNullable<
+  Parameters<typeof computeSystemStage>[0]
+>;
+
+function makeRecoveryScriptForTest(
+  steps: Array<Record<string, unknown>>
+): RecoveryScriptInput {
+  return { steps } as RecoveryScriptInput;
+}
+
+function stepForCompletionTest(overrides: Record<string, unknown>) {
+  return {
+    stepNumber: 4,
+    title: 'Market Response Routing',
+    stateKey: null,
+    canonicalQuestion: null,
+    completionRule: null,
+    actions: [],
+    branches: [],
+    ...overrides
+  };
+}
+
+const nextCompletionTestStep = stepForCompletionTest({
+  stepNumber: 5,
+  title: 'Current Situation — Job',
+  actions: [
+    {
+      actionType: 'ask_question',
+      content: 'What do you do for work?'
+    }
+  ]
+});
+
+describe('placeholder [MSG]+[WAIT] history completion', () => {
+  it('bug-41-placeholder-msg-wait-completes-on-lead-reply', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Going well',
+            actions: [
+              { actionType: 'send_message', content: 'Love to see it bro.' },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          },
+          {
+            branchLabel: 'Obstacle given — detailed and emotional',
+            actions: [
+              { actionType: 'runtime_judgment', content: 'store obstacle' },
+              {
+                actionType: 'send_message',
+                content:
+                  '{{acknowledge specifically using their own words. Then add: "give me a bit more context" to keep momentum}}'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+
+    const stage = computeSystemStage(script, {}, [
+      {
+        sender: 'AI',
+        content: 'give me a bit more context on your situation though',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'I get tilted and keep adding more to recover',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 5);
+  });
+
+  it('uses the classifier-selected placeholder branch when branch shapes differ', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Short placeholder branch',
+            actions: [
+              {
+                actionType: 'send_message',
+                content: '{{acknowledge briefly}}'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          },
+          {
+            branchLabel: 'Selected two-bubble branch',
+            actions: [
+              {
+                actionType: 'send_message',
+                content: '{{acknowledge in their words}}'
+              },
+              {
+                actionType: 'send_message',
+                content: '{{ask for one more bit of context}}'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+    const points = {
+      lastClassifierTrace: {
+        stepNumber: 4,
+        finalSelectedLabel: 'Selected two-bubble branch'
+      }
+    } as unknown as Parameters<typeof computeSystemStage>[1];
+
+    const incomplete = computeSystemStage(script, points, [
+      {
+        sender: 'AI',
+        content: 'that sounds frustrating bro',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah exactly',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+    assert.equal(incomplete.step?.stepNumber, 4);
+
+    const complete = computeSystemStage(script, points, [
+      {
+        sender: 'AI',
+        content: 'that sounds frustrating bro',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'AI',
+        content: 'give me a bit more context on that',
+        timestamp: '2026-05-11T05:16:39.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah exactly',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+    assert.equal(complete.step?.stepNumber, 5);
+  });
+
+  it('literal [MSG]+[WAIT] still completes via content match', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Literal branch',
+            actions: [
+              {
+                actionType: 'send_message',
+                content: 'Gotcha, I appreciate you being real about that.'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+
+    const stage = computeSystemStage(script, {}, [
+      {
+        sender: 'AI',
+        content: 'Gotcha, I appreciate you being real about that.',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah it is rough',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 5);
+  });
+
+  it('bug-42-placeholder-msg-no-wait-does-not-complete', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Placeholder no wait',
+            actions: [
+              { actionType: 'runtime_judgment', content: 'store obstacle' },
+              {
+                actionType: 'send_message',
+                content: '{{acknowledge in your own words}}'
+              }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+
+    const stage = computeSystemStage(script, {}, [
+      {
+        sender: 'AI',
+        content: 'that sounds frustrating bro',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah exactly',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 4);
+  });
+
+  it('bug-43-judge-only-branch-does-not-complete', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Judge only',
+            actions: [
+              { actionType: 'runtime_judgment', content: 'store obstacle' }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+
+    const stage = computeSystemStage(script, {}, [
+      {
+        sender: 'LEAD',
+        content: 'I keep revenge trading',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 4);
+  });
+
+  it('bug-44-multi-bubble-placeholder-completion waits for the last bubble', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Multi bubble placeholder',
+            actions: [
+              {
+                actionType: 'send_message',
+                content: '{{acknowledge in your own words}}'
+              },
+              {
+                actionType: 'send_message',
+                content: '{{add one short bridge sentence}}'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+
+    const incomplete = computeSystemStage(script, {}, [
+      {
+        sender: 'AI',
+        content: 'that sounds frustrating bro',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah exactly',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+    assert.equal(incomplete.step?.stepNumber, 4);
+
+    const complete = computeSystemStage(script, {}, [
+      {
+        sender: 'AI',
+        content: 'that sounds frustrating bro',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        sender: 'AI',
+        content: 'give me a bit more context on that',
+        timestamp: '2026-05-11T05:16:39.000Z'
+      },
+      {
+        sender: 'LEAD',
+        content: 'yeah exactly',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+    assert.equal(complete.step?.stepNumber, 5);
   });
 });
 
