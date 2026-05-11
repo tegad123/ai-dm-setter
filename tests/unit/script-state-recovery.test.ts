@@ -621,7 +621,7 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
-  it('bug-53-volunteered-target-income-with-trading-cue-can-auto-complete-next-ask', () => {
+  it('bug-58-target-income-must-be-captured-by-its-own-ask', () => {
     const goalScript = {
       id: 'target_income_volunteered_sequence',
       steps: [
@@ -663,10 +663,80 @@ describe('computeSystemStage generic sequencing', () => {
     });
 
     assert.equal((points.replaceOrSupplement as any)?.value, 'replace');
-    assert.equal((points.incomeGoal as any)?.value, 8000);
+    assert.equal(
+      (points.incomeGoal as any)?.value,
+      undefined,
+      'Step 8 context must not populate the target income field'
+    );
+    assert.equal(stage.step?.stepNumber, 2);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 2
+      ),
+      false
+    );
+  });
+
+  it('bug-58-step-9-income-goal-ask-completes-after-its-own-answer', () => {
+    const goalScript = {
+      id: 'target_income_own_ask_sequence',
+      steps: [
+        askStep(
+          1,
+          'Replace vs Supplement',
+          'Are you replacing your job or just looking for extra income on the side?'
+        ),
+        askStep(
+          2,
+          'Target Trading Income',
+          'How much would you need to be making from trading for it to actually matter?'
+        ),
+        askStep(3, 'Deep Why', 'Why does that number matter to you?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content:
+          'Are you replacing your job or just looking for extra income on the side?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'just extra on the side',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      },
+      {
+        id: 'ai_step2',
+        sender: 'AI',
+        content:
+          'How much would you need to be making from trading for it to actually matter?',
+        timestamp: new Date('2026-05-11T00:02:00Z')
+      },
+      {
+        id: 'lead_step2',
+        sender: 'LEAD',
+        content: '4k a month',
+        timestamp: new Date('2026-05-11T00:03:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script: goalScript
+    });
+    const stage = computeSystemStage(goalScript, points as any, history, {
+      previousCurrentScriptStep: 2,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.incomeGoal as any)?.value, 4000);
+    assert.equal((points.incomeGoal as any)?.sourceStepNumber, 2);
     assert.equal(
       (points.incomeGoal as any)?.extractionMethod,
-      'volunteered_incomeGoal_for_upcoming_ask'
+      'amount_after_step_9_prompt'
     );
     assert.equal(stage.step?.stepNumber, 3);
   });

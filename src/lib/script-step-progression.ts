@@ -70,6 +70,77 @@ function capturedPointValue(
   return raw;
 }
 
+function capturedPointRecord(
+  points: Record<string, unknown> | null | undefined,
+  key: string
+): Record<string, unknown> | null {
+  if (!points) return null;
+  const raw = points[key];
+  return raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : null;
+}
+
+function capturedPointSourceStepNumber(
+  point: Record<string, unknown> | null
+): number | null {
+  const raw = point?.sourceStepNumber;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function capturedPointHasNumericValue(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'string') return false;
+  return /\b\$?\s*\d+(?:[.,]\d+)?\s*[km]?\b/i.test(value.trim());
+}
+
+function hasCapturedDataPointFromStep(params: {
+  points: Record<string, unknown> | null | undefined;
+  keys: string[];
+  stepNumber: number;
+  requireNumeric?: boolean;
+}): boolean {
+  const hasBranchHistory = branchHistoryEvents(params.points).length > 0;
+  for (const key of params.keys) {
+    if (!hasCapturedDataPoint(params.points, key)) continue;
+    const point = capturedPointRecord(params.points, key);
+    const value = point ? point.value : capturedPointValue(params.points, key);
+    if (params.requireNumeric && !capturedPointHasNumericValue(value)) {
+      continue;
+    }
+
+    const sourceStepNumber = capturedPointSourceStepNumber(point);
+    if (sourceStepNumber === params.stepNumber) return true;
+
+    // Legacy conversations/tests may have flat capturedDataPoints and no
+    // durable branchHistory yet. Preserve that fallback only when the
+    // conversation has no durable step ledger to contradict the value.
+    if (!hasBranchHistory && sourceStepNumber === null) return true;
+  }
+  return false;
+}
+
+export function incomeGoalSatisfiedByExpectedStep(
+  points: Record<string, unknown> | null | undefined,
+  stepNumber = 9
+): boolean {
+  const hasBranchHistory = branchHistoryEvents(points).length > 0;
+  if (hasBranchHistory && !stepCompletedByBranchHistory(points, stepNumber)) {
+    return false;
+  }
+  return hasCapturedDataPointFromStep({
+    points,
+    keys: ['incomeGoal', 'income_goal'],
+    stepNumber,
+    requireNumeric: true
+  });
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -173,6 +244,10 @@ function prereqSatisfiedByCapturedState(
     deepWhySatisfiedByBranchHistory(points)
   ) {
     return true;
+  }
+
+  if (prereq.id === 'income_goal') {
+    return incomeGoalSatisfiedByExpectedStep(points, prereq.stepNumber);
   }
 
   return prereq.acceptableKeys.some((key) => {
@@ -780,9 +855,10 @@ export function detectStep10Skipped(
   capturedDataPoints: Record<string, unknown> | null | undefined
 ): boolean {
   if (!detectStep12PlusContent(reply)) return false;
-  const incomeGoalPresent =
-    hasCapturedDataPoint(capturedDataPoints, 'incomeGoal') ||
-    hasCapturedDataPoint(capturedDataPoints, 'income_goal');
+  const incomeGoalPresent = incomeGoalSatisfiedByExpectedStep(
+    capturedDataPoints,
+    9
+  );
   if (!incomeGoalPresent) return false;
   const deepWhyPresent =
     hasCapturedDataPoint(capturedDataPoints, 'deepWhy') ||

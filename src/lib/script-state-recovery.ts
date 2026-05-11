@@ -2091,12 +2091,14 @@ export function extractAmountUSD(text: string): number | null {
 function extractValueAfterPrompt<T>(params: {
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
+  steps?: ScriptStepWithRecovery[];
   field: string;
   promptPattern: RegExp;
   method: string;
   parse: (leadContent: string) => T | null;
 }) {
-  const { points, history, field, promptPattern, method, parse } = params;
+  const { points, history, steps, field, promptPattern, method, parse } =
+    params;
   let prompt: ScriptHistoryMessage | null = null;
   for (const msg of sortedHistory(history)) {
     if (
@@ -2114,7 +2116,13 @@ function extractValueAfterPrompt<T>(params: {
     }
     const value = parse(msg.content);
     if (value !== null && value !== undefined && value !== '') {
-      setPoint(points, field, value, 'HIGH', msg.id ?? null, method);
+      setPoint(points, field, value, 'HIGH', msg.id ?? null, method, {
+        sourceFieldName: field,
+        sourceStepNumber: steps?.length
+          ? stepNumberForAskMessage(steps, prompt.content)
+          : null,
+        sourceQuestion: prompt.content
+      });
       // After successful capture, reset prompt so we don't re-capture
       // from later messages — the FIRST lead reply after the prompt
       // is the canonical answer.
@@ -2143,9 +2151,11 @@ function extractDurationPhrase(text: string): string | null {
 function extractTradingExperienceDuration(params: {
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
+  script?: ScriptWithRecovery | null;
 }) {
   extractValueAfterPrompt({
     ...params,
+    steps: params.script?.steps ?? [],
     field: 'tradingExperienceDuration',
     method: 'duration_after_trading_experience_prompt',
     promptPattern:
@@ -2166,9 +2176,11 @@ function extractTradingExperienceDuration(params: {
 function extractIncomeGoal(params: {
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
+  script?: ScriptWithRecovery | null;
 }) {
   extractValueAfterPrompt({
     ...params,
+    steps: params.script?.steps ?? [],
     field: 'incomeGoal',
     method: 'amount_after_step_9_prompt',
     promptPattern:
@@ -2188,9 +2200,11 @@ function extractIncomeGoal(params: {
 function extractMonthlyIncomeFromJob(params: {
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
+  script?: ScriptWithRecovery | null;
 }) {
   extractValueAfterPrompt({
     ...params,
+    steps: params.script?.steps ?? [],
     field: 'monthlyIncome',
     method: 'amount_after_step_7_prompt',
     promptPattern:
@@ -2350,11 +2364,23 @@ function extractDataPoints(params: {
   // These code-level extractors backfill the most common ones so the
   // call-proposal / capital-question / mandatory-ask gates have
   // accurate state.
-  extractTradingExperienceDuration({ points, history: params.history });
+  extractTradingExperienceDuration({
+    points,
+    history: params.history,
+    script: params.script
+  });
   extractWorkBackground({ points, history: params.history });
-  extractMonthlyIncomeFromJob({ points, history: params.history });
+  extractMonthlyIncomeFromJob({
+    points,
+    history: params.history,
+    script: params.script
+  });
   extractReplaceOrSupplement({ points, history: params.history });
-  extractIncomeGoal({ points, history: params.history });
+  extractIncomeGoal({
+    points,
+    history: params.history,
+    script: params.script
+  });
   extractVolunteeredDataForUpcomingAsks({
     points,
     history: params.history,
@@ -2857,6 +2883,15 @@ function shouldExtractVolunteeredRequirement(params: {
     return true;
   }
 
+  // Target-income fields are semantically tied to their own script
+  // question. A current-income or replace/supplement answer may contain
+  // money-shaped language, but it must not satisfy the downstream target
+  // income ask unless the operator's current prompt was actually asking
+  // for that target.
+  if (params.requirement.key === 'incomeGoal') {
+    return false;
+  }
+
   if (!AMOUNT_DATA_REQUIREMENT_KEYS.has(params.requirement.key)) {
     return true;
   }
@@ -3007,8 +3042,28 @@ function capturedDataPointHasValue(point: CapturedDataPoint): boolean {
   return Boolean(value);
 }
 
+function capturedDataPointNumericValue(
+  point: CapturedDataPoint
+): number | null {
+  const value = point.value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') return extractAmountUSD(value);
+  return null;
+}
+
+function pointCanSatisfyRequirementForStep(params: {
+  point: CapturedDataPoint;
+  requirement: CapturedDataRequirement;
+  stepNumber: number;
+}): boolean {
+  if (params.requirement.key !== 'incomeGoal') return true;
+  if (params.point.sourceStepNumber !== params.stepNumber) return false;
+  return capturedDataPointNumericValue(params.point) !== null;
+}
+
 function recentPointForRequirement(params: {
   requirement: CapturedDataRequirement;
+  stepNumber: number;
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
   afterTimeMs: number;
@@ -3037,6 +3092,15 @@ function recentPointForRequirement(params: {
     if (!leadMessage) continue;
     const leadTime = new Date(leadMessage.timestamp).getTime();
     if (!Number.isFinite(leadTime) || leadTime < params.afterTimeMs) {
+      continue;
+    }
+    if (
+      !pointCanSatisfyRequirementForStep({
+        point,
+        requirement: params.requirement,
+        stepNumber: params.stepNumber
+      })
+    ) {
       continue;
     }
 
@@ -3077,6 +3141,7 @@ function volunteeredDataSkipCompletion(
     const satisfied = requirements.map((requirement) =>
       recentPointForRequirement({
         requirement,
+        stepNumber: step.stepNumber,
         points,
         history,
         afterTimeMs

@@ -67,6 +67,7 @@ import {
   detectBeliefBreakInMessage,
   getStepActionShape,
   hasCapturedDataPoint,
+  incomeGoalSatisfiedByExpectedStep,
   isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
 import {
@@ -3250,9 +3251,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
   }
   const capturedDataPointsForGate = scriptStateSnapshot?.capturedDataPoints;
-  const incomeGoalCapturedForStep10 =
-    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'incomeGoal') ||
-    hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'income_goal');
+  const incomeGoalCapturedForStep10 = incomeGoalSatisfiedByExpectedStep(
+    capturedDataPointsForGate ?? null,
+    9
+  );
   const deepWhyCapturedForStep10 =
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deepWhy') ||
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deep_why') ||

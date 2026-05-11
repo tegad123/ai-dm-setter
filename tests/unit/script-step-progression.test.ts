@@ -35,6 +35,7 @@ import {
   detectStepDistanceViolation,
   getStepActionShape,
   hasCapturedDataPoint,
+  incomeGoalSatisfiedByExpectedStep,
   inferCurrentStepNumber,
   inferStepFromReply,
   inferStepLabelFromReply,
@@ -63,6 +64,28 @@ import {
   shouldExposePersonaAssetUrl
 } from '../../src/lib/ai-prompts';
 import { sanitizeMessageGroupUrls } from '../../src/lib/url-allowlist';
+
+function step9IncomeGoalPoint(value: number | string = 4000) {
+  return {
+    value,
+    confidence: 'HIGH',
+    extractedFromMessageId: 'lead_step9',
+    extractionMethod: 'amount_after_step_9_prompt',
+    extractedAt: '2026-05-11T15:05:00.000Z',
+    sourceFieldName: 'incomeGoal',
+    sourceStepNumber: 9
+  };
+}
+
+function step9CompletedEvent() {
+  return {
+    eventType: 'step_completed',
+    stepNumber: 9,
+    stepTitle: 'Income Goal',
+    selectedBranchLabel: 'Wants to supplement',
+    completedAt: '2026-05-11T15:05:00.000Z'
+  };
+}
 
 // ---------------------------------------------------------------------------
 // hasCapturedDataPoint — accepts both flat and {value,confidence} shapes
@@ -210,6 +233,73 @@ describe('checkCallProposalPrereqs', () => {
     assert.equal(missing[0].id, 'belief_break_delivered');
   });
 
+  it('bug-58-requires-income-goal-from-step-9-when-branch-history-exists', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 8000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step8',
+        extractionMethod: 'volunteered_incomeGoal_for_upcoming_ask',
+        extractedAt: '2026-05-11T22:34:54.390Z',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 8
+      },
+      deepWhy: 'provide for family',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: 'true',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 8,
+          stepTitle: 'Replace vs Supplement',
+          selectedBranchLabel: 'Default',
+          completedAt: '2026-05-11T22:34:54.390Z'
+        }
+      ]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), false);
+    const missing = checkCallProposalPrereqs(points);
+    assert.equal(missing[0].id, 'income_goal');
+  });
+
+  it('bug-58-accepts-income-goal-captured-from-step-9-own-ask', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 4000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step9',
+        extractionMethod: 'amount_after_step_9_prompt',
+        extractedAt: '2026-05-11T22:35:54.390Z',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      deepWhy: 'provide for family',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: 'true',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 9,
+          stepTitle: 'Income Goal',
+          selectedBranchLabel: 'Wants to supplement',
+          completedAt: '2026-05-11T22:35:54.390Z'
+        }
+      ]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('accepts early_obstacle as a substitute for obstacle', () => {
     const points = {
       workBackground: 'engineer',
@@ -243,11 +333,12 @@ describe('checkCallProposalPrereqs', () => {
       workBackground: 'engineer',
       monthlyIncome: '5000',
       replaceOrSupplement: 'supplement',
-      incomeGoal: '4000',
+      incomeGoal: step9IncomeGoalPoint(),
       obstacle: 'no system',
       beliefBreakDelivered: 'complete',
       buyInConfirmed: 'true',
       branchHistory: [
+        step9CompletedEvent(),
         {
           eventType: 'step_completed',
           stepNumber: 11,
@@ -266,11 +357,12 @@ describe('checkCallProposalPrereqs', () => {
       workBackground: 'engineer',
       monthlyIncome: '5000',
       replaceOrSupplement: 'supplement',
-      incomeGoal: '4000',
+      incomeGoal: step9IncomeGoalPoint(),
       deepWhy: 'want to retire my mom',
       obstacle: 'no system',
       beliefBreakDelivered: 'complete',
       branchHistory: [
+        step9CompletedEvent(),
         {
           eventType: 'step_completed',
           stepNumber: 14,
@@ -289,11 +381,12 @@ describe('checkCallProposalPrereqs', () => {
       workBackground: 'engineer',
       monthlyIncome: '5000',
       replaceOrSupplement: 'supplement',
-      incomeGoal: '4000',
+      incomeGoal: step9IncomeGoalPoint(),
       deepWhy: 'want to retire my mom',
       obstacle: 'no system',
       beliefBreakDelivered: 'complete',
       branchHistory: [
+        step9CompletedEvent(),
         {
           eventType: 'step_completed',
           stepNumber: 14,
@@ -2479,8 +2572,9 @@ describe('detectStep10Skipped', () => {
 
   it('bug-54-deep-why-branch-history: completed deep-why step allows Step 12 content', () => {
     const captured = {
-      incomeGoal: '15000',
+      incomeGoal: step9IncomeGoalPoint(15000),
       branchHistory: [
+        step9CompletedEvent(),
         {
           eventType: 'step_completed',
           stepNumber: 10,
@@ -2497,7 +2591,7 @@ describe('detectStep10Skipped', () => {
 
   it('bug-55-deep-why-branch-history-missing: still blocks Step 12 when deep why was not completed', () => {
     const captured = {
-      incomeGoal: '15000',
+      incomeGoal: step9IncomeGoalPoint(15000),
       branchHistory: [
         {
           eventType: 'step_completed',
@@ -2515,8 +2609,9 @@ describe('detectStep10Skipped', () => {
 
   it('bug-56-deep-why-different-step-number: detects generic deep-why completion titles', () => {
     const captured = {
-      incomeGoal: '15000',
+      incomeGoal: step9IncomeGoalPoint(15000),
       branchHistory: [
+        step9CompletedEvent(),
         {
           eventType: 'step_completed',
           stepNumber: 4,
