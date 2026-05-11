@@ -486,20 +486,49 @@ type JudgeTokenScoringResult = {
   tied: boolean;
 };
 
+type JudgeClassifierTrace = {
+  stepNumber: number | null;
+  stepTitle: string | null;
+  branchCount: number;
+  hasRuntimeJudgment: boolean;
+  leadMessageFirst100: string | null;
+  tokenConfidence: JudgeTokenScoringResult['confidence'];
+  tokenSelectedLabel: string | null;
+  tokenBestScore: number;
+  tokenSecondScore: number | null;
+  tokenTied: boolean;
+  tokenScoreError: string | null;
+  llmAttempted: boolean;
+  llmSelectedLabel: string | null;
+  llmError: string | null;
+  finalSelectedLabel: string | null;
+  finalConfidence: JudgeBranchConfidence;
+  timestamp: string;
+};
+
 export type JudgeBranchMatch = {
   branchLabel: string | null;
   confidence: JudgeBranchConfidence;
   score: number;
   tokenScoringResult?: JudgeTokenScoringResult;
+  classifierTrace?: JudgeClassifierTrace;
 };
 
 export type JudgeBranchSelectionCache = Map<string, Promise<JudgeBranchMatch>>;
+
+type JudgeBranchClassifierOutcome = {
+  selectedLabel: string | null;
+  error: string | null;
+  timedOut: boolean;
+};
+
+type JudgeBranchClassifierResult = string | null | JudgeBranchClassifierOutcome;
 
 type JudgeBranchClassifier = (params: {
   step: JudgeStepLike;
   leadMessage: string;
   accountId?: string | null;
-}) => Promise<string | null>;
+}) => Promise<JudgeBranchClassifierResult>;
 
 export type JudgeBranchViolation = {
   blocked: boolean;
@@ -698,6 +727,112 @@ function buildJudgeBranchSelectionCacheKey(
   ].join('::');
 }
 
+function normalizeJudgeClassifierResult(
+  result: JudgeBranchClassifierResult
+): JudgeBranchClassifierOutcome {
+  if (result && typeof result === 'object') {
+    return {
+      selectedLabel: result.selectedLabel ?? null,
+      error: result.error ?? null,
+      timedOut: result.timedOut === true
+    };
+  }
+  return {
+    selectedLabel:
+      typeof result === 'string' && result.trim() ? result.trim() : null,
+    error: null,
+    timedOut: false
+  };
+}
+
+function buildJudgeClassifierTrace(params: {
+  step: JudgeStepLike | null | undefined;
+  leadMessage: string | null | undefined;
+  tokenMatch: JudgeBranchMatch;
+  tokenScoreError?: string | null;
+  llmAttempted?: boolean;
+  llmSelectedLabel?: string | null;
+  llmError?: string | null;
+  finalSelectedLabel?: string | null;
+  finalConfidence?: JudgeBranchConfidence;
+}): JudgeClassifierTrace {
+  const tokenResult = params.tokenMatch.tokenScoringResult;
+  return {
+    stepNumber: params.step?.stepNumber ?? null,
+    stepTitle: params.step?.title ?? null,
+    branchCount: params.step?.branches.length ?? 0,
+    hasRuntimeJudgment: hasRuntimeJudgmentAction(params.step),
+    leadMessageFirst100: params.leadMessage?.slice(0, 100) ?? null,
+    tokenConfidence:
+      tokenResult?.confidence ??
+      (params.tokenMatch.confidence === 'llm_classified'
+        ? 'none'
+        : params.tokenMatch.confidence),
+    tokenSelectedLabel:
+      tokenResult?.selectedBranchLabel ?? params.tokenMatch.branchLabel ?? null,
+    tokenBestScore: tokenResult?.bestScore ?? params.tokenMatch.score,
+    tokenSecondScore: tokenResult?.secondScore ?? null,
+    tokenTied: tokenResult?.tied ?? false,
+    tokenScoreError: params.tokenScoreError ?? null,
+    llmAttempted: params.llmAttempted === true,
+    llmSelectedLabel: params.llmSelectedLabel ?? null,
+    llmError: params.llmError ?? null,
+    finalSelectedLabel:
+      params.finalSelectedLabel ?? params.tokenMatch.branchLabel ?? null,
+    finalConfidence: params.finalConfidence ?? params.tokenMatch.confidence,
+    timestamp: new Date().toISOString()
+  };
+}
+
+function withJudgeClassifierTrace(
+  match: JudgeBranchMatch,
+  trace: JudgeClassifierTrace
+): JudgeBranchMatch {
+  return { ...match, classifierTrace: trace };
+}
+
+function asJsonObject(value: Prisma.JsonValue | null | undefined) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function persistJudgeClassifierTrace(params: {
+  conversationId: string | null;
+  match: JudgeBranchMatch;
+  snapshotCurrentScriptStep?: number | null;
+  inferredStepNumberForGate?: number | null;
+  step?: JudgeStepLike | null;
+}) {
+  if (!params.conversationId || !params.match.classifierTrace) return;
+
+  const trace = {
+    ...params.match.classifierTrace,
+    snapshotCurrentScriptStep: params.snapshotCurrentScriptStep ?? null,
+    inferredStepNumberForGate: params.inferredStepNumberForGate ?? null,
+    stepObjectStepNumber: params.step?.stepNumber ?? null,
+    stepObjectTitle: params.step?.title ?? null,
+    stepObjectBranchLabels:
+      params.step?.branches.map((branch) => branch.branchLabel) ?? []
+  };
+
+  const row = await prisma.conversation.findUnique({
+    where: { id: params.conversationId },
+    select: { capturedDataPoints: true }
+  });
+  const capturedDataPoints = {
+    ...asJsonObject(row?.capturedDataPoints),
+    lastClassifierTrace: trace
+  };
+
+  await prisma.conversation.update({
+    where: { id: params.conversationId },
+    data: {
+      capturedDataPoints: capturedDataPoints as Prisma.InputJsonValue
+    }
+  });
+}
+
 async function resolveAnthropicApiKeyWithSource(accountId?: string | null) {
   if (accountId) {
     const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
@@ -714,7 +849,7 @@ async function classifyJudgeBranchWithHaiku(params: {
   step: JudgeStepLike;
   leadMessage: string;
   accountId?: string | null;
-}): Promise<string | null> {
+}): Promise<JudgeBranchClassifierOutcome> {
   const { step, leadMessage, accountId } = params;
   const keyResolution = await resolveAnthropicApiKeyWithSource(accountId);
   const apiKey = keyResolution?.apiKey ?? null;
@@ -731,7 +866,11 @@ async function classifyJudgeBranchWithHaiku(params: {
       error: 'missing_anthropic_key',
       timedOut: false
     });
-    return null;
+    return {
+      selectedLabel: null,
+      error: 'missing_anthropic_key',
+      timedOut: false
+    };
   }
 
   const branchLines = step.branches
@@ -782,7 +921,11 @@ Respond with ONLY the exact branchLabel of the best match. No explanation. No pu
         error: `http_${response.status}`,
         timedOut: didTimeout
       });
-      return null;
+      return {
+        selectedLabel: null,
+        error: `http_${response.status}`,
+        timedOut: didTimeout
+      };
     }
 
     const data = (await response.json()) as {
@@ -799,16 +942,17 @@ Respond with ONLY the exact branchLabel of the best match. No explanation. No pu
       error: null,
       timedOut: didTimeout
     });
-    return text || null;
+    return { selectedLabel: text || null, error: null, timedOut: didTimeout };
   } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
     console.warn('[branch-classifier] LLM RESULT:', {
       stepNumber: step.stepNumber,
       success: false,
       selectedLabel: null,
-      error: err instanceof Error ? err.message : String(err),
+      error,
       timedOut: didTimeout
     });
-    return null;
+    return { selectedLabel: null, error, timedOut: didTimeout };
   } finally {
     clearTimeout(timeout);
   }
@@ -844,6 +988,7 @@ export async function selectJudgeBranchForLead(
     });
 
     let tokenMatch: JudgeBranchMatch;
+    let tokenScoreError: string | null = null;
     try {
       tokenMatch = scoreJudgeBranchesForLead(step, leadMessage);
       console.warn('[branch-classifier] TOKEN RESULT:', {
@@ -858,8 +1003,16 @@ export async function selectJudgeBranchForLead(
         stepNumber: step?.stepNumber ?? null,
         error: err instanceof Error ? err.message : String(err)
       });
+      tokenScoreError = err instanceof Error ? err.message : String(err);
       tokenMatch = safeFallback;
     }
+
+    const baseTrace = buildJudgeClassifierTrace({
+      step,
+      leadMessage,
+      tokenMatch,
+      tokenScoreError
+    });
 
     if (
       !step ||
@@ -867,7 +1020,7 @@ export async function selectJudgeBranchForLead(
       !leadMessage?.trim() ||
       (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
     ) {
-      return tokenMatch;
+      return withJudgeClassifierTrace(tokenMatch, baseTrace);
     }
 
     const cacheKey = buildJudgeBranchSelectionCacheKey(step, leadMessage);
@@ -876,16 +1029,46 @@ export async function selectJudgeBranchForLead(
 
     const classifier = options?.classifier ?? classifyJudgeBranchWithHaiku;
     const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
-      const selectedLabel = await classifier({
-        step,
-        leadMessage,
-        accountId: options?.accountId
-      });
+      let classifierOutcome: JudgeBranchClassifierOutcome;
+      try {
+        classifierOutcome = normalizeJudgeClassifierResult(
+          await classifier({
+            step,
+            leadMessage,
+            accountId: options?.accountId
+          })
+        );
+      } catch (err) {
+        classifierOutcome = {
+          selectedLabel: null,
+          error: err instanceof Error ? err.message : String(err),
+          timedOut: false
+        };
+      }
+      const selectedLabel = classifierOutcome.selectedLabel;
       const selectedBranch = selectedLabel
         ? step.branches.find((branch) => branch.branchLabel === selectedLabel)
         : null;
 
-      if (!selectedBranch) return tokenMatch;
+      if (!selectedBranch) {
+        const llmError =
+          classifierOutcome.error ||
+          (selectedLabel ? 'invalid_branch_label' : null);
+        return withJudgeClassifierTrace(
+          tokenMatch,
+          buildJudgeClassifierTrace({
+            step,
+            leadMessage,
+            tokenMatch,
+            tokenScoreError,
+            llmAttempted: true,
+            llmSelectedLabel: selectedLabel,
+            llmError,
+            finalSelectedLabel: tokenMatch.branchLabel,
+            finalConfidence: tokenMatch.confidence
+          })
+        );
+      }
 
       console.warn('[branch-classifier] LLM fallback:', {
         step: step.stepNumber,
@@ -901,13 +1084,41 @@ export async function selectJudgeBranchForLead(
         confidence: 'llm_classified'
       });
 
-      return {
+      const llmMatch: JudgeBranchMatch = {
         branchLabel: selectedBranch.branchLabel,
         confidence: 'llm_classified',
         score: tokenMatch.score,
         tokenScoringResult: tokenMatch.tokenScoringResult
       };
-    })().catch(() => tokenMatch);
+      return withJudgeClassifierTrace(
+        llmMatch,
+        buildJudgeClassifierTrace({
+          step,
+          leadMessage,
+          tokenMatch,
+          tokenScoreError,
+          llmAttempted: true,
+          llmSelectedLabel: selectedLabel,
+          llmError: classifierOutcome.error,
+          finalSelectedLabel: selectedBranch.branchLabel,
+          finalConfidence: 'llm_classified'
+        })
+      );
+    })().catch((err) =>
+      withJudgeClassifierTrace(
+        tokenMatch,
+        buildJudgeClassifierTrace({
+          step,
+          leadMessage,
+          tokenMatch,
+          tokenScoreError,
+          llmAttempted: true,
+          llmError: err instanceof Error ? err.message : String(err),
+          finalSelectedLabel: tokenMatch.branchLabel,
+          finalConfidence: tokenMatch.confidence
+        })
+      )
+    );
 
     options?.cache?.set(cacheKey, selectionPromise);
     return selectionPromise;
@@ -917,7 +1128,15 @@ export async function selectJudgeBranchForLead(
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack?.slice(0, 500) : undefined
     });
-    return safeFallback;
+    return withJudgeClassifierTrace(
+      safeFallback,
+      buildJudgeClassifierTrace({
+        step,
+        leadMessage,
+        tokenMatch: safeFallback,
+        tokenScoreError: err instanceof Error ? err.message : String(err)
+      })
+    );
   }
 }
 
@@ -2501,6 +2720,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       cache: judgeBranchSelectionCache
     }
   );
+  try {
+    await persistJudgeClassifierTrace({
+      conversationId: activeConversationId,
+      match: currentJudgeBranchMatch,
+      snapshotCurrentScriptStep: scriptStateSnapshot?.currentScriptStep ?? null,
+      inferredStepNumberForGate,
+      step: scriptStateSnapshot?.currentStep ?? null
+    });
+  } catch (err) {
+    console.error('[branch-classifier] DB trace persist failed:', {
+      conversationId: activeConversationId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
   const selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
     ? scriptStateSnapshot?.currentStep?.branches.find(
         (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
