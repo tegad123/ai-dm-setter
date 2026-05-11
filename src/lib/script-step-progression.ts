@@ -449,6 +449,9 @@ function formatCompactAction(
         );
         return `[${tag}] RUNTIME MESSAGE DIRECTIVE (do NOT output the braces or directive text literally): ${directive}. Write a natural message that satisfies this instruction using the lead's context. If the directive explicitly says to add/include/use an exact quoted phrase, include that phrase exactly.`;
       }
+      if (/\{\{[^}]+\}\}/.test(action.content || '')) {
+        return `[${tag}] REQUIRED MESSAGE (send exact wording; substitute variables from lead context; do not output braces or placeholder text; do not paraphrase non-variable words): ${action.content || '(empty)'}`;
+      }
       return `[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): ${action.content || '(empty)'}`;
     case 'ask_question':
       const sameReplyPrefix =

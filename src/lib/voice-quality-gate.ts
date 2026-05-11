@@ -998,6 +998,10 @@ function stripScriptVariables(text: string): string {
   return text.replace(/\{\{\s*[^}]+\s*\}\}/g, ' ');
 }
 
+function hasScriptVariableSlot(text: string): boolean {
+  return /\{\{\s*[^}]+\s*\}\}/.test(text);
+}
+
 function normalizeForVerbatimCompare(text: string): string {
   return stripScriptVariables(text)
     .toLowerCase()
@@ -1249,7 +1253,13 @@ export function detectMsgVerbatimViolation(
       continue;
     }
 
-    if (!requiredMessageMatchesGenerated(required.content, generatedReply)) {
+    const allowVariableSubstitution = hasScriptVariableSlot(required.content);
+    if (
+      !requiredMessageMatchesGenerated(required.content, generatedReply, {
+        allowOverlapFallback: allowVariableSubstitution,
+        overlapThreshold: 0.85
+      })
+    ) {
       return {
         expected: required.content,
         generated: generatedReply,

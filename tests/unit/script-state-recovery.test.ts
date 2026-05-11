@@ -495,6 +495,75 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(completion?.leadMessageId, 'lead_step1');
   });
 
+  it('bug-52-volunteered-job-tenure-auto-completes-next-ask-step', () => {
+    const workScript = {
+      id: 'work_tenure_sequence',
+      steps: [
+        askStep(1, 'Work Background', 'What do you do for work?'),
+        {
+          ...baseStep,
+          stepNumber: 2,
+          title: 'Work Tenure',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'I respect that bro, that is not easy work.'
+            },
+            {
+              actionType: 'ask_question',
+              content: 'How long you been doing that?'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        askStep(
+          3,
+          'Monthly Income',
+          'How much is your job bringing in on a monthly basis?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content: 'What do you do for work?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'i work in retail management, been doing it 4 years',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script: workScript
+    });
+    const stage = computeSystemStage(workScript, points as any, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.workDuration as any)?.value, '4 years');
+    assert.equal(
+      (points.workDuration as any)?.extractionMethod,
+      'volunteered_workDuration_for_upcoming_ask'
+    );
+    assert.equal((points.monthlyIncome as any)?.value, undefined);
+    assert.equal(stage.step?.stepNumber, 3);
+
+    const completion = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed' && event.stepNumber === 2
+    );
+    assert.equal(
+      completion?.stepCompletionReason,
+      'volunteered_data_auto_complete'
+    );
+    assert.equal(completion?.leadMessageId, 'lead_step1');
+  });
+
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
     const staleDataScript = {
       id: 'stale_volunteered_data_sequence',

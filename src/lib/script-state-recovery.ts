@@ -2338,6 +2338,11 @@ function extractDataPoints(params: {
   extractMonthlyIncomeFromJob({ points, history: params.history });
   extractReplaceOrSupplement({ points, history: params.history });
   extractIncomeGoal({ points, history: params.history });
+  extractVolunteeredDataForUpcomingAsks({
+    points,
+    history: params.history,
+    script: params.script
+  });
 
   extractArtifactDeliveryDataPoints(
     points,
@@ -2684,6 +2689,201 @@ function dataRequirementsForAskContent(
   }
 
   return dedupeDataRequirements(requirements);
+}
+
+function pointIsPresentForRequirement(
+  points: CapturedDataPoints,
+  requirement: CapturedDataRequirement
+): boolean {
+  return [requirement.key, ...requirement.aliases].some((key) =>
+    pointIsPresent(points, key)
+  );
+}
+
+function askActionsForStep(
+  step: ScriptStepWithRecovery
+): StepCompletionAction[] {
+  return stepCompletionPaths(step).flatMap((path) =>
+    path.actions.filter(
+      (action) =>
+        action.actionType === 'ask_question' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    )
+  );
+}
+
+function stepNumberForAskMessage(
+  steps: ScriptStepWithRecovery[],
+  messageContent: string
+): number | null {
+  for (const step of steps) {
+    if (
+      askActionsForStep(step).some((action) =>
+        actionContentMatches(action.content, messageContent)
+      )
+    ) {
+      return step.stepNumber;
+    }
+  }
+  return null;
+}
+
+function immediateLeadReplyAfterPrompt(
+  messages: ScriptHistoryMessage[],
+  promptIndex: number
+): ScriptHistoryMessage | null {
+  const prompt = messages[promptIndex];
+  if (!prompt) return null;
+  const promptTime = new Date(prompt.timestamp).getTime();
+
+  for (let index = promptIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    const messageTime = new Date(message.timestamp).getTime();
+    if (!Number.isFinite(messageTime) || messageTime <= promptTime) continue;
+    if (message.sender === 'LEAD') return message;
+    if (message.sender === 'AI' || message.sender === 'HUMAN') return null;
+  }
+
+  return null;
+}
+
+function upcomingRequirementsAfterStep(
+  steps: ScriptStepWithRecovery[],
+  stepNumber: number,
+  lookahead = 3
+): CapturedDataRequirement[] {
+  const currentIndex = steps.findIndex(
+    (step) => step.stepNumber === stepNumber
+  );
+  if (currentIndex < 0) return [];
+
+  return dedupeDataRequirements(
+    steps
+      .slice(currentIndex + 1, currentIndex + 1 + lookahead)
+      .flatMap((step) =>
+        askActionsForStep(step).flatMap((action) =>
+          dataRequirementsForAskContent(action.content)
+        )
+      )
+  );
+}
+
+function hasAmountDisclosureContext(content: string): boolean {
+  return (
+    /\$/.test(content) ||
+    /\b\d+(?:[.,]\d+)?\s*[km]\b/i.test(content) ||
+    /\b(income|monthly|month|salary|make|earn|bringing|bring\s+in|capital|saved|set\s+aside|funds?|cash|budget|goal|want|need|from\s+trading|per\s+month|a\s+month)\b/i.test(
+      content
+    )
+  );
+}
+
+function parseReplaceOrSupplementDecision(
+  content: string
+): 'replace' | 'supplement' | null {
+  const lower = content.toLowerCase();
+  if (
+    /\breplac(e|ing)\b|\bquit\b|\bleave\s+(my\s+)?job\b|\bfull[-\s]?time\b/i.test(
+      lower
+    )
+  ) {
+    return 'replace';
+  }
+  if (
+    /\bsupplement\b|\bextra\b|\bon\s+the\s+side\b|\bpart[-\s]?time\b|\bin\s+addition\b/i.test(
+      lower
+    )
+  ) {
+    return 'supplement';
+  }
+  return null;
+}
+
+function parseVolunteeredRequirementValue(
+  requirementKey: string,
+  content: string
+): unknown | null {
+  switch (requirementKey) {
+    case 'tradingExperienceDuration':
+    case 'workDuration':
+      return extractDurationPhrase(content);
+    case 'monthlyIncome':
+    case 'incomeGoal':
+    case 'capital': {
+      if (!hasAmountDisclosureContext(content)) return null;
+      return extractAmountUSD(content);
+    }
+    case 'replaceOrSupplement':
+      return parseReplaceOrSupplementDecision(content);
+    case 'obstacle': {
+      const trimmed = content.trim();
+      if (
+        trimmed.length >= 12 &&
+        /\b(struggl|problem|issue|hard|stuck|holding|stopping|revenge|loss|lose|lost|emotion|discipline|fear|greed|confidence)\b/i.test(
+          trimmed
+        )
+      ) {
+        return trimmed.slice(0, 500);
+      }
+      return null;
+    }
+    case 'deepWhy': {
+      const trimmed = content.trim();
+      if (
+        trimmed.length >= 12 &&
+        /\b(because|so\s+i\s+can|so\s+that|want|need|family|wife|kids?|children|freedom|quit|provide|matter|important|goal|life|future)\b/i.test(
+          trimmed
+        )
+      ) {
+        return trimmed.slice(0, 500);
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+function extractVolunteeredDataForUpcomingAsks(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  script: ScriptWithRecovery | null;
+}) {
+  const steps = params.script?.steps ?? [];
+  if (steps.length === 0) return;
+
+  const messages = sortedHistory(params.history);
+  for (let index = 0; index < messages.length; index += 1) {
+    const prompt = messages[index];
+    if (prompt.sender !== 'AI' && prompt.sender !== 'HUMAN') continue;
+
+    const stepNumber = stepNumberForAskMessage(steps, prompt.content);
+    if (!stepNumber) continue;
+
+    const leadReply = immediateLeadReplyAfterPrompt(messages, index);
+    if (!leadReply) continue;
+
+    const requirements = upcomingRequirementsAfterStep(steps, stepNumber);
+    for (const requirement of requirements) {
+      if (pointIsPresentForRequirement(params.points, requirement)) continue;
+
+      const value = parseVolunteeredRequirementValue(
+        requirement.key,
+        leadReply.content
+      );
+      if (value === null || value === undefined || value === '') continue;
+
+      setPoint(
+        params.points,
+        requirement.key,
+        value,
+        'HIGH',
+        leadReply.id ?? null,
+        `volunteered_${requirement.key}_for_upcoming_ask`
+      );
+    }
+  }
 }
 
 function capturedDataPointHasValue(point: CapturedDataPoint): boolean {
@@ -5070,6 +5270,7 @@ export async function applyStageOverride(params: {
 export function extractCapturedDataPointsForTest(params: {
   existing?: Prisma.JsonValue | null;
   history: ScriptHistoryMessage[];
+  script?: ScriptWithRecovery | null;
   minimumCapitalRequired?: number | null;
   durableStatus?: string | null;
   durableAmount?: number | null;
@@ -5077,7 +5278,7 @@ export function extractCapturedDataPointsForTest(params: {
   return extractDataPoints({
     existing: params.existing,
     history: params.history,
-    script: null,
+    script: params.script ?? null,
     persona: {
       minimumCapitalRequired: params.minimumCapitalRequired ?? null,
       capitalVerificationPrompt: null,

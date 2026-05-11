@@ -651,6 +651,33 @@ describe('buildCurrentStepBlock', () => {
     );
   });
 
+  it('renders literal [MSG] with variable slots as exact wording plus substitution', () => {
+    const current = makeStep({
+      stepNumber: 7,
+      title: 'Monthly Income',
+      directActions: [
+        {
+          actionType: 'send_message',
+          content:
+            "Yeah I feel you, I mean I'm not an expert in {{their field}} haha but I do know it's quite different than trading man."
+        },
+        {
+          actionType: 'ask_question',
+          content:
+            'And as of right now, how much is your job bringing in on a monthly basis?'
+        },
+        { actionType: 'wait_for_response' }
+      ]
+    });
+
+    const block = buildCurrentStepBlock(current, null);
+
+    assert.ok(block);
+    assert.match(block!, /send exact wording; substitute variables/);
+    assert.match(block!, /do not output braces or placeholder text/);
+    assert.doesNotMatch(block!, /RUNTIME MESSAGE DIRECTIVE/);
+  });
+
   it('does not mark [MSG] and [ASK] as same-reply when [WAIT] separates them', () => {
     const current = makeStep({
       stepNumber: 1,
@@ -3072,6 +3099,26 @@ describe('bug-30-msg-verbatim-violation', () => {
         'I respect that bro, I truly do.'
       ]),
       null
+    );
+  });
+
+  it('bug-52-allows-required-message-with-variable-slot-when-fixed-words-match', () => {
+    const required =
+      "Yeah I feel you, I mean I'm not an expert in {{their field}} haha but I do know it's quite different than trading man.";
+    const generated =
+      "Yeah I feel you, I mean I'm not an expert in their field haha but I do know it's quite different than trading man.";
+
+    assert.equal(detectMsgVerbatimViolation(generated, [required]), null);
+  });
+
+  it('bug-52-still-hard-fails-variable-slot-message-when-fixed-words-are-missing', () => {
+    const required =
+      "Yeah I feel you, I mean I'm not an expert in {{their field}} haha but I do know it's quite different than trading man.";
+
+    assert.ok(
+      detectMsgVerbatimViolation('retail management sounds intense bro', [
+        required
+      ])
     );
   });
 
