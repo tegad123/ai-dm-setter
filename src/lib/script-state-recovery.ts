@@ -2802,9 +2802,10 @@ export function computeSystemStage(
     durableMinStepNumber !== null &&
     candidate.step.stepNumber < durableMinStepNumber
   ) {
+    const floorStepNumber = durableMinStepNumber;
     const durableStep =
-      steps.find((step) => step.stepNumber === durableMinStepNumber) ??
-      steps.find((step) => step.stepNumber > durableMinStepNumber) ??
+      steps.find((step) => step.stepNumber === floorStepNumber) ??
+      steps.find((step) => step.stepNumber > floorStepNumber) ??
       steps.at(-1) ??
       candidate.step;
     if (durableStep.stepNumber > candidate.step.stepNumber) {
@@ -2812,6 +2813,34 @@ export function computeSystemStage(
         step: durableStep,
         reason: `branch_history_floor:${candidate.reason}`
       };
+    }
+  }
+
+  if (candidate.step) {
+    const currentCandidateStep = candidate.step;
+    const postFloorBookingSkip = bookingInfoSkipCompletion(
+      currentCandidateStep,
+      points,
+      history,
+      historyCursor
+    );
+    if (postFloorBookingSkip?.complete) {
+      appendStepCompletedBranchHistoryEvent(
+        points,
+        currentCandidateStep,
+        postFloorBookingSkip
+      );
+      durableMinStepNumber = durableMinimumStepNumber(points, steps);
+      const nextStep =
+        steps.find(
+          (step) => step.stepNumber > currentCandidateStep.stepNumber
+        ) ?? currentCandidateStep;
+      if (nextStep.stepNumber > currentCandidateStep.stepNumber) {
+        candidate = {
+          step: nextStep,
+          reason: `booking_info_complete_skip_missing_info_followup:${candidate.reason}`
+        };
+      }
     }
   }
 

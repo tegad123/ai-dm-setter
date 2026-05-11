@@ -218,6 +218,130 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
+  it('bug-X-booking-info-complete: survives durable floor after older stale branch events', () => {
+    const bookingScript = {
+      id: 'booking_sequence_with_stale_prior_step',
+      steps: [
+        askStep(16, 'Older stale proposal step', 'Are you ready for the call?'),
+        {
+          ...baseStep,
+          stepNumber: 20,
+          title: 'Collect booking info',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                'Drop me your full name, email, phone number, your timezone, and what day and time works best.'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          ...baseStep,
+          stepNumber: 21,
+          title: 'Missing Info Follow-Up',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Default',
+              conditionDescription: null,
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content:
+                    'Check their reply for all five: name, email, phone number, timezone, and day/time. If any are missing, ask for the specific one(s) they left out.'
+                },
+                {
+                  actionType: 'send_message',
+                  content:
+                    'Appreciate that bro, just missing your {{specific missing info e.g. "email" / "timezone" / "phone number"}}.'
+                },
+                { actionType: 'wait_for_response', content: null },
+                {
+                  actionType: 'runtime_judgment',
+                  content: 'Once all five are collected → proceed to STEP 22.'
+                }
+              ]
+            }
+          ]
+        },
+        askStep(22, 'Confirmation', 'Does that time still work?')
+      ]
+    } as any;
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 16,
+          stepTitle: 'Older stale proposal step',
+          selectedBranchLabel: 'Default',
+          suggestionId: 'stale_suggestion',
+          aiMessageId: null,
+          aiMessageIds: [],
+          leadMessageId: 'old_lead',
+          sentAt: null,
+          completedAt: null,
+          createdAt: '2026-05-11T00:00:00.000Z'
+        },
+        {
+          eventType: 'step_completed',
+          stepNumber: 20,
+          stepTitle: 'Collect booking info',
+          selectedBranchLabel: null,
+          suggestionId: null,
+          aiMessageId: 'ai_booking',
+          aiMessageIds: ['ai_booking'],
+          leadMessageId: 'lead_booking',
+          sentAt: '2026-05-11T00:10:00.000Z',
+          completedAt: '2026-05-11T00:11:00.000Z',
+          createdAt: '2026-05-11T00:11:01.000Z'
+        }
+      ],
+      fullName: {
+        value: 'Tega Umukoro',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:11:00.000Z'
+      },
+      email: {
+        value: 'tegad8@gmail.com',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:11:00.000Z'
+      },
+      phone: {
+        value: '346-295-4688',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:11:00.000Z'
+      },
+      timezone: {
+        value: 'CT',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:11:00.000Z'
+      },
+      dayAndTime: {
+        value: 'wed at 2pm',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:11:00.000Z'
+      }
+    };
+
+    const stage = computeSystemStage(bookingScript, points as any, [], {
+      previousCurrentScriptStep: 20,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 22);
+  });
+
   it('completes [MSG]+[WAIT] steps only after the lead replies', () => {
     const msgWaitScript = {
       id: 'msg_wait_sequence',
