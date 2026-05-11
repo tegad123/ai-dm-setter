@@ -2684,7 +2684,7 @@ function dataRequirementsForAskContent(
   }
 
   if (
-    /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,50}(trading|markets?)|what\s+(are|do)\s+you\s+(trying|wanting|hoping|looking|tryna).{0,50}(trading|markets?)|from\s+trading|trading\s+to\s+bring)\b/i.test(
+    /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(you'?d|you\s+would)\s+need|is\s+that\s+how\s+much\s+you'?d\s+need|how\s+far\s+away\s+would\s+that\s+be|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,50}(trading|markets?)|what\s+(are|do)\s+you\s+(trying|wanting|hoping|looking|tryna).{0,50}(trading|markets?)|from\s+trading|trading\s+to\s+bring)\b/i.test(
       content
     )
   ) {

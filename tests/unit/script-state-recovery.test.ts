@@ -633,7 +633,7 @@ describe('computeSystemStage generic sequencing', () => {
         askStep(
           2,
           'Target Trading Income',
-          'How much would you need to be making from trading for it to actually matter?'
+          "And is that how much you'd need if you ever wanted to replace your current income, or how far away would that be?"
         ),
         askStep(3, 'Deep Why', 'Why does that number matter to you?')
       ]
