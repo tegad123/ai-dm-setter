@@ -344,9 +344,10 @@ type ConditionalStepSkipClassifier = (params: {
 
 const CONDITIONAL_SKIP_MODEL = 'claude-haiku-4-5-20251001';
 const CONDITIONAL_SKIP_PATTERN =
-  /(?:skip|go|jump|advance)\s+(?:to\s+)?(?:step\s*)?(\d+)/gi;
+  /(?:skip|go|jump|advance|proceed)\s+(?:to\s+)?(?:step\s*)?(\d+)/gi;
 const CONDITIONAL_SKIP_ARROW_PATTERN = /(?:→|->|=>)\s*(?:step\s*)?(\d+)/gi;
-const CONDITIONAL_SKIP_HINT_PATTERN = /\b(skip|go|jump|advance)\b|(?:→|->|=>)/i;
+const CONDITIONAL_SKIP_HINT_PATTERN =
+  /\b(skip|go|jump|advance|proceed)\b|(?:→|->|=>)/i;
 
 function collectRegexMatches(
   content: string,
@@ -1200,6 +1201,116 @@ function findSetterMessagesForActions(
   }
 
   return sentMessages;
+}
+
+function selectedSuggestionMessagesAfter(
+  history: ScriptHistoryMessage[],
+  suggestionId: string | null,
+  afterTimeMs: number
+): ScriptHistoryMessage[] {
+  if (!suggestionId) return [];
+  return history.filter(
+    (message) =>
+      (message.sender === 'AI' || message.sender === 'HUMAN') &&
+      message.suggestionId === suggestionId &&
+      new Date(message.timestamp).getTime() > afterTimeMs
+  );
+}
+
+function hasActionType(
+  actions: StepCompletionAction[],
+  actionType: string
+): boolean {
+  return actions.some((action) => action.actionType === actionType);
+}
+
+function hasWaitAction(actions: StepCompletionAction[]): boolean {
+  return actions.some(
+    (action) =>
+      action.actionType === 'wait_for_response' ||
+      action.actionType === 'wait_duration'
+  );
+}
+
+function pathIsAutoCompletableRoutingOnly(
+  actions: StepCompletionAction[]
+): boolean {
+  return (
+    hasActionType(actions, 'runtime_judgment') &&
+    !hasActionType(actions, 'ask_question') &&
+    !hasWaitAction(actions)
+  );
+}
+
+function autoCompletionFromSelectedRoutingBranch(
+  step: ScriptStepWithRecovery,
+  points: CapturedDataPoints,
+  history: ScriptHistoryMessage[],
+  afterTimeMs: number
+): StepCompletionResult | null {
+  const selectedBranchHistory = branchHistorySelectionForStep(
+    points,
+    step.stepNumber
+  );
+  const selectedBranchLabel =
+    selectedBranchHistory?.selectedBranchLabel ?? null;
+  if (!selectedBranchHistory || !selectedBranchLabel) return null;
+
+  const selectionTime = branchHistoryEventTime(selectedBranchHistory);
+  if (selectionTime <= afterTimeMs) return null;
+
+  const actionPath = stepCompletionActionPaths(step, selectedBranchLabel).find(
+    pathIsAutoCompletableRoutingOnly
+  );
+  if (!actionPath) return null;
+
+  const sorted = sortedHistory(history);
+  const selectedMessages = selectedSuggestionMessagesAfter(
+    sorted,
+    selectedBranchHistory.suggestionId,
+    afterTimeMs
+  );
+  const hasOutboundAction =
+    hasActionType(actionPath, 'send_message') ||
+    hasActionType(actionPath, 'send_link') ||
+    hasActionType(actionPath, 'send_voice_note');
+
+  if (hasOutboundAction && selectedMessages.length === 0) {
+    return incompleteStepCompletion(
+      afterTimeMs,
+      'routing_only_branch_waiting_for_selected_message',
+      selectedBranchLabel,
+      selectedBranchHistory.suggestionId,
+      0
+    );
+  }
+
+  const lastSelectedMessage = selectedMessages.at(-1) ?? null;
+  const completedAt = lastSelectedMessage
+    ? new Date(lastSelectedMessage.timestamp).getTime()
+    : selectionTime;
+  const sentAt = lastSelectedMessage
+    ? new Date(lastSelectedMessage.timestamp).toISOString()
+    : (selectedBranchHistory.sentAt ?? selectedBranchHistory.createdAt);
+  const aiMessageIds = selectedMessages
+    .map((message) => message.id)
+    .filter((id): id is string => !!id);
+
+  return {
+    complete: true,
+    completedAt,
+    aiMessageId: lastSelectedMessage?.id ?? selectedBranchHistory.aiMessageId,
+    aiMessageIds:
+      aiMessageIds.length > 0
+        ? aiMessageIds
+        : selectedBranchHistory.aiMessageIds,
+    leadMessageId: selectedBranchHistory.leadMessageId,
+    sentAt,
+    reason: 'routing_only_branch_auto_complete',
+    selectedBranchLabel,
+    selectedSuggestionId: selectedBranchHistory.suggestionId,
+    historyMessagesWithSelectedSuggestionId: selectedMessages.length
+  };
 }
 
 function incompleteStepCompletion(
@@ -2254,6 +2365,53 @@ export function computeSystemStage(
         leadMessageId: durableCompletion.leadMessageId
       });
       continue;
+    }
+
+    const routingOnlyCompletion = autoCompletionFromSelectedRoutingBranch(
+      step,
+      points,
+      history,
+      historyCursor
+    );
+    if (routingOnlyCompletion?.complete) {
+      historyCursor = routingOnlyCompletion.completedAt;
+      appendStepCompletedBranchHistoryEvent(
+        points,
+        step,
+        routingOnlyCompletion
+      );
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: routingOnlyCompletion.reason,
+        previousSelectedBranch: routingOnlyCompletion.selectedBranchLabel,
+        currentSelectedBranch: routingOnlyCompletion.selectedBranchLabel,
+        selectedSuggestionId: routingOnlyCompletion.selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId:
+          routingOnlyCompletion.historyMessagesWithSelectedSuggestionId,
+        aiMessageId: routingOnlyCompletion.aiMessageId,
+        leadMessageId: routingOnlyCompletion.leadMessageId
+      });
+      continue;
+    }
+
+    if (routingOnlyCompletion) {
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: routingOnlyCompletion.reason,
+        previousSelectedBranch: routingOnlyCompletion.selectedBranchLabel,
+        currentSelectedBranch: null,
+        selectedSuggestionId: routingOnlyCompletion.selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId:
+          routingOnlyCompletion.historyMessagesWithSelectedSuggestionId,
+        aiMessageId: null,
+        leadMessageId: null
+      });
+      candidate = { step, reason: 'first_incomplete_step_from_history' };
+      break;
     }
 
     if (stepHasHistoryCompletionSignal(step, points)) {

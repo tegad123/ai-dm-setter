@@ -338,6 +338,235 @@ describe('durable per-step branch history', () => {
   });
 });
 
+describe('routing-only branch completion', () => {
+  function branchSelectedPoints(
+    stepNumber: number,
+    stepTitle: string,
+    selectedBranchLabel: string,
+    suggestionId = `sug_${stepNumber}`
+  ) {
+    return {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber,
+          stepTitle,
+          selectedBranchLabel,
+          suggestionId,
+          aiMessageId: null,
+          aiMessageIds: [],
+          leadMessageId: `lead_${stepNumber}`,
+          sentAt: null,
+          completedAt: null,
+          createdAt: '2026-05-11T00:00:00.000Z'
+        }
+      ]
+    };
+  }
+
+  function branchStep(
+    stepNumber: number,
+    title: string,
+    branchLabel: string,
+    actions: Array<{ actionType: string; content: string | null }>
+  ) {
+    return {
+      ...baseStep,
+      stepNumber,
+      title,
+      actions: [],
+      branches: [{ branchLabel, actions }]
+    };
+  }
+
+  it('auto-completes a selected JUDGE-only branch', () => {
+    const step1 = branchStep(1, 'Pure Routing', 'Qualified', [
+      { actionType: 'runtime_judgment', content: 'They qualify.' }
+    ]);
+    const step2 = askStep(2, 'Next Step', 'What time works?');
+    const script = { id: 'routing_only', steps: [step1, step2] } as any;
+    const points = branchSelectedPoints(1, 'Pure Routing', 'Qualified');
+
+    const stage = computeSystemStage(script, points as any, []);
+
+    assert.equal(stage.step?.stepNumber, 2);
+    const completed = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed'
+    );
+    assert.equal(completed?.stepNumber, 1);
+    assert.equal(
+      completed?.stepCompletionReason,
+      'routing_only_branch_auto_complete'
+    );
+  });
+
+  it('auto-completes a selected JUDGE plus MSG branch after its AI message exists', () => {
+    const step1 = branchStep(1, 'Capital Routing', '$1,500+ — Qualified', [
+      {
+        actionType: 'runtime_judgment',
+        content: 'If they qualify, proceed to STEP 2.'
+      },
+      {
+        actionType: 'send_message',
+        content:
+          "That's solid bro, I appreciate you being transparent. Let me get your info."
+      }
+    ]);
+    const step2 = askStep(2, 'Collect Info', 'What is your full name?');
+    const script = { id: 'routing_message', steps: [step1, step2] } as any;
+    const points = branchSelectedPoints(
+      1,
+      'Capital Routing',
+      '$1,500+ — Qualified'
+    );
+
+    const beforeDelivery = computeSystemStage(script, points as any, []);
+    assert.equal(beforeDelivery.step?.stepNumber, 1);
+
+    const afterDelivery = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content:
+          "That's solid bro, I appreciate you being transparent. Let me get your info.",
+        timestamp: '2026-05-11T00:00:30.000Z'
+      }
+    ]);
+
+    assert.equal(afterDelivery.step?.stepNumber, 2);
+    const completed = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed'
+    );
+    assert.equal(completed?.aiMessageId, 'ai_1');
+    assert.equal(completed?.leadMessageId, 'lead_1');
+  });
+
+  it('does not auto-complete JUDGE plus MSG plus WAIT before the lead replies', () => {
+    const step1 = branchStep(1, 'Context Ask', 'Needs context', [
+      { actionType: 'runtime_judgment', content: 'Acknowledge them.' },
+      { actionType: 'send_message', content: 'Give me a bit more context.' },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const step2 = askStep(2, 'Next Step', 'What changed?');
+    const script = { id: 'routing_wait', steps: [step1, step2] } as any;
+    const points = branchSelectedPoints(1, 'Context Ask', 'Needs context');
+
+    const noReply = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content: 'Give me a bit more context.',
+        timestamp: '2026-05-11T00:00:30.000Z'
+      }
+    ]);
+    const withReply = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content: 'Give me a bit more context.',
+        timestamp: '2026-05-11T00:00:30.000Z'
+      },
+      {
+        id: 'lead_reply',
+        sender: 'LEAD',
+        content: 'I revenge trade after losses.',
+        timestamp: '2026-05-11T00:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(noReply.step?.stepNumber, 1);
+    assert.equal(withReply.step?.stepNumber, 2);
+  });
+
+  it('does not auto-complete JUDGE plus ASK plus WAIT before the lead replies', () => {
+    const step1 = branchStep(1, 'Clarifying Question', 'Needs answer', [
+      { actionType: 'runtime_judgment', content: 'Ask the next question.' },
+      { actionType: 'ask_question', content: 'What is holding you back?' },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const step2 = askStep(2, 'Next Step', 'What would change things?');
+    const script = { id: 'routing_ask_wait', steps: [step1, step2] } as any;
+    const points = branchSelectedPoints(
+      1,
+      'Clarifying Question',
+      'Needs answer'
+    );
+
+    const noReply = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content: 'What is holding you back?',
+        timestamp: '2026-05-11T00:00:30.000Z'
+      }
+    ]);
+    const withReply = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content: 'What is holding you back?',
+        timestamp: '2026-05-11T00:00:30.000Z'
+      },
+      {
+        id: 'lead_reply',
+        sender: 'LEAD',
+        content: 'Mostly emotional control.',
+        timestamp: '2026-05-11T00:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(noReply.step?.stepNumber, 1);
+    assert.equal(withReply.step?.stepNumber, 2);
+  });
+
+  it('parses proceed-to routing directives and can advance to the target step', async () => {
+    const step1 = branchStep(1, 'Routing Decision', 'Ready', [
+      {
+        actionType: 'runtime_judgment',
+        content: 'If the lead is ready, proceed to STEP 3.'
+      }
+    ]);
+    const step2 = askStep(2, 'Nurture', 'What would help you feel ready?');
+    const step3 = askStep(3, 'Booking', 'What time works?');
+    const script = {
+      id: 'proceed_directive',
+      steps: [step1, step2, step3]
+    } as any;
+    const points = branchSelectedPoints(1, 'Routing Decision', 'Ready');
+    const stage = computeSystemStage(script, points as any, []);
+
+    assert.equal(stage.step?.stepNumber, 2);
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_routing',
+      script,
+      points: points as any,
+      history: [],
+      currentStep: stage.step as any,
+      classifier: async (params) => {
+        assert.equal(params.directives[0].destinationStepNumber, 3);
+        return {
+          decision: 'skip',
+          destinationStepNumber: 3,
+          reason: 'lead is ready'
+        };
+      }
+    });
+
+    assert.equal(result.step?.stepNumber, 3);
+    const decision = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'conditional_skip_decision'
+    );
+    assert.equal(decision?.skipDecision, 'skip');
+    assert.equal(decision?.skipDestinationStepNumber, 3);
+  });
+});
+
 describe('generic conditional step skips', () => {
   function branchJudgmentStep(
     stepNumber: number,
