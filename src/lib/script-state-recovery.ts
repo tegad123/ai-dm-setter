@@ -35,6 +35,12 @@ export interface BranchHistoryEvent {
   sentAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  stepCompletionAttempted?: boolean | null;
+  stepCompletionReason?: string | null;
+  previousSelectedBranch?: string | null;
+  currentSelectedBranch?: string | null;
+  selectedSuggestionId?: string | null;
+  historyMessagesWithSelectedSuggestionId?: number | null;
 }
 
 export type ScriptWithRecovery = Prisma.ScriptGetPayload<{
@@ -135,6 +141,14 @@ function nullableIsoString(value: unknown): string | null {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
+function nullableBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function nullableStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -170,7 +184,15 @@ function parseBranchHistoryEvent(value: unknown): BranchHistoryEvent | null {
     leadMessageId: nullableString(record.leadMessageId),
     sentAt: nullableIsoString(record.sentAt),
     completedAt: nullableIsoString(record.completedAt),
-    createdAt: nullableIsoString(record.createdAt) ?? new Date().toISOString()
+    createdAt: nullableIsoString(record.createdAt) ?? new Date().toISOString(),
+    stepCompletionAttempted: nullableBoolean(record.stepCompletionAttempted),
+    stepCompletionReason: nullableString(record.stepCompletionReason),
+    previousSelectedBranch: nullableString(record.previousSelectedBranch),
+    currentSelectedBranch: nullableString(record.currentSelectedBranch),
+    selectedSuggestionId: nullableString(record.selectedSuggestionId),
+    historyMessagesWithSelectedSuggestionId: nullableNumber(
+      record.historyMessagesWithSelectedSuggestionId
+    )
   };
 }
 
@@ -353,6 +375,10 @@ type StepCompletionResult = {
   aiMessageIds: string[];
   leadMessageId: string | null;
   sentAt: string | null;
+  reason: string;
+  selectedBranchLabel: string | null;
+  selectedSuggestionId: string | null;
+  historyMessagesWithSelectedSuggestionId: number | null;
 };
 
 function stepActionRef(action: {
@@ -694,14 +720,24 @@ function findSetterMessagesForActions(
   return sentMessages;
 }
 
-function incompleteStepCompletion(afterTimeMs: number): StepCompletionResult {
+function incompleteStepCompletion(
+  afterTimeMs: number,
+  reason: string,
+  selectedBranchLabel: string | null = null,
+  selectedSuggestionId: string | null = null,
+  historyMessagesWithSelectedSuggestionId: number | null = null
+): StepCompletionResult {
   return {
     complete: false,
     completedAt: afterTimeMs,
     aiMessageId: null,
     aiMessageIds: [],
     leadMessageId: null,
-    sentAt: null
+    sentAt: null,
+    reason,
+    selectedBranchLabel,
+    selectedSuggestionId,
+    historyMessagesWithSelectedSuggestionId
   };
 }
 
@@ -712,7 +748,7 @@ function stepCompletionFromHistory(
   afterTimeMs = Number.NEGATIVE_INFINITY
 ): StepCompletionResult {
   if (history.length === 0) {
-    return incompleteStepCompletion(afterTimeMs);
+    return incompleteStepCompletion(afterTimeMs, 'no_history');
   }
   const sorted = sortedHistory(history);
   const canonicalCandidates =
@@ -728,6 +764,14 @@ function stepCompletionFromHistory(
     step.stepNumber
   );
   const selectedSuggestionId = selectedBranchHistory?.suggestionId ?? null;
+  const historyMessagesWithSelectedSuggestionId = selectedSuggestionId
+    ? sorted.filter((message) => message.suggestionId === selectedSuggestionId)
+        .length
+    : null;
+  let lastReason =
+    selectedSuggestionId && historyMessagesWithSelectedSuggestionId === 0
+      ? 'selected_suggestion_id_not_present_in_recovery_history'
+      : 'no_completion_match';
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
     const { asks, messages, waits } = waitableActionsForPath(actions);
@@ -746,9 +790,16 @@ function stepCompletionFromHistory(
           aiMessageId: sent.id ?? null,
           aiMessageIds: sent.id ? [sent.id] : [],
           leadMessageId: leadReply.id ?? null,
-          sentAt: new Date(sent.timestamp).toISOString()
+          sentAt: new Date(sent.timestamp).toISOString(),
+          reason: 'completed_by_ask_reply',
+          selectedBranchLabel,
+          selectedSuggestionId,
+          historyMessagesWithSelectedSuggestionId
         };
       }
+      lastReason = sent
+        ? 'ask_sent_but_no_lead_reply_after_it'
+        : 'ask_message_not_found_in_history_after_cursor';
     }
 
     if (asks.length === 0 && messages.length > 0 && waits.length) {
@@ -770,13 +821,28 @@ function stepCompletionFromHistory(
               ?.map((message) => message.id)
               .filter((id): id is string => !!id) ?? [],
           leadMessageId: leadReply.id ?? null,
-          sentAt: new Date(lastSent.timestamp).toISOString()
+          sentAt: new Date(lastSent.timestamp).toISOString(),
+          reason: 'completed_by_message_wait_reply',
+          selectedBranchLabel,
+          selectedSuggestionId,
+          historyMessagesWithSelectedSuggestionId
         };
       }
+      lastReason = lastSent
+        ? 'waitable_message_sent_but_no_lead_reply_after_it'
+        : selectedSuggestionId
+          ? 'waitable_message_not_found_for_selected_suggestion'
+          : 'waitable_message_not_found_in_history_after_cursor';
     }
   }
 
-  return incompleteStepCompletion(afterTimeMs);
+  return incompleteStepCompletion(
+    afterTimeMs,
+    lastReason,
+    selectedBranchLabel,
+    selectedSuggestionId,
+    historyMessagesWithSelectedSuggestionId
+  );
 }
 
 function appendStepCompletedBranchHistoryEvent(
@@ -800,8 +866,36 @@ function appendStepCompletedBranchHistoryEvent(
     leadMessageId: completion.leadMessageId,
     sentAt: completion.sentAt,
     completedAt: new Date(completion.completedAt).toISOString(),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    stepCompletionAttempted: true,
+    stepCompletionReason: completion.reason,
+    previousSelectedBranch: selectedBranchLabel,
+    currentSelectedBranch: selectedBranchLabel,
+    selectedSuggestionId: completion.selectedSuggestionId,
+    historyMessagesWithSelectedSuggestionId:
+      completion.historyMessagesWithSelectedSuggestionId
   });
+}
+
+function writeStepCompletionTrace(
+  points: CapturedDataPoints,
+  trace: {
+    stepNumber: number | null;
+    stepTitle: string | null;
+    stepCompletionAttempted: boolean;
+    stepCompletionReason: string;
+    previousSelectedBranch: string | null;
+    currentSelectedBranch: string | null;
+    selectedSuggestionId: string | null;
+    historyMessagesWithSelectedSuggestionId: number | null;
+    aiMessageId: string | null;
+    leadMessageId: string | null;
+  }
+) {
+  (points as Record<string, unknown>).lastStepCompletionTrace = {
+    ...trace,
+    timestamp: new Date().toISOString()
+  };
 }
 
 function firstUrl(text: string | null | undefined): string | null {
@@ -1664,6 +1758,19 @@ export function computeSystemStage(
     );
     if (durableCompletion?.completedAt) {
       historyCursor = Date.parse(durableCompletion.completedAt);
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: 'completed_from_branch_history',
+        previousSelectedBranch: durableCompletion.selectedBranchLabel,
+        currentSelectedBranch: durableCompletion.selectedBranchLabel,
+        selectedSuggestionId: durableCompletion.selectedSuggestionId ?? null,
+        historyMessagesWithSelectedSuggestionId:
+          durableCompletion.historyMessagesWithSelectedSuggestionId ?? null,
+        aiMessageId: durableCompletion.aiMessageId,
+        leadMessageId: durableCompletion.leadMessageId
+      });
       continue;
     }
 
@@ -1677,15 +1784,73 @@ export function computeSystemStage(
       if (historyCompletion.complete) {
         historyCursor = historyCompletion.completedAt;
         appendStepCompletedBranchHistoryEvent(points, step, historyCompletion);
+        writeStepCompletionTrace(points, {
+          stepNumber: step.stepNumber,
+          stepTitle: step.title ?? null,
+          stepCompletionAttempted: true,
+          stepCompletionReason: historyCompletion.reason,
+          previousSelectedBranch: historyCompletion.selectedBranchLabel,
+          currentSelectedBranch: historyCompletion.selectedBranchLabel,
+          selectedSuggestionId: historyCompletion.selectedSuggestionId,
+          historyMessagesWithSelectedSuggestionId:
+            historyCompletion.historyMessagesWithSelectedSuggestionId,
+          aiMessageId: historyCompletion.aiMessageId,
+          leadMessageId: historyCompletion.leadMessageId
+        });
         continue;
       }
 
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: historyCompletion.reason,
+        previousSelectedBranch: historyCompletion.selectedBranchLabel,
+        currentSelectedBranch: null,
+        selectedSuggestionId: historyCompletion.selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId:
+          historyCompletion.historyMessagesWithSelectedSuggestionId,
+        aiMessageId: null,
+        leadMessageId: null
+      });
       candidate = { step, reason: 'first_incomplete_step_from_history' };
       break;
     }
 
-    if (isStepComplete(step, points)) continue;
+    if (isStepComplete(step, points)) {
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: false,
+        stepCompletionReason: 'completed_from_completion_rule',
+        previousSelectedBranch: selectedBranchLabelForStep(
+          points,
+          step.stepNumber
+        ),
+        currentSelectedBranch: null,
+        selectedSuggestionId: null,
+        historyMessagesWithSelectedSuggestionId: null,
+        aiMessageId: null,
+        leadMessageId: null
+      });
+      continue;
+    }
 
+    writeStepCompletionTrace(points, {
+      stepNumber: step.stepNumber,
+      stepTitle: step.title ?? null,
+      stepCompletionAttempted: false,
+      stepCompletionReason: 'no_history_completion_signal',
+      previousSelectedBranch: selectedBranchLabelForStep(
+        points,
+        step.stepNumber
+      ),
+      currentSelectedBranch: null,
+      selectedSuggestionId: null,
+      historyMessagesWithSelectedSuggestionId: null,
+      aiMessageId: null,
+      leadMessageId: null
+    });
     candidate = { step, reason: 'first_incomplete_step' };
     break;
   }

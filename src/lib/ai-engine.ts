@@ -2282,6 +2282,13 @@ export async function generateReply(
       );
     }
   }
+  const stepCompletionTraceAfterPrepare = asJsonObject(
+    (
+      scriptStateSnapshot?.capturedDataPoints as
+        | Record<string, unknown>
+        | undefined
+    )?.lastStepCompletionTrace as Prisma.JsonValue
+  );
   await writeGenerateReplyTrace({
     checkpoint2_prepareScriptStateComplete: true,
     lastCheckpoint: 'checkpoint2_prepareScriptStateComplete',
@@ -2294,7 +2301,30 @@ export async function generateReply(
     snapshotBranchLabels:
       scriptStateSnapshot?.currentStep?.branches.map(
         (branch) => branch.branchLabel
-      ) ?? []
+      ) ?? [],
+    stepCompletionAttempted:
+      typeof stepCompletionTraceAfterPrepare.stepCompletionAttempted ===
+      'boolean'
+        ? stepCompletionTraceAfterPrepare.stepCompletionAttempted
+        : null,
+    stepCompletionReason:
+      typeof stepCompletionTraceAfterPrepare.stepCompletionReason === 'string'
+        ? stepCompletionTraceAfterPrepare.stepCompletionReason
+        : null,
+    previousSelectedBranch:
+      typeof stepCompletionTraceAfterPrepare.previousSelectedBranch === 'string'
+        ? stepCompletionTraceAfterPrepare.previousSelectedBranch
+        : null,
+    currentSelectedBranch: null,
+    selectedSuggestionId:
+      typeof stepCompletionTraceAfterPrepare.selectedSuggestionId === 'string'
+        ? stepCompletionTraceAfterPrepare.selectedSuggestionId
+        : null,
+    historyMessagesWithSelectedSuggestionId:
+      typeof stepCompletionTraceAfterPrepare.historyMessagesWithSelectedSuggestionId ===
+      'number'
+        ? stepCompletionTraceAfterPrepare.historyMessagesWithSelectedSuggestionId
+        : null
   });
 
   if (coldStartStep1Inbound && activeConversationId && scriptStateSnapshot) {
@@ -2903,6 +2933,41 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
     };
   }
+  const stepCompletionTraceAfterClassifier = asJsonObject(
+    (
+      scriptStateSnapshot?.capturedDataPoints as
+        | Record<string, unknown>
+        | undefined
+    )?.lastStepCompletionTrace as Prisma.JsonValue
+  );
+  await writeGenerateReplyTrace({
+    stepCompletionAttempted:
+      typeof stepCompletionTraceAfterClassifier.stepCompletionAttempted ===
+      'boolean'
+        ? stepCompletionTraceAfterClassifier.stepCompletionAttempted
+        : null,
+    stepCompletionReason:
+      typeof stepCompletionTraceAfterClassifier.stepCompletionReason ===
+      'string'
+        ? stepCompletionTraceAfterClassifier.stepCompletionReason
+        : null,
+    previousSelectedBranch:
+      typeof stepCompletionTraceAfterClassifier.previousSelectedBranch ===
+      'string'
+        ? stepCompletionTraceAfterClassifier.previousSelectedBranch
+        : null,
+    currentSelectedBranch: selectedCurrentJudgeBranch?.branchLabel ?? null,
+    selectedSuggestionId:
+      typeof stepCompletionTraceAfterClassifier.selectedSuggestionId ===
+      'string'
+        ? stepCompletionTraceAfterClassifier.selectedSuggestionId
+        : null,
+    historyMessagesWithSelectedSuggestionId:
+      typeof stepCompletionTraceAfterClassifier.historyMessagesWithSelectedSuggestionId ===
+      'number'
+        ? stepCompletionTraceAfterClassifier.historyMessagesWithSelectedSuggestionId
+        : null
+  });
   const activeBranchRequiredMessages = selectedCurrentJudgeBranch
     ? getActiveBranchRequiredMessages(selectedCurrentJudgeBranch)
     : undefined;
@@ -5329,6 +5394,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       suggestionId = suggestion.id;
       if (scriptStateSnapshot?.currentStep) {
         try {
+          const stepCompletionTraceForBranchHistory = asJsonObject(
+            (scriptStateSnapshot.capturedDataPoints as Record<string, unknown>)
+              .lastStepCompletionTrace as Prisma.JsonValue
+          );
           await appendBranchHistoryEvent({
             conversationId: convoId,
             event: {
@@ -5342,7 +5411,34 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               aiMessageIds: [],
               leadMessageId: lastLeadMsg?.id ?? null,
               sentAt: null,
-              completedAt: null
+              completedAt: null,
+              stepCompletionAttempted:
+                typeof stepCompletionTraceForBranchHistory.stepCompletionAttempted ===
+                'boolean'
+                  ? stepCompletionTraceForBranchHistory.stepCompletionAttempted
+                  : null,
+              stepCompletionReason:
+                typeof stepCompletionTraceForBranchHistory.stepCompletionReason ===
+                'string'
+                  ? stepCompletionTraceForBranchHistory.stepCompletionReason
+                  : null,
+              previousSelectedBranch:
+                typeof stepCompletionTraceForBranchHistory.previousSelectedBranch ===
+                'string'
+                  ? stepCompletionTraceForBranchHistory.previousSelectedBranch
+                  : null,
+              currentSelectedBranch:
+                scriptStateSnapshot.selectedBranchLabel ?? null,
+              selectedSuggestionId:
+                typeof stepCompletionTraceForBranchHistory.selectedSuggestionId ===
+                'string'
+                  ? stepCompletionTraceForBranchHistory.selectedSuggestionId
+                  : null,
+              historyMessagesWithSelectedSuggestionId:
+                typeof stepCompletionTraceForBranchHistory.historyMessagesWithSelectedSuggestionId ===
+                'number'
+                  ? stepCompletionTraceForBranchHistory.historyMessagesWithSelectedSuggestionId
+                  : null
             }
           });
         } catch (err) {
