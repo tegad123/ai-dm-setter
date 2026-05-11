@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { containsCapitalQuestion } from '@/lib/voice-quality-gate';
+import { getCredentials } from '@/lib/credential-store';
 
 export type DataPointConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 export type RecoveryPriority = 'HOT' | 'MEDIUM' | 'LOW';
@@ -24,7 +25,11 @@ export interface CapturedDataPoint<T = unknown> {
 export type CapturedDataPoints = Record<string, CapturedDataPoint | undefined>;
 
 export interface BranchHistoryEvent {
-  eventType: 'branch_selected' | 'step_completed';
+  eventType:
+    | 'branch_selected'
+    | 'step_completed'
+    | 'conditional_skip_decision'
+    | 'conditional_skip_warning';
   stepNumber: number;
   stepTitle: string | null;
   selectedBranchLabel: string | null;
@@ -41,6 +46,12 @@ export interface BranchHistoryEvent {
   currentSelectedBranch?: string | null;
   selectedSuggestionId?: string | null;
   historyMessagesWithSelectedSuggestionId?: number | null;
+  skipDestinationStepNumber?: number | null;
+  skipDirective?: string | null;
+  skipDecision?: 'skip' | 'continue' | null;
+  skipReason?: string | null;
+  skipError?: string | null;
+  classifierModel?: string | null;
 }
 
 export type ScriptWithRecovery = Prisma.ScriptGetPayload<{
@@ -159,7 +170,9 @@ function parseBranchHistoryEvent(value: unknown): BranchHistoryEvent | null {
   const record = asRecord(value);
   const eventType =
     record.eventType === 'branch_selected' ||
-    record.eventType === 'step_completed'
+    record.eventType === 'step_completed' ||
+    record.eventType === 'conditional_skip_decision' ||
+    record.eventType === 'conditional_skip_warning'
       ? record.eventType
       : null;
   const stepNumber =
@@ -192,7 +205,16 @@ function parseBranchHistoryEvent(value: unknown): BranchHistoryEvent | null {
     selectedSuggestionId: nullableString(record.selectedSuggestionId),
     historyMessagesWithSelectedSuggestionId: nullableNumber(
       record.historyMessagesWithSelectedSuggestionId
-    )
+    ),
+    skipDestinationStepNumber: nullableNumber(record.skipDestinationStepNumber),
+    skipDirective: nullableString(record.skipDirective),
+    skipDecision:
+      record.skipDecision === 'skip' || record.skipDecision === 'continue'
+        ? record.skipDecision
+        : null,
+    skipReason: nullableString(record.skipReason),
+    skipError: nullableString(record.skipError),
+    classifierModel: nullableString(record.classifierModel)
   };
 }
 
@@ -241,6 +263,21 @@ function hasEquivalentBranchHistoryEvent(
       return existing.leadMessageId === event.leadMessageId;
     }
 
+    if (
+      (event.eventType === 'conditional_skip_decision' ||
+        event.eventType === 'conditional_skip_warning') &&
+      existing.leadMessageId &&
+      event.leadMessageId
+    ) {
+      return (
+        existing.leadMessageId === event.leadMessageId &&
+        existing.skipDestinationStepNumber ===
+          event.skipDestinationStepNumber &&
+        existing.skipDecision === event.skipDecision &&
+        existing.skipError === event.skipError
+      );
+    }
+
     return (
       existing.selectedBranchLabel === event.selectedBranchLabel &&
       existing.completedAt === event.completedAt &&
@@ -283,6 +320,212 @@ export async function appendBranchHistoryEvent(params: {
       capturedDataPoints: capturedDataPoints as Prisma.InputJsonValue
     }
   });
+}
+
+type ConditionalStepSkipDirective = {
+  sourceText: string;
+  destinationStepNumber: number;
+};
+
+type ConditionalStepSkipClassifierResult = {
+  decision: 'skip' | 'continue';
+  destinationStepNumber: number | null;
+  reason: string | null;
+  error?: string | null;
+};
+
+type ConditionalStepSkipClassifier = (params: {
+  accountId: string;
+  directiveText: string;
+  directives: ConditionalStepSkipDirective[];
+  recentConversation: ScriptHistoryMessage[];
+  priorBranchHistory: BranchHistoryEvent | null;
+}) => Promise<ConditionalStepSkipClassifierResult>;
+
+const CONDITIONAL_SKIP_MODEL = 'claude-haiku-4-5-20251001';
+const CONDITIONAL_SKIP_PATTERN =
+  /(?:skip|go|jump|advance)\s+(?:to\s+)?(?:step\s*)?(\d+)/gi;
+const CONDITIONAL_SKIP_ARROW_PATTERN = /(?:→|->|=>)\s*(?:step\s*)?(\d+)/gi;
+const CONDITIONAL_SKIP_HINT_PATTERN = /\b(skip|go|jump|advance)\b|(?:→|->|=>)/i;
+
+function collectRegexMatches(
+  content: string,
+  regex: RegExp
+): ConditionalStepSkipDirective[] {
+  const matches: ConditionalStepSkipDirective[] = [];
+  regex.lastIndex = 0;
+  let match: RegExpExecArray | null = regex.exec(content);
+  while (match) {
+    const destinationStepNumber = Number.parseInt(match[1] ?? '', 10);
+    if (!Number.isFinite(destinationStepNumber) || destinationStepNumber <= 0) {
+      match = regex.exec(content);
+      continue;
+    }
+    matches.push({
+      sourceText: match[0].trim(),
+      destinationStepNumber
+    });
+    match = regex.exec(content);
+  }
+  regex.lastIndex = 0;
+  return matches;
+}
+
+export function parseConditionalStepSkipDirectives(
+  content: string | null | undefined
+): ConditionalStepSkipDirective[] {
+  if (!content?.trim()) return [];
+  const directives = [
+    ...collectRegexMatches(content, CONDITIONAL_SKIP_PATTERN),
+    ...collectRegexMatches(content, CONDITIONAL_SKIP_ARROW_PATTERN)
+  ];
+  const seen = new Set<string>();
+  return directives.filter((directive) => {
+    const key = `${directive.destinationStepNumber}:${directive.sourceText.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function hasConditionalSkipHint(content: string | null | undefined): boolean {
+  return !!content?.trim() && CONDITIONAL_SKIP_HINT_PATTERN.test(content);
+}
+
+async function resolveAnthropicApiKey(
+  accountId: string
+): Promise<string | null> {
+  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
+  if (typeof anthropicCreds?.apiKey === 'string') {
+    const byokKey = anthropicCreds.apiKey.trim();
+    if (byokKey) return byokKey;
+  }
+  return process.env.ANTHROPIC_API_KEY?.trim() || null;
+}
+
+function recentConversationForSkipClassifier(history: ScriptHistoryMessage[]) {
+  return sortedHistory(history).slice(-10);
+}
+
+async function classifyConditionalStepSkipWithHaiku(params: {
+  accountId: string;
+  directiveText: string;
+  directives: ConditionalStepSkipDirective[];
+  recentConversation: ScriptHistoryMessage[];
+  priorBranchHistory: BranchHistoryEvent | null;
+}): Promise<ConditionalStepSkipClassifierResult> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const apiKey = await resolveAnthropicApiKey(params.accountId);
+    if (!apiKey) {
+      return {
+        decision: 'continue',
+        destinationStepNumber: null,
+        reason: 'missing_anthropic_key',
+        error: 'missing_anthropic_key'
+      };
+    }
+
+    const directiveLines = params.directives
+      .map(
+        (directive) =>
+          `- destination STEP ${directive.destinationStepNumber}: ${directive.sourceText}`
+      )
+      .join('\n');
+    const contextLines = params.recentConversation
+      .map((message) => `${message.sender}: ${message.content}`.slice(0, 600))
+      .join('\n');
+    const prompt = `You are a generic conditional step-skip router for an operator-authored sales script.
+
+The operator wrote this runtime_judgment in their script:
+${params.directiveText}
+
+Parsed possible skip destinations:
+${directiveLines}
+
+Recent conversation:
+${contextLines || '(none)'}
+
+Prior branchHistory entry:
+${JSON.stringify(params.priorBranchHistory ?? null)}
+
+Decide whether the operator's runtime_judgment means the conversation should skip now, based only on the operator's script text and the recent conversation context.
+
+Respond with ONLY compact JSON:
+{"decision":"skip"|"continue","destinationStepNumber":number|null,"reason":"short reason"}`;
+
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 3000);
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: CONDITIONAL_SKIP_MODEL,
+        max_tokens: 120,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }]
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return {
+        decision: 'continue',
+        destinationStepNumber: null,
+        reason: `http_${response.status}`,
+        error: `http_${response.status}`
+      };
+    }
+
+    const data = (await response.json()) as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const text =
+      data.content
+        ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
+        .join('')
+        .trim() ?? '';
+    const jsonText = text.match(/\{[\s\S]*\}/)?.[0] ?? text;
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    const rawDecision =
+      typeof parsed.decision === 'string'
+        ? parsed.decision.trim().toLowerCase()
+        : null;
+    const decision = rawDecision === 'skip' ? 'skip' : 'continue';
+    const destinationStepNumber =
+      typeof parsed.destinationStepNumber === 'number'
+        ? parsed.destinationStepNumber
+        : typeof parsed.destinationStepNumber === 'string'
+          ? Number.parseInt(parsed.destinationStepNumber, 10)
+          : null;
+
+    return {
+      decision,
+      destinationStepNumber:
+        Number.isFinite(destinationStepNumber) && destinationStepNumber
+          ? destinationStepNumber
+          : null,
+      reason:
+        typeof parsed.reason === 'string' && parsed.reason.trim()
+          ? parsed.reason.trim()
+          : null
+    };
+  } catch (err) {
+    return {
+      decision: 'continue',
+      destinationStepNumber: null,
+      reason: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : String(err)
+    };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function isCapturedDataPoint(value: unknown): value is CapturedDataPoint {
@@ -534,6 +777,245 @@ function durableMinimumStepNumber(
     (step) => step.stepNumber > maxCompletedStepNumber
   );
   return nextStep?.stepNumber ?? maxCompletedStepNumber;
+}
+
+function latestCompletedBranchHistoryEvent(
+  points: CapturedDataPoints
+): BranchHistoryEvent | null {
+  return (
+    readBranchHistoryEvents(points)
+      .filter(
+        (event) => event.eventType === 'step_completed' && !!event.completedAt
+      )
+      .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
+      .at(-1) ?? null
+  );
+}
+
+function existingConditionalSkipDecision(params: {
+  points: CapturedDataPoints;
+  stepNumber: number;
+  leadMessageId: string | null;
+}): BranchHistoryEvent | null {
+  if (!params.leadMessageId) return null;
+  return (
+    readBranchHistoryEvents(params.points)
+      .filter(
+        (event) =>
+          event.eventType === 'conditional_skip_decision' &&
+          event.stepNumber === params.stepNumber &&
+          event.leadMessageId === params.leadMessageId
+      )
+      .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
+      .at(-1) ?? null
+  );
+}
+
+function runtimeJudgmentTextsForCompletedStep(
+  step: ScriptStepWithRecovery,
+  selectedBranchLabel: string | null
+): string[] {
+  const directActions = step.actions;
+  const selectedBranches = selectedBranchLabel
+    ? step.branches.filter(
+        (branch) => branch.branchLabel === selectedBranchLabel
+      )
+    : step.branches;
+  const branchActions =
+    selectedBranchLabel && selectedBranches.length === 0
+      ? []
+      : selectedBranches.flatMap((branch) => branch.actions);
+
+  return [...directActions, ...branchActions]
+    .filter(
+      (action) =>
+        action.actionType === 'runtime_judgment' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    )
+    .map((action) => action.content!.trim());
+}
+
+function appendConditionalSkipEvent(
+  points: CapturedDataPoints,
+  params: {
+    eventType: 'conditional_skip_decision' | 'conditional_skip_warning';
+    sourceStep: ScriptStepWithRecovery;
+    completedEvent: BranchHistoryEvent;
+    directiveText: string | null;
+    destinationStepNumber: number | null;
+    decision: 'skip' | 'continue' | null;
+    reason: string | null;
+    error?: string | null;
+  }
+) {
+  appendBranchHistoryEventToPoints(points, {
+    eventType: params.eventType,
+    stepNumber: params.sourceStep.stepNumber,
+    stepTitle: params.sourceStep.title ?? null,
+    selectedBranchLabel: params.completedEvent.selectedBranchLabel,
+    suggestionId: params.completedEvent.suggestionId,
+    aiMessageId: params.completedEvent.aiMessageId,
+    aiMessageIds: params.completedEvent.aiMessageIds,
+    leadMessageId: params.completedEvent.leadMessageId,
+    sentAt: params.completedEvent.sentAt,
+    completedAt: params.completedEvent.completedAt,
+    createdAt: new Date().toISOString(),
+    skipDestinationStepNumber: params.destinationStepNumber,
+    skipDirective: params.directiveText,
+    skipDecision: params.decision,
+    skipReason: params.reason,
+    skipError: params.error ?? null,
+    classifierModel: CONDITIONAL_SKIP_MODEL
+  });
+}
+
+export async function applyConditionalStepSkip(params: {
+  accountId: string;
+  script: ScriptWithRecovery | null;
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  currentStep: ScriptStepWithRecovery | null;
+  classifier?: ConditionalStepSkipClassifier;
+}): Promise<{
+  step: ScriptStepWithRecovery | null;
+  reason: string | null;
+}> {
+  if (!params.script || !params.currentStep) {
+    return { step: params.currentStep, reason: null };
+  }
+
+  const completedEvent = latestCompletedBranchHistoryEvent(params.points);
+  if (!completedEvent?.completedAt) {
+    return { step: params.currentStep, reason: null };
+  }
+
+  const sourceStep = params.script.steps.find(
+    (step) => step.stepNumber === completedEvent.stepNumber
+  );
+  if (!sourceStep || sourceStep.stepNumber >= params.currentStep.stepNumber) {
+    return { step: params.currentStep, reason: null };
+  }
+
+  const existingDecision = existingConditionalSkipDecision({
+    points: params.points,
+    stepNumber: sourceStep.stepNumber,
+    leadMessageId: completedEvent.leadMessageId
+  });
+  if (existingDecision?.skipDecision === 'skip') {
+    const destinationStep = params.script.steps.find(
+      (step) => step.stepNumber === existingDecision.skipDestinationStepNumber
+    );
+    if (
+      destinationStep &&
+      destinationStep.stepNumber > params.currentStep.stepNumber
+    ) {
+      return {
+        step: destinationStep,
+        reason: `conditional_skip_cached:${sourceStep.stepNumber}->${destinationStep.stepNumber}`
+      };
+    }
+    return { step: params.currentStep, reason: null };
+  }
+  if (existingDecision?.skipDecision === 'continue') {
+    return { step: params.currentStep, reason: null };
+  }
+
+  const runtimeJudgments = runtimeJudgmentTextsForCompletedStep(
+    sourceStep,
+    completedEvent.selectedBranchLabel
+  );
+  const judgmentWithDirectives = runtimeJudgments
+    .map((text) => ({
+      text,
+      directives: parseConditionalStepSkipDirectives(text)
+    }))
+    .find((entry) => entry.directives.length > 0);
+
+  if (!judgmentWithDirectives) {
+    const unparsableJudgment = runtimeJudgments.find(hasConditionalSkipHint);
+    if (unparsableJudgment) {
+      appendConditionalSkipEvent(params.points, {
+        eventType: 'conditional_skip_warning',
+        sourceStep,
+        completedEvent,
+        directiveText: unparsableJudgment,
+        destinationStepNumber: null,
+        decision: null,
+        reason: 'conditional_skip_pattern_not_parsed',
+        error: 'conditional_skip_pattern_not_parsed'
+      });
+    }
+    return { step: params.currentStep, reason: null };
+  }
+
+  const classifier = params.classifier ?? classifyConditionalStepSkipWithHaiku;
+  let classification: ConditionalStepSkipClassifierResult;
+  try {
+    classification = await classifier({
+      accountId: params.accountId,
+      directiveText: judgmentWithDirectives.text,
+      directives: judgmentWithDirectives.directives,
+      recentConversation: recentConversationForSkipClassifier(params.history),
+      priorBranchHistory: completedEvent
+    });
+  } catch (err) {
+    classification = {
+      decision: 'continue',
+      destinationStepNumber: null,
+      reason: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+  const allowedDestinations = new Set(
+    judgmentWithDirectives.directives.map(
+      (directive) => directive.destinationStepNumber
+    )
+  );
+  const destinationStepNumber =
+    classification.destinationStepNumber ??
+    (judgmentWithDirectives.directives.length === 1
+      ? judgmentWithDirectives.directives[0].destinationStepNumber
+      : null);
+  const destinationStep =
+    classification.decision === 'skip' &&
+    destinationStepNumber &&
+    allowedDestinations.has(destinationStepNumber)
+      ? params.script.steps.find(
+          (step) => step.stepNumber === destinationStepNumber
+        )
+      : null;
+  const canSkip =
+    classification.decision === 'skip' &&
+    !!destinationStep &&
+    destinationStep.stepNumber > params.currentStep.stepNumber;
+
+  appendConditionalSkipEvent(params.points, {
+    eventType: 'conditional_skip_decision',
+    sourceStep,
+    completedEvent,
+    directiveText: judgmentWithDirectives.text,
+    destinationStepNumber:
+      Number.isFinite(destinationStepNumber) && destinationStepNumber
+        ? destinationStepNumber
+        : null,
+    decision: canSkip ? 'skip' : 'continue',
+    reason:
+      classification.reason ??
+      (canSkip ? 'classifier_selected_skip' : 'classifier_selected_continue'),
+    error:
+      classification.error ??
+      (classification.decision === 'skip' && !canSkip
+        ? 'invalid_or_non_forward_destination'
+        : null)
+  });
+
+  if (!canSkip) return { step: params.currentStep, reason: null };
+
+  return {
+    step: destinationStep,
+    reason: `conditional_skip:${sourceStep.stepNumber}->${destinationStep.stepNumber}`
+  };
 }
 
 function stripTemplateVariables(text: string): string {
@@ -2316,7 +2798,7 @@ export async function prepareScriptState(params: {
     durableStatus: conversation.capitalVerificationStatus,
     durableAmount: conversation.capitalVerifiedAmount
   });
-  const systemStage = computeSystemStage(
+  let systemStage = computeSystemStage(
     script,
     capturedDataPoints,
     params.history,
@@ -2325,7 +2807,24 @@ export async function prepareScriptState(params: {
       maxAdvanceSteps: 1
     }
   );
-  const currentStep = systemStage.step;
+  let currentStep = systemStage.step;
+  const conditionalSkip = await applyConditionalStepSkip({
+    accountId: params.accountId,
+    script,
+    points: capturedDataPoints,
+    history: params.history,
+    currentStep
+  });
+  if (
+    conditionalSkip.step &&
+    conditionalSkip.step.stepNumber !== currentStep?.stepNumber
+  ) {
+    currentStep = conditionalSkip.step;
+    systemStage = {
+      step: currentStep,
+      reason: conditionalSkip.reason ?? systemStage.reason
+    };
+  }
   const currentScriptStep = currentStep?.stepNumber ?? 1;
   const systemStageName = currentStep?.stateKey || currentStep?.title || null;
 

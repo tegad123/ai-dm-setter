@@ -2,7 +2,9 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  applyConditionalStepSkip,
   computeSystemStage,
+  parseConditionalStepSkipDirectives,
   readBranchHistoryEvents
 } from '../../src/lib/script-state-recovery';
 
@@ -333,5 +335,288 @@ describe('durable per-step branch history', () => {
     ]);
 
     assert.equal(stage.step?.stepNumber, 5);
+  });
+});
+
+describe('generic conditional step skips', () => {
+  function branchJudgmentStep(
+    stepNumber: number,
+    title: string,
+    branchLabel: string,
+    judgment: string
+  ) {
+    return {
+      ...baseStep,
+      stepNumber,
+      title,
+      actions: [],
+      branches: [
+        {
+          branchLabel,
+          actions: [{ actionType: 'runtime_judgment', content: judgment }]
+        }
+      ]
+    };
+  }
+
+  function completedPoints(
+    stepNumber: number,
+    stepTitle: string,
+    selectedBranchLabel: string,
+    leadMessageId = `lead_${stepNumber}`
+  ) {
+    return {
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber,
+          stepTitle,
+          selectedBranchLabel,
+          suggestionId: `sug_${stepNumber}`,
+          aiMessageId: `ai_${stepNumber}`,
+          aiMessageIds: [`ai_${stepNumber}`],
+          leadMessageId,
+          sentAt: '2026-05-11T00:00:00.000Z',
+          completedAt: '2026-05-11T00:01:00.000Z',
+          createdAt: '2026-05-11T00:01:01.000Z'
+        }
+      ]
+    };
+  }
+
+  it('parses operator-authored skip destination variants', () => {
+    const directives = parseConditionalStepSkipDirectives(`
+      skip to STEP 16
+      go to step 10
+      jump to STEP 14
+      advance to STEP 20
+      → STEP 22
+      -> STEP 24
+      => step 26
+    `);
+
+    assert.deepEqual(
+      directives.map((directive) => directive.destinationStepNumber),
+      [16, 10, 14, 20, 22, 24, 26]
+    );
+  });
+
+  it('legal services example: classifier-approved skip advances to parsed destination', async () => {
+    const step8 = branchJudgmentStep(
+      8,
+      'Proceed Decision',
+      'Client wants to proceed',
+      `If client confirms they want to proceed → skip to STEP 10.
+If they're hesitant, continue to STEP 9 for objection handling.`
+    );
+    const step9 = askStep(
+      9,
+      'Objection Handling',
+      'What concerns do you have?'
+    );
+    const step10 = askStep(10, 'Intake', 'What timeline works for you?');
+    const script = {
+      id: 'legal_services',
+      steps: [step8, step9, step10]
+    } as any;
+    const points = completedPoints(
+      8,
+      'Proceed Decision',
+      'Client wants to proceed'
+    );
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_legal',
+      script,
+      points: points as any,
+      history: [
+        {
+          id: 'lead_8',
+          sender: 'LEAD',
+          content: 'Yes, I want to proceed with the paperwork.',
+          timestamp: '2026-05-11T00:01:00.000Z'
+        }
+      ],
+      currentStep: step9 as any,
+      classifier: async (params) => {
+        assert.match(params.directiveText, /client confirms/i);
+        assert.equal(params.directives[0].destinationStepNumber, 10);
+        assert.equal(params.priorBranchHistory?.stepNumber, 8);
+        return {
+          decision: 'skip',
+          destinationStepNumber: 10,
+          reason: 'client confirmed proceed intent'
+        };
+      }
+    });
+
+    assert.equal(result.step?.stepNumber, 10);
+    const event = readBranchHistoryEvents(points as any).find(
+      (entry) => entry.eventType === 'conditional_skip_decision'
+    );
+    assert.equal(event?.skipDecision, 'skip');
+    assert.equal(event?.skipDestinationStepNumber, 10);
+  });
+
+  it('fitness coaching example: same generic logic supports jump wording', async () => {
+    const step12 = branchJudgmentStep(
+      12,
+      'Commitment Check',
+      'Excited and committed',
+      `If lead is clearly excited and committed, jump to STEP 14 for the offer.
+Otherwise stay on STEP 13 for reinforcement.`
+    );
+    const step13 = askStep(
+      13,
+      'Reinforcement',
+      'What would make this feel easier?'
+    );
+    const step14 = askStep(14, 'Offer', 'Ready to get started?');
+    const script = {
+      id: 'fitness_coaching',
+      steps: [step12, step13, step14]
+    } as any;
+    const points = completedPoints(
+      12,
+      'Commitment Check',
+      'Excited and committed'
+    );
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_fitness',
+      script,
+      points: points as any,
+      history: [
+        {
+          id: 'lead_12',
+          sender: 'LEAD',
+          content: "I'm excited. I'm committed and ready to do this.",
+          timestamp: '2026-05-11T00:01:00.000Z'
+        }
+      ],
+      currentStep: step13 as any,
+      classifier: async (params) => {
+        assert.match(params.directiveText, /jump to STEP 14/i);
+        return {
+          decision: 'skip',
+          destinationStepNumber: 14,
+          reason: 'lead is excited and committed'
+        };
+      }
+    });
+
+    assert.equal(result.step?.stepNumber, 14);
+    assert.equal(
+      readBranchHistoryEvents(points as any).find(
+        (entry) => entry.eventType === 'conditional_skip_decision'
+      )?.skipDecision,
+      'skip'
+    );
+  });
+
+  it('continues normally when classifier says the skip condition is not met', async () => {
+    const step3 = branchJudgmentStep(
+      3,
+      'Qualification',
+      'Needs nurturing',
+      'If they are decisive, advance to STEP 5. Otherwise continue to STEP 4.'
+    );
+    const step4 = askStep(4, 'Nurture', 'What would you need to feel sure?');
+    const step5 = askStep(5, 'Close', 'Do you want to move forward?');
+    const script = { id: 'continue_case', steps: [step3, step4, step5] } as any;
+    const points = completedPoints(3, 'Qualification', 'Needs nurturing');
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_continue',
+      script,
+      points: points as any,
+      history: [],
+      currentStep: step4 as any,
+      classifier: async () => ({
+        decision: 'continue',
+        destinationStepNumber: null,
+        reason: 'lead is not decisive yet'
+      })
+    });
+
+    assert.equal(result.step?.stepNumber, 4);
+    const event = readBranchHistoryEvents(points as any).find(
+      (entry) => entry.eventType === 'conditional_skip_decision'
+    );
+    assert.equal(event?.skipDecision, 'continue');
+  });
+
+  it('continues normally when classifier throws', async () => {
+    const step3 = branchJudgmentStep(
+      3,
+      'Qualification',
+      'Ready branch',
+      'If they are ready, go to STEP 5. Otherwise continue to STEP 4.'
+    );
+    const step4 = askStep(4, 'Nurture', 'What would you need to feel sure?');
+    const step5 = askStep(5, 'Close', 'Do you want to move forward?');
+    const script = {
+      id: 'classifier_throw_case',
+      steps: [step3, step4, step5]
+    } as any;
+    const points = completedPoints(3, 'Qualification', 'Ready branch');
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_throw',
+      script,
+      points: points as any,
+      history: [],
+      currentStep: step4 as any,
+      classifier: async () => {
+        throw new Error('classifier timed out');
+      }
+    });
+
+    assert.equal(result.step?.stepNumber, 4);
+    const event = readBranchHistoryEvents(points as any).find(
+      (entry) => entry.eventType === 'conditional_skip_decision'
+    );
+    assert.equal(event?.skipDecision, 'continue');
+    assert.equal(event?.skipError, 'classifier timed out');
+  });
+
+  it('logs a warning and continues when a skip hint has no parseable destination', async () => {
+    const step3 = branchJudgmentStep(
+      3,
+      'Qualification',
+      'Vague operator note',
+      'If they sound ready, skip ahead to the offer. Otherwise keep nurturing.'
+    );
+    const step4 = askStep(4, 'Nurture', 'What would you need to feel sure?');
+    const step5 = askStep(5, 'Offer', 'Do you want to move forward?');
+    const script = {
+      id: 'unparseable_case',
+      steps: [step3, step4, step5]
+    } as any;
+    const points = completedPoints(3, 'Qualification', 'Vague operator note');
+    let classifierCalled = false;
+
+    const result = await applyConditionalStepSkip({
+      accountId: 'acct_unparseable',
+      script,
+      points: points as any,
+      history: [],
+      currentStep: step4 as any,
+      classifier: async () => {
+        classifierCalled = true;
+        return {
+          decision: 'skip',
+          destinationStepNumber: 5,
+          reason: 'should not run'
+        };
+      }
+    });
+
+    assert.equal(result.step?.stepNumber, 4);
+    assert.equal(classifierCalled, false);
+    const warning = readBranchHistoryEvents(points as any).find(
+      (entry) => entry.eventType === 'conditional_skip_warning'
+    );
+    assert.equal(warning?.skipError, 'conditional_skip_pattern_not_parsed');
   });
 });
