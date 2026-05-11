@@ -27,6 +27,12 @@ export interface QualityResult {
   softSignals: Record<string, number>;
 }
 
+export interface RequiredMessage {
+  content: string;
+  isPlaceholder?: boolean;
+  embeddedQuotes?: string[];
+}
+
 export const FORBIDDEN_AI_DASH_PATTERN = /[\u2013\u2014]/;
 
 export const METADATA_LEAK_PATTERNS: RegExp[] = [
@@ -740,8 +746,18 @@ export interface VoiceQualityOptions {
    * verbatim or near-verbatim before the model advances.
    */
   currentStepRequiredMessages?: string[];
+  /**
+   * [MSG] requirements scoped to the classifier-selected branch. When this
+   * is present, it is authoritative for verbatim enforcement; the step-global
+   * currentStepRequiredMessages list is only a fallback for unrouted steps.
+   */
+  activeBranchRequiredMessages?: RequiredMessage[];
   /** True when the current step has at least one [ASK] action in any branch. */
   currentStepHasAnyAskAction?: boolean;
+  /** True when the classifier-selected branch has [MSG]+[WAIT] and no [ASK]. */
+  activeBranchHasSilentBranch?: boolean;
+  /** True when the classifier-selected branch contains an [ASK]. */
+  activeBranchHasAskAction?: boolean;
   /**
    * True when the active/selected branch for the current step contains
    * an [ASK]. Falls back to currentStepHasAnyAskAction when routing
@@ -1002,26 +1018,94 @@ function requiredMessageMatchesGenerated(
   return wordOverlapRatio(required, generated) >= overlapThreshold;
 }
 
+export function extractEmbeddedQuotes(content: string): string[] {
+  const quotes: string[] = [];
+  const regex = /"([^"]+)"|(?:^|[\s:([{])'([^']+)'(?=[\s.,;:!?)}\]]|$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    const quote = (match[1] || match[2] || '').trim();
+    if (quote.length > 0) quotes.push(quote);
+  }
+  return quotes;
+}
+
+type RequiredMessageInput =
+  | string
+  | RequiredMessage
+  | {
+      content?: string | null;
+      isPlaceholder?: boolean;
+      embeddedQuotes?: string[];
+    };
+
+function normalizeRequiredMessages(
+  currentStepMsgActions: RequiredMessageInput[]
+): RequiredMessage[] {
+  const messages: RequiredMessage[] = [];
+  for (const action of currentStepMsgActions) {
+    const content =
+      typeof action === 'string' ? action : (action.content ?? null);
+    if (!content || content.trim().length === 0) continue;
+    const trimmed = content.trim();
+    const actionMetadata =
+      typeof action === 'string'
+        ? null
+        : (action as {
+            isPlaceholder?: boolean;
+            embeddedQuotes?: string[];
+          });
+    const isPlaceholder =
+      typeof actionMetadata?.isPlaceholder === 'boolean'
+        ? actionMetadata.isPlaceholder
+        : isRuntimePlaceholderOnly(trimmed);
+    const embeddedQuotes = isPlaceholder
+      ? actionMetadata?.embeddedQuotes &&
+        actionMetadata.embeddedQuotes.length > 0
+        ? actionMetadata.embeddedQuotes
+        : extractEmbeddedQuotes(trimmed)
+      : [];
+    messages.push({
+      content: trimmed,
+      isPlaceholder,
+      embeddedQuotes
+    });
+  }
+  return messages;
+}
+
+function literalRequiredMessages(
+  currentStepMsgActions: RequiredMessageInput[]
+): string[] {
+  return normalizeRequiredMessages(currentStepMsgActions)
+    .filter((message) => message.isPlaceholder !== true)
+    .map((message) => message.content);
+}
+
 export function detectMsgVerbatimViolation(
   generatedReply: string,
-  currentStepMsgActions: Array<{ content?: string | null } | string>
+  currentStepMsgActions: RequiredMessageInput[]
 ): MsgVerbatimViolation | null {
-  const requiredMessages = currentStepMsgActions
-    .map((action) => (typeof action === 'string' ? action : action.content))
-    .filter((content): content is string =>
-      Boolean(
-        content &&
-          content.trim().length > 0 &&
-          !isRuntimePlaceholderOnly(content)
-      )
-    );
+  const requiredMessages = normalizeRequiredMessages(currentStepMsgActions);
 
   for (const required of requiredMessages) {
-    if (!requiredMessageMatchesGenerated(required, generatedReply)) {
+    if (required.isPlaceholder) {
+      for (const quote of required.embeddedQuotes ?? []) {
+        if (!requiredMessageMatchesGenerated(quote, generatedReply, 0.85)) {
+          return {
+            expected: quote,
+            generated: generatedReply,
+            overlap: wordOverlapRatio(quote, generatedReply)
+          };
+        }
+      }
+      continue;
+    }
+
+    if (!requiredMessageMatchesGenerated(required.content, generatedReply)) {
       return {
-        expected: required,
+        expected: required.content,
         generated: generatedReply,
-        overlap: wordOverlapRatio(required, generatedReply)
+        overlap: wordOverlapRatio(required.content, generatedReply)
       };
     }
   }
@@ -1031,17 +1115,9 @@ export function detectMsgVerbatimViolation(
 
 export function detectMsgBubbleSequenceViolation(
   messages: string[],
-  currentStepMsgActions: Array<{ content?: string | null } | string>
+  currentStepMsgActions: RequiredMessageInput[]
 ): MsgVerbatimViolation | null {
-  const requiredMessages = currentStepMsgActions
-    .map((action) => (typeof action === 'string' ? action : action.content))
-    .filter((content): content is string =>
-      Boolean(
-        content &&
-          content.trim().length > 0 &&
-          !isRuntimePlaceholderOnly(content)
-      )
-    );
+  const requiredMessages = literalRequiredMessages(currentStepMsgActions);
   if (requiredMessages.length <= 1) return null;
 
   let nextBubbleIndex = 0;
@@ -1383,21 +1459,29 @@ export function scoreVoiceQuality(
   // for emotional depth three turns in a row instead of letting the
   // disclosure breathe.)
   const replyQuestionCount = countQuestionMarks(reply);
+  const currentStepHasSilentBranch =
+    options?.activeBranchHasSilentBranch ?? options?.currentStepHasSilentBranch;
   if (
-    options?.currentStepHasSilentBranch &&
+    currentStepHasSilentBranch &&
     replyQuestionCount > 0 &&
     detectAcknowledgmentOpener(reply)
   ) {
-    const silentLabels = (options.currentStepSilentBranchLabels || [])
-      .map((l) => `"${l}"`)
-      .join(', ');
+    const silentLabels =
+      options?.activeBranchHasSilentBranch &&
+      options?.currentStepActiveBranchLabel
+        ? `"${options.currentStepActiveBranchLabel}"`
+        : (options?.currentStepSilentBranchLabels || [])
+            .map((l) => `"${l}"`)
+            .join(', ');
     hardFails.push(
       `silent_branch_violated_with_question: The script's current step has an acknowledgment-only branch (${silentLabels || 'unnamed silent branch'}) — [MSG]+[WAIT] with NO [ASK]. Your reply opened with an acknowledgment phrase but contained a question. The operator's intent on that branch is to sit in the moment and let the lead keep talking. Send the acknowledgment ONLY. End with a statement (period), not a question (?).`
     );
   }
 
   const currentStepHasAskBranch =
-    options?.currentStepHasAskBranch ?? options?.currentStepHasAnyAskAction;
+    options?.activeBranchHasAskAction ??
+    options?.currentStepHasAskBranch ??
+    options?.currentStepHasAnyAskAction;
   const stepNumber = options?.currentScriptStepNumber ?? null;
   const isBookingOrLinkStep =
     typeof stepNumber === 'number' && stepNumber >= 17;
@@ -3542,10 +3626,14 @@ export function scoreVoiceQualityGroup(
   // "yo bro caught the story 💪🏿" stall without false-firing on legit
   // multi-bubble splits where bubble 1 carries the question.
   const joined = messages.join(' ');
+  const requiredMessagesForGate = Array.isArray(
+    options?.activeBranchRequiredMessages
+  )
+    ? options.activeBranchRequiredMessages
+    : (options?.currentStepRequiredMessages ?? []);
   const msgViolation =
-    Array.isArray(options?.currentStepRequiredMessages) &&
-    options.currentStepRequiredMessages.length > 0
-      ? detectMsgVerbatimViolation(joined, options.currentStepRequiredMessages)
+    requiredMessagesForGate.length > 0
+      ? detectMsgVerbatimViolation(joined, requiredMessagesForGate)
       : null;
   if (msgViolation) {
     console.warn(
@@ -3556,13 +3644,8 @@ export function scoreVoiceQualityGroup(
     );
   }
   const msgSequenceViolation =
-    !msgViolation &&
-    Array.isArray(options?.currentStepRequiredMessages) &&
-    options.currentStepRequiredMessages.length > 1
-      ? detectMsgBubbleSequenceViolation(
-          messages,
-          options.currentStepRequiredMessages
-        )
+    !msgViolation && requiredMessagesForGate.length > 1
+      ? detectMsgBubbleSequenceViolation(messages, requiredMessagesForGate)
       : null;
   if (msgSequenceViolation) {
     console.warn(

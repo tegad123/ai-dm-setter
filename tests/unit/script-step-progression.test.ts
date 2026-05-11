@@ -1204,6 +1204,150 @@ describe('bug-35-missing-question-on-ask-step', () => {
 });
 
 // ---------------------------------------------------------------------------
+// bug-36..40-active-branch-scoped-quality-gates
+// ---------------------------------------------------------------------------
+
+describe('active-branch-scoped quality gates', () => {
+  const obstaclePlaceholder =
+    '{{acknowledge specifically using their own words — 1 sentence. Then add: "give me a bit more context on your situation though" to keep momentum}}';
+
+  it('bug-36-active-branch-scoped-verbatim: does not enforce sibling branch messages', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'damn bro, that red screen can mess with you fast. give me a bit more context on your situation though'
+      ],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content: obstaclePlaceholder,
+            isPlaceholder: true,
+            embeddedQuotes: [
+              'give me a bit more context on your situation though'
+            ]
+          }
+        ],
+        currentStepRequiredMessages: [
+          'Love to see it bro.',
+          'Gotcha, I appreciate you being real about that.'
+        ]
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('Gotcha, I appreciate you being real')
+      ),
+      false
+    );
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+  });
+
+  it('bug-37-placeholder-embedded-quote: enforces embedded quote only', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['damn bro, that red screen can mess with you fast'],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content: obstaclePlaceholder,
+            isPlaceholder: true,
+            embeddedQuotes: [
+              'give me a bit more context on your situation though'
+            ]
+          }
+        ]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some(
+        (failure) =>
+          failure.includes('msg_verbatim_violation:') &&
+          failure.includes('give me a bit more context')
+      )
+    );
+  });
+
+  it('bug-38-active-branch-silent: silent branch on mixed step does not require a question', () => {
+    const quality = scoreVoiceQualityGroup(['gotcha bro, that makes sense.'], {
+      currentStepHasAnyAskAction: true,
+      currentStepHasAskBranch: true,
+      activeBranchHasAskAction: false,
+      activeBranchHasSilentBranch: true,
+      currentStepActiveBranchIsSilent: true,
+      currentScriptStepNumber: 4
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
+  });
+
+  it('bug-39-active-branch-fallback: preserves step-global enforcement when no branch is selected', () => {
+    const quality = scoreVoiceQualityGroup(['damn bro, that is tough'], {
+      currentStepRequiredMessages: [
+        'Gotcha, I appreciate you being real about that.'
+      ]
+    });
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-40-literal-msg-still-enforced: active branch literal messages still hard-fail', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['what would getting 50k a month do for you and your sons?'],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content:
+              'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.',
+            isPlaceholder: false
+          }
+        ]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-40-literal-msg-still-enforced: active branch multi-message sequence still requires separate bubbles', () => {
+    const requiredMessages = [
+      'Bro what if I told you 99% of traders that say that actually do not know what the real problem is?',
+      'When people come into the markets, they believe they need more discipline.',
+      'So what is really the bottleneck? It is the systems you have in place.'
+    ];
+
+    const quality = scoreVoiceQualityGroup([requiredMessages.join(' ')], {
+      activeBranchRequiredMessages: requiredMessages.map((content) => ({
+        content,
+        isPlaceholder: false
+      }))
+    });
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('required_message_not_in_separate_bubble')
+      )
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // inferCurrentStepNumber stale-snapshot guard (bug-26)
 // ---------------------------------------------------------------------------
 

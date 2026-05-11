@@ -21,7 +21,9 @@ import {
   getUnacknowledgedLeadBurst,
   isExplicitAcceptance,
   aiPromisedArtifact,
-  TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
+  TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
+  extractEmbeddedQuotes,
+  type RequiredMessage
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 import {
@@ -1247,6 +1249,28 @@ function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
     !branchHasAskAction(branch) &&
     branch.actions.some((action) => action.actionType === 'send_message')
   );
+}
+
+function getActiveBranchRequiredMessages(
+  activeBranch: JudgeBranchLike | null | undefined
+): RequiredMessage[] {
+  if (!activeBranch) return [];
+  return activeBranch.actions
+    .filter(
+      (action) =>
+        action.actionType === 'send_message' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    )
+    .map((action) => {
+      const content = action.content?.trim() ?? '';
+      const isPlaceholder = isRuntimePlaceholderOnly(content);
+      return {
+        content,
+        isPlaceholder,
+        embeddedQuotes: isPlaceholder ? extractEmbeddedQuotes(content) : []
+      };
+    });
 }
 
 function actionSimilarityScore(actionContent: string, generated: string) {
@@ -2870,6 +2894,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
       )
     : null;
+  if (scriptStateSnapshot) {
+    scriptStateSnapshot = {
+      ...scriptStateSnapshot,
+      activeBranch: selectedCurrentJudgeBranch ?? null,
+      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
+    };
+  }
+  const activeBranchRequiredMessages = selectedCurrentJudgeBranch
+    ? getActiveBranchRequiredMessages(selectedCurrentJudgeBranch)
+    : undefined;
   const currentStepHasAskBranch =
     selectedCurrentJudgeBranch !== null &&
     selectedCurrentJudgeBranch !== undefined
@@ -2878,6 +2912,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const currentStepActiveBranchIsSilent = selectedCurrentJudgeBranch
     ? branchIsSilent(selectedCurrentJudgeBranch)
     : false;
+  const currentStepHasSilentBranch = selectedCurrentJudgeBranch
+    ? currentStepActiveBranchIsSilent
+    : (currentStepShape?.hasSilentBranch ?? false);
+  const currentStepSilentBranchLabels = selectedCurrentJudgeBranch
+    ? currentStepActiveBranchIsSilent
+      ? [selectedCurrentJudgeBranch.branchLabel]
+      : []
+    : (currentStepShape?.silentBranchLabels ?? []);
   const currentStepActiveBranchIsJudgeOnly = selectedCurrentJudgeBranch
     ? branchHasRuntimeJudgmentOnly(selectedCurrentJudgeBranch)
     : false;
@@ -2917,13 +2959,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
     capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? {},
-    currentStepHasSilentBranch: currentStepShape?.hasSilentBranch ?? false,
-    currentStepSilentBranchLabels: currentStepShape?.silentBranchLabels ?? [],
+    currentStepHasSilentBranch,
+    currentStepSilentBranchLabels,
     currentStepScriptedQuestions:
       currentStepShape?.scriptedQuestionContents ?? [],
     currentStepRequiredMessages:
       currentStepShape?.requiredMessageContents ?? [],
+    activeBranchRequiredMessages,
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
+    activeBranchHasSilentBranch: selectedCurrentJudgeBranch
+      ? currentStepActiveBranchIsSilent
+      : undefined,
+    activeBranchHasAskAction: selectedCurrentJudgeBranch
+      ? currentStepHasAskBranch
+      : undefined,
     currentStepHasAskBranch,
     currentStepActiveBranchIsSilent,
     currentStepActiveBranchIsJudgeOnly,
@@ -4334,9 +4383,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
 
       if (msgVerbatimViolationFailed) {
-        const requiredMsg =
+        const activeRequiredMsg = activeBranchRequiredMessages?.find(
+          (message) => message.content.trim().length > 0
+        );
+        const fallbackRequiredMsg =
           currentStepShape?.requiredMessageContents?.[0]?.trim() || '';
-        const msgOverride = `\n\n===== REQUIRED SCRIPT MESSAGE NOT FOLLOWED =====\nYour reply does not match the required script message for this step.\n\nYou must open with this EXACT text:\n"${requiredMsg}"\n\nDo not paraphrase. Do not reorder. Copy it word for word. If this step contains more required [MSG] actions after pauses, send each required [MSG] as its own separate bubble in script order before the [ASK].\n=====`;
+        const requiredMsg = activeRequiredMsg?.content || fallbackRequiredMsg;
+        const embeddedQuotes = activeRequiredMsg?.isPlaceholder
+          ? (activeRequiredMsg.embeddedQuotes ?? [])
+          : [];
+        const requiredInstruction =
+          activeRequiredMsg?.isPlaceholder && embeddedQuotes.length > 0
+            ? `Acknowledge the lead in your own words. You MUST include ${
+                embeddedQuotes.length === 1
+                  ? 'this exact phrase'
+                  : 'these exact phrases'
+              }:\n${embeddedQuotes.map((quote) => `"${quote}"`).join('\n')}`
+            : activeRequiredMsg?.isPlaceholder
+              ? `Acknowledge the lead in your own words using this script directive:\n"${requiredMsg}"`
+              : `You must open with this EXACT text:\n"${requiredMsg}"\n\nDo not paraphrase. Do not reorder. Copy it word for word. If this step contains more required [MSG] actions after pauses, send each required [MSG] as its own separate bubble in script order before the [ASK].`;
+        const msgOverride = `\n\n===== REQUIRED SCRIPT MESSAGE NOT FOLLOWED =====\nYour reply does not match the required script message for the active branch.\n\n${requiredInstruction}\n=====`;
         systemPromptForLLM = baseSystemPrompt + msgOverride;
         console.warn(
           `[ai-engine] Required [MSG] verbatim violation — forcing regen (attempt ${attempt + 1}/${MAX_RETRIES + 1}). expected="${requiredMsg.slice(0, 120)}"`

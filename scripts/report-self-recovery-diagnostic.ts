@@ -154,6 +154,8 @@ async function main() {
         script,
         currentStep: systemStage.step,
         currentScriptStep: systemStage.step?.stepNumber ?? 1,
+        activeBranch: null,
+        selectedBranchLabel: null,
         systemStage:
           systemStage.step?.stateKey || systemStage.step?.title || null,
         capturedDataPoints: points,

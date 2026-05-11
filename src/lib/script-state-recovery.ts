@@ -38,6 +38,8 @@ export type ScriptWithRecovery = Prisma.ScriptGetPayload<{
 }>;
 
 export type ScriptStepWithRecovery = ScriptWithRecovery['steps'][number];
+export type ScriptBranchWithRecovery =
+  ScriptStepWithRecovery['branches'][number];
 
 type PersonaForRecovery = {
   minimumCapitalRequired: number | null;
@@ -53,6 +55,8 @@ export interface ScriptStateSnapshot {
   script: ScriptWithRecovery | null;
   currentStep: ScriptStepWithRecovery | null;
   currentScriptStep: number;
+  activeBranch: ScriptBranchWithRecovery | null;
+  selectedBranchLabel: string | null;
   systemStage: string | null;
   capturedDataPoints: CapturedDataPoints;
   persona: PersonaForRecovery | null;
@@ -1667,6 +1671,8 @@ export async function prepareScriptState(params: {
       script: null,
       currentStep: null,
       currentScriptStep: 1,
+      activeBranch: null,
+      selectedBranchLabel: null,
       systemStage: null,
       capturedDataPoints: {},
       persona,
@@ -1741,6 +1747,8 @@ export async function prepareScriptState(params: {
     script,
     currentStep,
     currentScriptStep,
+    activeBranch: null,
+    selectedBranchLabel: null,
     systemStage: systemStageName,
     capturedDataPoints,
     persona,

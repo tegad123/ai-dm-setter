@@ -599,6 +599,8 @@ function run() {
     script,
     currentStep: script.steps[0],
     currentScriptStep: 8,
+    activeBranch: null,
+    selectedBranchLabel: null,
     systemStage: 'CAPITAL_QUALIFICATION',
     capturedDataPoints: {},
     persona: null,
