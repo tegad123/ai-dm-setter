@@ -615,6 +615,42 @@ describe('buildCurrentStepBlock', () => {
     assert.match(block!, /\[WAIT\] Wait for response/);
   });
 
+  it('renders placeholder [MSG] as a runtime directive, not verbatim text', () => {
+    const current = makeStep({
+      stepNumber: 3,
+      title: 'Market Assessment',
+      directActions: [
+        {
+          actionType: 'send_message',
+          content: '{{acknowledge their experience}}'
+        },
+        {
+          actionType: 'ask_question',
+          content:
+            'Nice, so how have the markets been treating you so far? Any main problems coming up?'
+        },
+        { actionType: 'wait_for_response' }
+      ]
+    });
+
+    const block = buildCurrentStepBlock(current, null);
+
+    assert.ok(block);
+    assert.match(block!, /RUNTIME MESSAGE DIRECTIVE/);
+    assert.match(
+      block!,
+      /do NOT output the braces or directive text literally/
+    );
+    assert.doesNotMatch(
+      block!,
+      /REQUIRED MESSAGE \(send verbatim[^)]*\): \{\{acknowledge their experience\}\}/
+    );
+    assert.match(
+      block!,
+      /REQUIRED QUESTION \(ask immediately after the preceding \[MSG\], in the same reply; use this exact wording\)/
+    );
+  });
+
   it('does not mark [MSG] and [ASK] as same-reply when [WAIT] separates them', () => {
     const current = makeStep({
       stepNumber: 1,

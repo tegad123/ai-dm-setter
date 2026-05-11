@@ -442,6 +442,13 @@ function formatCompactAction(
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
   switch (action.actionType) {
     case 'send_message':
+      if (isRuntimePlaceholderOnly(action.content)) {
+        const directive = (action.content || '').replace(
+          /^\s*\{\{\s*|\s*\}\}\s*$/g,
+          ''
+        );
+        return `[${tag}] RUNTIME MESSAGE DIRECTIVE (do NOT output the braces or directive text literally): ${directive}. Write a natural message that satisfies this instruction using the lead's context. If the directive explicitly says to add/include/use an exact quoted phrase, include that phrase exactly.`;
+      }
       return `[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): ${action.content || '(empty)'}`;
     case 'ask_question':
       const sameReplyPrefix =

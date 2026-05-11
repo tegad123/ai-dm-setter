@@ -23,6 +23,7 @@ import {
   type ScriptVariableResolutionContext,
   type ScriptVariableResolutionMap
 } from '@/lib/script-variable-resolver';
+import { isRuntimePlaceholderOnly } from '@/lib/script-step-progression';
 
 // Action type → prompt tag mapping
 const ACTION_TAG: Record<string, string> = {
@@ -788,8 +789,16 @@ function serializeAction(
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
 
   switch (action.actionType) {
-    case 'send_message':
-      return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${applyResolvedScriptVariables(action.content, variableResolutionMap) || '(empty)'}"`;
+    case 'send_message': {
+      const content =
+        applyResolvedScriptVariables(action.content, variableResolutionMap) ||
+        '(empty)';
+      if (isRuntimePlaceholderOnly(content)) {
+        const directive = content.replace(/^\s*\{\{\s*|\s*\}\}\s*$/g, '');
+        return `${indent}[${tag}] RUNTIME MESSAGE DIRECTIVE (do NOT output the braces or directive text literally): "${directive}". Write a natural message that satisfies this instruction using the lead's context. If the directive explicitly says to add/include/use an exact quoted phrase, include that phrase exactly.`;
+      }
+      return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${content}"`;
+    }
 
     case 'ask_question': {
       const content =
