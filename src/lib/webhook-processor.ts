@@ -2260,7 +2260,7 @@ export async function scheduleAIReply(
   // that's the legitimate "deliver the scheduled one now" path.
   if (!options?.skipDelayQueue) {
     const latestMsg = await prisma.message.findFirst({
-      where: { conversationId, sender: { not: 'SYSTEM' } },
+      where: { conversationId, sender: { not: 'SYSTEM' }, deletedAt: null },
       orderBy: { timestamp: 'desc' },
       select: { sender: true, timestamp: true, content: true }
     });
@@ -2292,6 +2292,7 @@ export async function scheduleAIReply(
         where: {
           conversationId,
           sender: 'AI',
+          deletedAt: null,
           timestamp: { lt: latestMsg.timestamp }
         },
         orderBy: { timestamp: 'desc' },
@@ -2304,6 +2305,7 @@ export async function scheduleAIReply(
         where: {
           conversationId,
           sender: 'LEAD',
+          deletedAt: null,
           timestamp: { lt: latestMsg.timestamp }
         },
         orderBy: { timestamp: 'desc' },
@@ -4266,7 +4268,7 @@ async function sendAIReply(
   // when the AI's debounce fired shortly after a prior reply — same
   // class of bug as Step 0a.
   const latestMsgInConvo = await prisma.message.findFirst({
-    where: { conversationId, sender: { not: 'SYSTEM' } },
+    where: { conversationId, sender: { not: 'SYSTEM' }, deletedAt: null },
     orderBy: { timestamp: 'desc' },
     select: { sender: true, timestamp: true }
   });
@@ -5014,7 +5016,7 @@ async function sendAIReply(
   // was either never created or already deleted.
   try {
     const latestAfterShip = await prisma.message.findFirst({
-      where: { conversationId, sender: 'AI' },
+      where: { conversationId, sender: 'AI', deletedAt: null },
       orderBy: { timestamp: 'desc' },
       select: { id: true, content: true, timestamp: true }
     });
@@ -5863,7 +5865,8 @@ export async function rescueOrphanAISuggestions(
     const latestMsg = await prisma.message.findFirst({
       where: {
         conversationId: orphan.conversationId,
-        sender: { not: 'SYSTEM' }
+        sender: { not: 'SYSTEM' },
+        deletedAt: null
       },
       orderBy: { timestamp: 'desc' },
       select: { sender: true, timestamp: true }
