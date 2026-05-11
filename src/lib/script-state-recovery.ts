@@ -2,6 +2,15 @@ import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { containsCapitalQuestion } from '@/lib/voice-quality-gate';
 import { getCredentials } from '@/lib/credential-store';
+import {
+  BOOKING_INFO_FIELD_NAMES,
+  type BookingInfoFields,
+  extractBookingInfoWithHaiku,
+  hasAllBookingInfoFields,
+  hasAnyBookingInfoField,
+  isBookingInfoRequestText
+} from '@/lib/booking-info-extractor';
+import { removeInvalidScriptVariableResolutionKeys } from '@/lib/script-variable-resolver';
 
 export type DataPointConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 export type RecoveryPriority = 'HOT' | 'MEDIUM' | 'LOW';
@@ -2281,6 +2290,259 @@ function extractDataPoints(params: {
   return points;
 }
 
+function bookingInfoFieldsFromPoints(
+  points: CapturedDataPoints
+): BookingInfoFields {
+  return {
+    fullName: pointValue<string>(points, 'fullName', false),
+    email: pointValue<string>(points, 'email', false),
+    phone: pointValue<string>(points, 'phone', false),
+    timezone: pointValue<string>(points, 'timezone', false),
+    dayAndTime: pointValue<string>(points, 'dayAndTime', false)
+  };
+}
+
+function bookingInfoLeadMessageId(points: CapturedDataPoints): string | null {
+  for (const field of BOOKING_INFO_FIELD_NAMES) {
+    const point = points[field];
+    if (isCapturedDataPoint(point) && point.extractedFromMessageId) {
+      return point.extractedFromMessageId;
+    }
+  }
+  return null;
+}
+
+function findBookingInfoRequestStep(params: {
+  script: ScriptWithRecovery | null;
+  promptContent: string;
+}): ScriptStepWithRecovery | null {
+  const steps = params.script?.steps ?? [];
+  let fallback: ScriptStepWithRecovery | null = null;
+  for (const step of steps) {
+    const actions = [
+      ...step.actions,
+      ...step.branches.flatMap((branch) => branch.actions)
+    ];
+    for (const action of actions) {
+      if (
+        action.actionType !== 'send_message' &&
+        action.actionType !== 'ask_question'
+      ) {
+        continue;
+      }
+      if (!isBookingInfoRequestText(action.content)) continue;
+      fallback ??= step;
+      if (actionContentMatches(action.content, params.promptContent)) {
+        return step;
+      }
+    }
+  }
+  return fallback;
+}
+
+function findLatestBookingInfoReply(params: {
+  history: ScriptHistoryMessage[];
+  script: ScriptWithRecovery | null;
+}): {
+  prompt: ScriptHistoryMessage;
+  leadReply: ScriptHistoryMessage;
+  promptStep: ScriptStepWithRecovery | null;
+} | null {
+  const sorted = sortedHistory(params.history);
+  const prompts = sorted.filter(
+    (message) =>
+      (message.sender === 'AI' || message.sender === 'HUMAN') &&
+      isBookingInfoRequestText(message.content)
+  );
+  const prompt = prompts.at(-1) ?? null;
+  if (!prompt) return null;
+  const promptTime = new Date(prompt.timestamp).getTime();
+  const leadReplies = sorted.filter(
+    (message) =>
+      message.sender === 'LEAD' &&
+      new Date(message.timestamp).getTime() > promptTime
+  );
+  const leadReply = leadReplies.at(-1) ?? null;
+  if (!leadReply) return null;
+  return {
+    prompt,
+    leadReply,
+    promptStep: findBookingInfoRequestStep({
+      script: params.script,
+      promptContent: prompt.content
+    })
+  };
+}
+
+function setBookingInfoDataPoints(params: {
+  points: CapturedDataPoints;
+  fields: BookingInfoFields;
+  leadMessageId: string | null;
+  method: string;
+}) {
+  for (const field of BOOKING_INFO_FIELD_NAMES) {
+    const value = params.fields[field];
+    if (!value) continue;
+    setPoint(
+      params.points,
+      field,
+      value,
+      'HIGH',
+      params.leadMessageId,
+      params.method
+    );
+  }
+}
+
+function stepLooksLikeMissingBookingInfoFollowUp(
+  step: ScriptStepWithRecovery
+): boolean {
+  const text = [
+    step.title,
+    ...step.actions.map((action) => action.content),
+    ...step.branches.flatMap((branch) => [
+      branch.branchLabel,
+      branch.conditionDescription,
+      ...branch.actions.map((action) => action.content)
+    ])
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+
+  if (!/\bmissing\b/.test(text)) return false;
+  const fieldMentions = [
+    /\b(full\s+name|name)\b/.test(text),
+    /\bemail\b/.test(text),
+    /\bphone\b/.test(text),
+    /\b(timezone|time\s+zone)\b/.test(text),
+    /\b(day\s+and\s+time|day\/time|best\s+time|time\s+works)\b/.test(text)
+  ];
+  return fieldMentions.filter(Boolean).length >= 3;
+}
+
+function bookingInfoSkipCompletion(
+  step: ScriptStepWithRecovery,
+  points: CapturedDataPoints,
+  history: ScriptHistoryMessage[],
+  afterTimeMs: number
+): StepCompletionResult | null {
+  if (!stepLooksLikeMissingBookingInfoFollowUp(step)) return null;
+  if (!hasAllBookingInfoFields(bookingInfoFieldsFromPoints(points))) {
+    return null;
+  }
+
+  const leadMessageId = bookingInfoLeadMessageId(points);
+  const leadMessage =
+    sortedHistory(history).find((message) => message.id === leadMessageId) ??
+    null;
+  const leadTime = leadMessage
+    ? new Date(leadMessage.timestamp).getTime()
+    : Date.now();
+  const completedAt = Math.max(leadTime, afterTimeMs + 1);
+  return {
+    complete: true,
+    completedAt,
+    aiMessageId: null,
+    aiMessageIds: [],
+    leadMessageId,
+    sentAt: null,
+    reason: 'booking_info_complete_skip_missing_info_followup',
+    selectedBranchLabel: selectedBranchLabelForStep(points, step.stepNumber),
+    selectedSuggestionId: null,
+    historyMessagesWithSelectedSuggestionId: null
+  };
+}
+
+async function extractBookingInfoDataPoints(params: {
+  accountId: string;
+  leadId: string;
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  script: ScriptWithRecovery | null;
+}) {
+  const reply = findLatestBookingInfoReply({
+    history: params.history,
+    script: params.script
+  });
+  if (!reply) return;
+
+  const existingFields = bookingInfoFieldsFromPoints(params.points);
+  const alreadyExtractedForReply =
+    bookingInfoLeadMessageId(params.points) === (reply.leadReply.id ?? null) &&
+    hasAnyBookingInfoField(existingFields);
+  const fields = alreadyExtractedForReply
+    ? existingFields
+    : await extractBookingInfoWithHaiku({
+        accountId: params.accountId,
+        leadMessage: reply.leadReply.content
+      });
+  if (!hasAnyBookingInfoField(fields)) return;
+
+  if (!alreadyExtractedForReply) {
+    setBookingInfoDataPoints({
+      points: params.points,
+      fields,
+      leadMessageId: reply.leadReply.id ?? null,
+      method: 'llm_booking_info_extraction'
+    });
+
+    const leadUpdate = {
+      ...(fields.fullName ? { name: fields.fullName } : {}),
+      ...(fields.email ? { email: fields.email } : {}),
+      ...(fields.timezone ? { timezone: fields.timezone } : {})
+    };
+    if (Object.keys(leadUpdate).length > 0) {
+      await prisma.lead
+        .update({
+          where: { id: params.leadId },
+          data: leadUpdate
+        })
+        .catch((err) =>
+          console.error('[script-state] booking lead update failed:', err)
+        );
+    }
+  }
+
+  if (
+    !reply.promptStep ||
+    !hasAllBookingInfoFields(bookingInfoFieldsFromPoints(params.points))
+  ) {
+    return;
+  }
+
+  appendBranchHistoryEventToPoints(params.points, {
+    eventType: 'step_completed',
+    stepNumber: reply.promptStep.stepNumber,
+    stepTitle: reply.promptStep.title ?? null,
+    selectedBranchLabel: selectedBranchLabelForStep(
+      params.points,
+      reply.promptStep.stepNumber
+    ),
+    suggestionId: null,
+    aiMessageId: reply.prompt.id ?? null,
+    aiMessageIds: reply.prompt.id ? [reply.prompt.id] : [],
+    leadMessageId: reply.leadReply.id ?? null,
+    sentAt: new Date(reply.prompt.timestamp).toISOString(),
+    completedAt: new Date(reply.leadReply.timestamp).toISOString(),
+    createdAt: new Date().toISOString(),
+    stepCompletionAttempted: true,
+    stepCompletionReason: 'completed_by_booking_info_reply',
+    previousSelectedBranch: selectedBranchLabelForStep(
+      params.points,
+      reply.promptStep.stepNumber
+    ),
+    currentSelectedBranch: selectedBranchLabelForStep(
+      params.points,
+      reply.promptStep.stepNumber
+    ),
+    selectedSuggestionId:
+      branchHistorySelectionForStep(params.points, reply.promptStep.stepNumber)
+        ?.suggestionId ?? null,
+    historyMessagesWithSelectedSuggestionId: null
+  });
+}
+
 function ruleRecord(step: ScriptStepWithRecovery): Record<string, unknown> {
   return asRecord(step.completionRule);
 }
@@ -2340,7 +2602,7 @@ export function computeSystemStage(
 ): { step: ScriptStepWithRecovery | null; reason: string } {
   const steps = script?.steps ?? [];
   let historyCursor = Number.NEGATIVE_INFINITY;
-  const durableMinStepNumber = durableMinimumStepNumber(points, steps);
+  let durableMinStepNumber = durableMinimumStepNumber(points, steps);
   let candidate: {
     step: ScriptStepWithRecovery | null;
     reason: string;
@@ -2366,6 +2628,36 @@ export function computeSystemStage(
           durableCompletion.historyMessagesWithSelectedSuggestionId ?? null,
         aiMessageId: durableCompletion.aiMessageId,
         leadMessageId: durableCompletion.leadMessageId
+      });
+      continue;
+    }
+
+    const bookingSkipCompletion = bookingInfoSkipCompletion(
+      step,
+      points,
+      history,
+      historyCursor
+    );
+    if (bookingSkipCompletion?.complete) {
+      historyCursor = bookingSkipCompletion.completedAt;
+      appendStepCompletedBranchHistoryEvent(
+        points,
+        step,
+        bookingSkipCompletion
+      );
+      durableMinStepNumber = durableMinimumStepNumber(points, steps);
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: bookingSkipCompletion.reason,
+        previousSelectedBranch: bookingSkipCompletion.selectedBranchLabel,
+        currentSelectedBranch: bookingSkipCompletion.selectedBranchLabel,
+        selectedSuggestionId: bookingSkipCompletion.selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId:
+          bookingSkipCompletion.historyMessagesWithSelectedSuggestionId,
+        aiMessageId: bookingSkipCompletion.aiMessageId,
+        leadMessageId: bookingSkipCompletion.leadMessageId
       });
       continue;
     }
@@ -2958,6 +3250,16 @@ export async function prepareScriptState(params: {
     persona,
     durableStatus: conversation.capitalVerificationStatus,
     durableAmount: conversation.capitalVerifiedAmount
+  });
+  removeInvalidScriptVariableResolutionKeys(
+    capturedDataPoints as unknown as Record<string, unknown>
+  );
+  await extractBookingInfoDataPoints({
+    accountId: params.accountId,
+    leadId: conversation.leadId,
+    points: capturedDataPoints,
+    history: params.history,
+    script
   });
   let systemStage = computeSystemStage(
     script,

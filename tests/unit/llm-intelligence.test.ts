@@ -13,11 +13,77 @@ import {
 import { parseSemanticCapitalAmountOutput } from '../../src/lib/capital-amount-classifier';
 import {
   applyResolvedScriptVariables,
+  extractTemplateVariableNames,
+  isValidTemplateVariableName,
+  parseScriptVariableExtractorValue,
   resolveScriptVariablesForTexts
 } from '../../src/lib/script-variable-resolver';
+import {
+  extractBookingInfoHeuristically,
+  parseBookingInfoExtractionOutput
+} from '../../src/lib/booking-info-extractor';
 import { scoreVoiceQualityGroup } from '../../src/lib/voice-quality-gate';
 
 describe('pre-prompt script variable resolution', () => {
+  it('bug-X-variable-name-validation: ignores directive placeholders with examples', () => {
+    assert.equal(isValidTemplateVariableName('deep_why'), true);
+    assert.equal(isValidTemplateVariableName('day and time'), true);
+    assert.equal(isValidTemplateVariableName('incomeGoal'), true);
+    assert.equal(
+      isValidTemplateVariableName(
+        'specific missing info e.g. "email" / "timezone" / "phone number"'
+      ),
+      false
+    );
+    assert.deepEqual(
+      extractTemplateVariableNames(
+        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{deep_why}} {{day and time}}'
+      ),
+      ['deep_why', 'day and time']
+    );
+  });
+
+  it('bug-X-haiku-strict-parsing: treats NONE plus reasoning as null', () => {
+    assert.equal(parseScriptVariableExtractorValue('NONE'), null);
+    assert.equal(
+      parseScriptVariableExtractorValue(
+        'NONE\n\nAll required information has been provided:\n- Full name: Tega Umukoro'
+      ),
+      null
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue('Tega Umukoro\nextra explanation'),
+      'Tega Umukoro'
+    );
+  });
+
+  it('does not call the LLM extractor for directive placeholders', async () => {
+    let calls = 0;
+    const resolutions = await resolveScriptVariablesForTexts(
+      [
+        'missing your {{specific missing info e.g. "email" / "timezone" / "phone number"}}'
+      ],
+      {
+        accountId: 'acct_test',
+        context: {
+          conversationHistory: [
+            {
+              sender: 'LEAD',
+              content: 'Tega Umukoro, tegad8@gmail.com, CT, wed at 2pm'
+            }
+          ]
+        },
+        extractor: async () => {
+          calls++;
+          return 'should not happen';
+        }
+      }
+    );
+
+    assert.equal(calls, 0);
+    assert.equal(resolutions.resolvedVariables.length, 0);
+  });
+
   it('resolves direct captured data and lead context before prompt construction', async () => {
     const resolutions = await resolveScriptVariablesForTexts(
       ['based off {{obstacle}}, got you {{NAME}}'],
@@ -170,6 +236,50 @@ describe('pre-prompt script variable resolution', () => {
     assert.equal(violation.blocked, true);
     assert.equal(violation.fallbackMessages[0], resolvedRequired);
     assert.equal(violation.fallbackMessages[0]?.includes('{{'), false);
+  });
+});
+
+describe('multi-field booking info extraction', () => {
+  it('bug-X-multi-field-booking-extraction: parses all five fields from JSON output', () => {
+    const fields = parseBookingInfoExtractionOutput(
+      JSON.stringify({
+        fullName: 'Tega Umukoro',
+        email: 'tegad8@gmail.com',
+        phone: '346-295-4688',
+        timezone: 'CT',
+        dayAndTime: 'wed at 2pm'
+      })
+    );
+
+    assert.deepEqual(fields, {
+      fullName: 'Tega Umukoro',
+      email: 'tegad8@gmail.com',
+      phone: '346-295-4688',
+      timezone: 'CT',
+      dayAndTime: 'wed at 2pm'
+    });
+  });
+
+  it('extracts obvious booking fields heuristically as a fallback', () => {
+    const fields = extractBookingInfoHeuristically(
+      'Tega Umukoro, tegad8@gmail.com, 346-295-4688, CT, wed at 2pm'
+    );
+
+    assert.equal(fields.fullName, 'Tega Umukoro');
+    assert.equal(fields.email, 'tegad8@gmail.com');
+    assert.equal(fields.phone, '346-295-4688');
+    assert.equal(fields.timezone, 'CT');
+    assert.equal(fields.dayAndTime, 'wed at 2pm');
+  });
+
+  it('uses null for fields missing from extractor JSON', () => {
+    const fields = parseBookingInfoExtractionOutput(
+      '{"fullName": null, "email": "tegad8@gmail.com", "phone": null, "timezone": null, "dayAndTime": null}'
+    );
+
+    assert.equal(fields.fullName, null);
+    assert.equal(fields.email, 'tegad8@gmail.com');
+    assert.equal(fields.phone, null);
   });
 });
 

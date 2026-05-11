@@ -55,6 +55,7 @@ import {
 } from '@/lib/script-serializer';
 import {
   applyResolvedScriptVariables,
+  isValidTemplateVariableName,
   persistScriptVariableResolutions,
   resolveScriptVariablesForTexts,
   type ScriptVariableResolutionContext,
@@ -456,6 +457,9 @@ export function resolveOrStripTemplateVariables(
   const text = input
     .replace(/\{\{\s*([^{}]{1,160})\s*\}\}/g, (_match, rawName: string) => {
       const variableName = rawName.trim();
+      if (!isValidTemplateVariableName(variableName)) {
+        return variableName;
+      }
       const value = resolveTemplateVariable(variableName, context);
       if (value !== null) {
         resolvedVariables.push(variableName);

@@ -106,6 +106,118 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
+  it('bug-X-booking-info-complete: skips missing-info follow-up when all booking fields are present', () => {
+    const bookingScript = {
+      id: 'booking_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 20,
+          title: 'Collect booking info',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                'Drop me your full name, email, phone number, your timezone, and what day and time works best.'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          ...baseStep,
+          stepNumber: 21,
+          title: 'Missing info follow-up',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                'If full name, email, phone, timezone, and day/time are present, proceed to the next step. Otherwise ask for the missing info.'
+            },
+            {
+              actionType: 'send_message',
+              content:
+                'Appreciate that bro, just missing your {{specific missing info e.g. "email" / "timezone" / "phone number"}}.'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        askStep(22, 'Confirmation', 'Does that time still work?')
+      ]
+    } as any;
+    const points = {
+      fullName: {
+        value: 'Tega Umukoro',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:01:00.000Z'
+      },
+      email: {
+        value: 'tegad8@gmail.com',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:01:00.000Z'
+      },
+      phone: {
+        value: '346-295-4688',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:01:00.000Z'
+      },
+      timezone: {
+        value: 'CT',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:01:00.000Z'
+      },
+      dayAndTime: {
+        value: 'wed at 2pm',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_booking',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:01:00.000Z'
+      }
+    };
+    const stage = computeSystemStage(
+      bookingScript,
+      points as any,
+      [
+        {
+          id: 'ai_booking',
+          sender: 'AI',
+          content:
+            'Drop me your full name, email, phone number, your timezone, and what day and time works best.',
+          timestamp: new Date('2026-05-11T00:00:00Z')
+        },
+        {
+          id: 'lead_booking',
+          sender: 'LEAD',
+          content:
+            'Tega Umukoro, tegad8@gmail.com, 346-295-4688, CT, wed at 2pm',
+          timestamp: new Date('2026-05-11T00:01:00Z')
+        }
+      ],
+      {
+        previousCurrentScriptStep: 20,
+        maxAdvanceSteps: 1
+      }
+    );
+
+    assert.equal(stage.step?.stepNumber, 22);
+    assert.ok(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 21 &&
+          event.stepCompletionReason ===
+            'booking_info_complete_skip_missing_info_followup'
+      )
+    );
+  });
+
   it('completes [MSG]+[WAIT] steps only after the lead replies', () => {
     const msgWaitScript = {
       id: 'msg_wait_sequence',

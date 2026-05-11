@@ -45,13 +45,26 @@ export function normalizeTemplateKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+export function isValidTemplateVariableName(
+  rawName: string | null | undefined
+): boolean {
+  const name = (rawName || '').trim();
+  if (!name || name.length > 50) return false;
+  if (/["'“”‘’/\\]/.test(name)) return false;
+  if (/\b(?:e\.g|i\.e|example|for example|such as)\b/i.test(name)) {
+    return false;
+  }
+  if (/[{}()[\];:,]/.test(name)) return false;
+  return /^[A-Za-z][A-Za-z0-9_ -]*$/.test(name);
+}
+
 export function extractTemplateVariableNames(text: string | null | undefined) {
   const names: string[] = [];
   const regex = /\{\{\s*([^{}]{1,160})\s*\}\}/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text || '')) !== null) {
     const name = match[1].trim();
-    if (name) names.push(name);
+    if (isValidTemplateVariableName(name)) names.push(name);
   }
   return Array.from(new Set(names));
 }
@@ -81,7 +94,7 @@ function variableAliases(variableName: string): string[] {
   const add = (items: string[]) => items.forEach((item) => aliases.add(item));
 
   if (/^(name|firstname|leadname)$/.test(normalized)) {
-    add(['name', 'leadName', 'firstName']);
+    add(['name', 'leadName', 'firstName', 'fullName', 'full_name']);
   }
   if (normalized.includes('obstacle') || normalized.includes('struggle')) {
     add([
@@ -239,13 +252,20 @@ function fallbackForVariable(variableName: string): string {
 }
 
 function cleanExtractorValue(value: string | null): string | null {
-  const trimmed = (value || '')
+  const firstLine = (value || '').split(/\r?\n/)[0] ?? '';
+  const trimmed = firstLine
     .trim()
     .replace(/^["']|["']$/g, '')
     .trim();
-  if (!trimmed || /^none$/i.test(trimmed)) return null;
+  if (!trimmed || /^none\b/i.test(trimmed)) return null;
   if (/\{\{[^}]+\}\}/.test(trimmed)) return null;
   return trimmed.slice(0, 260);
+}
+
+export function parseScriptVariableExtractorValue(
+  value: string | null
+): string | null {
+  return cleanExtractorValue(value);
 }
 
 async function extractVariableWithHaiku(params: {
@@ -382,9 +402,12 @@ export async function persistScriptVariableResolutions(params: {
   resolutions: ScriptVariableResolution[];
 }): Promise<void> {
   const persistable = params.resolutions.filter(
-    (resolution) => resolution.shouldPersist && resolution.source !== 'fallback'
+    (resolution) =>
+      resolution.shouldPersist &&
+      resolution.source !== 'fallback' &&
+      isValidTemplateVariableName(resolution.variableName)
   );
-  if (!params.conversationId || persistable.length === 0) return;
+  if (!params.conversationId) return;
 
   const row = await prisma.conversation.findUnique({
     where: { id: params.conversationId },
@@ -400,7 +423,16 @@ export async function persistScriptVariableResolutions(params: {
         >)
       : {};
 
-  let changed = false;
+  let changed = removeInvalidScriptVariableResolutionKeys(existing);
+  if (persistable.length === 0) {
+    if (!changed) return;
+    await prisma.conversation.update({
+      where: { id: params.conversationId },
+      data: { capturedDataPoints: existing as Prisma.InputJsonValue }
+    });
+    return;
+  }
+
   for (const resolution of persistable) {
     const alreadyPresent = resolveFromRecord(resolution.variableName, existing);
     if (alreadyPresent) continue;
@@ -423,4 +455,28 @@ export async function persistScriptVariableResolutions(params: {
     where: { id: params.conversationId },
     data: { capturedDataPoints: existing as Prisma.InputJsonValue }
   });
+}
+
+export function removeInvalidScriptVariableResolutionKeys(
+  points: Record<string, unknown>
+): boolean {
+  let changed = false;
+  for (const [key, raw] of Object.entries(points)) {
+    if (isValidTemplateVariableName(key)) continue;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    const extractionMethod =
+      typeof record.extractionMethod === 'string'
+        ? record.extractionMethod
+        : '';
+    const variableName =
+      typeof record.variableName === 'string' ? record.variableName : '';
+    const isVariableResolution =
+      extractionMethod.includes('variable_resolution') ||
+      (!!variableName && variableName === key);
+    if (!isVariableResolution) continue;
+    delete points[key];
+    changed = true;
+  }
+  return changed;
 }
