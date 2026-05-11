@@ -624,6 +624,11 @@ type StepCompletionAction = {
   content: string | null;
 };
 
+type StepCompletionPath = {
+  selectedBranchLabel: string | null;
+  actions: StepCompletionAction[];
+};
+
 type StepCompletionResult = {
   complete: boolean;
   completedAt: number;
@@ -672,9 +677,23 @@ function stepCompletionActionPaths(
   step: ScriptStepWithRecovery,
   selectedBranchLabel: string | null = null
 ): StepCompletionAction[][] {
+  return stepCompletionPaths(step, selectedBranchLabel).map(
+    (path) => path.actions
+  );
+}
+
+function stepCompletionPaths(
+  step: ScriptStepWithRecovery,
+  selectedBranchLabel: string | null = null
+): StepCompletionPath[] {
   const directActions = step.actions.map(stepActionRef);
   if (step.branches.length === 0) {
-    return [dedupeStepCompletionActions(directActions)];
+    return [
+      {
+        selectedBranchLabel: null,
+        actions: dedupeStepCompletionActions(directActions)
+      }
+    ];
   }
 
   const branchActions = selectedBranchLabel
@@ -684,15 +703,21 @@ function stepCompletionActionPaths(
     : step.branches;
 
   if (selectedBranchLabel && branchActions.length === 0) {
-    return [dedupeStepCompletionActions(directActions)];
+    return [
+      {
+        selectedBranchLabel: null,
+        actions: dedupeStepCompletionActions(directActions)
+      }
+    ];
   }
 
-  return branchActions.map((branch) => [
-    ...dedupeStepCompletionActions([
+  return branchActions.map((branch) => ({
+    selectedBranchLabel: branch.branchLabel,
+    actions: dedupeStepCompletionActions([
       ...directActions,
       ...branch.actions.map(stepActionRef)
     ])
-  ]);
+  }));
 }
 
 function branchHistorySelectedLabelForStep(
@@ -1460,11 +1485,13 @@ function appendStepCompletedBranchHistoryEvent(
     points,
     step.stepNumber
   );
+  const completedBranchLabel =
+    completion.selectedBranchLabel ?? selectedBranchLabel;
   appendBranchHistoryEventToPoints(points, {
     eventType: 'step_completed',
     stepNumber: step.stepNumber,
     stepTitle: step.title ?? null,
-    selectedBranchLabel,
+    selectedBranchLabel: completedBranchLabel,
     suggestionId: null,
     aiMessageId: completion.aiMessageId,
     aiMessageIds: completion.aiMessageIds,
@@ -1474,8 +1501,8 @@ function appendStepCompletedBranchHistoryEvent(
     createdAt: new Date().toISOString(),
     stepCompletionAttempted: true,
     stepCompletionReason: completion.reason,
-    previousSelectedBranch: selectedBranchLabel,
-    currentSelectedBranch: selectedBranchLabel,
+    previousSelectedBranch: completedBranchLabel,
+    currentSelectedBranch: completedBranchLabel,
     selectedSuggestionId: completion.selectedSuggestionId,
     historyMessagesWithSelectedSuggestionId:
       completion.historyMessagesWithSelectedSuggestionId
@@ -2079,6 +2106,37 @@ function extractValueAfterPrompt<T>(params: {
   }
 }
 
+function extractDurationPhrase(text: string): string | null {
+  const normalized = text.trim();
+  if (!normalized) return null;
+
+  const sinceMatch = normalized.match(/\bsince\s+((?:19|20)\d{2})\b/i);
+  if (sinceMatch?.[1]) {
+    return `since ${sinceMatch[1]}`;
+  }
+
+  const durationMatch = normalized.match(
+    /\b((?:about|around|roughly|almost|over|under|like|for)?\s*(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:years?|yrs?|months?|mos?|weeks?|wks?|days?))\b/i
+  );
+  if (!durationMatch?.[1]) return null;
+
+  return durationMatch[1].replace(/\s+/g, ' ').trim();
+}
+
+function extractTradingExperienceDuration(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  extractValueAfterPrompt({
+    ...params,
+    field: 'tradingExperienceDuration',
+    method: 'duration_after_trading_experience_prompt',
+    promptPattern:
+      /\b(new\s+in\s+(?:the\s+)?markets?|been\s+(?:trading|in\s+(?:the\s+)?markets?)\s+for\s+a\s+while|how\s+long.{0,80}\b(trading|markets?|at\s+it)\b|what\s+got\s+you\s+interested.{0,40}\b(trading|markets?)\b)\b/i,
+    parse: extractDurationPhrase
+  });
+}
+
 /**
  * Extract incomeGoal from the lead's response to a Step 9 income-goal-
  * from-trading question. Patterns the AI typically uses:
@@ -2275,6 +2333,7 @@ function extractDataPoints(params: {
   // These code-level extractors backfill the most common ones so the
   // call-proposal / capital-question / mandatory-ask gates have
   // accurate state.
+  extractTradingExperienceDuration({ points, history: params.history });
   extractWorkBackground({ points, history: params.history });
   extractMonthlyIncomeFromJob({ points, history: params.history });
   extractReplaceOrSupplement({ points, history: params.history });
@@ -2452,6 +2511,287 @@ function bookingInfoSkipCompletion(
     selectedSuggestionId: null,
     historyMessagesWithSelectedSuggestionId: null
   };
+}
+
+type CapturedDataRequirement = {
+  key: string;
+  aliases: string[];
+};
+
+type RecentCapturedDataPoint = {
+  key: string;
+  point: CapturedDataPoint;
+  leadMessage: ScriptHistoryMessage;
+  leadTime: number;
+};
+
+const DATA_REQUIREMENT_ALIASES: Record<string, string[]> = {
+  tradingExperienceDuration: [
+    'trading_experience_duration',
+    'tradingExperience',
+    'trading_experience',
+    'marketExperience',
+    'marketsExperience',
+    'experienceDuration'
+  ],
+  tradingMotivation: [
+    'trading_motivation',
+    'marketMotivation',
+    'marketsMotivation'
+  ],
+  workBackground: ['work_background', 'job', 'jobTitle', 'occupation'],
+  workDuration: [
+    'work_duration',
+    'jobTenure',
+    'job_tenure',
+    'workExperienceDuration'
+  ],
+  monthlyIncome: ['monthly_income', 'jobIncome', 'currentIncome'],
+  replaceOrSupplement: [
+    'replace_or_supplement',
+    'incomePlan',
+    'jobReplacementIntent'
+  ],
+  incomeGoal: ['income_goal', 'desiredIncome', 'tradingIncomeGoal'],
+  deepWhy: ['deep_why', 'desiredOutcome', 'desired_outcome'],
+  obstacle: ['early_obstacle', 'earlyObstacle', 'mainObstacle'],
+  capital: ['capitalAmount', 'capital_amount', 'availableCapital'],
+  fullName: ['full_name', 'name'],
+  email: ['emailAddress', 'email_address'],
+  phone: ['phoneNumber', 'phone_number'],
+  timezone: ['timeZone', 'time_zone'],
+  dayAndTime: ['day_and_time', 'dayTime', 'preferredCallTime']
+};
+
+function dataRequirement(key: string): CapturedDataRequirement {
+  return { key, aliases: DATA_REQUIREMENT_ALIASES[key] ?? [] };
+}
+
+function dedupeDataRequirements(
+  requirements: CapturedDataRequirement[]
+): CapturedDataRequirement[] {
+  const seen = new Set<string>();
+  return requirements.filter((requirement) => {
+    if (seen.has(requirement.key)) return false;
+    seen.add(requirement.key);
+    return true;
+  });
+}
+
+function dataRequirementsForAskContent(
+  content: string | null | undefined
+): CapturedDataRequirement[] {
+  if (!content) return [];
+  const text = content.toLowerCase();
+  const requirements: CapturedDataRequirement[] = [];
+
+  if (
+    /\bhow\s+long\b.{0,80}\b(markets?|trading|trader|at\s+it)\b/i.test(
+      content
+    ) ||
+    /\b(markets?|trading)\b.{0,80}\bhow\s+long\b/i.test(content)
+  ) {
+    requirements.push(dataRequirement('tradingExperienceDuration'));
+  }
+
+  if (
+    /\bwhat\s+got\s+you\s+interested\b.{0,50}\b(trading|markets?)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('tradingMotivation'));
+  }
+
+  if (
+    /\b(what\s+do\s+you\s+do\s+for\s+work|what'?s\s+your\s+(job|day\s+job)|how\s+do\s+you\s+make\s+(money|a\s+living)|what\s+is\s+it\s+you\s+do|what'?s\s+your\s+9.5)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('workBackground'));
+  }
+
+  if (
+    /\bhow\s+long\b.{0,60}\b(doing\s+that|been\s+(doing|working|at)|at\s+(that|your\s+job))\b/i.test(
+      content
+    ) &&
+    !/\b(markets?|trading|trader)\b/i.test(content)
+  ) {
+    requirements.push(dataRequirement('workDuration'));
+  }
+
+  if (
+    /\b(how\s+much\s+is\s+your\s+job\s+bringing\s+in|bringing\s+in\s+on\s+a\s+monthly|monthly\s+income|how\s+much\s+(do\s+)?you\s+make\s+(monthly|per\s+month|a\s+month)|what'?s\s+your\s+monthly\s+income)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('monthlyIncome'));
+  }
+
+  if (
+    /\b(replac(e|ing)\s+your\s+job|supplement|extra\s+income|replace.{0,30}\bor.{0,30}extra|replace.{0,50}income)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('replaceOrSupplement'));
+  }
+
+  if (
+    /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,50}(trading|markets?)|what\s+(are|do)\s+you\s+(trying|wanting|hoping|looking|tryna).{0,50}(trading|markets?)|from\s+trading|trading\s+to\s+bring)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('incomeGoal'));
+  }
+
+  if (
+    /\b(main\s+(thing|obstacle|struggle)|holding\s+you\s+back|stopping\s+you|what'?s\s+the\s+problem|what\s+are\s+you\s+struggling\s+with)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('obstacle'));
+  }
+
+  if (
+    /\b(deep\s+why|deeper\s+why|why\s+(does|would|is)\s+this\s+(matter|important)|desired\s+outcome|what\s+would\s+that\s+do\s+for\s+you|why\s+do\s+you\s+want)\b/i.test(
+      content
+    )
+  ) {
+    requirements.push(dataRequirement('deepWhy'));
+  }
+
+  if (containsCapitalQuestion(content)) {
+    requirements.push(dataRequirement('capital'));
+  }
+
+  if (/\bfull\s+name\b|\bfirst\s+and\s+last\b/.test(text)) {
+    requirements.push(dataRequirement('fullName'));
+  }
+  if (/\bemail\b/.test(text)) {
+    requirements.push(dataRequirement('email'));
+  }
+  if (/\b(phone(?:\s+number)?|cell|mobile)\b/.test(text)) {
+    requirements.push(dataRequirement('phone'));
+  }
+  if (/\btime\s*zone\b|\btimezone\b/.test(text)) {
+    requirements.push(dataRequirement('timezone'));
+  }
+  if (
+    /\b(day\s+and\s+time|day\/time|best\s+time|what\s+time\s+works|when\s+works)\b/.test(
+      text
+    )
+  ) {
+    requirements.push(dataRequirement('dayAndTime'));
+  }
+
+  return dedupeDataRequirements(requirements);
+}
+
+function capturedDataPointHasValue(point: CapturedDataPoint): boolean {
+  const value = point.value;
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return value === true;
+  return Boolean(value);
+}
+
+function recentPointForRequirement(params: {
+  requirement: CapturedDataRequirement;
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  afterTimeMs: number;
+}): RecentCapturedDataPoint | null {
+  const sorted = sortedHistory(params.history);
+  const keys = [params.requirement.key, ...params.requirement.aliases];
+  const matches: RecentCapturedDataPoint[] = [];
+
+  for (const key of keys) {
+    const point = params.points[key];
+    if (
+      !isCapturedDataPoint(point) ||
+      point.confidence !== HIGH_CONFIDENCE ||
+      !capturedDataPointHasValue(point) ||
+      !point.extractedFromMessageId
+    ) {
+      continue;
+    }
+
+    const leadMessage =
+      sorted.find(
+        (message) =>
+          message.id === point.extractedFromMessageId &&
+          message.sender === 'LEAD'
+      ) ?? null;
+    if (!leadMessage) continue;
+    const leadTime = new Date(leadMessage.timestamp).getTime();
+    if (!Number.isFinite(leadTime) || leadTime < params.afterTimeMs) {
+      continue;
+    }
+
+    matches.push({ key, point, leadMessage, leadTime });
+  }
+
+  return matches.sort((a, b) => b.leadTime - a.leadTime).at(0) ?? null;
+}
+
+function volunteeredDataSkipCompletion(
+  step: ScriptStepWithRecovery,
+  points: CapturedDataPoints,
+  history: ScriptHistoryMessage[],
+  afterTimeMs: number
+): StepCompletionResult | null {
+  if (!Number.isFinite(afterTimeMs)) return null;
+
+  const selectedBranchLabel = selectedBranchLabelForStep(
+    points,
+    step.stepNumber
+  );
+
+  for (const path of stepCompletionPaths(step, selectedBranchLabel)) {
+    if (!hasWaitAction(path.actions)) continue;
+    const asks = path.actions.filter(
+      (action) =>
+        action.actionType === 'ask_question' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    );
+    if (asks.length === 0) continue;
+
+    const requirements = dedupeDataRequirements(
+      asks.flatMap((ask) => dataRequirementsForAskContent(ask.content))
+    );
+    if (requirements.length === 0) continue;
+
+    const satisfied = requirements.map((requirement) =>
+      recentPointForRequirement({
+        requirement,
+        points,
+        history,
+        afterTimeMs
+      })
+    );
+    if (satisfied.some((match) => match === null)) continue;
+
+    const latest = (satisfied as RecentCapturedDataPoint[]).sort(
+      (a, b) => b.leadTime - a.leadTime
+    )[0];
+    if (!latest) continue;
+
+    return {
+      complete: true,
+      completedAt: Math.max(latest.leadTime, afterTimeMs + 1),
+      aiMessageId: null,
+      aiMessageIds: [],
+      leadMessageId: latest.leadMessage.id ?? null,
+      sentAt: null,
+      reason: 'volunteered_data_auto_complete',
+      selectedBranchLabel: path.selectedBranchLabel ?? selectedBranchLabel,
+      selectedSuggestionId: null,
+      historyMessagesWithSelectedSuggestionId: null
+    };
+  }
+
+  return null;
 }
 
 async function extractBookingInfoDataPoints(params: {
@@ -2662,6 +3002,36 @@ export function computeSystemStage(
       continue;
     }
 
+    const volunteeredSkipCompletion = volunteeredDataSkipCompletion(
+      step,
+      points,
+      history,
+      historyCursor
+    );
+    if (volunteeredSkipCompletion?.complete) {
+      historyCursor = volunteeredSkipCompletion.completedAt;
+      appendStepCompletedBranchHistoryEvent(
+        points,
+        step,
+        volunteeredSkipCompletion
+      );
+      durableMinStepNumber = durableMinimumStepNumber(points, steps);
+      writeStepCompletionTrace(points, {
+        stepNumber: step.stepNumber,
+        stepTitle: step.title ?? null,
+        stepCompletionAttempted: true,
+        stepCompletionReason: volunteeredSkipCompletion.reason,
+        previousSelectedBranch: volunteeredSkipCompletion.selectedBranchLabel,
+        currentSelectedBranch: volunteeredSkipCompletion.selectedBranchLabel,
+        selectedSuggestionId: volunteeredSkipCompletion.selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId:
+          volunteeredSkipCompletion.historyMessagesWithSelectedSuggestionId,
+        aiMessageId: volunteeredSkipCompletion.aiMessageId,
+        leadMessageId: volunteeredSkipCompletion.leadMessageId
+      });
+      continue;
+    }
+
     const routingOnlyCompletion = autoCompletionFromSelectedRoutingBranch(
       step,
       points,
@@ -2839,6 +3209,31 @@ export function computeSystemStage(
         candidate = {
           step: nextStep,
           reason: `booking_info_complete_skip_missing_info_followup:${candidate.reason}`
+        };
+      }
+    }
+
+    const postFloorVolunteeredSkip = volunteeredDataSkipCompletion(
+      currentCandidateStep,
+      points,
+      history,
+      historyCursor
+    );
+    if (postFloorVolunteeredSkip?.complete) {
+      appendStepCompletedBranchHistoryEvent(
+        points,
+        currentCandidateStep,
+        postFloorVolunteeredSkip
+      );
+      durableMinStepNumber = durableMinimumStepNumber(points, steps);
+      const nextStep =
+        steps.find(
+          (step) => step.stepNumber > currentCandidateStep.stepNumber
+        ) ?? currentCandidateStep;
+      if (nextStep.stepNumber > currentCandidateStep.stepNumber) {
+        candidate = {
+          step: nextStep,
+          reason: `volunteered_data_auto_complete:${candidate.reason}`
         };
       }
     }

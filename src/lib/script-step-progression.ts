@@ -112,6 +112,20 @@ function deepWhySatisfiedByBranchHistory(
   });
 }
 
+function stepCompletedByBranchHistory(
+  points: Record<string, unknown> | null | undefined,
+  stepNumber: number
+): boolean {
+  return branchHistoryEvents(points).some((event) => {
+    if (event.eventType !== 'step_completed') return false;
+    const eventStepNumber =
+      typeof event.stepNumber === 'number'
+        ? event.stepNumber
+        : Number(event.stepNumber);
+    return eventStepNumber === stepNumber;
+  });
+}
+
 function buyInConfirmedByBranchHistory(
   points: Record<string, unknown> | null | undefined,
   stepNumber: number
@@ -770,29 +784,13 @@ export function detectStep10Skipped(
 }
 
 // ---------------------------------------------------------------------------
-// Mandatory-ask enforcement (volunteered-data skip guard)
+// Mandatory-ask enforcement (unsafe skip guard)
 // ---------------------------------------------------------------------------
-// Step completion requires BOTH:
-//   1. The [ASK] question was sent by the AI
-//   2. The lead responded to it
-//
-// Volunteered data should be stored in capturedDataPoints but MUST NOT
-// short-circuit the [ASK]. Production drift (@tegaumukoro_ 2026-05-08,
-// fourth skip incident today): lead said "I trade futures and work as a
-// nurse" — AI captured `job=nurse` from the volunteered answer and
-// jumped from Step 5 directly to Step 9 (income goal), skipping Step 6
-// (how long?), Step 7 (monthly income), and Step 8 (replace vs
-// supplement) entirely.
-//
-// The existing call-proposal prereq gate checks whether
-// capturedDataPoints contains the data — but volunteered data passes
-// that check without the [ASK] ever firing. This guard requires the
-// [ASK] phrasing to actually appear in AI message history before the
-// step is considered complete.
-//
-// Steps 6, 7, 8 are the most common skip targets (job-related discovery
-// often gets volunteered together). Other steps may need similar
-// treatment as new skip classes emerge.
+// These checks block unsafe jumps where the LLM skips Step 6/7/8 only
+// because capturedDataPoints happen to contain values. Durable recovery
+// can now also write a step_completed branchHistory event when the lead
+// volunteered the exact data in the same reply that completed a prior
+// step. That ledger entry is treated as satisfying the requirement.
 
 export interface MandatoryAskRequirement {
   stepNumber: number;
@@ -902,6 +900,9 @@ export function checkMandatoryAsksFired(
 ): MandatoryAskRequirement[] {
   return MANDATORY_ASK_STEPS.filter((req) => {
     if (detectAskFiredInHistory(aiMessages, req.askPhraseFragments)) {
+      return false;
+    }
+    if (stepCompletedByBranchHistory(capturedDataPoints, req.stepNumber)) {
       return false;
     }
     if (req.judgeSkipKeys && req.judgeSkipKeys.length > 0) {

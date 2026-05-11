@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   applyConditionalStepSkip,
   computeSystemStage,
+  extractCapturedDataPointsForTest,
   parseConditionalStepSkipDirectives,
   readBranchHistoryEvents
 } from '../../src/lib/script-state-recovery';
@@ -381,6 +382,168 @@ describe('computeSystemStage generic sequencing', () => {
 
     assert.equal(noReply.step?.stepNumber, 1);
     assert.equal(withReply.step?.stepNumber, 2);
+  });
+
+  it('bug-49-volunteered-tenure-extracted-from-experience-reply', () => {
+    const points = extractCapturedDataPointsForTest({
+      history: [
+        {
+          id: 'ai_step1',
+          sender: 'AI',
+          content:
+            'So are you new in the markets or have you been trading for a while?',
+          timestamp: new Date('2026-05-11T00:00:00Z')
+        },
+        {
+          id: 'lead_step1',
+          sender: 'LEAD',
+          content: 'yes been at it about a year',
+          timestamp: new Date('2026-05-11T00:01:00Z')
+        }
+      ]
+    });
+
+    assert.equal(
+      (points.tradingExperienceDuration as any)?.value,
+      'about a year'
+    );
+    assert.equal(
+      (points.tradingExperienceDuration as any)?.extractedFromMessageId,
+      'lead_step1'
+    );
+  });
+
+  it('bug-50-volunteered-data-auto-completes-next-ask-step', () => {
+    const experienceScript = {
+      id: 'experience_sequence',
+      steps: [
+        askStep(
+          1,
+          'Intro',
+          'So are you new in the markets or have you been trading for a while?'
+        ),
+        {
+          ...baseStep,
+          stepNumber: 2,
+          title: 'Experience Depth',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Already in markets',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content: "Okay great so you're not totally new."
+                },
+                {
+                  actionType: 'ask_question',
+                  content: 'How long have you been in the markets for?'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            },
+            {
+              branchLabel: 'New to markets',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content: "Love to see it bro, that's a first step."
+                },
+                {
+                  actionType: 'ask_question',
+                  content:
+                    'So what got you interested in trading in the first place?'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            }
+          ]
+        },
+        askStep(3, 'Job Context', 'What do you do for work?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content:
+          'So are you new in the markets or have you been trading for a while?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'yes been at it about a year',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({ history });
+    const stage = computeSystemStage(experienceScript, points as any, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 3);
+    const completion = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed' && event.stepNumber === 2
+    );
+    assert.equal(
+      completion?.stepCompletionReason,
+      'volunteered_data_auto_complete'
+    );
+    assert.equal(completion?.selectedBranchLabel, 'Already in markets');
+    assert.equal(completion?.leadMessageId, 'lead_step1');
+  });
+
+  it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
+    const staleDataScript = {
+      id: 'stale_volunteered_data_sequence',
+      steps: [
+        askStep(1, 'Intro', 'Are you already trading?'),
+        askStep(2, 'Experience Depth', 'How long have you been trading?'),
+        askStep(3, 'Job Context', 'What do you do for work?')
+      ]
+    } as any;
+    const points = {
+      tradingExperienceDuration: {
+        value: 'about a year',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'old_lead',
+        extractionMethod: 'test',
+        extractedAt: '2026-05-11T00:00:00.000Z'
+      }
+    };
+    const history = [
+      {
+        id: 'old_lead',
+        sender: 'LEAD',
+        content: 'about a year',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content: 'Are you already trading?',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'yeah',
+        timestamp: new Date('2026-05-11T00:02:00Z')
+      }
+    ];
+
+    const stage = computeSystemStage(staleDataScript, points as any, history);
+
+    assert.equal(stage.step?.stepNumber, 2);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 2
+      ),
+      false
+    );
   });
 });
 

@@ -2984,6 +2984,29 @@ describe('checkMandatoryAsksFired', () => {
     assert.deepEqual(checkMandatoryAsksFired(history, captured), []);
   });
 
+  it('honors durable volunteered-data step completions', () => {
+    const history = [
+      { content: 'how much is your job bringing in on a monthly basis?' },
+      {
+        content:
+          'are you thinking of replacing your job completely with trading?'
+      }
+    ];
+    const captured = {
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 6,
+          stepTitle: 'Job Acknowledgment',
+          selectedBranchLabel: null,
+          completedAt: '2026-05-11T00:01:00.000Z'
+        }
+      ]
+    };
+
+    assert.deepEqual(checkMandatoryAsksFired(history, captured), []);
+  });
+
   it('detects partial-firing and returns only missing steps', () => {
     const history = [
       { content: 'how long you been doing that?' }
