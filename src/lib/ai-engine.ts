@@ -687,7 +687,8 @@ function scoreJudgeBranchesForLead(
     };
   }
 
-  if (best.score < 3 || tied) {
+  const closeTokenMargin = !!second && best.score - second.score <= 2;
+  if (best.score < 3 || tied || closeTokenMargin) {
     return {
       branchLabel: null,
       confidence: 'low',
@@ -1529,12 +1530,6 @@ export async function buildJudgeClassificationDirective(params: {
   const { step, latestLeadMessage, accountId, cache } = params;
   if (!step || !hasRuntimeJudgmentAction(step)) return '';
 
-  const branchLines = step.branches.map((branch) => {
-    const condition = branch.conditionDescription?.trim()
-      ? ` — ${branch.conditionDescription.trim()}`
-      : '';
-    return `- ${branch.branchLabel}${condition}`;
-  });
   const match = await selectJudgeBranchForLead(step, latestLeadMessage, {
     accountId,
     cache
@@ -1542,6 +1537,13 @@ export async function buildJudgeClassificationDirective(params: {
   const matchedBranch = match.branchLabel
     ? step.branches.find((branch) => branch.branchLabel === match.branchLabel)
     : null;
+  const directiveBranches = matchedBranch ? [matchedBranch] : step.branches;
+  const branchLines = directiveBranches.map((branch) => {
+    const condition = branch.conditionDescription?.trim()
+      ? ` — ${branch.conditionDescription.trim()}`
+      : '';
+    return `- ${branch.branchLabel}${condition}`;
+  });
   const matchedActions =
     matchedBranch && scriptedBranchActions(matchedBranch).length > 0
       ? scriptedBranchActions(matchedBranch)
@@ -1557,7 +1559,7 @@ export async function buildJudgeClassificationDirective(params: {
           .join('\n')
       : null;
 
-  return `\n\n===== SCRIPT [JUDGE] CLASSIFICATION GATE =====\nThe CURRENT script step contains a [JUDGE] action. This is a mandatory branch-classification gate, not optional guidance.\n\nCurrent step: Step ${step.stepNumber}: ${step.title}\nLatest lead message: "${(latestLeadMessage || '').slice(0, 500)}"\n\nBranch candidates:\n${branchLines.join('\n') || '- (no branches configured)'}\n\nEngine classification: ${
+  return `\n\n===== SCRIPT [JUDGE] CLASSIFICATION GATE =====\nThe CURRENT script step contains a [JUDGE] action. This is a mandatory branch-classification gate, not optional guidance.\n\nCurrent step: Step ${step.stepNumber}: ${step.title}\nLatest lead message: "${(latestLeadMessage || '').slice(0, 500)}"\n\n${matchedBranch ? 'Locked branch:' : 'Branch candidates:'}\n${branchLines.join('\n') || '- (no branches configured)'}\n\nEngine classification: ${
     match.branchLabel
       ? `the latest lead message matches "${match.branchLabel}" (${match.confidence} confidence). Run that branch's actions now.`
       : 'no branch matched with enough confidence. Ask ONE concise clarification from the current step instead of defaulting to any branch.'
@@ -2560,6 +2562,58 @@ export async function generateReply(
       ? { ...leadContext, preQualified: undefined }
       : leadContext;
 
+  // Classify the active branch BEFORE prompt construction so the serializer
+  // can hide sibling branches from the LLM. Gate-only active-branch scoping is
+  // too late: once all branches are visible in the prompt, the model can still
+  // generate from the wrong branch and burn through retries.
+  const currentStepNumberForGate =
+    typeof scriptStateSnapshot?.currentScriptStep === 'number' &&
+    scriptStateSnapshot.currentScriptStep > 0
+      ? scriptStateSnapshot.currentScriptStep
+      : (scriptStateSnapshot?.currentStep?.stepNumber ?? null);
+  const judgeBranchSelectionCache: JudgeBranchSelectionCache = new Map();
+  const currentJudgeBranchMatch = await selectJudgeBranchForLead(
+    scriptStateSnapshot?.currentStep ?? null,
+    lastLeadMsg?.content ?? null,
+    {
+      accountId,
+      cache: judgeBranchSelectionCache
+    }
+  );
+  let selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
+    ? scriptStateSnapshot?.currentStep?.branches.find(
+        (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
+      )
+    : null;
+  if (
+    !selectedCurrentJudgeBranch &&
+    scriptStateSnapshot?.currentStep?.stepNumber === 1 &&
+    scriptStateSnapshot.currentStep.branches.length > 0
+  ) {
+    const selectedStep1Branches = selectStep1BranchesForPrompt(
+      scriptStateSnapshot.currentStep.branches,
+      {
+        conversationSource: coldStartStep1Inbound
+          ? 'INBOUND'
+          : (conversationCallState?.source ?? null),
+        leadSource: coldStartStep1Inbound
+          ? 'INBOUND'
+          : (conversationCallState?.leadSource ?? leadContext.source ?? null),
+        manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
+      }
+    );
+    if (selectedStep1Branches.length === 1) {
+      selectedCurrentJudgeBranch = selectedStep1Branches[0];
+    }
+  }
+  if (scriptStateSnapshot) {
+    scriptStateSnapshot = {
+      ...scriptStateSnapshot,
+      activeBranch: selectedCurrentJudgeBranch ?? null,
+      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
+    };
+  }
+
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     personaId,
@@ -2573,7 +2627,12 @@ export async function generateReply(
       conversationSource: conversationCallState?.source ?? null,
       leadSource:
         conversationCallState?.leadSource ?? leadContext.source ?? null,
-      manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
+      manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null,
+      selectedBranchStepNumber:
+        selectedCurrentJudgeBranch && currentStepNumberForGate
+          ? currentStepNumberForGate
+          : null,
+      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
     },
     scriptStateSnapshot?.currentScriptStep ?? null
   );
@@ -2582,7 +2641,8 @@ export async function generateReply(
     lastCheckpoint: 'checkpoint3_promptBuilt',
     promptLength: systemPrompt.length,
     authoritativeCurrentScriptStep:
-      scriptStateSnapshot?.currentScriptStep ?? null
+      scriptStateSnapshot?.currentScriptStep ?? null,
+    currentSelectedBranch: selectedCurrentJudgeBranch?.branchLabel ?? null
   });
 
   // 1b. Append scoring intelligence if available
@@ -3058,7 +3118,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const coldStartStep1Directive = coldStartStep1Inbound
     ? buildColdStartStep1InboundDirective()
     : '';
-  const judgeBranchSelectionCache: JudgeBranchSelectionCache = new Map();
   const judgeClassificationDirective = await buildJudgeClassificationDirective({
     step: scriptStateSnapshot?.currentStep ?? null,
     latestLeadMessage: lastLeadMsg?.content ?? null,
@@ -3093,11 +3152,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // step. Multi-bubble delivery means AI message count is not a reliable
   // proxy for script position; the serializer and quality gates must inspect
   // the same step.
-  const currentStepNumberForGate =
-    typeof scriptStateSnapshot?.currentScriptStep === 'number' &&
-    scriptStateSnapshot.currentScriptStep > 0
-      ? scriptStateSnapshot.currentScriptStep
-      : (scriptStateSnapshot?.currentStep?.stepNumber ?? null);
   const currentStepShape = scriptStateSnapshot?.script
     ? getStepActionShape(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3117,14 +3171,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         (branch) => branch.branchLabel
       ) ?? []
   });
-  const currentJudgeBranchMatch = await selectJudgeBranchForLead(
-    scriptStateSnapshot?.currentStep ?? null,
-    lastLeadMsg?.content ?? null,
-    {
-      accountId,
-      cache: judgeBranchSelectionCache
-    }
-  );
   try {
     await persistJudgeClassifierTrace({
       conversationId: activeConversationId,
@@ -3138,39 +3184,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       conversationId: activeConversationId,
       error: err instanceof Error ? err.message : String(err)
     });
-  }
-  let selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
-    ? scriptStateSnapshot?.currentStep?.branches.find(
-        (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
-      )
-    : null;
-  if (
-    !selectedCurrentJudgeBranch &&
-    scriptStateSnapshot?.currentStep?.stepNumber === 1 &&
-    scriptStateSnapshot.currentStep.branches.length > 0
-  ) {
-    const selectedStep1Branches = selectStep1BranchesForPrompt(
-      scriptStateSnapshot.currentStep.branches,
-      {
-        conversationSource: coldStartStep1Inbound
-          ? 'INBOUND'
-          : (conversationCallState?.source ?? null),
-        leadSource: coldStartStep1Inbound
-          ? 'INBOUND'
-          : (conversationCallState?.leadSource ?? leadContext.source ?? null),
-        manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
-      }
-    );
-    if (selectedStep1Branches.length === 1) {
-      selectedCurrentJudgeBranch = selectedStep1Branches[0];
-    }
-  }
-  if (scriptStateSnapshot) {
-    scriptStateSnapshot = {
-      ...scriptStateSnapshot,
-      activeBranch: selectedCurrentJudgeBranch ?? null,
-      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
-    };
   }
   const stepCompletionTraceAfterClassifier = asJsonObject(
     (

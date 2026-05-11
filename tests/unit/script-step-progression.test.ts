@@ -53,7 +53,10 @@ import {
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
 import { computeSystemStage } from '../../src/lib/script-state-recovery';
-import { selectStep1BranchesForPrompt } from '../../src/lib/script-serializer';
+import {
+  selectBranchesForPrompt,
+  selectStep1BranchesForPrompt
+} from '../../src/lib/script-serializer';
 import {
   getCurrentlyRelevantUrlsFromScript,
   shouldExposePersonaAssetUrl
@@ -1162,6 +1165,51 @@ describe('bug-34-llm-branch-classifier', () => {
     assert.equal(match.confidence, 'none');
   });
 
+  it('bug-34-close-token-margin-runs-classifier: narrow token lead is treated as ambiguous', async () => {
+    const closeMarginStep = {
+      stepNumber: 4,
+      title: 'Market response routing',
+      actions: [{ actionType: 'runtime_judgment', content: null }],
+      branches: [
+        {
+          branchLabel: 'Going badly - vague',
+          conditionDescription: 'loss red trading',
+          actions: [
+            {
+              actionType: 'ask_question',
+              content: 'what is the main obstacle?'
+            }
+          ]
+        },
+        {
+          branchLabel: 'Obstacle given - detailed and emotional',
+          conditionDescription: 'loss red revenge trading detailed emotional',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'give me a bit more context'
+            }
+          ]
+        }
+      ]
+    };
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      closeMarginStep,
+      'loss red revenge trading',
+      {
+        classifier: async () => {
+          calls++;
+          return 'Obstacle given - detailed and emotional';
+        }
+      }
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(match.branchLabel, 'Obstacle given - detailed and emotional');
+    assert.equal(match.confidence, 'llm_classified');
+  });
+
   it('does not call classifier for medium/high token confidence', async () => {
     let calls = 0;
     const match = await selectJudgeBranchForLead(
@@ -1479,6 +1527,156 @@ describe('active-branch-scoped quality gates', () => {
     assert.deepEqual(
       selected.map((branch) => branch.branchLabel),
       ["Warm Inbound (DM'd directly)"]
+    );
+  });
+
+  it('bug-49-locked-branch-prompt-filter: selected branch hides sibling branch actions', () => {
+    const step = {
+      stepNumber: 4,
+      branches: [
+        {
+          branchLabel: 'Going badly - vague',
+          actions: [
+            {
+              actionType: 'ask_question',
+              content: 'what is the main obstacle?'
+            }
+          ]
+        },
+        {
+          branchLabel: 'Obstacle given - detailed and emotional',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'I appreciate you being real about that.'
+            },
+            {
+              actionType: 'wait_for_response',
+              content: null
+            }
+          ]
+        }
+      ]
+    };
+
+    const selected = selectBranchesForPrompt(step, {
+      selectedBranchStepNumber: 4,
+      selectedBranchLabel: 'Obstacle given - detailed and emotional'
+    });
+
+    assert.deepEqual(
+      selected.map((branch) => branch.branchLabel),
+      ['Obstacle given - detailed and emotional']
+    );
+    assert.equal(
+      selected[0].actions.some((action) =>
+        action.content?.includes('main obstacle')
+      ),
+      false
+    );
+  });
+
+  it('bug-49-locked-branch-fallback: null classifier result preserves all branches', () => {
+    const step = {
+      stepNumber: 4,
+      branches: [
+        { branchLabel: 'Branch A', actions: [] },
+        { branchLabel: 'Branch B', actions: [] }
+      ]
+    };
+
+    assert.deepEqual(
+      selectBranchesForPrompt(step, {}).map((branch) => branch.branchLabel),
+      ['Branch A', 'Branch B']
+    );
+  });
+
+  it('bug-49-placeholder-branch-selected: placeholder MSG branch remains visible when locked', () => {
+    const step = {
+      stepNumber: 8,
+      branches: [
+        {
+          branchLabel: 'Generic follow-up',
+          actions: [
+            {
+              actionType: 'ask_question',
+              content: 'can you tell me more?'
+            }
+          ]
+        },
+        {
+          branchLabel: 'Emotional disclosure',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content: 'store the disclosed obstacle'
+            },
+            {
+              actionType: 'send_message',
+              content:
+                '{{acknowledge their words. Then add: "give me a bit more context"}}'
+            },
+            {
+              actionType: 'wait_for_response',
+              content: null
+            }
+          ]
+        }
+      ]
+    };
+
+    const selected = selectBranchesForPrompt(step, {
+      selectedBranchStepNumber: 8,
+      selectedBranchLabel: 'Emotional disclosure'
+    });
+
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].branchLabel, 'Emotional disclosure');
+    assert.equal(
+      selected[0].actions.some((action) =>
+        action.content?.includes('give me a bit more context')
+      ),
+      true
+    );
+  });
+
+  it('bug-49-judge-only-branch-selected: routing-only branch can be locked into the prompt', () => {
+    const step = {
+      stepNumber: 12,
+      branches: [
+        {
+          branchLabel: 'Continue normal path',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'continue here'
+            }
+          ]
+        },
+        {
+          branchLabel: 'Route to qualified path',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content: 'if qualified, advance to the qualified path'
+            }
+          ]
+        }
+      ]
+    };
+
+    const selected = selectBranchesForPrompt(step, {
+      selectedBranchStepNumber: 12,
+      selectedBranchLabel: 'Route to qualified path'
+    });
+
+    assert.deepEqual(
+      selected.map((branch) => branch.branchLabel),
+      ['Route to qualified path']
+    );
+    assert.deepEqual(
+      selected[0].actions.map((action) => action.actionType),
+      ['runtime_judgment']
     );
   });
 

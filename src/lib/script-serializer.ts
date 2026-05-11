@@ -172,6 +172,14 @@ export async function serializeScriptForPrompt(
       );
     }
     stepLines.push(`Step ${step.stepNumber}: ${step.title}`);
+    if (
+      routingContext?.selectedBranchLabel &&
+      routingContext.selectedBranchStepNumber === step.stepNumber
+    ) {
+      stepLines.push(
+        `Branch selection locked: "${routingContext.selectedBranchLabel}". Follow only this branch's actions for the current reply.`
+      );
+    }
     if (step.objective) {
       stepLines.push(`Objective: ${step.objective}`);
     }
@@ -422,7 +430,7 @@ export async function serializeScriptForPrompt(
         instruction: j.content
       });
     }
-    for (const branch of step.branches) {
+    for (const branch of selectBranchesForPrompt(step, routingContext)) {
       const branchRuntimeActions = branch.actions
         .filter((a) => a.actionType === 'runtime_judgment' && a.content)
         .map((a) => ({
@@ -479,6 +487,8 @@ export interface ScriptRoutingContext {
   conversationSource?: string | null;
   leadSource?: string | null;
   manyChatFiredAt?: Date | string | null;
+  selectedBranchLabel?: string | null;
+  selectedBranchStepNumber?: number | null;
   nowMs?: number;
   manyChatActiveWindowMs?: number;
 }
@@ -597,10 +607,34 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
   return finalSelection;
 }
 
-function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
+export function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
   step: T,
   routingContext?: ScriptRoutingContext
 ): T['branches'] {
+  const lockedBranchLabel = routingContext?.selectedBranchLabel?.trim();
+  if (
+    lockedBranchLabel &&
+    routingContext?.selectedBranchStepNumber === step.stepNumber
+  ) {
+    const selected = step.branches.filter(
+      (branch) => branch.branchLabel === lockedBranchLabel
+    );
+    if (selected.length > 0) {
+      console.warn('[branch-debug] locked branch selection:', {
+        stepNumber: step.stepNumber,
+        selectedBranch: selected.map((branch) => branch.branchLabel).join(' | ')
+      });
+      return selected;
+    }
+    console.warn('[branch-debug] locked branch missing, falling back:', {
+      stepNumber: step.stepNumber,
+      selectedBranchLabel: lockedBranchLabel,
+      availableBranches: step.branches
+        .map((branch) => branch.branchLabel)
+        .join(' | ')
+    });
+  }
+
   if (step.stepNumber !== 1) return step.branches;
   return selectStep1BranchesForPrompt(step.branches, routingContext);
 }
