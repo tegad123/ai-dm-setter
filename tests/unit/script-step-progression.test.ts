@@ -1798,6 +1798,63 @@ describe('placeholder [MSG]+[WAIT] history completion', () => {
     assert.equal(stage.step?.stepNumber, 5);
   });
 
+  it('completes selected placeholder branch when recovery history carries suggestionId', () => {
+    const script = makeRecoveryScriptForTest([
+      stepForCompletionTest({
+        branches: [
+          {
+            branchLabel: 'Obstacle given — detailed and emotional',
+            actions: [
+              { actionType: 'runtime_judgment', content: 'store obstacle' },
+              {
+                actionType: 'send_message',
+                content:
+                  '{{acknowledge specifically using their own words. Then add: "give me a bit more context" to keep momentum}}'
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      }),
+      nextCompletionTestStep
+    ]);
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 4,
+          stepTitle: 'Market Response Routing',
+          selectedBranchLabel: 'Obstacle given — detailed and emotional',
+          suggestionId: 'sug_step_4',
+          aiMessageId: null,
+          aiMessageIds: [],
+          leadMessageId: 'lead_prior',
+          sentAt: null,
+          completedAt: null,
+          createdAt: '2026-05-11T05:16:00.000Z'
+        }
+      ]
+    } as unknown as Parameters<typeof computeSystemStage>[1];
+
+    const stage = computeSystemStage(script, points, [
+      {
+        id: 'ai_obstacle_msg',
+        suggestionId: 'sug_step_4',
+        sender: 'AI',
+        content: 'give me a bit more context on your situation though',
+        timestamp: '2026-05-11T05:16:24.000Z'
+      },
+      {
+        id: 'lead_context',
+        sender: 'LEAD',
+        content: 'I keep adding more to recover after the trade goes red',
+        timestamp: '2026-05-11T05:18:14.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 5);
+  });
+
   it('uses the classifier-selected placeholder branch when branch shapes differ', () => {
     const script = makeRecoveryScriptForTest([
       stepForCompletionTest({

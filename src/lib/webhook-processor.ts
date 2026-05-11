@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import {
   detectRestrictedGeography,
   generateReply,
+  type ConversationMessage,
   type GenerateReplyResult
 } from '@/lib/ai-engine';
 import type { LeadContext, BookingSlot } from '@/lib/ai-prompts';
@@ -679,6 +680,65 @@ export function shouldAutoSendReply(args: {
   autoSendOverride: boolean;
 }): boolean {
   return args.aiActive && (args.awayMode || args.autoSendOverride);
+}
+
+export type GenerateReplyHistoryRow = {
+  id: string;
+  sender: string;
+  content: string;
+  timestamp: Date | string;
+  isVoiceNote?: boolean | null;
+  voiceNoteUrl?: string | null;
+  imageUrl?: string | null;
+  hasImage?: boolean | null;
+  mediaType?: string | null;
+  mediaUrl?: string | null;
+  transcription?: string | null;
+  imageMetadata?: Prisma.JsonValue | null;
+  mediaProcessedAt?: Date | string | null;
+  mediaProcessingError?: string | null;
+  mediaCostUsd?: Prisma.Decimal | number | string | null;
+  messageGroupId?: string | null;
+  bubbleIndex?: number | null;
+  bubbleTotalCount?: number | null;
+  suggestionId?: string | null;
+  isHumanCorrection?: boolean | null;
+};
+
+export function formatMessagesForGenerateReply(
+  messages: GenerateReplyHistoryRow[]
+): ConversationMessage[] {
+  return messages.map((m) => ({
+    id: m.id,
+    sender: m.sender,
+    content: m.content,
+    timestamp: m.timestamp,
+    isVoiceNote: m.isVoiceNote ?? undefined,
+    voiceNoteUrl: m.voiceNoteUrl,
+    imageUrl: m.imageUrl,
+    hasImage: m.hasImage ?? undefined,
+    mediaType: m.mediaType,
+    mediaUrl: m.mediaUrl,
+    transcription: m.transcription,
+    imageMetadata: m.imageMetadata,
+    mediaProcessedAt: m.mediaProcessedAt,
+    mediaProcessingError: m.mediaProcessingError,
+    mediaCostUsd: m.mediaCostUsd,
+    messageGroupId: m.messageGroupId,
+    bubbleIndex: m.bubbleIndex,
+    bubbleTotalCount: m.bubbleTotalCount,
+    suggestionId: m.suggestionId,
+    // Carry through to ai-engine so the [Operator correction]
+    // directive fires when the most recent setter message is a
+    // post-unsend manual reply.
+    isHumanCorrection: m.isHumanCorrection ?? undefined
+  }));
+}
+
+export function suggestionIdForDeliveredBubble(
+  suggestionId: string | null | undefined
+): string | null {
+  return suggestionId || null;
 }
 
 function extractLeadEmail(text: string): string | null {
@@ -3085,30 +3145,7 @@ export async function scheduleAIReply(
   // ── Step 4: Generate AI reply ──────────────────────────────────
   log('sched.step4.generateStart');
   const _aiGenStart = Date.now();
-  const formattedMessages = messages.map((m) => ({
-    id: m.id,
-    sender: m.sender,
-    content: m.content,
-    timestamp: m.timestamp,
-    isVoiceNote: m.isVoiceNote,
-    voiceNoteUrl: m.voiceNoteUrl,
-    imageUrl: m.imageUrl,
-    hasImage: m.hasImage,
-    mediaType: m.mediaType,
-    mediaUrl: m.mediaUrl,
-    transcription: m.transcription,
-    imageMetadata: m.imageMetadata,
-    mediaProcessedAt: m.mediaProcessedAt,
-    mediaProcessingError: m.mediaProcessingError,
-    mediaCostUsd: m.mediaCostUsd,
-    messageGroupId: m.messageGroupId,
-    bubbleIndex: m.bubbleIndex,
-    bubbleTotalCount: m.bubbleTotalCount,
-    // Carry through to ai-engine so the [Operator correction]
-    // directive fires when the most recent setter message is a
-    // post-unsend manual reply.
-    isHumanCorrection: m.isHumanCorrection
-  }));
+  const formattedMessages = formatMessagesForGenerateReply(messages);
 
   let result: GenerateReplyResult;
   try {
@@ -3531,7 +3568,7 @@ async function deliverBubbleGroup(params: {
         stallType: isFirst ? result.stallType || null : null,
         followUpAttemptNumber: isFirst ? (result.followUpNumber ?? null) : null,
         systemPromptVersion: isFirst ? result.systemPromptVersion : null,
-        suggestionId: isFirst ? result.suggestionId || null : null,
+        suggestionId: suggestionIdForDeliveredBubble(result.suggestionId),
         msgSource: 'QUALIFYDMS_AI',
         platformMessageId: ship.messageId
       }
