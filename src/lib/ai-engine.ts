@@ -1896,6 +1896,39 @@ export async function generateReply(
         )
       );
   }
+
+  // Script-state self-recovery pre-pass. This must run before the prompt is
+  // built so serializeScriptForPrompt focuses on the authoritative step from
+  // conversation history instead of inferring from raw AI message count.
+  let scriptStateSnapshot: ScriptStateSnapshot | null = null;
+  if (activeConversationId) {
+    try {
+      scriptStateSnapshot = await prepareScriptState({
+        accountId,
+        conversationId: activeConversationId,
+        history: conversationHistory
+      });
+    } catch (err) {
+      console.error(
+        '[ai-engine] script-state pre-pass failed (non-fatal):',
+        err
+      );
+    }
+  }
+
+  if (coldStartStep1Inbound && activeConversationId && scriptStateSnapshot) {
+    await persistColdStartStep1InboundState({
+      conversationId: activeConversationId,
+      snapshot: scriptStateSnapshot
+    });
+    console.warn('[ai-engine] cold-start Step 1 Inbound forced', {
+      conversationId: activeConversationId,
+      messageCount:
+        conversationCallState?._count.messages ?? conversationHistory.length,
+      source: conversationCallState?.source ?? leadContext.source ?? null
+    });
+  }
+
   const leadContextForPrompt =
     coldStartStep1Inbound && leadContext.preQualified
       ? { ...leadContext, preQualified: undefined }
@@ -1915,7 +1948,8 @@ export async function generateReply(
       leadSource:
         conversationCallState?.leadSource ?? leadContext.source ?? null,
       manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
-    }
+    },
+    scriptStateSnapshot?.currentScriptStep ?? null
   );
 
   // 1b. Append scoring intelligence if available
@@ -2065,38 +2099,6 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     /^https?:\/\//i.test(promptConfigForGate.homeworkUrl.trim())
       ? promptConfigForGate.homeworkUrl.trim()
       : null;
-
-  // Script-state self-recovery pre-pass. This persists confidence-scored
-  // captured data points and the authoritative current script step before
-  // the LLM gets a chance to stall or mislabel its stage.
-  let scriptStateSnapshot: ScriptStateSnapshot | null = null;
-  if (activeConversationId) {
-    try {
-      scriptStateSnapshot = await prepareScriptState({
-        accountId,
-        conversationId: activeConversationId,
-        history: conversationHistory
-      });
-    } catch (err) {
-      console.error(
-        '[ai-engine] script-state pre-pass failed (non-fatal):',
-        err
-      );
-    }
-  }
-
-  if (coldStartStep1Inbound && activeConversationId && scriptStateSnapshot) {
-    await persistColdStartStep1InboundState({
-      conversationId: activeConversationId,
-      snapshot: scriptStateSnapshot
-    });
-    console.warn('[ai-engine] cold-start Step 1 Inbound forced', {
-      conversationId: activeConversationId,
-      messageCount:
-        conversationCallState?._count.messages ?? conversationHistory.length,
-      source: conversationCallState?.source ?? leadContext.source ?? null
-    });
-  }
 
   // Path B(1): suppress legacy pacing gates when an active relational
   // Script is present. Those message-count gates were tuned for the old

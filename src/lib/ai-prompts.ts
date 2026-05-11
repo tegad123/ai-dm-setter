@@ -1728,7 +1728,14 @@ export async function buildDynamicSystemPrompt(
    * need it; the full message history is enough context).
    */
   establishedFactsBlock?: string | null,
-  scriptRoutingContext?: ScriptRoutingContext
+  scriptRoutingContext?: ScriptRoutingContext,
+  /**
+   * Authoritative script step computed by prepareScriptState from the
+   * conversation history. Multi-bubble AI turns make message-count based
+   * inference unreliable, so this is the only value used for serializer
+   * focus mode.
+   */
+  authoritativeCurrentScriptStep?: number | null
 ): Promise<string> {
   // F3.2: load the EXACT persona the caller named, not a guess.
   // Cross-account FK is impossible at this point — generateReply's
@@ -2452,19 +2459,9 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
   // 2. Script-first (legacy) — if rawScript exists
   // 3. Field-by-field (legacy) — fallback
   // Try new Script template system first, fall back to old PersonaBreakdown
-  // Compute the current script step number from prior AI message count.
-  // Each scripted [ASK]+[WAIT] pair consumes one AI turn, so the floor
-  // = priorAIMessages.length + 1. The serializer clamps to the script's
-  // last step internally. Passing this enables FOCUS MODE — only the
-  // current + next step appear in the rendered Script Framework block,
-  // preventing the LLM from pattern-matching to a later stage like the
-  // call proposal (@daniel_elumelu 2026-05-08 incident).
-  const inferredCurrentStepNumber = Array.isArray(priorAIMessages)
-    ? Math.max(1, priorAIMessages.length + 1)
-    : null;
   const scriptText = await serializeScriptForPrompt(
     accountId,
-    inferredCurrentStepNumber,
+    authoritativeCurrentScriptStep ?? null,
     scriptRoutingContext
   );
   const breakdownText =
