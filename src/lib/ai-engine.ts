@@ -698,15 +698,16 @@ function buildJudgeBranchSelectionCacheKey(
   ].join('::');
 }
 
-async function resolveAnthropicApiKey(accountId?: string | null) {
+async function resolveAnthropicApiKeyWithSource(accountId?: string | null) {
   if (accountId) {
     const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
     if (typeof anthropicCreds?.apiKey === 'string') {
       const byokKey = anthropicCreds.apiKey.trim();
-      if (byokKey) return byokKey;
+      if (byokKey) return { apiKey: byokKey, keySource: 'byok' as const };
     }
   }
-  return process.env.ANTHROPIC_API_KEY?.trim() || null;
+  const envKey = process.env.ANTHROPIC_API_KEY?.trim() || null;
+  return envKey ? { apiKey: envKey, keySource: 'env' as const } : null;
 }
 
 async function classifyJudgeBranchWithHaiku(params: {
@@ -715,8 +716,23 @@ async function classifyJudgeBranchWithHaiku(params: {
   accountId?: string | null;
 }): Promise<string | null> {
   const { step, leadMessage, accountId } = params;
-  const apiKey = await resolveAnthropicApiKey(accountId);
-  if (!apiKey) return null;
+  const keyResolution = await resolveAnthropicApiKeyWithSource(accountId);
+  const apiKey = keyResolution?.apiKey ?? null;
+  console.warn('[branch-classifier] LLM ATTEMPT:', {
+    stepNumber: step.stepNumber,
+    hasAnthropicKey: !!apiKey,
+    keySource: keyResolution?.keySource ?? 'env'
+  });
+  if (!apiKey) {
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      success: false,
+      selectedLabel: null,
+      error: 'missing_anthropic_key',
+      timedOut: false
+    });
+    return null;
+  }
 
   const branchLines = step.branches
     .map(
@@ -735,7 +751,11 @@ ${branchLines}
 Respond with ONLY the exact branchLabel of the best match. No explanation. No punctuation. Just the label.`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
+  let didTimeout = false;
+  const timeout = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, 3000);
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -754,7 +774,16 @@ Respond with ONLY the exact branchLabel of the best match. No explanation. No pu
       signal: controller.signal
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn('[branch-classifier] LLM RESULT:', {
+        stepNumber: step.stepNumber,
+        success: false,
+        selectedLabel: null,
+        error: `http_${response.status}`,
+        timedOut: didTimeout
+      });
+      return null;
+    }
 
     const data = (await response.json()) as {
       content?: Array<{ type?: string; text?: string }>;
@@ -763,8 +792,22 @@ Respond with ONLY the exact branchLabel of the best match. No explanation. No pu
       ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
       .join('')
       .trim();
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      success: !!text,
+      selectedLabel: text || null,
+      error: null,
+      timedOut: didTimeout
+    });
     return text || null;
-  } catch {
+  } catch (err) {
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      success: false,
+      selectedLabel: null,
+      error: err instanceof Error ? err.message : String(err),
+      timedOut: didTimeout
+    });
     return null;
   } finally {
     clearTimeout(timeout);
@@ -780,7 +823,19 @@ export async function selectJudgeBranchForLead(
     classifier?: JudgeBranchClassifier;
   }
 ): Promise<JudgeBranchMatch> {
+  console.warn('[branch-classifier] ENTRY:', {
+    stepNumber: step?.stepNumber ?? null,
+    branchCount: step?.branches.length ?? 0,
+    leadMessageFirst50: leadMessage?.slice(0, 50) ?? null
+  });
   const tokenMatch = scoreJudgeBranchesForLead(step, leadMessage);
+  console.warn('[branch-classifier] TOKEN RESULT:', {
+    stepNumber: step?.stepNumber ?? null,
+    confidence: tokenMatch.confidence,
+    selectedLabel: tokenMatch.branchLabel ?? null,
+    willAttemptLLM:
+      tokenMatch.confidence === 'none' || tokenMatch.confidence === 'low'
+  });
   if (
     !step ||
     !hasRuntimeJudgmentAction(step) ||
@@ -2427,6 +2482,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const currentStepActiveBranchIsJudgeOnly = selectedCurrentJudgeBranch
     ? branchHasRuntimeJudgmentOnly(selectedCurrentJudgeBranch)
     : false;
+  const currentStepActiveBranchLabel =
+    selectedCurrentJudgeBranch?.branchLabel ?? null;
   if (scriptStateSnapshot?.script) {
     const selectedStep = scriptStateSnapshot.script.steps.find(
       (step) => step.stepNumber === inferredStepNumberForGate
@@ -2471,6 +2528,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepHasAskBranch,
     currentStepActiveBranchIsSilent,
     currentStepActiveBranchIsJudgeOnly,
+    currentStepActiveBranchLabel,
     currentScriptStepNumber: inferredStepNumberForGate,
     aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
     skipLegacyPacingGates,

@@ -748,6 +748,8 @@ export interface VoiceQualityOptions {
    * cannot identify the active branch.
    */
   currentStepHasAskBranch?: boolean;
+  /** Diagnostic label for the active/selected branch used by ask gating. */
+  currentStepActiveBranchLabel?: string | null;
   /** True when the active/selected branch is [MSG]+[WAIT] with no [ASK]. */
   currentStepActiveBranchIsSilent?: boolean;
   /** True when the active/selected branch contains only [JUDGE] actions. */
@@ -1399,6 +1401,14 @@ export function scoreVoiceQuality(
   const stepNumber = options?.currentScriptStepNumber ?? null;
   const isBookingOrLinkStep =
     typeof stepNumber === 'number' && stepNumber >= 17;
+  console.warn('[voice-quality-gate] ASK-BRANCH EVAL:', {
+    currentStepHasAskBranch,
+    activeBranchLabel: options?.currentStepActiveBranchLabel ?? null,
+    replyHasQuestion: countQuestionMarks(reply) > 0,
+    stepNumber,
+    gateWouldFire:
+      currentStepHasAskBranch === true && countQuestionMarks(reply) === 0
+  });
   if (
     currentStepHasAskBranch === true &&
     replyQuestionCount === 0 &&
