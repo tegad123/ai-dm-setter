@@ -70,6 +70,80 @@ function capturedPointValue(
   return raw;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function branchHistoryEvents(
+  points: Record<string, unknown> | null | undefined
+): Record<string, unknown>[] {
+  const raw = asRecord(points)?.branchHistory;
+  return Array.isArray(raw)
+    ? raw
+        .map((event) => asRecord(event))
+        .filter((event): event is Record<string, unknown> => event !== null)
+    : [];
+}
+
+const BUY_IN_SIGNAL =
+  /\b(buy[\s-]?in|bought\s+in|commit(?:ted|ment)?|on\s+board|agree(?:d|ment)?)\b/i;
+const POSITIVE_BRANCH_SIGNAL =
+  /\b(clear|confirm(?:ed|ation)?|yes|yeah|yep|affirm(?:ed|ative)?|accept(?:ed)?|ready|committed|positive|go\s+ahead|proceed)\b/i;
+const NEGATIVE_BRANCH_SIGNAL =
+  /\b(no|not|unclear|hesitant|hesitation|objection|decline(?:d)?|negative|unsure|not\s+ready)\b/i;
+
+function buyInConfirmedByBranchHistory(
+  points: Record<string, unknown> | null | undefined,
+  stepNumber: number
+): boolean {
+  return branchHistoryEvents(points).some((event) => {
+    if (event.eventType !== 'step_completed') return false;
+    const eventStepNumber =
+      typeof event.stepNumber === 'number'
+        ? event.stepNumber
+        : Number(event.stepNumber);
+    if (eventStepNumber !== stepNumber) return false;
+
+    const selectedBranchLabel =
+      typeof event.selectedBranchLabel === 'string'
+        ? event.selectedBranchLabel
+        : '';
+    const stepTitle =
+      typeof event.stepTitle === 'string' ? event.stepTitle : '';
+    const combined = `${stepTitle} ${selectedBranchLabel}`;
+
+    if (NEGATIVE_BRANCH_SIGNAL.test(selectedBranchLabel)) return false;
+    return (
+      (BUY_IN_SIGNAL.test(selectedBranchLabel) &&
+        POSITIVE_BRANCH_SIGNAL.test(selectedBranchLabel)) ||
+      (BUY_IN_SIGNAL.test(stepTitle) &&
+        POSITIVE_BRANCH_SIGNAL.test(selectedBranchLabel)) ||
+      (BUY_IN_SIGNAL.test(combined) && POSITIVE_BRANCH_SIGNAL.test(combined))
+    );
+  });
+}
+
+function prereqSatisfiedByCapturedState(
+  points: Record<string, unknown> | null | undefined,
+  prereq: Pick<CallProposalPrereq, 'id' | 'stepNumber' | 'acceptableKeys'>
+): boolean {
+  if (
+    prereq.id === 'buy_in_confirmed' &&
+    buyInConfirmedByBranchHistory(points, prereq.stepNumber)
+  ) {
+    return true;
+  }
+
+  return prereq.acceptableKeys.some((key) => {
+    if (key === 'beliefBreakDelivered' || key === 'belief_break_delivered') {
+      return capturedPointValue(points, key) === 'complete';
+    }
+    return hasCapturedDataPoint(points, key);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Call-proposal prereq gate
 // ---------------------------------------------------------------------------
@@ -167,16 +241,7 @@ export function checkCallProposalPrereqs(
   points: Record<string, unknown> | null | undefined
 ): CallProposalPrereq[] {
   return CALL_PROPOSAL_PREREQS.filter(
-    (prereq) =>
-      !prereq.acceptableKeys.some((key) => {
-        if (
-          key === 'beliefBreakDelivered' ||
-          key === 'belief_break_delivered'
-        ) {
-          return capturedPointValue(points, key) === 'complete';
-        }
-        return hasCapturedDataPoint(points, key);
-      })
+    (prereq) => !prereqSatisfiedByCapturedState(points, prereq)
   );
 }
 
@@ -955,16 +1020,7 @@ export function checkCapitalQuestionPrereqs(
   points: Record<string, unknown> | null | undefined
 ): CapitalQuestionPrereq[] {
   return CAPITAL_QUESTION_PREREQS.filter(
-    (prereq) =>
-      !prereq.acceptableKeys.some((key) => {
-        if (
-          key === 'beliefBreakDelivered' ||
-          key === 'belief_break_delivered'
-        ) {
-          return capturedPointValue(points, key) === 'complete';
-        }
-        return hasCapturedDataPoint(points, key);
-      })
+    (prereq) => !prereqSatisfiedByCapturedState(points, prereq)
   );
 }
 

@@ -227,6 +227,54 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-C: accepts completed clear buy-in branchHistory as buy_in_confirmed', () => {
+    const points = {
+      workBackground: 'engineer',
+      monthlyIncome: '5000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '4000',
+      deepWhy: 'want to retire my mom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'complete',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 14,
+          stepTitle: 'Buy-in confirmation',
+          selectedBranchLabel: 'Clear buy-in',
+          completedAt: '2026-05-11T07:00:00.000Z'
+        }
+      ]
+    };
+
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('does not treat hesitant buy-in branchHistory as buy_in_confirmed', () => {
+    const points = {
+      workBackground: 'engineer',
+      monthlyIncome: '5000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '4000',
+      deepWhy: 'want to retire my mom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'complete',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 14,
+          stepTitle: 'Buy-in confirmation',
+          selectedBranchLabel: 'Not ready / hesitant',
+          completedAt: '2026-05-11T07:00:00.000Z'
+        }
+      ]
+    };
+
+    const missing = checkCallProposalPrereqs(points);
+    assert.equal(missing.length, 1);
+    assert.equal(missing[0].id, 'buy_in_confirmed');
+  });
+
   it('returns the FIRST missing prereq in script-step order', () => {
     // Captured everything except beliefBreakDelivered (Step 13).
     const points = {
@@ -2022,6 +2070,26 @@ describe('checkCapitalQuestionPrereqs', () => {
       buyInConfirmed: 'true',
       callProposalAccepted: 'true'
     };
+    assert.deepEqual(checkCapitalQuestionPrereqs(points), []);
+  });
+
+  it('accepts completed clear buy-in branchHistory for capital prereqs too', () => {
+    const points = {
+      deepWhy: 'family freedom',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'complete',
+      callProposalAccepted: 'true',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 14,
+          stepTitle: 'Buy-in confirmation',
+          selectedBranchLabel: 'Clear buy-in',
+          completedAt: '2026-05-11T07:00:00.000Z'
+        }
+      ]
+    };
+
     assert.deepEqual(checkCapitalQuestionPrereqs(points), []);
   });
 
