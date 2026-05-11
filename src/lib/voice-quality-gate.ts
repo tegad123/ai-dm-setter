@@ -19,6 +19,7 @@ import {
   isRuntimePlaceholderOnly,
   maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
+import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
 
 export interface QualityResult {
   score: number; // 0.0 – 1.0
@@ -758,6 +759,12 @@ export interface VoiceQualityOptions {
   activeBranchHasSilentBranch?: boolean;
   /** True when the classifier-selected branch contains an [ASK]. */
   activeBranchHasAskAction?: boolean;
+  /**
+   * Runtime URL allowlist for this generated turn. Any URL in the
+   * generated reply/bubbles must be present here after normalization
+   * (fragment-insensitive for Typeform hidden fields).
+   */
+  allowedUrls?: Array<string | null | undefined> | Set<string>;
   /**
    * True when the active/selected branch for the current step contains
    * an [ASK]. Falls back to currentStepHasAnyAskAction when routing
@@ -3583,6 +3590,30 @@ function checkLinkPromiseWithoutUrl(joinedText: string): string | null {
   return null;
 }
 
+export interface FabricatedUrlViolation {
+  url: string;
+  bubbleIndex: number;
+}
+
+export function detectFabricatedUrlInReply(
+  messages: string[],
+  allowedUrls?: Array<string | null | undefined> | Set<string>
+): FabricatedUrlViolation | null {
+  if (!allowedUrls) return null;
+  const allowed = Array.from(allowedUrls);
+
+  for (let bubbleIndex = 0; bubbleIndex < messages.length; bubbleIndex++) {
+    const urls = extractUrlsFromText(messages[bubbleIndex]);
+    for (const url of urls) {
+      if (!isUrlAllowed(url, allowed)) {
+        return { url, bubbleIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
 export interface GroupQualityResult {
   /** Worst (minimum) per-bubble score. */
   score: number;
@@ -3687,6 +3718,20 @@ export function scoreVoiceQualityGroup(
   const linkPromiseFailure = checkLinkPromiseWithoutUrl(joined);
   if (linkPromiseFailure) {
     hardFails.push(`[group] ${linkPromiseFailure}`);
+  }
+
+  const fabricatedUrlViolation = detectFabricatedUrlInReply(
+    messages,
+    options?.allowedUrls
+  );
+  if (fabricatedUrlViolation) {
+    console.warn('[voice-quality-gate] fabricated_url_in_reply:', {
+      url: fabricatedUrlViolation.url,
+      bubbleIndex: fabricatedUrlViolation.bubbleIndex
+    });
+    hardFails.push(
+      `[group] fabricated_url_in_reply: url="${fabricatedUrlViolation.url}" bubble=${fabricatedUrlViolation.bubbleIndex}`
+    );
   }
 
   // R37 burst extension (Jefferson @namejeffe 2026-05-03).

@@ -58,6 +58,11 @@ import {
   hasCapturedDataPoint,
   isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
+import {
+  extractUrlsFromText,
+  isUrlAllowed,
+  normalizeUrlForAllowlist
+} from '@/lib/url-allowlist';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1272,6 +1277,210 @@ function getActiveBranchRequiredMessages(
         embeddedQuotes: isPlaceholder ? extractEmbeddedQuotes(content) : []
       };
     });
+}
+
+type UrlActionLike = {
+  actionType?: string | null;
+  content?: string | null;
+  linkUrl?: string | null;
+};
+
+function addAllowedUrlsFromAction(
+  action: UrlActionLike | null | undefined,
+  urls: Set<string>
+): void {
+  if (!action) return;
+  if (typeof action.linkUrl === 'string' && action.linkUrl.trim()) {
+    urls.add(action.linkUrl.trim());
+  }
+  for (const url of extractUrlsFromText(action.content)) {
+    urls.add(url);
+  }
+}
+
+function addPersonaFallbackUrls(
+  persona: ScriptStateSnapshot['persona'] | null | undefined,
+  urls: Set<string>,
+  hasActiveRelationalScript: boolean
+): void {
+  if (!persona) return;
+  const promptConfig = persona.promptConfig;
+  urls.add(persona.freeValueLink ?? '');
+  urls.add(getJsonStringField(persona.downsellConfig, 'link') ?? '');
+  urls.add(getJsonStringField(promptConfig, 'downsellLink') ?? '');
+  urls.add(getJsonStringField(promptConfig, 'youtubeFallbackUrl') ?? '');
+  urls.add(getJsonStringField(promptConfig, 'freeValueLink') ?? '');
+
+  if (!hasActiveRelationalScript) {
+    urls.add(getJsonStringField(promptConfig, 'bookingTypeformUrl') ?? '');
+    urls.add(getJsonStringField(promptConfig, 'typeformUrl') ?? '');
+    const assetLinks =
+      promptConfig &&
+      typeof promptConfig === 'object' &&
+      !Array.isArray(promptConfig)
+        ? (promptConfig as Record<string, unknown>).assetLinks
+        : null;
+    if (
+      assetLinks &&
+      typeof assetLinks === 'object' &&
+      !Array.isArray(assetLinks)
+    ) {
+      const bookingLink = (assetLinks as Record<string, unknown>).bookingLink;
+      if (typeof bookingLink === 'string') urls.add(bookingLink);
+    }
+  }
+}
+
+function addCapturedTemplateUrls(
+  capturedDataPoints:
+    | ScriptStateSnapshot['capturedDataPoints']
+    | null
+    | undefined,
+  urls: Set<string>
+): void {
+  if (!capturedDataPoints) return;
+  for (const point of Object.values(capturedDataPoints)) {
+    if (!point) continue;
+    const rawValue =
+      typeof point === 'object' && 'value' in point
+        ? (point as { value?: unknown }).value
+        : point;
+    if (typeof rawValue === 'string') {
+      for (const url of extractUrlsFromText(rawValue)) urls.add(url);
+    }
+  }
+}
+
+function collectCurrentTurnAllowedUrls(params: {
+  snapshot: ScriptStateSnapshot | null;
+  currentStepNumber: number | null | undefined;
+}): string[] {
+  const urls = new Set<string>();
+  const script = params.snapshot?.script ?? null;
+  const currentStep =
+    script && typeof params.currentStepNumber === 'number'
+      ? script.steps.find(
+          (step) => step.stepNumber === params.currentStepNumber
+        )
+      : null;
+
+  if (currentStep) {
+    for (const action of currentStep.actions ?? []) {
+      addAllowedUrlsFromAction(action as UrlActionLike, urls);
+    }
+    for (const branch of currentStep.branches ?? []) {
+      for (const action of branch.actions ?? []) {
+        addAllowedUrlsFromAction(action as UrlActionLike, urls);
+      }
+    }
+  }
+
+  addPersonaFallbackUrls(params.snapshot?.persona, urls, !!script);
+  addCapturedTemplateUrls(params.snapshot?.capturedDataPoints, urls);
+
+  return Array.from(urls).filter((url) => normalizeUrlForAllowlist(url));
+}
+
+type FutureStepMismatchSeverity = 'none' | 'minor' | 'critical';
+
+function normalizeForFutureStepMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenOverlapRatio(expected: string, generated: string): number {
+  const expectedTokens = Array.from(
+    new Set(normalizeForFutureStepMatch(expected).split(' ').filter(Boolean))
+  );
+  if (expectedTokens.length === 0) return 0;
+  const generatedTokens = new Set(
+    normalizeForFutureStepMatch(generated).split(' ').filter(Boolean)
+  );
+  const matched = expectedTokens.filter((token) => generatedTokens.has(token));
+  return matched.length / expectedTokens.length;
+}
+
+function detectFutureStepContentMismatch(params: {
+  snapshot: ScriptStateSnapshot | null;
+  currentStepNumber: number | null | undefined;
+  messages: string[];
+  currentAllowedUrls: string[];
+}): {
+  detectedFutureStepContent: boolean;
+  mismatchSeverity: FutureStepMismatchSeverity;
+  matchedStepNumber: number | null;
+  matchedReason: string | null;
+} {
+  const script = params.snapshot?.script ?? null;
+  if (!script || typeof params.currentStepNumber !== 'number') {
+    return {
+      detectedFutureStepContent: false,
+      mismatchSeverity: 'none',
+      matchedStepNumber: null,
+      matchedReason: null
+    };
+  }
+
+  const currentStepNumber = params.currentStepNumber;
+  const generated = params.messages.join('\n');
+  const futureSteps = script.steps
+    .filter((step) => step.stepNumber > currentStepNumber)
+    .sort((a, b) => a.stepNumber - b.stepNumber);
+  const currentAllowedUrls = params.currentAllowedUrls;
+
+  for (const step of futureSteps) {
+    const stepActions: UrlActionLike[] = [
+      ...(step.actions as UrlActionLike[]),
+      ...step.branches.flatMap((branch) => branch.actions as UrlActionLike[])
+    ];
+    for (const action of stepActions) {
+      const actionUrls = [
+        ...(typeof action.linkUrl === 'string' ? [action.linkUrl] : []),
+        ...extractUrlsFromText(action.content)
+      ];
+      for (const url of actionUrls) {
+        if (generated.includes(url) && !isUrlAllowed(url, currentAllowedUrls)) {
+          return {
+            detectedFutureStepContent: true,
+            mismatchSeverity:
+              step.stepNumber - currentStepNumber >= 2 ? 'critical' : 'minor',
+            matchedStepNumber: step.stepNumber,
+            matchedReason: 'future_step_url'
+          };
+        }
+      }
+
+      const content = action.content?.trim();
+      if (
+        !content ||
+        content.length < 24 ||
+        isRuntimePlaceholderOnly(content)
+      ) {
+        continue;
+      }
+      const overlap = tokenOverlapRatio(content, generated);
+      if (overlap >= 0.82) {
+        return {
+          detectedFutureStepContent: true,
+          mismatchSeverity:
+            step.stepNumber - currentStepNumber >= 2 ? 'critical' : 'minor',
+          matchedStepNumber: step.stepNumber,
+          matchedReason: 'future_step_literal_overlap'
+        };
+      }
+    }
+  }
+
+  return {
+    detectedFutureStepContent: false,
+    mismatchSeverity: 'none',
+    matchedStepNumber: null,
+    matchedReason: null
+  };
 }
 
 function actionSimilarityScore(actionContent: string, generated: string) {
@@ -2998,6 +3207,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     : false;
   const currentStepActiveBranchLabel =
     selectedCurrentJudgeBranch?.branchLabel ?? null;
+  const currentTurnAllowedUrls = collectCurrentTurnAllowedUrls({
+    snapshot: scriptStateSnapshot ?? null,
+    currentStepNumber: currentStepNumberForGate
+  });
   if (scriptStateSnapshot?.script) {
     const selectedStep = scriptStateSnapshot.script.steps.find(
       (step) => step.stepNumber === currentStepNumberForGate
@@ -3046,6 +3259,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     activeBranchHasAskAction: selectedCurrentJudgeBranch
       ? currentStepHasAskBranch
       : undefined,
+    allowedUrls: currentTurnAllowedUrls,
     currentStepHasAskBranch,
     currentStepActiveBranchIsSilent,
     currentStepActiveBranchIsJudgeOnly,
@@ -3229,6 +3443,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
       throw err;
     }
+    const futureStepMismatch = detectFutureStepContentMismatch({
+      snapshot: scriptStateSnapshot ?? null,
+      currentStepNumber: currentStepNumberForGate,
+      messages: parsed.messages,
+      currentAllowedUrls: currentTurnAllowedUrls
+    });
     await writeGenerateReplyTrace({
       checkpoint6_responseGenerated: true,
       lastCheckpoint: 'checkpoint6_responseGenerated',
@@ -3237,7 +3457,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       responseFirst100: parsed.message?.slice(0, 100) ?? null,
       responseStage: parsed.stage ?? null,
       responseSubStage: parsed.subStage ?? null,
-      responseMessageCount: parsed.messages?.length ?? 0
+      responseMessageCount: parsed.messages?.length ?? 0,
+      detectedFutureStepContent: futureStepMismatch.detectedFutureStepContent,
+      mismatchSeverity: futureStepMismatch.mismatchSeverity,
+      mismatchMatchedStepNumber: futureStepMismatch.matchedStepNumber,
+      mismatchMatchedReason: futureStepMismatch.matchedReason
     });
 
     const parsedMetadataLeak = parsed.parserMetadataLeak;
@@ -3992,6 +4216,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + linkOverride;
         console.warn(
           `[ai-engine] Link promise without URL detected — forcing regen with override (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      const fabricatedUrlFailed = quality.hardFails.some((f) =>
+        f.includes('fabricated_url_in_reply:')
+      );
+      if (fabricatedUrlFailed) {
+        const fabricatedUrlOverride = `\n\n===== FABRICATED URL IN REPLY =====\nYou included a URL that is not in the current script. Remove the URL. Use only URLs explicitly provided in [LINK] actions or persona configuration.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + fabricatedUrlOverride;
+        console.warn(
+          `[ai-engine] Fabricated URL detected — forcing regen without unauthorized URL (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
         );
       }
 
@@ -5086,6 +5321,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           (f) =>
             f.includes('bracketed_placeholder_leaked:') ||
             f.includes('link_promise_without_url:') ||
+            f.includes('fabricated_url_in_reply:') ||
             f.includes('call_pitch_before_capital_verification:') ||
             f.includes('closer_or_call_in_downsell:') ||
             // Step-progression gates (2026-05-08): when the LLM keeps

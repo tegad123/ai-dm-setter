@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import {
   classifyMetaDeliveryError,
@@ -75,6 +76,12 @@ function replyTextFromSuggestion(suggestion: {
   return suggestion.responseText;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 function deliveryErrorCodeLabel(errorInfo: {
   metaCode: number | null;
   httpStatus: number | null;
@@ -140,6 +147,7 @@ export async function GET(request: NextRequest) {
       silentStopRows,
       silentStopStatusRows,
       recentSilentStopRows,
+      stateContentMismatchRows,
       metadataLeakCandidateMessages
     ] = await Promise.all([
       // ── PRIORITY 1.A: Distress signals ────────────────────────────
@@ -578,6 +586,29 @@ export async function GET(request: NextRequest) {
         }),
         []
       ),
+      // ── PRIORITY 1.E: current-state / generated-content mismatch ─
+      // Observability-only trace from generateReply. If critical, surface
+      // it for review, but the gate itself does not block the send.
+      safe(
+        prisma.conversation.findMany({
+          where: {
+            ...accountConvFilter,
+            lastMessageAt: {
+              gte: new Date(now.getTime() - RECENT_ACTIVITY_MS)
+            },
+            capturedDataPoints: { not: Prisma.JsonNull }
+          },
+          select: {
+            id: true,
+            lastMessageAt: true,
+            capturedDataPoints: true,
+            lead: { select: { id: true, name: true, handle: true } }
+          },
+          orderBy: { lastMessageAt: 'desc' },
+          take: 100
+        }),
+        []
+      ),
       // ── PRIORITY 2.H: historical metadata leak sweep ────────────
       // Coarse DB filter + precise detector in JS. Report-only; no
       // historical message mutation here.
@@ -691,6 +722,7 @@ export async function GET(request: NextRequest) {
     callUnconfirmedRows.forEach((c) => referencedConvIds.add(c.id));
     callOutcomeNeededRows.forEach((c) => referencedConvIds.add(c.id));
     pendingRecoveryRows.forEach((r) => referencedConvIds.add(r.conversationId));
+    stateContentMismatchRows.forEach((c) => referencedConvIds.add(c.id));
     historicalMetadataLeakMatches.forEach((r) =>
       referencedConvIds.add(r.message.conversationId)
     );
@@ -945,6 +977,36 @@ export async function GET(request: NextRequest) {
           errorMeaning: isQualityGateFailure
             ? QUALITY_GATE_FAILURE_REASON
             : errorInfo!.meaning
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    const urgentStateContentMismatch = stateContentMismatchRows
+      .map((conversation) => {
+        const captured = asRecord(conversation.capturedDataPoints);
+        const trace = asRecord(captured.generateReplyTrace);
+        if (trace.mismatchSeverity !== 'critical') return null;
+        if (isDismissed(conversation.id, 'state_content_mismatch')) {
+          return null;
+        }
+        return {
+          type: 'state_content_mismatch' as const,
+          conversationId: conversation.id,
+          leadId: conversation.lead.id,
+          leadName: conversation.lead.name,
+          leadHandle: conversation.lead.handle,
+          detectedAt:
+            typeof trace.timestamp === 'string'
+              ? trace.timestamp
+              : (conversation.lastMessageAt?.toISOString() ?? null),
+          matchedStepNumber:
+            typeof trace.mismatchMatchedStepNumber === 'number'
+              ? trace.mismatchMatchedStepNumber
+              : null,
+          matchedReason:
+            typeof trace.mismatchMatchedReason === 'string'
+              ? trace.mismatchMatchedReason
+              : null
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -1426,6 +1488,7 @@ export async function GET(request: NextRequest) {
         ...urgentDistress,
         ...urgentSchedulingConflicts,
         ...urgentScheduledReplyFailures,
+        ...urgentStateContentMismatch,
         ...urgentStuck,
         ...urgentDeliveryFailures
       ],

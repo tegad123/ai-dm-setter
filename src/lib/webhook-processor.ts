@@ -27,6 +27,10 @@ import {
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import {
+  extractUrlsFromText,
+  sanitizeMessageGroupUrls
+} from '@/lib/url-allowlist';
+import {
   runPostMessageScoring,
   getScoringContextForPrompt,
   runPostAIReplyScoring
@@ -461,8 +465,31 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
     const raw = (value as Record<string, unknown>)[key];
     return typeof raw === 'string' ? raw : null;
   };
+  const addPromptAssetUrls = (value: Prisma.JsonValue | null | undefined) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const assets = (value as Record<string, unknown>).assetLinks;
+    if (!assets || typeof assets !== 'object' || Array.isArray(assets)) return;
+    const assetRecord = assets as Record<string, unknown>;
+    addUrl(assetRecord.bookingLink);
+    addUrl(assetRecord.freeValueLink);
+    const videoLinks = assetRecord.videoLinks;
+    if (Array.isArray(videoLinks)) {
+      for (const video of videoLinks) {
+        if (typeof video === 'string') addUrl(video);
+        if (video && typeof video === 'object' && !Array.isArray(video)) {
+          addUrl((video as Record<string, unknown>).url);
+        }
+      }
+    }
+  };
 
   try {
+    const activeScript = await prisma.script.findFirst({
+      where: { accountId, isActive: true },
+      select: { id: true }
+    });
+    const hasActiveRelationalScript = !!activeScript;
+
     // Sprint 3: Add link slot URLs from ScriptSlots (legacy)
     const linkSlots = await prisma.scriptSlot.findMany({
       where: {
@@ -477,17 +504,26 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       addUrl(slot.url);
     }
 
-    // Sprint 3 Revised: Add link URLs from Script template actions
-    const scriptLinkActions = await prisma.scriptAction.findMany({
+    // Sprint 3 Revised: Add URLs from active Script template actions.
+    // Include explicit [LINK]/[VIDEO] rows and literal URLs authored
+    // inside [MSG]/[ASK] content so ship-time sanitization does not strip
+    // operator-written links that are not modeled as send_link actions.
+    const scriptUrlActions = await prisma.scriptAction.findMany({
       where: {
         step: { script: { accountId, isActive: true } },
-        actionType: { in: ['send_link', 'send_video'] },
-        linkUrl: { not: null }
+        OR: [
+          { linkUrl: { not: null } },
+          { content: { contains: 'http', mode: 'insensitive' } },
+          { content: { contains: 'www.', mode: 'insensitive' } }
+        ]
       },
-      select: { linkUrl: true }
+      select: { linkUrl: true, content: true }
     });
-    for (const action of scriptLinkActions) {
+    for (const action of scriptUrlActions) {
       addUrl(action.linkUrl);
+      for (const url of extractUrlsFromText(action.content)) {
+        addUrl(url);
+      }
     }
 
     // Persona-level URLs. Operators configure downsell / booking / free-value
@@ -508,41 +544,18 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       addUrl(persona.freeValueLink);
       addUrl(readJsonString(persona.downsellConfig, 'link'));
       addUrl(readJsonString(persona.promptConfig, 'downsellLink'));
-      addUrl(readJsonString(persona.promptConfig, 'bookingTypeformUrl'));
       addUrl(readJsonString(persona.promptConfig, 'youtubeFallbackUrl'));
       addUrl(readJsonString(persona.promptConfig, 'freeValueLink'));
+      if (!hasActiveRelationalScript) {
+        addUrl(readJsonString(persona.promptConfig, 'bookingTypeformUrl'));
+        addUrl(readJsonString(persona.promptConfig, 'typeformUrl'));
+        addPromptAssetUrls(persona.promptConfig);
+      }
     }
   } catch (err) {
     console.error('[webhook-processor] getAllowedUrls failed:', err);
   }
   return allowed;
-}
-
-/**
- * Strip any URL from `text` that is not in the allow-list. Returns the
- * sanitized text and a list of URLs that were removed (for logging).
- *
- * This is the last line of defense against URL hallucination (R16). The
- * AI is also instructed not to invent URLs, but this guard ensures a
- * fabricated `cal.com/...` link never reaches the lead even if the AI
- * ignores the rule.
- */
-function stripHallucinatedUrls(
-  text: string,
-  allowed: Set<string>
-): { sanitized: string; removed: string[] } {
-  const removed: string[] = [];
-  const urlRegex = /https?:\/\/[^\s<>"')]+/g;
-  const sanitized = text.replace(urlRegex, (match) => {
-    // Trim trailing punctuation that the regex might have included
-    const trimmed = match.replace(/[.,;:!?]+$/, '');
-    if (allowed.has(trimmed) || allowed.has(match)) {
-      return match;
-    }
-    removed.push(trimmed);
-    return '[link removed]';
-  });
-  return { sanitized, removed };
 }
 
 function sanitizeAIResultDashes(
@@ -3250,16 +3263,12 @@ export async function scheduleAIReply(
   // the "AI dropped a fake calendar URL" bug.
   try {
     const allowedUrls = await getAllowedUrls(accountId);
-    const { sanitized, removed } = stripHallucinatedUrls(
-      result.reply,
-      allowedUrls
-    );
+    const removed = sanitizeMessageGroupUrls(result, allowedUrls);
     if (removed.length) {
       console.warn(
-        `[webhook-processor] R16 violation for ${conversationId}: AI tried to send ${removed.length} unauthorized URL(s):`,
+        `[webhook-processor] R16 violation for ${conversationId}: AI tried to send ${removed.length} unauthorized URL(s) across reply bubbles:`,
         removed
       );
-      result.reply = sanitized;
     }
   } catch (err) {
     console.error(

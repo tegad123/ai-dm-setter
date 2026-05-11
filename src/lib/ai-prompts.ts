@@ -8,6 +8,7 @@ import {
   type ScriptRoutingContext
 } from '@/lib/script-serializer';
 import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
+import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
 
 // ---------------------------------------------------------------------------
 // Rule-authoring policy (READ THIS BEFORE ADDING A NEW R-RULE)
@@ -1260,6 +1261,100 @@ function appendTypeformHiddenField(
   return `${base}#${pairs.join('&')}`;
 }
 
+type ScriptUrlActionLike = {
+  content?: string | null;
+  linkUrl?: string | null;
+};
+
+type ScriptUrlStepLike = {
+  stepNumber: number;
+  actions?: ScriptUrlActionLike[];
+  branches?: Array<{ actions?: ScriptUrlActionLike[] }>;
+};
+
+function addActionUrls(action: ScriptUrlActionLike, urls: Set<string>): void {
+  if (
+    typeof action.linkUrl === 'string' &&
+    /^https?:\/\//i.test(action.linkUrl)
+  ) {
+    urls.add(action.linkUrl.trim());
+  }
+  for (const url of extractUrlsFromText(action.content)) {
+    urls.add(url);
+  }
+}
+
+export function getCurrentlyRelevantUrlsFromScript(
+  script: { steps?: ScriptUrlStepLike[] } | null | undefined,
+  currentStepNumber: number | null | undefined,
+  lookaheadSteps = 2
+): Set<string> {
+  const urls = new Set<string>();
+  if (
+    !script ||
+    typeof currentStepNumber !== 'number' ||
+    currentStepNumber < 1
+  ) {
+    return urls;
+  }
+
+  const maxStep = currentStepNumber + Math.max(0, lookaheadSteps);
+  for (const step of script.steps ?? []) {
+    if (step.stepNumber < currentStepNumber || step.stepNumber > maxStep) {
+      continue;
+    }
+    for (const action of step.actions ?? []) addActionUrls(action, urls);
+    for (const branch of step.branches ?? []) {
+      for (const action of branch.actions ?? []) addActionUrls(action, urls);
+    }
+  }
+
+  return urls;
+}
+
+async function loadCurrentlyRelevantUrls(
+  accountId: string,
+  currentStepNumber: number | null | undefined
+): Promise<Set<string> | null> {
+  if (typeof currentStepNumber !== 'number' || currentStepNumber < 1) {
+    return null;
+  }
+
+  const script = await prisma.script.findFirst({
+    where: { accountId, isActive: true },
+    include: {
+      steps: {
+        where: {
+          stepNumber: {
+            gte: currentStepNumber,
+            lte: currentStepNumber + 2
+          }
+        },
+        include: {
+          actions: true,
+          branches: {
+            include: {
+              actions: true
+            }
+          }
+        }
+      }
+    }
+  });
+
+  if (!script) return null;
+  return getCurrentlyRelevantUrlsFromScript(script, currentStepNumber);
+}
+
+export function shouldExposePersonaAssetUrl(
+  url: string | null | undefined,
+  currentlyRelevantUrls: Set<string> | null | undefined
+): boolean {
+  if (!url || !/^https?:\/\//i.test(url.trim())) return false;
+  if (!currentlyRelevantUrls) return true;
+  return isUrlAllowed(url.trim(), currentlyRelevantUrls);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildSupplementalSections(
   p: any,
@@ -1271,15 +1366,22 @@ function buildSupplementalSections(
    * route this lead's submission deterministically. Optional
    * because synthetic / admin prompt builds may have no conversation.
    */
-  conversationId?: string
+  conversationId?: string,
+  currentlyRelevantUrls?: Set<string> | null
 ): string {
   const parts: string[] = [];
 
-  const homeworkUrl =
+  const rawHomeworkUrl =
     typeof config.homeworkUrl === 'string' &&
     /^https?:\/\//i.test(config.homeworkUrl.trim())
       ? config.homeworkUrl.trim()
       : null;
+  const homeworkUrl = shouldExposePersonaAssetUrl(
+    rawHomeworkUrl,
+    currentlyRelevantUrls
+  )
+    ? rawHomeworkUrl
+    : null;
   if (homeworkUrl) {
     parts.push(`\n### CALL HOMEWORK PAGE
 Homework page: ${homeworkUrl}
@@ -1300,39 +1402,67 @@ This page tells leads what to expect on their call and how to prepare. Do NOT se
   // configured on the Typeform form (Settings → Hidden fields). If
   // there's no conversationId in scope (synthetic prompt builds), we
   // fall back to the bare URL — webhook will email/IG-match instead.
+  const scopedTypeformUrl = shouldExposePersonaAssetUrl(
+    rawTypeformUrl,
+    currentlyRelevantUrls
+  )
+    ? rawTypeformUrl
+    : null;
   const typeformUrl =
-    rawTypeformUrl && conversationId
+    scopedTypeformUrl && conversationId
       ? appendTypeformHiddenField(
-          rawTypeformUrl,
+          scopedTypeformUrl,
           'conversationid',
           conversationId
         )
-      : rawTypeformUrl;
-  const bookingLink =
+      : scopedTypeformUrl;
+  const rawBookingLink =
     assets &&
     typeof assets === 'object' &&
     typeof assets.bookingLink === 'string'
-      ? conversationId
-        ? appendTypeformHiddenField(
-            assets.bookingLink,
-            'conversationid',
-            conversationId
-          )
-        : assets.bookingLink
+      ? assets.bookingLink.trim()
       : null;
+  const scopedBookingLink = shouldExposePersonaAssetUrl(
+    rawBookingLink,
+    currentlyRelevantUrls
+  )
+    ? rawBookingLink
+    : null;
+  const bookingLink =
+    scopedBookingLink && conversationId
+      ? appendTypeformHiddenField(
+          scopedBookingLink,
+          'conversationid',
+          conversationId
+        )
+      : scopedBookingLink;
   if (assets && typeof assets === 'object') {
     const assetParts: string[] = [];
     if (bookingLink) assetParts.push(`- Booking link: ${bookingLink}`);
     if (typeformUrl)
       assetParts.push(`- Typeform / booking URL: ${typeformUrl}`);
-    if (assets.freeValueLink || p.freeValueLink)
-      assetParts.push(
-        `- Free value link: ${assets.freeValueLink || p.freeValueLink}`
-      );
+    const freeValueLink =
+      typeof assets.freeValueLink === 'string' &&
+      shouldExposePersonaAssetUrl(assets.freeValueLink, currentlyRelevantUrls)
+        ? assets.freeValueLink
+        : typeof p.freeValueLink === 'string' &&
+            shouldExposePersonaAssetUrl(p.freeValueLink, currentlyRelevantUrls)
+          ? p.freeValueLink
+          : null;
+    if (freeValueLink) assetParts.push(`- Free value link: ${freeValueLink}`);
     if (assets.videoLinks?.length) {
       assets.videoLinks.forEach((v: any) => {
-        if (typeof v === 'string') assetParts.push(`- Video: ${v}`);
-        else if (v.label && v.url) assetParts.push(`- ${v.label}: ${v.url}`);
+        if (typeof v === 'string') {
+          if (shouldExposePersonaAssetUrl(v, currentlyRelevantUrls)) {
+            assetParts.push(`- Video: ${v}`);
+          }
+        } else if (
+          v.label &&
+          v.url &&
+          shouldExposePersonaAssetUrl(v.url, currentlyRelevantUrls)
+        ) {
+          assetParts.push(`- ${v.label}: ${v.url}`);
+        }
       });
     }
     if (assetParts.length)
@@ -1401,7 +1531,8 @@ function buildScriptFirstTenantData(
   p: any,
   trainingExamples: any[],
   config: any,
-  conversationId?: string
+  conversationId?: string,
+  currentlyRelevantUrls?: Set<string> | null
 ): string {
   const sections: string[] = [];
 
@@ -1421,7 +1552,8 @@ function buildScriptFirstTenantData(
     p,
     trainingExamples,
     config,
-    conversationId
+    conversationId,
+    currentlyRelevantUrls
   );
   if (supplemental) {
     sections.push(`\n### SUPPLEMENTAL DATA\n${supplemental}`);
@@ -1439,7 +1571,8 @@ function buildLegacyTenantData(
   p: any,
   trainingExamples: any[],
   config: any,
-  conversationId?: string
+  conversationId?: string,
+  currentlyRelevantUrls?: Set<string> | null
 ): string {
   const sections: string[] = [];
 
@@ -1664,7 +1797,13 @@ function buildLegacyTenantData(
   }
   // Supplemental data (shared with script-first path)
   sections.push(
-    buildSupplementalSections(p, trainingExamples, config, conversationId)
+    buildSupplementalSections(
+      p,
+      trainingExamples,
+      config,
+      conversationId,
+      currentlyRelevantUrls
+    )
   );
 
   return sections.join('\n');
@@ -1777,6 +1916,10 @@ export async function buildDynamicSystemPrompt(
   // Build template variables
   let prompt = MASTER_PROMPT_TEMPLATE;
   const config = (p.promptConfig as any) || {};
+  const currentlyRelevantUrls = await loadCurrentlyRelevantUrls(
+    accountId,
+    authoritativeCurrentScriptStep ?? null
+  );
 
   // ── Identity ──────────────────────────────────────────────────────
   prompt = prompt.replace(/\{\{fullName\}\}/g, p.fullName || 'Sales Rep');
@@ -2480,7 +2623,8 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
       p as any,
       trainingExamples,
       config,
-      leadContext.conversationId
+      leadContext.conversationId,
+      currentlyRelevantUrls
     );
     const tenantBlock = supplemental
       ? `${dualBlock}\n\n# SUPPLEMENTAL DATA\n${supplemental}`
@@ -2493,7 +2637,8 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
       p as any,
       trainingExamples,
       config,
-      leadContext.conversationId
+      leadContext.conversationId,
+      currentlyRelevantUrls
     );
     prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, scriptBlock);
   } else {
@@ -2502,7 +2647,8 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
       p,
       trainingExamples,
       config,
-      leadContext.conversationId
+      leadContext.conversationId,
+      currentlyRelevantUrls
     );
     prompt = prompt.replace(/\{\{tenantDataBlock\}\}/g, legacyBlock);
   }

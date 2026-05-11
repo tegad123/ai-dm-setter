@@ -47,11 +47,17 @@ import {
   selectJudgeBranchForLead
 } from '../../src/lib/ai-engine';
 import {
+  detectFabricatedUrlInReply,
   detectMsgBubbleSequenceViolation,
   detectMsgVerbatimViolation,
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
 import { computeSystemStage } from '../../src/lib/script-state-recovery';
+import {
+  getCurrentlyRelevantUrlsFromScript,
+  shouldExposePersonaAssetUrl
+} from '../../src/lib/ai-prompts';
+import { sanitizeMessageGroupUrls } from '../../src/lib/url-allowlist';
 
 // ---------------------------------------------------------------------------
 // hasCapturedDataPoint — accepts both flat and {value,confidence} shapes
@@ -2580,6 +2586,152 @@ describe('bug-30-msg-verbatim-violation', () => {
       detectMsgBubbleSequenceViolation(requiredMessages, requiredMessages),
       null
     );
+  });
+});
+
+describe('fabricated URL guard', () => {
+  it('catches a fabricated URL in a single-bubble reply', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['here is the link: https://old.example.com/typeform'],
+      {
+        allowedUrls: ['https://current.example.com/book']
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('fabricated_url_in_reply:')
+      )
+    );
+  });
+
+  it('catches a fabricated URL in the second bubble', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['perfect bro', 'grab this: https://old.example.com/typeform'],
+      {
+        allowedUrls: ['https://current.example.com/book']
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('fabricated_url_in_reply:')
+      )
+    );
+  });
+
+  it('catches a fabricated URL in the third bubble', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'perfect bro',
+        'one more thing',
+        'grab this: https://old.example.com/typeform'
+      ],
+      {
+        allowedUrls: ['https://current.example.com/book']
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('fabricated_url_in_reply:')
+      )
+    );
+  });
+
+  it('allows a URL from the current script allowlist', () => {
+    const violation = detectFabricatedUrlInReply(
+      ['grab this: https://current.example.com/book#conversationid=abc123'],
+      ['https://current.example.com/book']
+    );
+
+    assert.equal(violation, null);
+  });
+
+  it('allows a URL from persona fallback allowlist', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['this free training will help: https://youtube.com/watch?v=abc123'],
+      {
+        allowedUrls: ['https://youtube.com/watch?v=abc123']
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('fabricated_url_in_reply:')
+      ),
+      false
+    );
+  });
+
+  it('sanitizes URLs across all multi-bubble messages before shipping', () => {
+    const result = {
+      reply: 'perfect bro',
+      messages: [
+        'perfect bro',
+        'grab this: https://old.example.com/typeform',
+        'use this instead: https://current.example.com/book'
+      ]
+    };
+
+    const removed = sanitizeMessageGroupUrls(result, [
+      'https://current.example.com/book'
+    ]);
+
+    assert.deepEqual(removed, ['https://old.example.com/typeform']);
+    assert.equal(result.messages[1], 'grab this: [link removed]');
+    assert.equal(
+      result.messages[2],
+      'use this instead: https://current.example.com/book'
+    );
+  });
+
+  it('does not expose stale persona booking URLs when current script step does not reference them', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 19,
+          actions: [
+            {
+              content: 'confirm the lead has enough capital',
+              linkUrl: null
+            }
+          ],
+          branches: []
+        },
+        {
+          stepNumber: 21,
+          actions: [
+            {
+              content: 'booking handoff',
+              linkUrl: 'https://current.example.com/book'
+            }
+          ],
+          branches: []
+        }
+      ]
+    };
+    const relevant = getCurrentlyRelevantUrlsFromScript(script, 19);
+
+    assert.equal(
+      shouldExposePersonaAssetUrl('https://old.example.com/typeform', relevant),
+      false
+    );
+    assert.equal(
+      shouldExposePersonaAssetUrl('https://current.example.com/book', relevant),
+      true
+    );
+  });
+
+  it("enforces each client's own URL allowlist without cross-client leakage", () => {
+    const clientTwoAllowed = ['https://legal.example.com/intake'];
+
+    const violation = detectFabricatedUrlInReply(
+      ['fill this out: https://fitness.example.com/apply'],
+      clientTwoAllowed
+    );
+
+    assert.equal(violation?.url, 'https://fitness.example.com/apply');
   });
 });
 
