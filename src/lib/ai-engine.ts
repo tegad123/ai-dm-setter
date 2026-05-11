@@ -1798,6 +1798,10 @@ export interface GenerateReplyResult {
   shouldVoiceNote: boolean;
   voiceNoteAction: { slot_id: string } | null;
   qualityScore: number;
+  qualityGateTerminalFailure?: boolean;
+  qualityGateFailureReason?: string | null;
+  qualityGateHardFails?: string[];
+  qualityGateAttempts?: number;
   suggestedDelay: number;
   systemPromptVersion: string;
   // Closed-loop training
@@ -2700,6 +2704,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   let finalQualityScore: number | null = null;
   let qualityGatePassedFirstAttempt = false;
   let preGenerationRecovery: RecoveryResult | null = null;
+  let qualityGateTerminalFailure = false;
+  let qualityGateFailureReason: string | null = null;
+  let qualityGateHardFails: string[] = [];
 
   // UNQUALIFIED post-exit guard (Kelvin Kelvot 2026-04-24 incident).
   // When lead.stage is already UNQUALIFIED, the AI shouldn't continue
@@ -3418,6 +3425,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               parsed.escalateToHuman = false;
               parsed.voiceNoteAction = null;
               finalQualityScore = recoveryQuality.score;
+              qualityGateTerminalFailure = false;
+              qualityGateFailureReason = null;
+              qualityGateHardFails = [];
               preGenerationRecovery = recovery;
               if (attempt === 0) qualityGatePassedFirstAttempt = true;
               console.warn(
@@ -3492,6 +3502,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
     }
     finalQualityScore = quality.score;
+    qualityGateHardFails = [...quality.hardFails];
+    if (quality.passed) {
+      qualityGateTerminalFailure = false;
+      qualityGateFailureReason = null;
+      qualityGateHardFails = [];
+    }
     await writeGenerateReplyTrace({
       checkpoint7_qualityGateRun: true,
       lastCheckpoint: 'checkpoint7_qualityGateRun',
@@ -5097,11 +5113,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
           );
           parsed.escalateToHuman = true;
+          qualityGateTerminalFailure = true;
+          qualityGateFailureReason = 'empty_output_after_quality_retries';
+          qualityGateHardFails = [...quality.hardFails];
         } else if (hardUnshippable) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts with UNSHIPPABLE hard fail — forcing escalate_to_human on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
           );
           parsed.escalateToHuman = true;
+          qualityGateTerminalFailure = true;
+          qualityGateFailureReason = 'hard_unshippable_after_quality_retries';
+          qualityGateHardFails = [...quality.hardFails];
         } else if (softUnshippable) {
           // Soft-fail best-effort (markdown / repeated capital Q).
           // Audit row → amber Action Required item; AI stays active.
@@ -5272,6 +5294,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           parsed.escalateToHuman = false;
           parsed.voiceNoteAction = null;
           finalQualityScore = recoveryQuality.score;
+          qualityGateTerminalFailure = false;
+          qualityGateFailureReason = null;
+          qualityGateHardFails = [];
           selfRecovered = true;
           selfRecoveryEventId = recovery.eventId;
           selfRecoveryReason = recovery.reason;
@@ -5631,6 +5656,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     shouldVoiceNote,
     voiceNoteAction: parsed.voiceNoteAction,
     qualityScore: Math.round(parsed.stageConfidence * 100),
+    qualityGateTerminalFailure,
+    qualityGateFailureReason,
+    qualityGateHardFails,
+    qualityGateAttempts,
     suggestedDelay,
     systemPromptVersion,
     suggestionId,

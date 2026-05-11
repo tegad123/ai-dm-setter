@@ -7,6 +7,11 @@ import {
   processScheduledReply,
   computeReplyDelaySeconds
 } from '@/lib/webhook-processor';
+import {
+  FAILED_QUALITY_GATE_STATUS,
+  isQualityGateEscalationError
+} from '@/lib/quality-gate-escalation';
+import { SCHEDULED_REPLY_MAX_ATTEMPTS } from '@/lib/meta-delivery-errors';
 import prisma from '@/lib/prisma';
 
 // Short delays bypass the per-minute cron queue and run inline via after().
@@ -447,8 +452,14 @@ async function processInstagramEvents(payload: any): Promise<void> {
         // creation, not delivery for existing conversations.
         const convo = await prisma.conversation.findUnique({
           where: { id: result.conversationId },
-          select: { aiActive: true }
+          select: { aiActive: true, awaitingHumanReview: true }
         });
+        if (convo?.awaitingHumanReview) {
+          console.log(
+            `[instagram-webhook] AI reply skipped — ${result.conversationId} is awaiting human review`
+          );
+          continue;
+        }
         if (convo?.aiActive) {
           // Decide between inline (after()) and queued (cron) execution.
           // The cron runs every minute, so a 30-45s configured delay would
@@ -518,7 +529,21 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   });
                   return;
                 }
+                const processingStartedAt = new Date();
                 await processScheduledReply(targetConvoId, accountId);
+                const deliveredMessage = await prisma.message.findFirst({
+                  where: {
+                    conversationId: targetConvoId,
+                    sender: 'AI',
+                    timestamp: { gte: processingStartedAt }
+                  },
+                  select: { id: true }
+                });
+                if (!deliveredMessage) {
+                  throw new Error(
+                    'ScheduledReply completed without delivering an AI Message'
+                  );
+                }
                 await prisma.scheduledReply.update({
                   where: { id: scheduledReply.id },
                   data: {
@@ -537,6 +562,24 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   scheduledReplyId: scheduledReply.id,
                   ...details
                 });
+                if (isQualityGateEscalationError(afterErr)) {
+                  await prisma.scheduledReply
+                    .update({
+                      where: { id: scheduledReply.id },
+                      data: {
+                        status: FAILED_QUALITY_GATE_STATUS,
+                        attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+                        scheduledFor: new Date(),
+                        processedAt: new Date(),
+                        lastError: afterErr.message.slice(0, 2000),
+                        ...(afterErr.generatedResult
+                          ? { generatedResult: afterErr.generatedResult }
+                          : {})
+                      }
+                    })
+                    .catch(() => null);
+                  return;
+                }
                 await prisma.scheduledReply
                   .updateMany({
                     where: {

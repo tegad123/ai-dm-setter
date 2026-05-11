@@ -372,8 +372,14 @@ async function processFacebookEvents(payload: any): Promise<void> {
         // creation, not delivery for existing conversations.
         const convo = await prisma.conversation.findUnique({
           where: { id: result.conversationId },
-          select: { aiActive: true }
+          select: { aiActive: true, awaitingHumanReview: true }
         });
+        if (convo?.awaitingHumanReview) {
+          console.log(
+            `[facebook-webhook] AI reply skipped — ${result.conversationId} is awaiting human review`
+          );
+          continue;
+        }
         if (convo?.aiActive) {
           const delaySeconds = await computeReplyDelaySeconds(accountId);
           const targetConvoId = result.conversationId;

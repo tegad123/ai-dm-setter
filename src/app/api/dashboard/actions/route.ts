@@ -4,6 +4,10 @@ import {
   classifyMetaDeliveryError,
   SCHEDULED_REPLY_MAX_ATTEMPTS
 } from '@/lib/meta-delivery-errors';
+import {
+  FAILED_QUALITY_GATE_STATUS,
+  QUALITY_GATE_FAILURE_REASON
+} from '@/lib/quality-gate-escalation';
 import { detectMetadataLeak } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -236,24 +240,36 @@ export async function GET(request: NextRequest) {
         prisma.scheduledReply.findMany({
           where: {
             accountId,
-            status: 'FAILED',
-            attempts: { gte: SCHEDULED_REPLY_MAX_ATTEMPTS },
-            OR: [
+            AND: [
               {
-                processedAt: {
-                  gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
-                }
+                OR: [
+                  {
+                    status: 'FAILED',
+                    attempts: { gte: SCHEDULED_REPLY_MAX_ATTEMPTS }
+                  },
+                  { status: FAILED_QUALITY_GATE_STATUS }
+                ]
               },
               {
-                scheduledFor: {
-                  gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
-                }
+                OR: [
+                  {
+                    processedAt: {
+                      gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
+                    }
+                  },
+                  {
+                    scheduledFor: {
+                      gte: new Date(now.getTime() - DELIVERY_FAILURE_WINDOW_MS)
+                    }
+                  }
+                ]
               }
             ]
           },
           select: {
             id: true,
             conversationId: true,
+            status: true,
             scheduledFor: true,
             attempts: true,
             lastError: true,
@@ -869,8 +885,7 @@ export async function GET(request: NextRequest) {
                 conversationId: {
                   in: Array.from(new Set(missingReplyConvIds))
                 },
-                wasSelected: false,
-                wasRejected: false
+                wasSelected: false
               },
               orderBy: { generatedAt: 'desc' },
               select: {
@@ -898,9 +913,14 @@ export async function GET(request: NextRequest) {
         if (isDismissed(row.conversationId, 'scheduled_delivery_failure')) {
           return null;
         }
-        const errorInfo = classifyMetaDeliveryError(
-          row.lastError ?? 'Unknown delivery error'
-        );
+        const isQualityGateFailure =
+          row.status === FAILED_QUALITY_GATE_STATUS ||
+          (row.lastError ?? '').startsWith(FAILED_QUALITY_GATE_STATUS);
+        const errorInfo = isQualityGateFailure
+          ? null
+          : classifyMetaDeliveryError(
+              row.lastError ?? 'Unknown delivery error'
+            );
         const generatedReplyText =
           replyTextFromGeneratedResult(row.generatedResult) ??
           fallbackReplyByConv.get(row.conversationId) ??
@@ -917,10 +937,14 @@ export async function GET(request: NextRequest) {
             row.scheduledFor ??
             row.createdAt
           ).toISOString(),
-          attempts: errorInfo.permanent ? 1 : row.attempts,
+          attempts: errorInfo?.permanent ? 1 : row.attempts,
           generatedReplyText,
-          errorCodeLabel: deliveryErrorCodeLabel(errorInfo),
-          errorMeaning: errorInfo.meaning
+          errorCodeLabel: isQualityGateFailure
+            ? 'Quality gate failed'
+            : deliveryErrorCodeLabel(errorInfo!),
+          errorMeaning: isQualityGateFailure
+            ? QUALITY_GATE_FAILURE_REASON
+            : errorInfo!.meaning
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);

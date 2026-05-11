@@ -374,7 +374,8 @@ export async function POST(
       data: {
         lastMessageAt: nowForAction,
         awaitingAiResponse: false,
-        awaitingSince: null
+        awaitingSince: null,
+        awaitingHumanReview: false
       },
       select: {
         id: true,

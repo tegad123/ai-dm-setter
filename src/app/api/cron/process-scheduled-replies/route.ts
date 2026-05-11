@@ -5,6 +5,11 @@ import {
   SCHEDULED_REPLY_MAX_ATTEMPTS
 } from '@/lib/meta-delivery-errors';
 import { processScheduledReply } from '@/lib/webhook-processor';
+import {
+  FAILED_QUALITY_GATE_STATUS,
+  isQualityGateEscalationError,
+  QUALITY_GATE_FAILURE_REASON
+} from '@/lib/quality-gate-escalation';
 import { broadcastNotification } from '@/lib/realtime';
 import { Prisma } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
@@ -302,11 +307,25 @@ export async function GET(req: NextRequest) {
         `[cron] processing reply ${reply.id} convo=${reply.conversationId}`
       );
       try {
+        const processingStartedAt = new Date();
         await processScheduledReply(reply.conversationId, reply.accountId, {
           messageType: reply.messageType,
           generatedResult: reply.generatedResult,
           createdAt: reply.createdAt
         });
+        const deliveredMessage = await prisma.message.findFirst({
+          where: {
+            conversationId: reply.conversationId,
+            sender: 'AI',
+            timestamp: { gte: processingStartedAt }
+          },
+          select: { id: true }
+        });
+        if (!deliveredMessage) {
+          throw new Error(
+            'ScheduledReply completed without delivering an AI Message'
+          );
+        }
         console.log(`[cron] processed reply ${reply.id} OK`);
 
         await prisma.scheduledReply.update({
@@ -319,6 +338,42 @@ export async function GET(req: NextRequest) {
           `[cron] Failed to process scheduled reply ${reply.id}:`,
           err
         );
+        if (isQualityGateEscalationError(err)) {
+          const failedAt = new Date();
+          await prisma.scheduledReply.update({
+            where: { id: reply.id },
+            data: {
+              status: FAILED_QUALITY_GATE_STATUS,
+              attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+              scheduledFor: failedAt,
+              processedAt: failedAt,
+              lastError: err.message.slice(0, 2000),
+              ...(err.generatedResult
+                ? { generatedResult: err.generatedResult }
+                : {})
+            }
+          });
+          await prisma.conversation
+            .update({
+              where: { id: reply.conversationId },
+              data: {
+                aiActive: true,
+                autoSendOverride: true,
+                awaitingHumanReview: true,
+                awaitingAiResponse: true,
+                awaitingSince: err.awaitingSince ?? failedAt,
+                lastSilentStopAt: failedAt
+              }
+            })
+            .catch(() => null);
+          console.warn('[cron] scheduled reply escalated to human review:', {
+            scheduledReplyId: reply.id,
+            conversationId: reply.conversationId,
+            reason: QUALITY_GATE_FAILURE_REASON
+          });
+          failed++;
+          continue;
+        }
         const errorInfo = classifyMetaDeliveryError(err);
         const errorMessage = errorInfo.rawMessage.slice(0, 2000);
         const failedAttempt = reply.attempts + 1;

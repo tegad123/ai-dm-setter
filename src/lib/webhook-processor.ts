@@ -38,6 +38,12 @@ import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { transitionLeadStage } from '@/lib/lead-stage';
 import {
+  buildQualityGateGeneratedResult,
+  isTerminalQualityGateResult,
+  QualityGateEscalationError,
+  QUALITY_GATE_FAILURE_REASON
+} from '@/lib/quality-gate-escalation';
+import {
   resolvePlatformAwayMode,
   shouldMarkEngagedFromLeadMessage,
   updateLeadStageFromConversation
@@ -261,6 +267,99 @@ async function alertMetaTokenInvalidated(params: {
   } catch (err) {
     console.error(
       '[webhook-processor] Failed to create token-invalidated notification:',
+      err
+    );
+  }
+}
+
+async function escalateQualityGateFailure(params: {
+  conversationId: string;
+  accountId: string;
+  lead: {
+    id: string;
+    name: string;
+    handle: string;
+    accountId: string;
+  };
+  result: GenerateReplyResult;
+  latestLeadTimestamp?: Date | null;
+}): Promise<void> {
+  const { conversationId, accountId, lead, result, latestLeadTimestamp } =
+    params;
+  const hardFails = result.qualityGateHardFails ?? [];
+  const generatedText = (
+    Array.isArray(result.messages) && result.messages.length > 0
+      ? result.messages
+      : [result.reply]
+  )
+    .filter((message): message is string => typeof message === 'string')
+    .join('\n')
+    .slice(0, 1200);
+
+  if (result.suggestionId) {
+    await prisma.aISuggestion
+      .update({
+        where: { id: result.suggestionId },
+        data: { wasRejected: true, finalSentText: null }
+      })
+      .catch((err) =>
+        console.error(
+          '[webhook-processor] quality-gate suggestion mark rejected failed:',
+          err
+        )
+      );
+  }
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: {
+      aiActive: true,
+      autoSendOverride: true,
+      awaitingHumanReview: true,
+      awaitingAiResponse: true,
+      awaitingSince: latestLeadTimestamp ?? new Date(),
+      lastSilentStopAt: new Date()
+    }
+  });
+  await prisma.scheduledReply
+    .updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    })
+    .catch((err) =>
+      console.error(
+        '[webhook-processor] quality-gate pending reply cancel failed:',
+        err
+      )
+    );
+
+  try {
+    const { escalate } = await import('@/lib/escalation-dispatch');
+    const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+    const link = origin
+      ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
+      : undefined;
+    await escalate({
+      type: 'ai_stuck',
+      accountId,
+      leadId: lead.id,
+      conversationId,
+      leadName: lead.name,
+      leadHandle: lead.handle,
+      title: 'AI generation failed quality gate — manual response required',
+      body:
+        `${lead.name} (@${lead.handle}): ${QUALITY_GATE_FAILURE_REASON}. ` +
+        `No AI message was delivered and the scheduled reply was escalated for manual handling.\n\n` +
+        `Hard fails: ${hardFails.length ? hardFails.join(', ') : 'unknown'}\n\n` +
+        `Generated draft:\n${generatedText || '(draft unavailable)'}`,
+      details: hardFails.length
+        ? hardFails.join(', ')
+        : QUALITY_GATE_FAILURE_REASON,
+      link
+    });
+  } catch (err) {
+    console.error(
+      '[webhook-processor] quality-gate escalation notification failed:',
       err
     );
   }
@@ -1318,8 +1417,12 @@ export async function processIncomingMessage(
     data: {
       lastMessageAt: now,
       unreadCount: { increment: 1 },
-      awaitingAiResponse: lead.conversation!.aiActive,
-      awaitingSince: lead.conversation!.aiActive ? now : null,
+      awaitingAiResponse:
+        lead.conversation!.aiActive && !lead.conversation!.awaitingHumanReview,
+      awaitingSince:
+        lead.conversation!.aiActive && !lead.conversation!.awaitingHumanReview
+          ? now
+          : null,
       ...(detectedEmail ? { leadEmail: detectedEmail } : {})
     }
   });
@@ -2213,6 +2316,14 @@ export async function scheduleAIReply(
     `messages=${conversation.messages.length}`
   );
 
+  if (conversation.awaitingHumanReview) {
+    log('sched.step1.awaitingHumanReview', 'manual response required');
+    if (options?.skipDelayQueue) {
+      throw new Error('Conversation is awaiting human review');
+    }
+    return;
+  }
+
   const { lead } = conversation;
 
   const latestLeadMessage = [...conversation.messages]
@@ -3018,7 +3129,28 @@ export async function scheduleAIReply(
         }
       })
       .catch(() => null);
+    if (options?.skipDelayQueue) {
+      throw err;
+    }
     return;
+  }
+
+  if (isTerminalQualityGateResult(result)) {
+    await escalateQualityGateFailure({
+      conversationId,
+      accountId,
+      lead,
+      result,
+      latestLeadTimestamp: latestLeadMessage?.timestamp ?? null
+    });
+    throw new QualityGateEscalationError({
+      conversationId,
+      accountId,
+      suggestionId: result.suggestionId,
+      generatedResult: buildQualityGateGeneratedResult(result),
+      hardFails: result.qualityGateHardFails,
+      awaitingSince: latestLeadMessage?.timestamp ?? null
+    });
   }
 
   // ── Step 4a-pre: Script-bound runtime_match VN resolution ──────
@@ -5388,7 +5520,12 @@ export async function processAdminMessage(
   // = context only; consecutive PHONE messages = takeover.
   await prisma.conversation.update({
     where: { id: conversationId },
-    data: { lastMessageAt: new Date() }
+    data: {
+      lastMessageAt: new Date(),
+      awaitingAiResponse: false,
+      awaitingSince: null,
+      awaitingHumanReview: false
+    }
   });
 
   let autoPausedFromConsecutivePhone = false;
@@ -6136,6 +6273,28 @@ async function deliverStoredReply(
   const { lead } = conversation;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = generatedResult as any;
+  if (isTerminalQualityGateResult(result)) {
+    const latestLead = await prisma.message.findFirst({
+      where: { conversationId, sender: 'LEAD' },
+      orderBy: { timestamp: 'desc' },
+      select: { timestamp: true }
+    });
+    await escalateQualityGateFailure({
+      conversationId,
+      accountId,
+      lead,
+      result,
+      latestLeadTimestamp: latestLead?.timestamp ?? null
+    });
+    throw new QualityGateEscalationError({
+      conversationId,
+      accountId,
+      suggestionId: result.suggestionId ?? null,
+      generatedResult: buildQualityGateGeneratedResult(result),
+      hardFails: result.qualityGateHardFails ?? [],
+      awaitingSince: latestLead?.timestamp ?? null
+    });
+  }
 
   console.log(
     `[webhook-processor] Delivering pre-generated ${result.shouldVoiceNote || result.voiceNoteAction?.slot_id ? 'voice note' : 'text'} reply for ${conversationId}`

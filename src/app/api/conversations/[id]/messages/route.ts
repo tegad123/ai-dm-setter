@@ -305,6 +305,7 @@ export async function POST(
       lastMessageAt?: Date;
       awaitingAiResponse?: boolean;
       awaitingSince?: Date | null;
+      awaitingHumanReview?: boolean;
     } = {};
     if (sender !== 'SYSTEM') {
       updateData.lastMessageAt = now;
@@ -312,6 +313,7 @@ export async function POST(
     if (sender === 'HUMAN') {
       updateData.awaitingAiResponse = false;
       updateData.awaitingSince = null;
+      updateData.awaitingHumanReview = false;
       // Cancel any pending debounced AI reply — the human just sent
       // a message, the queued AI reply would otherwise fire a minute
       // later and talk over them.

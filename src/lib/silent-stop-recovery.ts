@@ -525,6 +525,7 @@ async function fetchStalledConversations(now = new Date()) {
     where: {
       aiActive: true,
       awaitingAiResponse: true,
+      awaitingHumanReview: false,
       awaitingSince: { lt: threshold },
       // Belt-and-suspenders DB-side filter mirroring the
       // isConversationActive guard. `lastMessageAt` is bumped on every
