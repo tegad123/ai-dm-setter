@@ -94,6 +94,24 @@ const POSITIVE_BRANCH_SIGNAL =
 const NEGATIVE_BRANCH_SIGNAL =
   /\b(no|not|unclear|hesitant|hesitation|objection|decline(?:d)?|negative|unsure|not\s+ready)\b/i;
 
+const DEEP_WHY_STEP_SIGNAL =
+  /\b(deep\s+why|deeper\s+why|desired\s+outcome|personal\s+(?:why|reason)|emotional\s+(?:why|reason)|reason\s+behind\s+(?:the\s+)?goal|why\s+(?:it|this|that)\s+(?:is|matters)|family\s+freedom|time\s+freedom)\b/i;
+
+function deepWhySatisfiedByBranchHistory(
+  points: Record<string, unknown> | null | undefined
+): boolean {
+  return branchHistoryEvents(points).some((event) => {
+    if (event.eventType !== 'step_completed') return false;
+    const stepTitle =
+      typeof event.stepTitle === 'string' ? event.stepTitle : '';
+    const selectedBranchLabel =
+      typeof event.selectedBranchLabel === 'string'
+        ? event.selectedBranchLabel
+        : '';
+    return DEEP_WHY_STEP_SIGNAL.test(`${stepTitle} ${selectedBranchLabel}`);
+  });
+}
+
 function buyInConfirmedByBranchHistory(
   points: Record<string, unknown> | null | undefined,
   stepNumber: number
@@ -132,6 +150,13 @@ function prereqSatisfiedByCapturedState(
   if (
     prereq.id === 'buy_in_confirmed' &&
     buyInConfirmedByBranchHistory(points, prereq.stepNumber)
+  ) {
+    return true;
+  }
+
+  if (
+    prereq.id === 'desired_outcome_or_deep_why' &&
+    deepWhySatisfiedByBranchHistory(points)
   ) {
     return true;
   }
@@ -739,7 +764,8 @@ export function detectStep10Skipped(
     hasCapturedDataPoint(capturedDataPoints, 'deepWhy') ||
     hasCapturedDataPoint(capturedDataPoints, 'deep_why') ||
     hasCapturedDataPoint(capturedDataPoints, 'desiredOutcome') ||
-    hasCapturedDataPoint(capturedDataPoints, 'desired_outcome');
+    hasCapturedDataPoint(capturedDataPoints, 'desired_outcome') ||
+    deepWhySatisfiedByBranchHistory(capturedDataPoints);
   return !deepWhyPresent;
 }
 

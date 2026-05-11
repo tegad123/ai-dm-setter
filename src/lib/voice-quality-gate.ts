@@ -4050,9 +4050,7 @@ export function scoreVoiceQualityGroup(
       lastTwoStructures.every((structure) => structure === currentStructure)) ||
       recentSameStructureCount >= 2)
   ) {
-    hardFails.push(
-      `[group] repeated_message_structure: recent AI turns already overused ${currentStructure}. Vary your message structure — use a single bubble, a longer empathy split, a direct question, or a three-bubble react/dig/question turn instead of repeating the same shape.`
-    );
+    softSignals.repeated_message_structure = -0.15;
   } else if (
     currentStructure !== 'other' &&
     lastTwoStructures[lastTwoStructures.length - 1] === currentStructure

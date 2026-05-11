@@ -238,6 +238,29 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('accepts completed deep-why branchHistory as desired outcome prereq', () => {
+    const points = {
+      workBackground: 'engineer',
+      monthlyIncome: '5000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '4000',
+      obstacle: 'no system',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: 'true',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 11,
+          stepTitle: 'Desired Outcome — Probe if Surface',
+          selectedBranchLabel: 'Surface — needs second probe',
+          completedAt: '2026-05-11T15:07:11.508Z'
+        }
+      ]
+    };
+
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-C: accepts completed clear buy-in branchHistory as buy_in_confirmed', () => {
     const points = {
       workBackground: 'engineer',
@@ -1526,6 +1549,32 @@ describe('active-branch-scoped quality gates', () => {
     );
   });
 
+  it('bug-57-repeated-message-structure-is-soft-warning-only', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'love that bro, i can see the commitment just by the way you speak.',
+        'what do you feel is the main thing holding you back that you would ideally want some guidance on man?'
+      ],
+      {
+        priorMessageStructures: [
+          'two_short_reaction_question',
+          'two_short_reaction_question'
+        ]
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('repeated_message_structure:')
+      ),
+      false
+    );
+    assert.equal(
+      typeof quality.softSignals.repeated_message_structure,
+      'number'
+    );
+  });
+
   it('bug-38-active-branch-silent: silent branch on mixed step does not require a question', () => {
     const quality = scoreVoiceQualityGroup(['gotcha bro, that makes sense.'], {
       currentStepHasAnyAskAction: true,
@@ -2362,6 +2411,60 @@ describe('detectStep10Skipped', () => {
       desiredOutcome: 'family freedom'
     };
     const reply = 'What do you feel is the main thing holding you back?';
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('bug-54-deep-why-branch-history: completed deep-why step allows Step 12 content', () => {
+    const captured = {
+      incomeGoal: '15000',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 10,
+          stepTitle: 'Desired Outcome — Deep Why',
+          selectedBranchLabel: 'Default',
+          completedAt: '2026-05-11T15:06:04.857Z'
+        }
+      ]
+    };
+    const reply = 'What do you feel is the main thing holding you back?';
+
+    assert.equal(detectStep10Skipped(reply, captured), false);
+  });
+
+  it('bug-55-deep-why-branch-history-missing: still blocks Step 12 when deep why was not completed', () => {
+    const captured = {
+      incomeGoal: '15000',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 9,
+          stepTitle: 'Income Goal',
+          selectedBranchLabel: 'Wants to replace',
+          completedAt: '2026-05-11T15:04:53.437Z'
+        }
+      ]
+    };
+    const reply = 'What do you feel is the main thing holding you back?';
+
+    assert.equal(detectStep10Skipped(reply, captured), true);
+  });
+
+  it('bug-56-deep-why-different-step-number: detects generic deep-why completion titles', () => {
+    const captured = {
+      incomeGoal: '15000',
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 4,
+          stepTitle: 'Personal reason behind the goal',
+          selectedBranchLabel: 'Default',
+          completedAt: '2026-05-11T15:06:04.857Z'
+        }
+      ]
+    };
+    const reply = 'What do you feel is the main thing holding you back?';
+
     assert.equal(detectStep10Skipped(reply, captured), false);
   });
 
