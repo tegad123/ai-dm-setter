@@ -50,6 +50,7 @@ import {
   detectFabricatedUrlInReply,
   detectMsgBubbleSequenceViolation,
   detectMsgVerbatimViolation,
+  extractRequiredQuotes,
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
 import { computeSystemStage } from '../../src/lib/script-state-recovery';
@@ -1418,6 +1419,109 @@ describe('active-branch-scoped quality gates', () => {
         (failure) =>
           failure.includes('msg_verbatim_violation:') &&
           failure.includes('give me a bit more context')
+      )
+    );
+  });
+
+  it('bug-50-example-quotes-not-enforced: ignores quoted placeholder alternatives', () => {
+    const examplePlaceholder =
+      '{{Comment on their job genuinely — "I respect that" / "I\'ve been there" / acknowledge it.}}';
+
+    const extraction = extractRequiredQuotes(examplePlaceholder);
+    assert.deepEqual(extraction.requiredQuotes, []);
+    assert.deepEqual(extraction.exampleQuotes, [
+      'I respect that',
+      "I've been there"
+    ]);
+
+    const quality = scoreVoiceQualityGroup(
+      ['damn bro, nurse work is no joke. How long you been doing that?'],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content: examplePlaceholder,
+            isPlaceholder: true
+          }
+        ]
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+  });
+
+  it('bug-51-required-quotes-enforced: requires imperative placeholder quotes', () => {
+    const requiredPlaceholder =
+      '{{acknowledge specifically using their own words — 1 sentence. Then add: "give me a bit more context" to keep momentum}}';
+
+    const extraction = extractRequiredQuotes(requiredPlaceholder);
+    assert.deepEqual(extraction.requiredQuotes, ['give me a bit more context']);
+    assert.deepEqual(extraction.exampleQuotes, []);
+
+    const quality = scoreVoiceQualityGroup(
+      ['damn bro, that red screen can mess with you fast'],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content: requiredPlaceholder,
+            isPlaceholder: true
+          }
+        ]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some(
+        (failure) =>
+          failure.includes('msg_verbatim_violation:') &&
+          failure.includes('give me a bit more context')
+      )
+    );
+  });
+
+  it('bug-52-single-quote-default-required: treats a lone placeholder quote as required', () => {
+    const placeholder =
+      '{{acknowledge them briefly and close with "send me a bit more context"}}';
+
+    assert.deepEqual(extractRequiredQuotes(placeholder).requiredQuotes, [
+      'send me a bit more context'
+    ]);
+
+    const quality = scoreVoiceQualityGroup(['got you bro'], {
+      activeBranchRequiredMessages: [
+        {
+          content: placeholder,
+          isPlaceholder: true
+        }
+      ]
+    });
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-53-literal-msg-unaffected: still enforces literal messages', () => {
+    const quality = scoreVoiceQualityGroup(['I hear you bro.'], {
+      activeBranchRequiredMessages: [
+        {
+          content: 'I respect that bro, I truly do.',
+          isPlaceholder: false
+        }
+      ]
+    });
+
+    assert.ok(
+      quality.hardFails.some(
+        (failure) =>
+          failure.includes('msg_verbatim_violation:') &&
+          failure.includes('I respect that bro, I truly do')
       )
     );
   });

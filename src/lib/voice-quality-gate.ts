@@ -32,6 +32,7 @@ export interface RequiredMessage {
   content: string;
   isPlaceholder?: boolean;
   embeddedQuotes?: string[];
+  exampleQuotes?: string[];
 }
 
 export const FORBIDDEN_AI_DASH_PATTERN = /[\u2013\u2014]/;
@@ -1040,15 +1041,112 @@ function requiredMessageMatchesGenerated(
     : false;
 }
 
-export function extractEmbeddedQuotes(content: string): string[] {
-  const quotes: string[] = [];
+type ExtractedQuote = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+export type PlaceholderQuoteExtraction = {
+  requiredQuotes: string[];
+  exampleQuotes: string[];
+};
+
+const REQUIRED_QUOTE_CONTEXT =
+  /(?:then\s+add|must\s+(?:say|include|use)|include|use\s+exactly|say\s+exactly|add|append|end\s+with|close\s+with)\s*:?\s*$/i;
+
+const EXAMPLE_QUOTE_CONTEXT =
+  /(?:like|such\s+as|e\.?g\.?|for\s+example|for\s+instance|examples?|anything\s+like|can\s+say|could\s+say|options?)\s*:?\s*$/i;
+
+function quotedStringsWithPositions(content: string): ExtractedQuote[] {
+  const quotes: ExtractedQuote[] = [];
   const regex = /"([^"]+)"|(?:^|[\s:([{])'([^']+)'(?=[\s.,;:!?)}\]]|$)/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(content)) !== null) {
+    const raw = match[0];
     const quote = (match[1] || match[2] || '').trim();
-    if (quote.length > 0) quotes.push(quote);
+    if (quote.length === 0) continue;
+    const quoteOffset = raw.indexOf(match[1] || match[2] || '');
+    quotes.push({
+      text: quote,
+      start: match.index + Math.max(quoteOffset, 0),
+      end: match.index + raw.length
+    });
   }
   return quotes;
+}
+
+function quoteContextBefore(content: string, quote: ExtractedQuote): string {
+  const prior = content.slice(0, quote.start);
+  const boundary = Math.max(
+    prior.lastIndexOf('.'),
+    prior.lastIndexOf('\n'),
+    prior.lastIndexOf(';'),
+    prior.lastIndexOf('{{')
+  );
+  return prior.slice(Math.max(0, boundary + 1)).trim();
+}
+
+function hasAlternativeQuoteSyntax(
+  content: string,
+  quotes: ExtractedQuote[]
+): boolean {
+  if (quotes.length < 2) return false;
+
+  for (let index = 0; index < quotes.length - 1; index += 1) {
+    const between = content.slice(quotes[index].end, quotes[index + 1].start);
+    if (/[\/|]/.test(between) || /\bor\b/i.test(between)) return true;
+    if (/^\s*,\s*$/.test(between)) return true;
+  }
+
+  return quotes.some((quote) => {
+    const after = content.slice(quote.end, quote.end + 80);
+    return /^\s*(?:\/|\||,|\bor\b)/i.test(after);
+  });
+}
+
+export function extractRequiredQuotes(
+  content: string
+): PlaceholderQuoteExtraction {
+  const quotes = quotedStringsWithPositions(content);
+  if (quotes.length === 0) {
+    return { requiredQuotes: [], exampleQuotes: [] };
+  }
+
+  if (hasAlternativeQuoteSyntax(content, quotes)) {
+    return {
+      requiredQuotes: [],
+      exampleQuotes: quotes.map((quote) => quote.text)
+    };
+  }
+
+  const requiredQuotes: string[] = [];
+  const exampleQuotes: string[] = [];
+
+  for (const quote of quotes) {
+    const context = quoteContextBefore(content, quote);
+    if (EXAMPLE_QUOTE_CONTEXT.test(context)) {
+      exampleQuotes.push(quote.text);
+      continue;
+    }
+
+    if (REQUIRED_QUOTE_CONTEXT.test(context)) {
+      requiredQuotes.push(quote.text);
+      continue;
+    }
+
+    if (quotes.length === 1) {
+      requiredQuotes.push(quote.text);
+    } else {
+      exampleQuotes.push(quote.text);
+    }
+  }
+
+  return { requiredQuotes, exampleQuotes };
+}
+
+export function extractEmbeddedQuotes(content: string): string[] {
+  return extractRequiredQuotes(content).requiredQuotes;
 }
 
 type RequiredMessageInput =
@@ -1058,6 +1156,7 @@ type RequiredMessageInput =
       content?: string | null;
       isPlaceholder?: boolean;
       embeddedQuotes?: string[];
+      exampleQuotes?: string[];
     };
 
 function normalizeRequiredMessages(
@@ -1075,21 +1174,31 @@ function normalizeRequiredMessages(
         : (action as {
             isPlaceholder?: boolean;
             embeddedQuotes?: string[];
+            exampleQuotes?: string[];
           });
     const isPlaceholder =
       typeof actionMetadata?.isPlaceholder === 'boolean'
         ? actionMetadata.isPlaceholder
         : isRuntimePlaceholderOnly(trimmed);
+    const extractedQuotes = isPlaceholder
+      ? extractRequiredQuotes(trimmed)
+      : { requiredQuotes: [], exampleQuotes: [] };
     const embeddedQuotes = isPlaceholder
       ? actionMetadata?.embeddedQuotes &&
         actionMetadata.embeddedQuotes.length > 0
         ? actionMetadata.embeddedQuotes
-        : extractEmbeddedQuotes(trimmed)
+        : extractedQuotes.requiredQuotes
+      : [];
+    const exampleQuotes = isPlaceholder
+      ? actionMetadata?.exampleQuotes && actionMetadata.exampleQuotes.length > 0
+        ? actionMetadata.exampleQuotes
+        : extractedQuotes.exampleQuotes
       : [];
     messages.push({
       content: trimmed,
       isPlaceholder,
-      embeddedQuotes
+      embeddedQuotes,
+      exampleQuotes
     });
   }
   return messages;
