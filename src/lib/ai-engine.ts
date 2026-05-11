@@ -54,6 +54,13 @@ import {
   selectStep1BranchesForPrompt
 } from '@/lib/script-serializer';
 import {
+  applyResolvedScriptVariables,
+  persistScriptVariableResolutions,
+  resolveScriptVariablesForTexts,
+  type ScriptVariableResolutionContext,
+  type ScriptVariableResolutionMap
+} from '@/lib/script-variable-resolver';
+import {
   countConversationTurns,
   detectBeliefBreakDeliveryStage,
   detectBeliefBreakInMessage,
@@ -1279,7 +1286,8 @@ function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
 }
 
 function getActiveBranchRequiredMessages(
-  activeBranch: JudgeBranchLike | null | undefined
+  activeBranch: JudgeBranchLike | null | undefined,
+  variableResolutionMap?: ScriptVariableResolutionMap | null
 ): RequiredMessage[] {
   if (!activeBranch) return [];
   return activeBranch.actions
@@ -1290,7 +1298,11 @@ function getActiveBranchRequiredMessages(
         action.content.trim().length > 0
     )
     .map((action) => {
-      const content = action.content?.trim() ?? '';
+      const content =
+        applyResolvedScriptVariables(
+          action.content?.trim() ?? '',
+          variableResolutionMap
+        )?.trim() ?? '';
       const isPlaceholder = isRuntimePlaceholderOnly(content);
       return {
         content,
@@ -1298,6 +1310,42 @@ function getActiveBranchRequiredMessages(
         embeddedQuotes: isPlaceholder ? extractEmbeddedQuotes(content) : []
       };
     });
+}
+
+function resolveMessageContentsForGate(
+  contents: string[],
+  variableResolutionMap?: ScriptVariableResolutionMap | null
+): string[] {
+  return contents
+    .map((content) =>
+      (
+        applyResolvedScriptVariables(content, variableResolutionMap) ?? content
+      ).trim()
+    )
+    .filter((content) => content.length > 0);
+}
+
+function collectCurrentStepVariableTexts(
+  step: JudgeStepLike | null | undefined
+): string[] {
+  if (!step) return [];
+  const actions = [
+    ...step.actions,
+    ...step.branches.flatMap((branch) => branch.actions)
+  ];
+  return Array.from(
+    new Set(
+      actions
+        .filter(
+          (action) =>
+            (action.actionType === 'send_message' ||
+              action.actionType === 'ask_question') &&
+            typeof action.content === 'string' &&
+            action.content.trim().length > 0
+        )
+        .map((action) => action.content!.trim())
+    )
+  );
 }
 
 type UrlActionLike = {
@@ -1543,8 +1591,10 @@ export async function buildJudgeClassificationDirective(params: {
   latestLeadMessage?: string | null;
   accountId?: string | null;
   cache?: JudgeBranchSelectionCache;
+  variableResolutionMap?: ScriptVariableResolutionMap | null;
 }): Promise<string> {
-  const { step, latestLeadMessage, accountId, cache } = params;
+  const { step, latestLeadMessage, accountId, cache, variableResolutionMap } =
+    params;
   if (!step || !hasRuntimeJudgmentAction(step)) return '';
 
   const match = await selectJudgeBranchForLead(step, latestLeadMessage, {
@@ -1571,7 +1621,12 @@ export async function buildJudgeClassificationDirective(params: {
                 : action.actionType === 'send_message'
                   ? 'MSG'
                   : 'ACTION';
-            return `  [${tag}] ${action.content?.trim()}`;
+            const content =
+              applyResolvedScriptVariables(
+                action.content?.trim() ?? '',
+                variableResolutionMap
+              )?.trim() ?? '';
+            return `  [${tag}] ${content}`;
           })
           .join('\n')
       : null;
@@ -1594,6 +1649,7 @@ export async function detectJudgeBranchViolation(params: {
   accountId?: string | null;
   cache?: JudgeBranchSelectionCache;
   classifier?: JudgeBranchClassifier;
+  variableResolutionMap?: ScriptVariableResolutionMap | null;
 }): Promise<JudgeBranchViolation> {
   const {
     step,
@@ -1601,7 +1657,8 @@ export async function detectJudgeBranchViolation(params: {
     generatedMessages,
     accountId,
     cache,
-    classifier
+    classifier,
+    variableResolutionMap
   } = params;
   if (!step || !hasRuntimeJudgmentAction(step)) {
     return {
@@ -1638,7 +1695,16 @@ export async function detectJudgeBranchViolation(params: {
     };
   }
 
-  const expectedActions = scriptedBranchActions(expectedBranch);
+  const expectedActions = scriptedBranchActions(expectedBranch).map(
+    (action) => ({
+      ...action,
+      content:
+        applyResolvedScriptVariables(
+          action.content ?? '',
+          variableResolutionMap
+        )?.trim() ?? action.content
+    })
+  );
   if (expectedActions.length === 0) {
     return {
       blocked: false,
@@ -2638,6 +2704,39 @@ export async function generateReply(
     };
   }
 
+  const scriptVariableResolutionContext: ScriptVariableResolutionContext = {
+    conversationId: activeConversationId,
+    capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? null,
+    conversationHistory: conversationHistory.map((message) => ({
+      id: message.id ?? null,
+      sender: message.sender,
+      content: message.content,
+      timestamp: message.timestamp
+    })),
+    leadContext: leadContextForPrompt as unknown as Record<string, unknown>
+  };
+  const gateVariableResolutionTexts = collectCurrentStepVariableTexts(
+    scriptStateSnapshot?.currentStep ?? null
+  );
+  const gateVariableResolutionMap = gateVariableResolutionTexts.some((text) =>
+    /\{\{\s*[^}]+\s*\}\}/.test(text)
+  )
+    ? await resolveScriptVariablesForTexts(gateVariableResolutionTexts, {
+        accountId,
+        context: scriptVariableResolutionContext
+      })
+    : null;
+  if (gateVariableResolutionMap) {
+    await persistScriptVariableResolutions({
+      conversationId: activeConversationId,
+      resolutions: gateVariableResolutionMap.resolvedVariables
+    }).catch((err) => {
+      console.error('[ai-engine] variable resolution persist failed:', {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+  }
+
   let systemPrompt = await buildDynamicSystemPrompt(
     accountId,
     personaId,
@@ -2662,17 +2761,7 @@ export async function generateReply(
         smartModeActive && currentStepNumberForGate
           ? currentStepNumberForGate
           : null,
-      variableResolutionContext: {
-        conversationId: activeConversationId,
-        capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? null,
-        conversationHistory: conversationHistory.map((message) => ({
-          id: message.id ?? null,
-          sender: message.sender,
-          content: message.content,
-          timestamp: message.timestamp
-        })),
-        leadContext: leadContextForPrompt as unknown as Record<string, unknown>
-      }
+      variableResolutionContext: scriptVariableResolutionContext
     },
     scriptStateSnapshot?.currentScriptStep ?? null
   );
@@ -3162,7 +3251,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     step: scriptStateSnapshot?.currentStep ?? null,
     latestLeadMessage: lastLeadMsg?.content ?? null,
     accountId,
-    cache: judgeBranchSelectionCache
+    cache: judgeBranchSelectionCache,
+    variableResolutionMap: gateVariableResolutionMap
   });
   const smartModeDirective = smartModeActive
     ? `\n\n===== SMART MODE RESPONSE =====\nThe branch router could not confidently lock a branch for the current [JUDGE] step (${currentJudgeBranchMatch.confidence} confidence). Do not force the lead into a default branch.\n\nRespond naturally in the persona's voice. Address the lead's actual message, use the current step description and goal as direction, and end with one question that progresses the conversation toward this step's goal.\n\nDo not copy literal [MSG]/[ASK] content from sibling branches unless it clearly fits what the lead just said. Do not invent URLs, booking details, capital facts, or outcomes.\n=====`
@@ -3265,8 +3355,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         : null
   });
   const activeBranchRequiredMessages = selectedCurrentJudgeBranch
-    ? getActiveBranchRequiredMessages(selectedCurrentJudgeBranch)
+    ? getActiveBranchRequiredMessages(
+        selectedCurrentJudgeBranch,
+        gateVariableResolutionMap
+      )
     : undefined;
+  const currentStepRequiredMessagesForGate = resolveMessageContentsForGate(
+    currentStepShape?.requiredMessageContents ?? [],
+    gateVariableResolutionMap
+  );
+  const currentStepScriptedQuestionsForGate = resolveMessageContentsForGate(
+    currentStepShape?.scriptedQuestionContents ?? [],
+    gateVariableResolutionMap
+  );
   const currentStepHasAskBranch =
     selectedCurrentJudgeBranch !== null &&
     selectedCurrentJudgeBranch !== undefined
@@ -3329,10 +3430,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? {},
     currentStepHasSilentBranch,
     currentStepSilentBranchLabels,
-    currentStepScriptedQuestions:
-      currentStepShape?.scriptedQuestionContents ?? [],
-    currentStepRequiredMessages:
-      currentStepShape?.requiredMessageContents ?? [],
+    currentStepScriptedQuestions: currentStepScriptedQuestionsForGate,
+    currentStepRequiredMessages: currentStepRequiredMessagesForGate,
     activeBranchRequiredMessages,
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
     activeBranchHasSilentBranch: selectedCurrentJudgeBranch
@@ -3624,7 +3723,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           ? parsed.messages
           : [parsed.message],
       accountId,
-      cache: judgeBranchSelectionCache
+      cache: judgeBranchSelectionCache,
+      variableResolutionMap: gateVariableResolutionMap
     });
     if (judgeBranchViolation.blocked) {
       const judgeOverride = `\n\n===== [JUDGE] BRANCH MISMATCH — REGENERATE CURRENT BRANCH =====\n${judgeBranchViolation.reason}\n\nThe script engine already classified the latest lead reply into branch "${judgeBranchViolation.matchedBranchLabel}". You must run that branch's scripted actions now.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Using a different branch's [ASK] or [MSG]\n  ✗ Advancing to the NEXT STEP preview before the matched branch completes\n  ✗ Defaulting to a branch just because it appears later in the script\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the matched branch's [MSG]/[ASK] content verbatim or near-verbatim\n  ✓ Then wait for the lead's reply before advancing\n=====`;
@@ -4788,7 +4888,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           (message) => message.content.trim().length > 0
         );
         const fallbackRequiredMsg =
-          currentStepShape?.requiredMessageContents?.[0]?.trim() || '';
+          currentStepRequiredMessagesForGate[0]?.trim() || '';
         const requiredMsg = activeRequiredMsg?.content || fallbackRequiredMsg;
         const embeddedQuotes = activeRequiredMsg?.isPlaceholder
           ? (activeRequiredMsg.embeddedQuotes ?? [])

@@ -6,6 +6,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  detectJudgeBranchViolation,
   isJudgeBranchLockConfidence,
   shouldUseSmartModeForJudgeConfidence
 } from '../../src/lib/ai-engine';
@@ -95,6 +96,80 @@ describe('pre-prompt script variable resolution', () => {
       applyResolvedScriptVariables('based off {{obstacle}}', resolutions),
       'based off what you mentioned earlier'
     );
+  });
+
+  it('uses resolved variables for judge fallback and verbatim gates', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['the main struggle is {{obstacle}}'],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            early_obstacle:
+              'emotional control, cannot follow rules in the trade'
+          }
+        },
+        extractor: async () => null
+      }
+    );
+
+    const resolvedRequired = applyResolvedScriptVariables(
+      "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell.",
+      resolutions
+    );
+    assert.equal(
+      resolvedRequired?.includes('{{'),
+      false,
+      'resolved required text should not contain template braces'
+    );
+
+    const passQuality = scoreVoiceQualityGroup([resolvedRequired || ''], {
+      activeBranchRequiredMessages: [
+        {
+          content: resolvedRequired || '',
+          isPlaceholder: false
+        }
+      ]
+    });
+    assert.equal(
+      passQuality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+
+    const violation = await detectJudgeBranchViolation({
+      latestLeadMessage: '3k set aside',
+      generatedMessages: ['not the required script message'],
+      variableResolutionMap: resolutions,
+      classifier: async () => 'Default',
+      step: {
+        stepNumber: 16,
+        title: 'Call Proposal',
+        actions: [],
+        branches: [
+          {
+            branchLabel: 'Default',
+            conditionDescription: null,
+            actions: [
+              {
+                actionType: 'runtime_judgment',
+                content: 'Use the selected branch.'
+              },
+              {
+                actionType: 'send_message',
+                content:
+                  "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell."
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    assert.equal(violation.blocked, true);
+    assert.equal(violation.fallbackMessages[0], resolvedRequired);
+    assert.equal(violation.fallbackMessages[0]?.includes('{{'), false);
   });
 });
 
