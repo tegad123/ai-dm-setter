@@ -29,6 +29,9 @@ export interface CapturedDataPoint<T = unknown> {
   extractedFromMessageId: string | null;
   extractionMethod: string;
   extractedAt: string;
+  sourceFieldName?: string | null;
+  sourceStepNumber?: number | null;
+  sourceQuestion?: string | null;
 }
 
 export type CapturedDataPoints = Record<string, CapturedDataPoint | undefined>;
@@ -578,7 +581,12 @@ function setPoint<T>(
   value: T,
   confidence: DataPointConfidence,
   extractedFromMessageId: string | null,
-  extractionMethod: string
+  extractionMethod: string,
+  metadata?: {
+    sourceFieldName?: string | null;
+    sourceStepNumber?: number | null;
+    sourceQuestion?: string | null;
+  }
 ) {
   const existing = points[key];
   if (
@@ -594,7 +602,16 @@ function setPoint<T>(
     confidence,
     extractedFromMessageId,
     extractionMethod,
-    extractedAt: new Date().toISOString()
+    extractedAt: new Date().toISOString(),
+    ...(metadata?.sourceFieldName !== undefined
+      ? { sourceFieldName: metadata.sourceFieldName }
+      : {}),
+    ...(metadata?.sourceStepNumber !== undefined
+      ? { sourceStepNumber: metadata.sourceStepNumber }
+      : {}),
+    ...(metadata?.sourceQuestion !== undefined
+      ? { sourceQuestion: metadata.sourceQuestion }
+      : {})
   };
 }
 
@@ -2769,6 +2786,31 @@ function upcomingRequirementsAfterStep(
   );
 }
 
+const AMOUNT_DATA_REQUIREMENT_KEYS = new Set([
+  'monthlyIncome',
+  'incomeGoal',
+  'capital'
+]);
+
+function requirementListContainsKey(
+  requirements: CapturedDataRequirement[],
+  key: string
+): boolean {
+  return requirements.some((requirement) => requirement.key === key);
+}
+
+function currentPromptAsksForDifferentAmountField(params: {
+  currentRequirements: CapturedDataRequirement[];
+  requirementKey: string;
+}): boolean {
+  if (!AMOUNT_DATA_REQUIREMENT_KEYS.has(params.requirementKey)) return false;
+  return params.currentRequirements.some(
+    (requirement) =>
+      requirement.key !== params.requirementKey &&
+      AMOUNT_DATA_REQUIREMENT_KEYS.has(requirement.key)
+  );
+}
+
 function hasAmountDisclosureContext(content: string): boolean {
   return (
     /\$/.test(content) ||
@@ -2776,6 +2818,61 @@ function hasAmountDisclosureContext(content: string): boolean {
     /\b(income|monthly|month|salary|make|earn|bringing|bring\s+in|capital|saved|set\s+aside|funds?|cash|budget|goal|want|need|from\s+trading|per\s+month|a\s+month)\b/i.test(
       content
     )
+  );
+}
+
+function hasRequirementSpecificVolunteeredCue(
+  requirementKey: string,
+  content: string
+): boolean {
+  switch (requirementKey) {
+    case 'monthlyIncome':
+      return /\b(job|work|salary|current(?:ly)?|right\s+now|monthly\s+income|bringing|bring\s+in|make\s+(?:at\s+work|from\s+(?:my\s+)?job)|per\s+month|a\s+month|monthly)\b/i.test(
+        content
+      );
+    case 'incomeGoal':
+      return /\b(goal|target|want|need|trying|hoping|looking|tryna|would\s+like|from\s+trading|trading\s+to\s+bring|make\s+from\s+trading|replace\s+(?:it|my\s+(?:job|income))|want\s+trading|need\s+trading)\b/i.test(
+        content
+      );
+    case 'capital':
+      return /\b(capital|saved|set\s+aside|funds?|cash|budget|invest|investment|start\s+with|account\s+size|ready\s+to\s+start)\b/i.test(
+        content
+      );
+    default:
+      return true;
+  }
+}
+
+function shouldExtractVolunteeredRequirement(params: {
+  requirement: CapturedDataRequirement;
+  currentRequirements: CapturedDataRequirement[];
+  leadReplyContent: string;
+}): boolean {
+  if (
+    requirementListContainsKey(
+      params.currentRequirements,
+      params.requirement.key
+    )
+  ) {
+    return true;
+  }
+
+  if (!AMOUNT_DATA_REQUIREMENT_KEYS.has(params.requirement.key)) {
+    return true;
+  }
+
+  if (
+    currentPromptAsksForDifferentAmountField({
+      currentRequirements: params.currentRequirements,
+      requirementKey: params.requirement.key
+    })
+  ) {
+    return false;
+  }
+
+  return hasRequirementSpecificVolunteeredCue(
+    params.requirement.key,
+    params.leadReplyContent
   );
 }
 
@@ -2864,9 +2961,19 @@ function extractVolunteeredDataForUpcomingAsks(params: {
     const leadReply = immediateLeadReplyAfterPrompt(messages, index);
     if (!leadReply) continue;
 
+    const currentRequirements = dataRequirementsForAskContent(prompt.content);
     const requirements = upcomingRequirementsAfterStep(steps, stepNumber);
     for (const requirement of requirements) {
       if (pointIsPresentForRequirement(params.points, requirement)) continue;
+      if (
+        !shouldExtractVolunteeredRequirement({
+          requirement,
+          currentRequirements,
+          leadReplyContent: leadReply.content
+        })
+      ) {
+        continue;
+      }
 
       const value = parseVolunteeredRequirementValue(
         requirement.key,
@@ -2880,7 +2987,12 @@ function extractVolunteeredDataForUpcomingAsks(params: {
         value,
         'HIGH',
         leadReply.id ?? null,
-        `volunteered_${requirement.key}_for_upcoming_ask`
+        `volunteered_${requirement.key}_for_upcoming_ask`,
+        {
+          sourceFieldName: requirement.key,
+          sourceStepNumber: stepNumber,
+          sourceQuestion: prompt.content
+        }
       );
     }
   }

@@ -564,6 +564,113 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(completion?.leadMessageId, 'lead_step1');
   });
 
+  it('bug-53-current-income-answer-does-not-populate-target-income-goal', () => {
+    const incomeScript = {
+      id: 'income_semantics_sequence',
+      steps: [
+        askStep(
+          1,
+          'Monthly Income',
+          'How much is your job bringing in on a monthly basis?'
+        ),
+        askStep(
+          2,
+          'Replace vs Supplement',
+          'Are you thinking of replacing your job completely with trading or just generating some extra income on the side?'
+        ),
+        askStep(
+          3,
+          'Target Trading Income',
+          'How much would you need to be making from trading for it to actually matter?'
+        ),
+        askStep(4, 'Deep Why', 'Why does that number matter to you?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content: 'How much is your job bringing in on a monthly basis?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: '3k a month',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script: incomeScript
+    });
+    const stage = computeSystemStage(incomeScript, points as any, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.monthlyIncome as any)?.value, 3000);
+    assert.equal((points.incomeGoal as any)?.value, undefined);
+    assert.equal(stage.step?.stepNumber, 2);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 3
+      ),
+      false
+    );
+  });
+
+  it('bug-53-volunteered-target-income-with-trading-cue-can-auto-complete-next-ask', () => {
+    const goalScript = {
+      id: 'target_income_volunteered_sequence',
+      steps: [
+        askStep(
+          1,
+          'Replace vs Supplement',
+          'Are you replacing your job or just looking for extra income on the side?'
+        ),
+        askStep(
+          2,
+          'Target Trading Income',
+          'How much would you need to be making from trading for it to actually matter?'
+        ),
+        askStep(3, 'Deep Why', 'Why does that number matter to you?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content:
+          'Are you replacing your job or just looking for extra income on the side?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'replace it, I need trading to bring in 8k a month',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script: goalScript
+    });
+    const stage = computeSystemStage(goalScript, points as any, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.replaceOrSupplement as any)?.value, 'replace');
+    assert.equal((points.incomeGoal as any)?.value, 8000);
+    assert.equal(
+      (points.incomeGoal as any)?.extractionMethod,
+      'volunteered_incomeGoal_for_upcoming_ask'
+    );
+    assert.equal(stage.step?.stepNumber, 3);
+  });
+
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
     const staleDataScript = {
       id: 'stale_volunteered_data_sequence',
