@@ -14,6 +14,19 @@ import prisma from '@/lib/prisma';
 // doesn't have to stay alive for minutes. 90s leaves headroom for AI gen.
 const INLINE_DELAY_THRESHOLD_SECONDS = 90;
 
+function afterCallbackErrorDetails(err: unknown) {
+  if (err instanceof Error) {
+    return {
+      error: err.message,
+      stack: err.stack
+    };
+  }
+  return {
+    error: String(err),
+    stack: undefined
+  };
+}
+
 function hasImageAttachment(attachments: unknown): boolean {
   return (
     Array.isArray(attachments) &&
@@ -446,16 +459,44 @@ async function processInstagramEvents(payload: any): Promise<void> {
           const targetConvoId = result.conversationId;
 
           if (delaySeconds <= INLINE_DELAY_THRESHOLD_SECONDS) {
+            await prisma.scheduledReply.updateMany({
+              where: {
+                conversationId: targetConvoId,
+                status: 'PENDING'
+              },
+              data: { status: 'CANCELLED' }
+            });
+            const scheduledReply = await prisma.scheduledReply.create({
+              data: {
+                conversationId: targetConvoId,
+                accountId,
+                scheduledFor: new Date(Date.now() + delaySeconds * 1000),
+                status: 'PENDING'
+              }
+            });
             console.log(
               `[instagram-webhook] Inline-deferring reply for ${targetConvoId} ` +
-                `(${delaySeconds}s, threshold ${INLINE_DELAY_THRESHOLD_SECONDS}s)`
+                `(${delaySeconds}s, threshold ${INLINE_DELAY_THRESHOLD_SECONDS}s, scheduledReply=${scheduledReply.id})`
             );
             after(async () => {
               try {
-                if (delaySeconds > 0) {
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, delaySeconds * 1000)
+                const waitMs =
+                  scheduledReply.scheduledFor.getTime() - Date.now();
+                if (waitMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, waitMs));
+                }
+                const claimed = await prisma.scheduledReply.updateMany({
+                  where: {
+                    id: scheduledReply.id,
+                    status: 'PENDING'
+                  },
+                  data: { status: 'PROCESSING' }
+                });
+                if (claimed.count === 0) {
+                  console.log(
+                    `[instagram-webhook] inline reply skipped — scheduledReply ${scheduledReply.id} already claimed`
                   );
+                  return;
                 }
                 // Re-check aiActive at delivery time — the user may have
                 // toggled AI off during the delay window.
@@ -467,17 +508,48 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   console.log(
                     `[instagram-webhook] inline reply cancelled — aiActive flipped off for ${targetConvoId}`
                   );
+                  await prisma.scheduledReply.update({
+                    where: { id: scheduledReply.id },
+                    data: {
+                      status: 'CANCELLED',
+                      processedAt: new Date(),
+                      lastError: 'AI inactive at inline delivery time'
+                    }
+                  });
                   return;
                 }
                 await processScheduledReply(targetConvoId, accountId);
+                await prisma.scheduledReply.update({
+                  where: { id: scheduledReply.id },
+                  data: {
+                    status: 'SENT',
+                    processedAt: new Date(),
+                    lastError: null
+                  }
+                });
                 console.log(
                   `[instagram-webhook] inline reply delivered for ${targetConvoId}`
                 );
               } catch (afterErr) {
-                console.error(
-                  `[instagram-webhook] inline reply failed for ${targetConvoId}:`,
-                  afterErr
-                );
+                const details = afterCallbackErrorDetails(afterErr);
+                console.error('[webhook] after() callback failed silently:', {
+                  conversationId: targetConvoId,
+                  scheduledReplyId: scheduledReply.id,
+                  ...details
+                });
+                await prisma.scheduledReply
+                  .updateMany({
+                    where: {
+                      id: scheduledReply.id,
+                      status: 'PROCESSING'
+                    },
+                    data: {
+                      status: 'PENDING',
+                      scheduledFor: new Date(),
+                      lastError: details.error.slice(0, 2000)
+                    }
+                  })
+                  .catch(() => null);
               }
             });
           } else {
