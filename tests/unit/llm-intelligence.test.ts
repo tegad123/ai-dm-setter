@@ -65,6 +65,52 @@ describe('pre-prompt script variable resolution', () => {
     );
   });
 
+  it('bug-57-variable-output-validation: rejects full lead quotes for obstacle', () => {
+    assert.equal(
+      parseScriptVariableExtractorValue(
+        "honestly bro it's been brutal, i keep blowing my small accounts revenge trading. started with 2k, now i'm down to like 800 bucks and my wife doesn't even know",
+        'obstacle'
+      ),
+      null
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue(
+        'They struggle with emotions when trading',
+        'obstacle'
+      ),
+      null
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue('revenge trading', 'obstacle'),
+      'revenge trading'
+    );
+  });
+
+  it('bug-57-variable-output-validation: normalizes typed variables', () => {
+    assert.equal(
+      parseScriptVariableExtractorValue('Tega Umokoro', 'NAME'),
+      'Tega'
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue(
+        'they want to make 5000',
+        'income_goal'
+      ),
+      '5000'
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue('$3k a month from my job', 'capital'),
+      '$3k'
+    );
+    assert.equal(
+      parseScriptVariableExtractorValue(
+        'replace job income with trading',
+        'desired_outcome'
+      ),
+      'replace job income with trading'
+    );
+  });
+
   it('does not call the LLM extractor for directive placeholders', async () => {
     let calls = 0;
     const resolutions = await resolveScriptVariablesForTexts(
@@ -179,6 +225,66 @@ describe('pre-prompt script variable resolution', () => {
     assert.equal(
       rendered,
       'based off revenge trading after red trades, got you Tega'
+    );
+  });
+
+  it('bug-57-rejects-long-captured-obstacle-and-uses-concise-llm-value', async () => {
+    let calls = 0;
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['based off {{obstacle}}'],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            obstacle: {
+              value:
+                "honestly bro it's been brutal, i keep blowing my small accounts revenge trading. started with 2k, now i'm down to like 800 bucks and my wife doesn't even know"
+            }
+          },
+          conversationHistory: [
+            {
+              sender: 'LEAD',
+              content:
+                "honestly bro it's been brutal, i keep blowing my small accounts revenge trading"
+            }
+          ]
+        },
+        extractor: async ({ variableName }) => {
+          calls++;
+          return variableName === 'obstacle' ? 'revenge trading' : null;
+        }
+      }
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(
+      applyResolvedScriptVariables('based off {{obstacle}}', resolutions),
+      'based off revenge trading'
+    );
+  });
+
+  it('bug-57-rejects-oversized-llm-resolution-and-falls-back', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['based off {{obstacle}}'],
+      {
+        accountId: 'acct_test',
+        context: {
+          conversationHistory: [
+            {
+              sender: 'LEAD',
+              content:
+                "honestly bro it's been brutal, i keep blowing accounts when i see red"
+            }
+          ]
+        },
+        extractor: async () =>
+          "honestly bro it's been brutal, i keep blowing accounts when i see red"
+      }
+    );
+
+    assert.equal(
+      applyResolvedScriptVariables('based off {{obstacle}}', resolutions),
+      'based off what you mentioned earlier'
     );
   });
 

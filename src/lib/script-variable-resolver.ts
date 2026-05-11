@@ -41,6 +41,25 @@ type ScriptVariableExtractor = (params: {
   accountId: string;
 }) => Promise<string | null>;
 
+type ScriptVariableValueKind =
+  | 'name'
+  | 'obstacle'
+  | 'deepWhy'
+  | 'desiredOutcome'
+  | 'money'
+  | 'datetime'
+  | 'contact'
+  | 'generic';
+
+interface ScriptVariableValueSpec {
+  kind: ScriptVariableValueKind;
+  typeLabel: string;
+  formatSpec: string;
+  maxWords: number | null;
+  correctExamples: string[];
+  wrongExamples: string[];
+}
+
 export function normalizeTemplateKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -126,6 +145,207 @@ function stringifyTemplateValue(value: unknown): string | null {
   return null;
 }
 
+function wordCount(value: string): number {
+  return value.split(/\s+/).filter(Boolean).length;
+}
+
+function hasEmoji(value: string): boolean {
+  return /[\u2600-\u27BF\uD83C-\uDBFF\uDC00-\uDFFF]/.test(value);
+}
+
+export function getVariableValueSpec(
+  variableName: string
+): ScriptVariableValueSpec {
+  const normalized = normalizeTemplateKey(variableName);
+
+  if (/^(name|firstname|leadname)$/.test(normalized)) {
+    return {
+      kind: 'name',
+      typeLabel: 'first name',
+      formatSpec: 'first name only, 1 word',
+      maxWords: 1,
+      correctExamples: ['Tega', 'Daniel'],
+      wrongExamples: ['Tega Umukoro', 'the lead is named Tega']
+    };
+  }
+
+  if (normalized.includes('obstacle') || normalized.includes('struggle')) {
+    return {
+      kind: 'obstacle',
+      typeLabel: 'short noun phrase',
+      formatSpec: '1-5 words naming the core obstacle',
+      maxWords: 5,
+      correctExamples: [
+        'emotional control',
+        'revenge trading',
+        'no consistent system',
+        'lack of discipline'
+      ],
+      wrongExamples: [
+        "honestly bro it's been brutal...",
+        'They struggle with emotions when trading',
+        'the lead said he keeps blowing accounts after losses'
+      ]
+    };
+  }
+
+  if (
+    normalized.includes('deepwhy') ||
+    normalized.includes('reason') ||
+    normalized === 'why'
+  ) {
+    return {
+      kind: 'deepWhy',
+      typeLabel: 'short reason phrase',
+      formatSpec: '5-15 words describing why this matters to the lead',
+      maxWords: 15,
+      correctExamples: [
+        'spend more time with family',
+        'pay off debt and breathe again',
+        'quit the nursing job'
+      ],
+      wrongExamples: [
+        'The reason is that the lead explained a long backstory',
+        "honestly I just can't keep doing this anymore bro"
+      ]
+    };
+  }
+
+  if (normalized.includes('desired') || normalized.includes('outcome')) {
+    return {
+      kind: 'desiredOutcome',
+      typeLabel: 'short outcome phrase',
+      formatSpec: '5-15 words describing the desired result',
+      maxWords: 15,
+      correctExamples: [
+        'replace job income with trading',
+        'make consistent income from trading',
+        'build a second income stream'
+      ],
+      wrongExamples: [
+        'The lead wants to eventually get to a place where...',
+        'I want to quit my job because...'
+      ]
+    };
+  }
+
+  if (
+    normalized.includes('income') ||
+    normalized.includes('capital') ||
+    normalized.includes('amount') ||
+    normalized.includes('money')
+  ) {
+    return {
+      kind: 'money',
+      typeLabel: 'money amount',
+      formatSpec: 'dollar amount only, like 3000, $3k, or $5,000',
+      maxWords: 4,
+      correctExamples: ['3000', '$3k', '$5,000'],
+      wrongExamples: ['3k a month from my job', 'they want to make 5000']
+    };
+  }
+
+  if (normalized.includes('day') || normalized.includes('time')) {
+    return {
+      kind: 'datetime',
+      typeLabel: 'day/time phrase',
+      formatSpec: 'short day and time phrase only',
+      maxWords: 8,
+      correctExamples: ['Wednesday at 2pm', 'tomorrow afternoon'],
+      wrongExamples: ['The lead said Wednesday at 2pm should work for them']
+    };
+  }
+
+  if (
+    normalized.includes('email') ||
+    normalized.includes('phone') ||
+    normalized.includes('timezone')
+  ) {
+    return {
+      kind: 'contact',
+      typeLabel: 'contact field value',
+      formatSpec: 'the exact contact field value only',
+      maxWords: 6,
+      correctExamples: ['tegad8@gmail.com', '346-295-4688', 'CT'],
+      wrongExamples: ['Their email is tegad8@gmail.com']
+    };
+  }
+
+  return {
+    kind: 'generic',
+    typeLabel: 'short phrase',
+    formatSpec: 'short phrase, no full sentences',
+    maxWords: 12,
+    correctExamples: ['what matters most', 'consistent progress'],
+    wrongExamples: ['The lead said a long explanation about their situation']
+  };
+}
+
+function cleanMoneyValue(value: string): string | null {
+  const compact = value.replace(/,/g, '').trim();
+  const match = compact.match(/\$?\s*(\d+(?:\.\d+)?)\s*([kKmM])?\b/);
+  if (!match) return null;
+  const amount = match[1];
+  const suffix = match[2]?.toLowerCase() ?? '';
+  if (suffix === 'k') return `$${amount}k`;
+  if (suffix === 'm') return `$${amount}m`;
+  return /^\$/.test(value.trim()) ? `$${amount}` : amount;
+}
+
+function normalizeResolvedVariableValue(
+  variableName: string,
+  rawValue: string | null
+): string | null {
+  const firstLine = (rawValue || '').split(/\r?\n/)[0] ?? '';
+  let value = firstLine
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .trim();
+  if (!value || /^none\b/i.test(value)) return null;
+  if (/\{\{[^}]+\}\}/.test(value)) return null;
+
+  const spec = getVariableValueSpec(variableName);
+
+  if (spec.kind === 'money') {
+    return cleanMoneyValue(value);
+  }
+
+  if (spec.kind === 'name') {
+    const first = value
+      .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ'-]+/g, ' ')
+      .trim()
+      .split(/\s+/)[0];
+    return first || null;
+  }
+
+  value = value.replace(/[.。!?]+$/g, '').trim();
+
+  const quoteLike =
+    /["“”]/.test(value) ||
+    hasEmoji(value) ||
+    /\b(?:bro|lol|lmao|haha|man)\b/i.test(value) ||
+    /^(?:honestly|literally|tbh|ngl|honestly bro|i mean)\b/i.test(value);
+  if (
+    quoteLike &&
+    ['obstacle', 'deepWhy', 'desiredOutcome', 'generic'].includes(spec.kind)
+  ) {
+    return null;
+  }
+
+  if (
+    ['obstacle', 'deepWhy', 'desiredOutcome', 'generic'].includes(spec.kind)
+  ) {
+    if (/^(?:the lead|they|he|she|i|we)\b/i.test(value)) return null;
+    if (wordCount(value) > 20) return null;
+  }
+
+  if (spec.maxWords !== null && wordCount(value) > spec.maxWords) {
+    return null;
+  }
+
+  return value;
+}
+
 function variableAliases(variableName: string): string[] {
   const normalized = normalizeTemplateKey(variableName);
   const aliases = new Set([variableName, normalized]);
@@ -180,7 +400,10 @@ function resolveFromRecord(
 
   for (const [key, raw] of Object.entries(record)) {
     if (!normalizedAliases.has(normalizeTemplateKey(key))) continue;
-    const value = stringifyTemplateValue(unwrapCapturedPoint(raw));
+    const value = normalizeResolvedVariableValue(
+      variableName,
+      stringifyTemplateValue(unwrapCapturedPoint(raw))
+    );
     if (value) return value;
   }
 
@@ -261,8 +484,11 @@ function inferFromBranchHistory(
       history,
       typeof event.leadMessageId === 'string' ? event.leadMessageId : null
     );
-    const content = leadMessage?.content?.trim();
-    if (content && content.length >= 2) return content.slice(0, 260);
+    const content = normalizeResolvedVariableValue(
+      variableName,
+      leadMessage?.content?.trim() ?? null
+    );
+    if (content && content.length >= 2) return content;
   }
 
   return null;
@@ -289,21 +515,41 @@ function fallbackForVariable(variableName: string): string {
   return 'what you shared earlier';
 }
 
-function cleanExtractorValue(value: string | null): string | null {
-  const firstLine = (value || '').split(/\r?\n/)[0] ?? '';
-  const trimmed = firstLine
-    .trim()
-    .replace(/^["']|["']$/g, '')
-    .trim();
-  if (!trimmed || /^none\b/i.test(trimmed)) return null;
-  if (/\{\{[^}]+\}\}/.test(trimmed)) return null;
-  return trimmed.slice(0, 260);
+function cleanExtractorValue(
+  value: string | null,
+  variableName = 'generic'
+): string | null {
+  return normalizeResolvedVariableValue(variableName, value);
 }
 
 export function parseScriptVariableExtractorValue(
-  value: string | null
+  value: string | null,
+  variableName?: string
 ): string | null {
-  return cleanExtractorValue(value);
+  return cleanExtractorValue(value, variableName);
+}
+
+function buildExtractorPrompt(params: {
+  variableName: string;
+  history: string;
+}): string {
+  const spec = getVariableValueSpec(params.variableName);
+  const correct = spec.correctExamples
+    .map((example) => `- '${example}'`)
+    .join('\n');
+  const wrong = spec.wrongExamples
+    .map((example) => `- '${example}'`)
+    .join('\n');
+
+  return (
+    `Extract the lead's {{${params.variableName}}} from this sales DM conversation.\n` +
+    `Return ONLY a short ${spec.typeLabel} in this format: ${spec.formatSpec}.\n` +
+    `No explanation. No full sentences. No quote from the lead. If unclear, return NONE.\n\n` +
+    `Examples of CORRECT output:\n${correct}\n\n` +
+    `Examples of WRONG output:\n${wrong}\n\n` +
+    `Conversation history:\n${params.history || '(none)'}\n\n` +
+    `Return the value:`
+  );
 }
 
 async function extractVariableWithHaiku(params: {
@@ -317,18 +563,17 @@ async function extractVariableWithHaiku(params: {
     .join('\n');
   const result = await callHaikuText({
     accountId: params.accountId,
-    maxTokens: 80,
+    maxTokens: 50,
     temperature: 0,
     timeoutMs: 3000,
     logPrefix: '[script-variable-resolver]',
-    prompt:
-      `You extract one missing script variable for a sales DM conversation.\n` +
-      `Conversation history:\n${history || '(none)'}\n\n` +
-      `What is the lead's {{${params.variableName}}}?\n` +
-      `Return ONLY the value, or NONE if the conversation does not contain it.`
+    prompt: buildExtractorPrompt({
+      variableName: params.variableName,
+      history
+    })
   });
 
-  return cleanExtractorValue(result.text);
+  return cleanExtractorValue(result.text, params.variableName);
 }
 
 export async function resolveScriptVariablesForTexts(
@@ -394,10 +639,11 @@ export async function resolveScriptVariablesForTexts(
         conversationHistory: context.conversationHistory ?? [],
         accountId: params.accountId
       });
-      if (extracted) {
+      const cleanExtracted = cleanExtractorValue(extracted, variableName);
+      if (cleanExtracted) {
         resolution = {
           variableName,
-          value: extracted,
+          value: cleanExtracted,
           source: 'llm',
           confidence: 'MEDIUM',
           shouldPersist: true
