@@ -45,6 +45,34 @@ export function normalizeTemplateKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+const KNOWN_MULTI_WORD_TEMPLATE_VARIABLES = new Set([
+  'day and time',
+  'first name',
+  'last name',
+  'full name',
+  'phone number',
+  'email address',
+  'time zone'
+]);
+
+const DIRECTIVE_FIRST_WORDS = new Set([
+  'acknowledge',
+  'address',
+  'ask',
+  'comment',
+  'confirm',
+  'greet',
+  'include',
+  'match',
+  'mention',
+  'reference',
+  'respond',
+  'restate',
+  'say',
+  'summarize',
+  'use'
+]);
+
 export function isValidTemplateVariableName(
   rawName: string | null | undefined
 ): boolean {
@@ -55,7 +83,17 @@ export function isValidTemplateVariableName(
     return false;
   }
   if (/[{}()[\];:,]/.test(name)) return false;
-  return /^[A-Za-z][A-Za-z0-9_ -]*$/.test(name);
+
+  const words = name.toLowerCase().split(/\s+/).filter(Boolean);
+  const firstWord = words[0] ?? '';
+  if (DIRECTIVE_FIRST_WORDS.has(firstWord)) return false;
+  if (/ing$/.test(firstWord)) return false;
+
+  if (words.length > 1) {
+    return KNOWN_MULTI_WORD_TEMPLATE_VARIABLES.has(words.join(' '));
+  }
+
+  return /^[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)*$/.test(name);
 }
 
 export function extractTemplateVariableNames(text: string | null | undefined) {

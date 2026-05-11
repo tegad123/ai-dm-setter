@@ -28,7 +28,15 @@ describe('pre-prompt script variable resolution', () => {
   it('bug-X-variable-name-validation: ignores directive placeholders with examples', () => {
     assert.equal(isValidTemplateVariableName('deep_why'), true);
     assert.equal(isValidTemplateVariableName('day and time'), true);
+    assert.equal(isValidTemplateVariableName('first name'), true);
+    assert.equal(isValidTemplateVariableName('phone number'), true);
     assert.equal(isValidTemplateVariableName('incomeGoal'), true);
+    assert.equal(
+      isValidTemplateVariableName('acknowledge their experience'),
+      false
+    );
+    assert.equal(isValidTemplateVariableName('comment on their job'), false);
+    assert.equal(isValidTemplateVariableName('matching their tone'), false);
     assert.equal(
       isValidTemplateVariableName(
         'specific missing info e.g. "email" / "timezone" / "phone number"'
@@ -37,7 +45,7 @@ describe('pre-prompt script variable resolution', () => {
     );
     assert.deepEqual(
       extractTemplateVariableNames(
-        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{deep_why}} {{day and time}}'
+        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{acknowledge their experience}} {{deep_why}} {{day and time}}'
       ),
       ['deep_why', 'day and time']
     );
@@ -61,7 +69,9 @@ describe('pre-prompt script variable resolution', () => {
     let calls = 0;
     const resolutions = await resolveScriptVariablesForTexts(
       [
-        'missing your {{specific missing info e.g. "email" / "timezone" / "phone number"}}'
+        'missing your {{specific missing info e.g. "email" / "timezone" / "phone number"}}',
+        '{{acknowledge their experience}}',
+        '{{comment on their job}}'
       ],
       {
         accountId: 'acct_test',
@@ -82,6 +92,65 @@ describe('pre-prompt script variable resolution', () => {
 
     assert.equal(calls, 0);
     assert.equal(resolutions.resolvedVariables.length, 0);
+  });
+
+  it('does not enforce directive placeholders as resolved verbatim messages', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['{{acknowledge their experience}}'],
+      {
+        accountId: 'acct_test',
+        context: {
+          conversationHistory: [
+            {
+              sender: 'LEAD',
+              content: 'been at it for about a year, mostly losing money'
+            }
+          ]
+        },
+        extractor: async () => {
+          throw new Error('directive placeholder should not be extracted');
+        }
+      }
+    );
+    const unresolved = applyResolvedScriptVariables(
+      '{{acknowledge their experience}}',
+      resolutions
+    );
+
+    assert.equal(unresolved, '{{acknowledge their experience}}');
+    const quality = scoreVoiceQualityGroup(
+      [
+        'Nice, so how have the markets been treating you so far? Any main problems coming up?'
+      ],
+      {
+        activeBranchRequiredMessages: [
+          {
+            content: unresolved ?? '',
+            isPlaceholder: true,
+            embeddedQuotes: []
+          }
+        ],
+        activeBranchScriptedQuestions: [
+          'Nice, so how have the markets been treating you so far? Any main problems coming up?'
+        ],
+        activeBranchHasAskAction: true,
+        currentStepHasAskBranch: true,
+        currentScriptStepNumber: 3
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('multiple_questions_in_reply:')
+      ),
+      false
+    );
   });
 
   it('resolves direct captured data and lead context before prompt construction', async () => {

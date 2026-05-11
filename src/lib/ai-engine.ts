@@ -1316,6 +1316,28 @@ function getActiveBranchRequiredMessages(
     });
 }
 
+function getActiveBranchScriptedQuestions(
+  activeBranch: JudgeBranchLike | null | undefined,
+  variableResolutionMap?: ScriptVariableResolutionMap | null
+): string[] {
+  if (!activeBranch) return [];
+  return activeBranch.actions
+    .filter(
+      (action) =>
+        action.actionType === 'ask_question' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    )
+    .map((action) =>
+      (
+        applyResolvedScriptVariables(action.content, variableResolutionMap) ??
+        action.content ??
+        ''
+      ).trim()
+    )
+    .filter((content) => content.length > 0);
+}
+
 function resolveMessageContentsForGate(
   contents: string[],
   variableResolutionMap?: ScriptVariableResolutionMap | null
@@ -3364,6 +3386,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         gateVariableResolutionMap
       )
     : undefined;
+  const activeBranchScriptedQuestions = selectedCurrentJudgeBranch
+    ? getActiveBranchScriptedQuestions(
+        selectedCurrentJudgeBranch,
+        gateVariableResolutionMap
+      )
+    : undefined;
   const currentStepRequiredMessagesForGate = resolveMessageContentsForGate(
     currentStepShape?.requiredMessageContents ?? [],
     gateVariableResolutionMap
@@ -3435,6 +3463,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepHasSilentBranch,
     currentStepSilentBranchLabels,
     currentStepScriptedQuestions: currentStepScriptedQuestionsForGate,
+    activeBranchScriptedQuestions,
     currentStepRequiredMessages: currentStepRequiredMessagesForGate,
     activeBranchRequiredMessages,
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,

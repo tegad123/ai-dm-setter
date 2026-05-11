@@ -750,6 +750,12 @@ export interface VoiceQualityOptions {
    */
   currentStepScriptedQuestions?: string[];
   /**
+   * [ASK] question texts scoped to the classifier-selected branch. Used to
+   * allow operator-authored multi-question asks without allowing the LLM to
+   * add extra off-script questions.
+   */
+  activeBranchScriptedQuestions?: string[];
+  /**
    * Direct current-step [MSG] action contents that must be delivered
    * verbatim or near-verbatim before the model advances.
    */
@@ -1674,15 +1680,22 @@ export function scoreVoiceQuality(
     );
   }
 
-  // Multiple-questions guard: any single AI turn should fire AT MOST one
-  // question. The daetradez script's [ASK] actions all contain exactly one
-  // `?`. When the AI emits 2+ questions in a single reply, it's almost
-  // always either (a) stacking an off-script probe on top of the scripted
-  // ask, or (b) drilling the lead repeatedly within one turn. Hard-fail
-  // and regen down to a single question.
-  if (replyQuestionCount >= 2) {
+  const scriptedQuestionCounts = (
+    Array.isArray(options?.activeBranchScriptedQuestions)
+      ? options?.activeBranchScriptedQuestions
+      : options?.currentStepScriptedQuestions
+  )
+    ?.map((question) => countQuestionMarks(question))
+    .filter((count) => count > 0);
+  const allowedQuestionCount = Math.max(1, ...(scriptedQuestionCounts ?? []));
+
+  // Multiple-questions guard: a generated reply may contain as many question
+  // marks as the operator-authored [ASK] for the active branch, but no more.
+  // This preserves deliberate multi-question script copy while still catching
+  // the LLM when it stacks extra off-script probes into one turn.
+  if (replyQuestionCount > allowedQuestionCount) {
     hardFails.push(
-      `multiple_questions_in_reply: reply contained ${replyQuestionCount} question marks. Send ONE question per turn. Pick the most important one for the current script step and drop the rest.`
+      `multiple_questions_in_reply: reply contained ${replyQuestionCount} question marks but the current script allows ${allowedQuestionCount}. Send only the operator-authored [ASK] for this branch and drop any extra questions.`
     );
   }
 
