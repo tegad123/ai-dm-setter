@@ -27,6 +27,7 @@ export type CapturedDataPoints = Record<string, CapturedDataPoint | undefined>;
 export interface BranchHistoryEvent {
   eventType:
     | 'branch_selected'
+    | 'smart_mode_response'
     | 'step_completed'
     | 'conditional_skip_decision'
     | 'conditional_skip_warning';
@@ -170,6 +171,7 @@ function parseBranchHistoryEvent(value: unknown): BranchHistoryEvent | null {
   const record = asRecord(value);
   const eventType =
     record.eventType === 'branch_selected' ||
+    record.eventType === 'smart_mode_response' ||
     record.eventType === 'step_completed' ||
     record.eventType === 'conditional_skip_decision' ||
     record.eventType === 'conditional_skip_warning'
@@ -248,7 +250,8 @@ function hasEquivalentBranchHistoryEvent(
     }
 
     if (
-      event.eventType === 'branch_selected' &&
+      (event.eventType === 'branch_selected' ||
+        event.eventType === 'smart_mode_response') &&
       existing.suggestionId &&
       event.suggestionId
     ) {

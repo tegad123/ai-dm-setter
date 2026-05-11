@@ -66,6 +66,7 @@ import {
   isUrlAllowed,
   normalizeUrlForAllowlist
 } from '@/lib/url-allowlist';
+import { classifyCapitalAmountWithHaiku } from '@/lib/capital-amount-classifier';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -488,6 +489,22 @@ type JudgeBranchConfidence =
   | 'low'
   | 'none'
   | 'llm_classified';
+
+export function isJudgeBranchLockConfidence(
+  confidence: string | null | undefined
+): boolean {
+  return (
+    confidence === 'high' ||
+    confidence === 'medium' ||
+    confidence === 'llm_classified'
+  );
+}
+
+export function shouldUseSmartModeForJudgeConfidence(
+  confidence: string | null | undefined
+): boolean {
+  return confidence === 'low' || confidence === 'none';
+}
 
 type JudgeTokenScoringResult = {
   selectedBranchLabel: string | null;
@@ -2580,11 +2597,18 @@ export async function generateReply(
       cache: judgeBranchSelectionCache
     }
   );
-  let selectedCurrentJudgeBranch = currentJudgeBranchMatch.branchLabel
-    ? scriptStateSnapshot?.currentStep?.branches.find(
-        (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
-      )
-    : null;
+  const currentJudgeBranchLocked = isJudgeBranchLockConfidence(
+    currentJudgeBranchMatch.confidence
+  );
+  const smartModeActive =
+    hasRuntimeJudgmentAction(scriptStateSnapshot?.currentStep ?? null) &&
+    shouldUseSmartModeForJudgeConfidence(currentJudgeBranchMatch.confidence);
+  let selectedCurrentJudgeBranch =
+    currentJudgeBranchLocked && currentJudgeBranchMatch.branchLabel
+      ? scriptStateSnapshot?.currentStep?.branches.find(
+          (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
+        )
+      : null;
   if (
     !selectedCurrentJudgeBranch &&
     scriptStateSnapshot?.currentStep?.stepNumber === 1 &&
@@ -2632,7 +2656,23 @@ export async function generateReply(
         selectedCurrentJudgeBranch && currentStepNumberForGate
           ? currentStepNumberForGate
           : null,
-      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
+      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null,
+      smartMode: smartModeActive,
+      smartModeStepNumber:
+        smartModeActive && currentStepNumberForGate
+          ? currentStepNumberForGate
+          : null,
+      variableResolutionContext: {
+        conversationId: activeConversationId,
+        capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? null,
+        conversationHistory: conversationHistory.map((message) => ({
+          id: message.id ?? null,
+          sender: message.sender,
+          content: message.content,
+          timestamp: message.timestamp
+        })),
+        leadContext: leadContextForPrompt as unknown as Record<string, unknown>
+      }
     },
     scriptStateSnapshot?.currentScriptStep ?? null
   );
@@ -3124,6 +3164,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     accountId,
     cache: judgeBranchSelectionCache
   });
+  const smartModeDirective = smartModeActive
+    ? `\n\n===== SMART MODE RESPONSE =====\nThe branch router could not confidently lock a branch for the current [JUDGE] step (${currentJudgeBranchMatch.confidence} confidence). Do not force the lead into a default branch.\n\nRespond naturally in the persona's voice. Address the lead's actual message, use the current step description and goal as direction, and end with one question that progresses the conversation toward this step's goal.\n\nDo not copy literal [MSG]/[ASK] content from sibling branches unless it clearly fits what the lead just said. Do not invent URLs, booking details, capital facts, or outcomes.\n=====`
+    : '';
 
   const baseSystemPrompt =
     coldStartStep1Directive +
@@ -3135,7 +3178,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     operatorCorrectionDirective +
     priorCapturedSignalsDirective +
     step10DeepWhyDirective +
-    judgeClassificationDirective;
+    judgeClassificationDirective +
+    smartModeDirective;
   let systemPromptForLLM = baseSystemPrompt;
   let r24GateEverForcedRegen = false;
   let r24LastResult: R24GateResult = {
@@ -3268,6 +3312,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     candidateMessageCount: number,
     capitalOutcomeOverride?: VoiceGateCapitalOutcome
   ) => ({
+    smartMode: smartModeActive,
     relaxLengthLimit: !!unkeptPattern,
     conversationMessageCount: conversationHistory.length,
     leadStage: leadContext.status || undefined,
@@ -3755,7 +3800,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       delete quality.softSignals.unnecessary_scheduling_question;
       delete quality.softSignals.logistics_before_qualification;
       if (quality.hardFails.length !== beforeCount) {
-        quality.passed = quality.hardFails.length === 0 && quality.score >= 0.7;
+        quality.passed = quality.hardFails.length === 0;
         console.log(
           `[ai-engine] Reschedule flow bypassed ${beforeCount - quality.hardFails.length} qualification gate failure(s)`
         );
@@ -3816,6 +3861,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       r24WasEvaluatedThisTurn = true;
       r24LastResult = await checkR24Verification(
         activeConversationId,
+        accountId,
         capitalThreshold,
         capitalCustomPrompt,
         // Pass the current-turn LEAD message as a timing-defensive
@@ -3857,6 +3903,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       fixBResult = await shouldBlockForCapitalVerification({
         parsed,
         conversationId: activeConversationId,
+        accountId,
         capitalThreshold,
         capitalCustomPrompt,
         closerNames,
@@ -5698,11 +5745,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           await appendBranchHistoryEvent({
             conversationId: convoId,
             event: {
-              eventType: 'branch_selected',
+              eventType: smartModeActive
+                ? 'smart_mode_response'
+                : 'branch_selected',
               stepNumber: scriptStateSnapshot.currentStep.stepNumber,
               stepTitle: scriptStateSnapshot.currentStep.title ?? null,
-              selectedBranchLabel:
-                scriptStateSnapshot.selectedBranchLabel ?? null,
+              selectedBranchLabel: smartModeActive
+                ? null
+                : (scriptStateSnapshot.selectedBranchLabel ?? null),
               suggestionId,
               aiMessageId: null,
               aiMessageIds: [],
@@ -5714,9 +5764,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                 'boolean'
                   ? stepCompletionTraceForBranchHistory.stepCompletionAttempted
                   : null,
-              stepCompletionReason:
-                typeof stepCompletionTraceForBranchHistory.stepCompletionReason ===
-                'string'
+              stepCompletionReason: smartModeActive
+                ? 'smart_mode_low_confidence_branch'
+                : typeof stepCompletionTraceForBranchHistory.stepCompletionReason ===
+                    'string'
                   ? stepCompletionTraceForBranchHistory.stepCompletionReason
                   : null,
               previousSelectedBranch:
@@ -5724,8 +5775,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                 'string'
                   ? stepCompletionTraceForBranchHistory.previousSelectedBranch
                   : null,
-              currentSelectedBranch:
-                scriptStateSnapshot.selectedBranchLabel ?? null,
+              currentSelectedBranch: smartModeActive
+                ? null
+                : (scriptStateSnapshot.selectedBranchLabel ?? null),
               selectedSuggestionId:
                 typeof stepCompletionTraceForBranchHistory.selectedSuggestionId ===
                 'string'
@@ -7141,6 +7193,7 @@ interface CapitalVerificationBlockResult {
 async function shouldBlockForCapitalVerification(params: {
   parsed: ParsedAIResponse;
   conversationId: string;
+  accountId?: string | null;
   capitalThreshold: number | null;
   capitalCustomPrompt: string | null;
   closerNames?: string[];
@@ -7153,6 +7206,7 @@ async function shouldBlockForCapitalVerification(params: {
   const {
     parsed,
     conversationId,
+    accountId,
     capitalThreshold,
     capitalCustomPrompt,
     currentTurnLeadMsg
@@ -7178,6 +7232,7 @@ async function shouldBlockForCapitalVerification(params: {
   // regardless of DB-snapshot timing.
   const r24 = await checkR24Verification(
     conversationId,
+    accountId,
     capitalThreshold,
     capitalCustomPrompt,
     currentTurnLeadMsg
@@ -7921,6 +7976,70 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   return { kind: 'ambiguous', amount: null, reason: 'no_pattern_matched' };
 }
 
+function applySemanticCapitalAmountToParsedAnswer(
+  raw: string,
+  parsed: ParsedLeadAnswer,
+  semanticAmount: number | null
+): ParsedLeadAnswer {
+  if (semanticAmount === null || semanticAmount === undefined) return parsed;
+  if (parsed.kind === 'disqualifier') return parsed;
+
+  const text = raw.trim();
+  if (capitalNumberNeedsComfortClarification(text)) {
+    return {
+      kind: 'ambiguous',
+      amount: semanticAmount,
+      currency: detectCurrencyFromText(text) ?? 'USD',
+      reason: 'total_savings_or_financial_stress'
+    };
+  }
+
+  if (PROP_FIRM_PATTERN.test(text)) {
+    const hasPersonalIndicator =
+      PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text);
+    if (!hasPersonalIndicator) return parsed;
+  }
+
+  return {
+    kind: 'amount',
+    amount: semanticAmount,
+    currency: detectCurrencyFromText(text) ?? 'USD'
+  };
+}
+
+async function parseLeadCapitalAnswerWithSemanticFallback(params: {
+  message: string;
+  accountId?: string | null;
+  recentConversation?: string[];
+}): Promise<ParsedLeadAnswer> {
+  const parsed = parseLeadCapitalAnswer(params.message);
+  if (parsed.kind === 'disqualifier') return parsed;
+
+  const semantic = await classifyCapitalAmountWithHaiku({
+    accountId: params.accountId,
+    leadMessage: params.message,
+    recentConversation: params.recentConversation
+  });
+  if (semantic.amount !== null) {
+    console.warn('[capital-classifier] semantic amount selected:', {
+      amount: semantic.amount,
+      leadMessageFirst80: params.message.slice(0, 80)
+    });
+  } else if (semantic.error || semantic.timedOut) {
+    console.warn('[capital-classifier] semantic parse unavailable:', {
+      error: semantic.error,
+      timedOut: semantic.timedOut,
+      leadMessageFirst80: params.message.slice(0, 80)
+    });
+  }
+
+  return applySemanticCapitalAmountToParsedAnswer(
+    params.message,
+    parsed,
+    semantic.amount
+  );
+}
+
 /**
  * Detect the currency a lead is using for capital amounts. Source
  * priority: explicit candidate texts (mergedAnswers) first, then a DB
@@ -8030,6 +8149,41 @@ async function persistR24VerificationState(
       },
       data
     });
+    if (result.parsedAmount !== null && result.parsedAmount !== undefined) {
+      const row = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { capturedDataPoints: true }
+      });
+      const points = {
+        ...asJsonObject(row?.capturedDataPoints)
+      };
+      const extractedAt = new Date().toISOString();
+      points.capital = {
+        value: result.parsedAmount,
+        confidence: 'HIGH',
+        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        extractionMethod: 'semantic_capital_classification',
+        extractedAt
+      };
+      points.verifiedCapitalUsd = {
+        value: result.parsedAmountUsd ?? result.parsedAmount,
+        confidence: 'HIGH',
+        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        extractionMethod: 'semantic_capital_classification',
+        extractedAt
+      };
+      points.capitalThresholdMet = {
+        value: qualified,
+        confidence: 'HIGH',
+        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        extractionMethod: 'semantic_capital_classification',
+        extractedAt
+      };
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { capturedDataPoints: points as Prisma.InputJsonValue }
+      });
+    }
   } catch (err) {
     console.error(
       '[ai-engine] R24 durable qualification state update failed (non-fatal):',
@@ -8047,6 +8201,7 @@ async function persistR24VerificationState(
  */
 async function checkR24Verification(
   conversationId: string,
+  accountId: string | null | undefined,
   threshold: number,
   customPrompt: string | null,
   currentTurnLeadMsg?: {
@@ -8265,9 +8420,17 @@ async function checkR24Verification(
     // thresholds as instructions and must never become "capital answers".
     if (message.sender !== 'LEAD') continue;
     if (message.content.trimStart().startsWith('OPERATOR NOTE:')) continue;
+    const recentConversation = mergedAnswers
+      .filter((m) => m.timestamp.getTime() <= message.timestamp.getTime())
+      .slice(-6)
+      .map((m) => `${m.sender}: ${m.content}`);
     classifications.push({
       msg: message,
-      cls: parseLeadCapitalAnswer(message.content)
+      cls: await parseLeadCapitalAnswerWithSemanticFallback({
+        message: message.content,
+        accountId,
+        recentConversation
+      })
     });
   }
   if (classifications.length === 0) {

@@ -624,6 +624,12 @@ export function callLogisticsAlreadyDeliveredInRecentHistory(
 
 export interface VoiceQualityOptions {
   /**
+   * Smart mode is used only when the branch router cannot confidently
+   * lock a script branch. In that mode we keep safety/platform gates hard
+   * but relax script-fidelity gates that depend on a specific branch.
+   */
+  smartMode?: boolean;
+  /**
    * When true, relax the 300-char length cap. Used when the turn is
    * delivering on a prior promise ("I'll explain") — explanations need
    * room to actually explain, so we allow up to 500 chars.
@@ -1885,13 +1891,18 @@ export function scoreVoiceQuality(
     hardFails.push('lol_instead_of_haha');
   }
 
-  // 8. Message too long — 300 chars normally, 500 when relaxed (e.g., when
-  // the turn is delivering on a prior promise and needs room to explain).
+  // 8. Message too long — style warning by default. It only becomes a
+  // hard fail at absurd lengths where the lead would receive a wall of
+  // text rather than a DM. This keeps voice preferences from blocking
+  // valid script-compliant replies.
   const lengthCap = options?.relaxLengthLimit ? 500 : 300;
-  if (reply.length > lengthCap) {
+  const replyWordCount = reply.trim().split(/\s+/).filter(Boolean).length;
+  if (replyWordCount > 500) {
     hardFails.push(
-      `message_too_long: ${reply.length} chars (cap ${lengthCap})`
+      `message_too_long: ${replyWordCount} words (hard cap 500 words)`
     );
+  } else if (reply.length > lengthCap) {
+    softSignals.message_too_long = -0.1;
   }
 
   // 9. Cliffhanger preamble — a short message that promises follow-up
@@ -3324,7 +3335,7 @@ export function scoreVoiceQuality(
 
   return {
     score,
-    passed: hardFails.length === 0 && score >= 0.7,
+    passed: hardFails.length === 0,
     hardFails,
     softSignals
   };
@@ -3738,6 +3749,32 @@ export interface GroupQualityResult {
   perBubble: QualityResult[];
 }
 
+const SMART_MODE_HARD_FAILURE_TOKENS = [
+  'fabricated_url_in_reply:',
+  'r34_metadata_leak:',
+  'metadata_leak',
+  'bracketed_placeholder_leaked:',
+  'booking_fabrication:',
+  'closer_or_call_in_downsell:',
+  'distress_signal_detected:',
+  'link_promise_without_url:',
+  'r29_transcribed_voice_note_ignored:',
+  'call_pitch_before_capital_verification:',
+  'funding_partner',
+  'r40_call_pitch_to_unqualified_after_downsell_accept:',
+  'r40_downsell_accepted_missing_url:',
+  'typeform_filled_no_booking_wrong_path:',
+  'banned_phrase',
+  'banned_word'
+];
+
+function isSmartModeHardFailure(failure: string): boolean {
+  const normalized = failure.toLowerCase();
+  return SMART_MODE_HARD_FAILURE_TOKENS.some((token) =>
+    normalized.includes(token)
+  );
+}
+
 export function scoreVoiceQualityGroup(
   messages: string[],
   options?: VoiceQualityOptions
@@ -3783,6 +3820,9 @@ export function scoreVoiceQualityGroup(
       if (failure.startsWith('missing_required_question_on_ask_step:')) {
         continue;
       }
+      if (options?.smartMode && !isSmartModeHardFailure(failure)) {
+        continue;
+      }
       hardFails.push(`[bubble=${i}] ${failure}`);
     }
   });
@@ -3800,6 +3840,7 @@ export function scoreVoiceQualityGroup(
   const groupIsBookingOrLinkStep =
     typeof groupStepNumber === 'number' && groupStepNumber >= 17;
   if (
+    options?.smartMode !== true &&
     groupCurrentStepHasAskBranch === true &&
     groupReplyQuestionCount === 0 &&
     options?.currentStepActiveBranchIsSilent !== true &&
@@ -3825,7 +3866,7 @@ export function scoreVoiceQualityGroup(
     ? options.activeBranchRequiredMessages
     : (options?.currentStepRequiredMessages ?? []);
   const msgViolation =
-    requiredMessagesForGate.length > 0
+    options?.smartMode !== true && requiredMessagesForGate.length > 0
       ? detectMsgVerbatimViolation(joined, requiredMessagesForGate)
       : null;
   if (msgViolation) {
@@ -3837,7 +3878,9 @@ export function scoreVoiceQualityGroup(
     );
   }
   const msgSequenceViolation =
-    !msgViolation && requiredMessagesForGate.length > 1
+    options?.smartMode !== true &&
+    !msgViolation &&
+    requiredMessagesForGate.length > 1
       ? detectMsgBubbleSequenceViolation(messages, requiredMessagesForGate)
       : null;
   if (msgSequenceViolation) {
@@ -4060,11 +4103,10 @@ export function scoreVoiceQualityGroup(
 
   return {
     score,
-    // Pass iff no hard fails AND the joined turn clears the soft-score
-    // threshold. joinedQuality.passed already encodes both its own
-    // hardFails-empty and score>=0.7, but we've pulled hardFails out
-    // to per-bubble tagging so recompute the soft-only gate here.
-    passed: hardFails.length === 0 && score >= 0.7,
+    // Pass iff no hard fails. Soft score is still logged for dashboard
+    // trends, but voice/style preferences must not block valid script
+    // deliveries.
+    passed: hardFails.length === 0,
     hardFails,
     softSignals,
     perBubble

@@ -16,6 +16,13 @@ import {
   parseRuntimeJudgments,
   type RuntimeJudgmentInput
 } from '@/lib/runtime-judgment-evaluator';
+import {
+  applyResolvedScriptVariables,
+  persistScriptVariableResolutions,
+  resolveScriptVariablesForTexts,
+  type ScriptVariableResolutionContext,
+  type ScriptVariableResolutionMap
+} from '@/lib/script-variable-resolver';
 
 // Action type → prompt tag mapping
 const ACTION_TAG: Record<string, string> = {
@@ -160,8 +167,37 @@ export async function serializeScriptForPrompt(
           s.stepNumber === (clampedCurrent as number) + 1
       )
     : script.steps;
+  const smartModeActive =
+    routingContext?.smartMode === true &&
+    typeof routingContext.smartModeStepNumber === 'number';
+  const renderedSteps = smartModeActive
+    ? focusedSteps.filter(
+        (step) => step.stepNumber === routingContext.smartModeStepNumber
+      )
+    : focusedSteps;
+  const variableResolutionMap =
+    routingContext?.variableResolutionContext &&
+    !routingContext.variableResolutionContext.disabled
+      ? await resolveScriptVariablesForTexts(
+          collectLeadFacingActionTexts(renderedSteps),
+          {
+            accountId,
+            context: routingContext.variableResolutionContext
+          }
+        )
+      : null;
+  if (variableResolutionMap) {
+    await persistScriptVariableResolutions({
+      conversationId: routingContext?.variableResolutionContext?.conversationId,
+      resolutions: variableResolutionMap.resolvedVariables
+    }).catch((err) => {
+      console.error('[script-serializer] variable resolution persist failed:', {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+  }
 
-  for (const step of focusedSteps) {
+  for (const step of renderedSteps) {
     stepLines.push('');
     if (focusModeActive) {
       const isCurrent = step.stepNumber === clampedCurrent;
@@ -193,8 +229,31 @@ export async function serializeScriptForPrompt(
       stepLines.push(`Canonical question: ${step.canonicalQuestion.trim()}`);
     }
 
+    if (
+      smartModeActive &&
+      step.stepNumber === routingContext.smartModeStepNumber
+    ) {
+      const branchDescriptions = step.branches
+        .map((branch) => {
+          const condition = branch.conditionDescription?.trim()
+            ? ` — ${branch.conditionDescription.trim()}`
+            : '';
+          return `  - ${branch.branchLabel}${condition}`;
+        })
+        .join('\n');
+      stepLines.push(
+        `Smart mode: branch confidence is low/none, so literal [MSG]/[ASK] actions are intentionally hidden. Use this step's objective and branch themes only.`
+      );
+      if (branchDescriptions) {
+        stepLines.push(`Branch themes:\n${branchDescriptions}`);
+      }
+      continue;
+    }
+
     if (step.actions.length > 0) {
-      stepLines.push(...serializeActionSequence(step.actions, '    '));
+      stepLines.push(
+        ...serializeActionSequence(step.actions, '    ', variableResolutionMap)
+      );
     }
 
     const stepBranches = selectBranchesForPrompt(step, routingContext);
@@ -234,7 +293,13 @@ export async function serializeScriptForPrompt(
           );
         }
 
-        stepLines.push(...serializeActionSequence(branch.actions, '    '));
+        stepLines.push(
+          ...serializeActionSequence(
+            branch.actions,
+            '    ',
+            variableResolutionMap
+          )
+        );
       }
     }
   }
@@ -489,6 +554,13 @@ export interface ScriptRoutingContext {
   manyChatFiredAt?: Date | string | null;
   selectedBranchLabel?: string | null;
   selectedBranchStepNumber?: number | null;
+  smartMode?: boolean;
+  smartModeStepNumber?: number | null;
+  variableResolutionContext?:
+    | (ScriptVariableResolutionContext & {
+        disabled?: boolean;
+      })
+    | null;
   nowMs?: number;
   manyChatActiveWindowMs?: number;
 }
@@ -501,8 +573,39 @@ type SerializableBranch = {
 
 type SerializableStepWithBranches = {
   stepNumber: number;
+  actions?: SerializableAction[];
   branches: SerializableBranch[];
 };
+
+function collectLeadFacingActionTexts(
+  steps: Array<{
+    actions?: SerializableAction[];
+    branches: SerializableBranch[];
+  }>
+): Array<string | null | undefined> {
+  const texts: Array<string | null | undefined> = [];
+  for (const step of steps) {
+    for (const action of step.actions ?? []) {
+      if (
+        action.actionType === 'send_message' ||
+        action.actionType === 'ask_question'
+      ) {
+        texts.push(action.content);
+      }
+    }
+    for (const branch of step.branches) {
+      for (const action of branch.actions) {
+        if (
+          action.actionType === 'send_message' ||
+          action.actionType === 'ask_question'
+        ) {
+          texts.push(action.content);
+        }
+      }
+    }
+  }
+  return texts;
+}
 
 export function isManyChatRoutingRecent(
   source: string | null | undefined,
@@ -641,7 +744,8 @@ export function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
 
 function serializeActionSequence(
   actions: SerializableAction[],
-  indent: string
+  indent: string,
+  variableResolutionMap?: ScriptVariableResolutionMap | null
 ): string[] {
   const lines: string[] = [];
 
@@ -659,7 +763,14 @@ function serializeActionSequence(
       );
     }
 
-    lines.push(serializeAction(action, indent, { previousAction, nextAction }));
+    lines.push(
+      serializeAction(
+        action,
+        indent,
+        { previousAction, nextAction },
+        variableResolutionMap
+      )
+    );
   }
 
   return lines;
@@ -671,16 +782,19 @@ function serializeAction(
   context?: {
     previousAction?: SerializableAction | null;
     nextAction?: SerializableAction | null;
-  }
+  },
+  variableResolutionMap?: ScriptVariableResolutionMap | null
 ): string {
   const tag = ACTION_TAG[action.actionType] || action.actionType.toUpperCase();
 
   switch (action.actionType) {
     case 'send_message':
-      return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${action.content || '(empty)'}"`;
+      return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${applyResolvedScriptVariables(action.content, variableResolutionMap) || '(empty)'}"`;
 
     case 'ask_question': {
-      const content = action.content || '(empty)';
+      const content =
+        applyResolvedScriptVariables(action.content, variableResolutionMap) ||
+        '(empty)';
       const sameReplyPrefix =
         context?.previousAction?.actionType === 'send_message'
           ? 'ask immediately after the preceding [MSG], in the same reply; '
