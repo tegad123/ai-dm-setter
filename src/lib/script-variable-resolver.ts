@@ -746,7 +746,6 @@ export function removeInvalidScriptVariableResolutionKeys(
 ): boolean {
   let changed = false;
   for (const [key, raw] of Object.entries(points)) {
-    if (isValidTemplateVariableName(key)) continue;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const record = raw as Record<string, unknown>;
     const extractionMethod =
@@ -759,6 +758,10 @@ export function removeInvalidScriptVariableResolutionKeys(
       extractionMethod.includes('variable_resolution') ||
       (!!variableName && variableName === key);
     if (!isVariableResolution) continue;
+    if (isValidTemplateVariableName(key)) {
+      const value = stringifyTemplateValue(unwrapCapturedPoint(raw));
+      if (normalizeResolvedVariableValue(key, value)) continue;
+    }
     delete points[key];
     changed = true;
   }

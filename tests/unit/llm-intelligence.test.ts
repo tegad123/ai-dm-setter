@@ -16,6 +16,7 @@ import {
   extractTemplateVariableNames,
   isValidTemplateVariableName,
   parseScriptVariableExtractorValue,
+  removeInvalidScriptVariableResolutionKeys,
   resolveScriptVariablesForTexts
 } from '../../src/lib/script-variable-resolver';
 import {
@@ -109,6 +110,31 @@ describe('pre-prompt script variable resolution', () => {
       ),
       'replace job income with trading'
     );
+  });
+
+  it('bug-57-persisted-variable-cleanup: removes invalid stored variable-resolution values', () => {
+    const points = {
+      income_goal: {
+        value:
+          'honestly bro it would mean we keep barely making ends meet, no savings for emergencies',
+        variableName: 'income_goal',
+        extractionMethod: 'branch_history_variable_resolution'
+      },
+      desired_outcome: {
+        value: 'replace job income with trading',
+        variableName: 'desired_outcome',
+        extractionMethod: 'llm_variable_resolution'
+      },
+      obstacle: {
+        value: 'long operator-captured field should not be deleted here',
+        extractionMethod: 'volunteered_obstacle_for_upcoming_ask'
+      }
+    };
+
+    assert.equal(removeInvalidScriptVariableResolutionKeys(points), true);
+    assert.equal('income_goal' in points, false);
+    assert.equal('desired_outcome' in points, true);
+    assert.equal('obstacle' in points, true);
   });
 
   it('does not call the LLM extractor for directive placeholders', async () => {
