@@ -500,6 +500,12 @@ interface MinimalStep {
   }>;
 }
 
+export function isRuntimePlaceholderOnly(content: string | null | undefined) {
+  return (
+    typeof content === 'string' && /^\s*\{\{[\s\S]+?\}\}\s*$/.test(content)
+  );
+}
+
 /**
  * Pure-data: derives the action shape for a given step number. Pass an
  * already-loaded script (from script-serializer's query) so this stays
@@ -535,7 +541,8 @@ export function getStepActionShape(
     if (
       action.actionType === 'send_message' &&
       typeof action.content === 'string' &&
-      action.content.trim().length > 0
+      action.content.trim().length > 0 &&
+      !isRuntimePlaceholderOnly(action.content)
     ) {
       requiredMessageContents.push(action.content.trim());
     }

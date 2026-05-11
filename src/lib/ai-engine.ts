@@ -53,7 +53,8 @@ import {
   detectBeliefBreakInMessage,
   getStepActionShape,
   hasCapturedDataPoint,
-  inferCurrentStepNumber
+  inferCurrentStepNumber,
+  isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
 
 // ---------------------------------------------------------------------------
@@ -840,7 +841,8 @@ function scriptedBranchActions(branch: JudgeBranchLike): JudgeActionLike[] {
         action.actionType === 'send_link' ||
         action.actionType === 'send_video') &&
       typeof action.content === 'string' &&
-      action.content.trim().length > 0
+      action.content.trim().length > 0 &&
+      !isRuntimePlaceholderOnly(action.content)
   );
 }
 
@@ -963,9 +965,16 @@ export async function detectJudgeBranchViolation(params: {
   generatedMessages: string[];
   accountId?: string | null;
   cache?: JudgeBranchSelectionCache;
+  classifier?: JudgeBranchClassifier;
 }): Promise<JudgeBranchViolation> {
-  const { step, latestLeadMessage, generatedMessages, accountId, cache } =
-    params;
+  const {
+    step,
+    latestLeadMessage,
+    generatedMessages,
+    accountId,
+    cache,
+    classifier
+  } = params;
   if (!step || !hasRuntimeJudgmentAction(step)) {
     return {
       blocked: false,
@@ -977,7 +986,8 @@ export async function detectJudgeBranchViolation(params: {
 
   const match = await selectJudgeBranchForLead(step, latestLeadMessage, {
     accountId,
-    cache
+    cache,
+    classifier
   });
   if (!match.branchLabel) {
     return {

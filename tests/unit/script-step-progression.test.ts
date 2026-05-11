@@ -42,7 +42,10 @@ import {
   maxQuestionSimilarityToScript,
   type CompactScriptStep
 } from '../../src/lib/script-step-progression';
-import { selectJudgeBranchForLead } from '../../src/lib/ai-engine';
+import {
+  detectJudgeBranchViolation,
+  selectJudgeBranchForLead
+} from '../../src/lib/ai-engine';
 import {
   detectMsgBubbleSequenceViolation,
   detectMsgVerbatimViolation,
@@ -714,6 +717,43 @@ describe('getStepActionShape', () => {
     assert.deepEqual(shape!.requiredMessageContents, ['context bro']);
   });
 
+  it('does not treat placeholder-only [MSG] actions as required verbatim text', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 6,
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Default',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content:
+                    '{{Comment on their job genuinely — "I respect that" / acknowledge it.}}'
+                },
+                {
+                  actionType: 'ask_question',
+                  content: 'How long have you been doing that?'
+                },
+                { actionType: 'wait_for_response' }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+
+    const shape = getStepActionShape(script, 6);
+
+    assert.ok(shape);
+    assert.equal(shape!.hasAnyAskAction, true);
+    assert.deepEqual(shape!.requiredMessageContents, []);
+    assert.deepEqual(shape!.scriptedQuestionContents, [
+      'How long have you been doing that?'
+    ]);
+  });
+
   it('collects direct [MSG] content as required verbatim text', () => {
     const script = {
       steps: [
@@ -1059,6 +1099,42 @@ describe('bug-34-llm-branch-classifier', () => {
     assert.equal(calls, 0);
     assert.equal(match.branchLabel, 'Going well');
     assert.ok(match.confidence === 'medium' || match.confidence === 'high');
+  });
+
+  it('ignores placeholder-only [MSG] actions when checking judge branch violations', async () => {
+    const step = {
+      stepNumber: 6,
+      title: 'Job acknowledgment',
+      actions: [{ actionType: 'runtime_judgment', content: null }],
+      branches: [
+        {
+          branchLabel: 'Default',
+          conditionDescription: 'lead gave their job',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                '{{Comment on their job genuinely — "I respect that" / acknowledge it.}}'
+            },
+            {
+              actionType: 'ask_question',
+              content: 'How long have you been doing that?'
+            }
+          ]
+        }
+      ]
+    };
+
+    const violation = await detectJudgeBranchViolation({
+      step,
+      latestLeadMessage: 'I work as a nurse',
+      generatedMessages: [
+        'respect that bro, nurses do real work. How long have you been doing that?'
+      ],
+      classifier: async () => 'Default'
+    });
+
+    assert.equal(violation.blocked, false);
   });
 });
 

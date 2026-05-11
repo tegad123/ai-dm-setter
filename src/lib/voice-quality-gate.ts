@@ -16,6 +16,7 @@ import {
   detectStep10Skipped,
   detectStepDistanceViolation,
   inferStepLabelFromReply,
+  isRuntimePlaceholderOnly,
   maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
 
@@ -1006,7 +1007,11 @@ export function detectMsgVerbatimViolation(
   const requiredMessages = currentStepMsgActions
     .map((action) => (typeof action === 'string' ? action : action.content))
     .filter((content): content is string =>
-      Boolean(content && content.trim().length > 0)
+      Boolean(
+        content &&
+          content.trim().length > 0 &&
+          !isRuntimePlaceholderOnly(content)
+      )
     );
 
   for (const required of requiredMessages) {
@@ -1029,7 +1034,11 @@ export function detectMsgBubbleSequenceViolation(
   const requiredMessages = currentStepMsgActions
     .map((action) => (typeof action === 'string' ? action : action.content))
     .filter((content): content is string =>
-      Boolean(content && content.trim().length > 0)
+      Boolean(
+        content &&
+          content.trim().length > 0 &&
+          !isRuntimePlaceholderOnly(content)
+      )
     );
   if (requiredMessages.length <= 1) return null;
 
