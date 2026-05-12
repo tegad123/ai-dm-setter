@@ -81,9 +81,10 @@ export interface PersonaSeedConfig {
   minimumCapitalRequired?: number;
   freeValueLink?: string;
   customPhrases?: Record<string, string>;
-  styleAnalysis?: Record<string, unknown>;
-  financialWaterfall?: Record<string, unknown>;
-  knowledgeAssets?: Record<string, unknown>;
+  styleAnalysis?: Record<string, unknown> | string;
+  // Prod stores these as JSON; can be array or object depending on persona.
+  financialWaterfall?: Record<string, unknown> | unknown[];
+  knowledgeAssets?: Record<string, unknown> | unknown[];
 }
 
 // ─── Prod-dump fixture shapes ───────────────────────────────────────

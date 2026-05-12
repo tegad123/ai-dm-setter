@@ -15,16 +15,26 @@
 import { RateLimitExhaustedError } from './errors';
 import { estimateCostUsd } from './pricing';
 
-const META_HOST_PATTERNS: RegExp[] = [
-  /(^|\.)graph\.instagram\.com($|\/)/i,
-  /(^|\.)graph\.facebook\.com($|\/)/i,
-  /(^|\.)graph\.fb\.com($|\/)/i
+const META_HOSTS: string[] = [
+  'graph.instagram.com',
+  'graph.facebook.com',
+  'graph.fb.com'
 ];
+const ANTHROPIC_HOST = 'api.anthropic.com';
+const OPENAI_HOST = 'api.openai.com';
+const TRANSCRIPTION_PATH = '/v1/audio/transcriptions';
 
-const ANTHROPIC_HOST_PATTERN = /(^|\.)api\.anthropic\.com($|\/)/i;
-const OPENAI_HOST_PATTERN = /(^|\.)api\.openai\.com($|\/)/i;
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
 
-const TRANSCRIPTION_HOST_PATTERNS: RegExp[] = [/\/v1\/audio\/transcriptions/i];
+function hostMatches(host: string, target: string): boolean {
+  return host === target || host.endsWith('.' + target);
+}
 
 interface ProviderUsage {
   calls: number;
@@ -74,11 +84,20 @@ function urlString(input: Request | string | URL): string {
 }
 
 function isMeta(url: string): boolean {
-  return META_HOST_PATTERNS.some((p) => p.test(url));
+  const h = hostOf(url);
+  return META_HOSTS.some((t) => hostMatches(h, t));
+}
+
+function isAnthropic(url: string): boolean {
+  return hostMatches(hostOf(url), ANTHROPIC_HOST);
+}
+
+function isOpenAI(url: string): boolean {
+  return hostMatches(hostOf(url), OPENAI_HOST);
 }
 
 function isTranscription(url: string): boolean {
-  return TRANSCRIPTION_HOST_PATTERNS.some((p) => p.test(url));
+  return url.toLowerCase().includes(TRANSCRIPTION_PATH);
 }
 
 function delayMs(attempt: number, retryAfter: number | null): number {
@@ -205,12 +224,12 @@ export function installFetchStub(opts: { fastPath?: boolean } = {}): void {
       throw new Error('[harness] originalFetch missing after install');
     }
 
-    if (ANTHROPIC_HOST_PATTERN.test(url)) {
+    if (isAnthropic(url)) {
       return callWithRateLimit('anthropic', () =>
         originalFetch!(input as Request, init)
       );
     }
-    if (OPENAI_HOST_PATTERN.test(url)) {
+    if (isOpenAI(url)) {
       return callWithRateLimit('openai', () =>
         originalFetch!(input as Request, init)
       );

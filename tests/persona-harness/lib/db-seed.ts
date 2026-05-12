@@ -2,8 +2,20 @@
 // has an id (or slug) that starts with the harness prefix so cleanup
 // can find them deterministically.
 
+import { createHash } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { HARNESS_CONFIG, assertTestDb, getPrisma } from './safety-guard';
+
+// Generate a deterministic numeric Instagram-shaped recipient id from
+// the persona slug + scenario id. Prod validator
+// (canShipToPlatformRecipient) requires /^\d{12,}$/ — the prefixed
+// test-harness-... string fails that check before the outbound fetch
+// even runs. 17 digits matches real IG page-scoped IDs.
+function numericPlatformUserId(slug: string, scenarioId: string): string {
+  const h = createHash('sha256').update(`${slug}/${scenarioId}`).digest('hex');
+  const big = BigInt(`0x${h.slice(0, 16)}`);
+  return `9${big.toString().padStart(16, '0').slice(-16)}`;
+}
 import type {
   AccountConfigFixture,
   PersonaSeedConfig,
@@ -14,7 +26,7 @@ import type {
 } from '../types';
 
 function asJson(
-  v: Record<string, unknown> | undefined
+  v: Record<string, unknown> | unknown[] | undefined
 ): Prisma.InputJsonValue | undefined {
   return v === undefined ? undefined : (v as Prisma.InputJsonValue);
 }
@@ -76,8 +88,14 @@ export async function seedAccount(
     name: accountConfig?.name ?? `Persona Harness — ${personaSlug}`,
     plan: (accountConfig?.plan as 'FREE' | 'PRO' | 'ENTERPRISE') ?? 'PRO',
     aiProvider: accountConfig?.aiProvider ?? 'anthropic',
-    awayModeInstagram: accountConfig?.awayModeInstagram ?? true,
-    awayModeFacebook: accountConfig?.awayModeFacebook ?? false,
+    // FORCED ON for the harness regardless of fixture. With awayMode
+    // off, the webhook flow generates AISuggestion rows for dashboard
+    // review instead of persisting AI Messages — which means the
+    // script step never advances between turns and the test stalls
+    // on step 1. The harness exists to exercise the auto-send path,
+    // not the human-review path.
+    awayModeInstagram: true,
+    awayModeFacebook: true,
     ghostThresholdDays: accountConfig?.ghostThresholdDays ?? 7,
     onboardingComplete: true
   };
@@ -86,7 +104,8 @@ export async function seedAccount(
     create: merged,
     update: {
       aiProvider: merged.aiProvider,
-      awayModeInstagram: merged.awayModeInstagram
+      awayModeInstagram: merged.awayModeInstagram,
+      awayModeFacebook: merged.awayModeFacebook
     }
   });
   return { id: account.id, slug: account.slug };
@@ -183,7 +202,7 @@ export async function seedScenarioLead(
   const prisma = await getPrisma();
   const leadId = `${PREFIX}lead-${personaSlug}-${scenarioId}`;
   const conversationId = `${PREFIX}conv-${personaSlug}-${scenarioId}`;
-  const platformUserId = `${PREFIX}platuser-${personaSlug}-${scenarioId}`;
+  const platformUserId = numericPlatformUserId(personaSlug, scenarioId);
 
   // Use create — cleanup is per-persona so by the time we seed a new
   // scenario, the previous rows are gone. If a stale row exists,
