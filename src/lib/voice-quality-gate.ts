@@ -1251,18 +1251,32 @@ function scriptedQuestionsForOptions(options?: VoiceQualityOptions): string[] {
   return options?.currentStepScriptedQuestions ?? [];
 }
 
-function bannedPhraseAppearsInRequiredLiteralMessage(
-  phrase: string,
-  options?: VoiceQualityOptions
-): boolean {
-  const normalizedPhrase = normalizeForVerbatimCompare(phrase);
-  if (!normalizedPhrase) return false;
-
-  return normalizeRequiredMessages(requiredMessageInputsForOptions(options))
+function operatorRequiredLiteralTexts(options?: VoiceQualityOptions): string[] {
+  const requiredMessages = normalizeRequiredMessages(
+    requiredMessageInputsForOptions(options)
+  )
     .filter((message) => message.isPlaceholder !== true)
-    .some((message) =>
-      normalizeForVerbatimCompare(message.content).includes(normalizedPhrase)
-    );
+    .map((message) => message.content);
+
+  return [...requiredMessages, ...scriptedQuestionsForOptions(options)];
+}
+
+function bannedTermAppearsInOperatorRequiredLiteral(
+  term: string,
+  options: VoiceQualityOptions | undefined,
+  opts: { wholeWord?: boolean } = {}
+): boolean {
+  const normalizedTerm = normalizeForVerbatimCompare(term);
+  if (!normalizedTerm) return false;
+
+  return operatorRequiredLiteralTexts(options).some((text) => {
+    const normalizedText = normalizeForVerbatimCompare(text);
+    if (opts.wholeWord) {
+      const re = new RegExp(`\\b${escapeRegExpChars(normalizedTerm)}\\b`, 'i');
+      return re.test(normalizedText);
+    }
+    return normalizedText.includes(normalizedTerm);
+  });
 }
 
 function parseNumericRequirement(value: string): number | null {
@@ -1948,7 +1962,7 @@ export function scoreVoiceQuality(
   for (const phrase of BANNED_PHRASES) {
     if (
       lower.includes(phrase) &&
-      !bannedPhraseAppearsInRequiredLiteralMessage(phrase, options)
+      !bannedTermAppearsInOperatorRequiredLiteral(phrase, options)
     ) {
       hardFails.push(`banned_phrase: "${phrase}"`);
     }
@@ -1957,7 +1971,12 @@ export function scoreVoiceQuality(
   // 2. Banned words (full word match)
   for (const word of BANNED_WORDS) {
     const re = new RegExp(`\\b${word}\\b`, 'i');
-    if (re.test(reply)) {
+    if (
+      re.test(reply) &&
+      !bannedTermAppearsInOperatorRequiredLiteral(word, options, {
+        wholeWord: true
+      })
+    ) {
       hardFails.push(`banned_word: "${word}"`);
     }
   }

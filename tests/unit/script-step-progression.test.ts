@@ -3653,6 +3653,38 @@ describe('bug-30-msg-verbatim-violation', () => {
       )
     );
   });
+
+  it('bug-003-extended-required-ask-word-wins-over-banned-word', () => {
+    const requiredAsk =
+      'What specifically would that extra income change for you and your family?';
+    const quality = scoreVoiceQualityGroup([requiredAsk], {
+      currentStepScriptedQuestions: [requiredAsk],
+      currentStepHasAnyAskAction: true
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('banned_word: "specifically"')
+      ),
+      false
+    );
+  });
+
+  it('bug-003-extended-still-blocks-banned-word-when-not-required-by-script', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['Specifically, you need to tell me your why.'],
+      {
+        currentStepScriptedQuestions: ['What would that income change for you?'],
+        currentStepHasAnyAskAction: true
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('banned_word: "specifically"')
+      )
+    );
+  });
 });
 
 describe('fabricated URL guard', () => {
