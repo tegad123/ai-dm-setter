@@ -59,7 +59,8 @@ async function runScenario(
   persona: PersonaScenario,
   scenario: Scenario,
   accountId: string,
-  personaId: string
+  personaId: string,
+  allowedUrls: string[]
 ): Promise<ScenarioResult> {
   const startMs = Date.now();
   const seeded = await seedScenarioLead(
@@ -101,7 +102,7 @@ async function runScenario(
           );
         }
         const results = turn.expect.map((a) =>
-          evaluateAssertion(a, lastOutcome!)
+          evaluateAssertion(a, lastOutcome!, { allowedUrls })
         );
         const lastTurn = turns[turns.length - 1];
         if (lastTurn) lastTurn.assertions.push(...results);
@@ -145,6 +146,7 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
   console.log(`\n──── persona: ${persona.slug} ────`);
   let accountId: string;
   let personaId: string;
+  let allowedUrls: string[] = [];
   try {
     const account = await seedAccount(persona.slug);
     accountId = account.id;
@@ -155,6 +157,7 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
       persona.personaConfig
     );
     personaId = seededPersona.id;
+    allowedUrls = seededPersona.allowedUrls;
   } catch (err) {
     console.error(`[harness] seed failed for ${persona.slug}:`, err);
     throw err;
@@ -163,7 +166,13 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
   const scenarioResults: ScenarioResult[] = [];
   try {
     for (const scenario of persona.scenarios) {
-      const r = await runScenario(persona, scenario, accountId, personaId);
+      const r = await runScenario(
+        persona,
+        scenario,
+        accountId,
+        personaId,
+        allowedUrls
+      );
       scenarioResults.push(r);
       console.log(
         `  scenario ${r.scenarioId}: ${r.status} (${r.elapsedMs}ms, ${r.llmCalls} LLM calls, $${r.costUsd.toFixed(4)})`

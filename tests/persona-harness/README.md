@@ -59,15 +59,50 @@ See `types.ts → AssertionType`. Examples:
 |---|---|
 | `AI_REPLY_NOT_EMPTY` | AI actually responded |
 | `AI_REPLY_MAX_CHARS` | enforce brevity, `value: 280` |
-| `FORBIDDEN_PHRASE_ABSENT` | `value: 'stage_confidence'` |
-| `PHRASE_PRESENT` / `PHRASE_ABSENT` | substring match |
+| `AI_MESSAGE_CONTAINS` / `PHRASE_PRESENT` | case-insensitive substring (alias) |
+| `FORBIDDEN_PHRASE_ABSENT` / `PHRASE_ABSENT` | substring must NOT appear |
 | `PHRASE_MATCHES` | `pattern: '\\bbook(ed|ing)\\b'` |
 | `STAGE_IS` / `STAGE_ADVANCED` | `value: 'EXPERIENCE'` |
-| `CAPTURED_DATA_HAS` / `CAPTURED_DATA_EQUALS` | `key: 'capital_amount'` |
+| `STEP_IS` / `STEP_REACHED` | `value: 14` (currentScriptStep == / >=) |
+| `CAPTURED_DATA_HAS` | `field: 'monthlyIncome'` (or `key:`) |
+| `CAPTURED_DATA_VALUE` / `CAPTURED_DATA_EQUALS` | `field`, `value` — compares `.value` of the CapturedDataPoint object |
+| `BRANCH_SELECTED` | `step: 19, value: 'Below $1500 — Downsell'` |
+| `BRANCH_HISTORY_HAS_EVENT` | `step: 15, eventType: 'step_skipped'` (aliases `conditional_skip_decision` w/ skipDecision='skip') |
+| `LINK_SENT` | `urlContains: 'whop.com/checkout'` |
+| `NO_FABRICATED_URL` | every URL in reply matches the persona's URL allowlist (freeValueLink, downsellConfig.link, promptConfig.{bookingTypeformUrl, downsellLink, ...}) |
+| `NO_TEMPLATE_LEAK` | reply has no `{{...}}`, `${...}`, `<<...>>`, `[[...]]`, or stray "undefined" |
+| `NO_QUALITY_GATE_FAILURE` | no ScheduledReply marked FAILED_QUALITY_GATE and no Notification created |
 | `LEAD_INTENT_TAG` | `value: 'PRE_QUALIFIED'` |
 | `INBOUND_QUALIFICATION_WRITTEN` | classifier fired on turn 1 |
 | `SCHEDULED_REPLY_EXISTS` | AI reply actually persisted |
 | `NOTIFICATION_CREATED` | quality-gate escalation happened |
+
+Captured-data values come from the production `CapturedDataPoint` wrapper
+(`{ value, confidence, extractionMethod, ... }`). `CAPTURED_DATA_VALUE`
+compares the inner `.value`. `branchHistory` is read from
+`Conversation.capturedDataPoints.branchHistory` — populated by
+`script-state-recovery` and `ai-engine` during a turn.
+
+## Real prod-persona scenarios
+
+The shipped Persona B file (`personas/persona-b-capital-disqualified.persona.ts`)
+encodes the real prod scenario but uses a placeholder `personaConfig`
+so the harness compiles. Step- and branch-level assertions will only
+produce reliable signal once you:
+
+1. Dump the real persona row + parsed Script / ScriptStep / ScriptBranch
+   into the test DB (see `scripts/dump-daetradez-persona.ts` and
+   `scripts/dump-daetradez-script.ts` for prod-side dump helpers).
+2. Paste the dumped values into the persona file's `personaConfig`
+   (or wire up a future `loadFromTestDb` mode — not yet supported).
+
+Until then, expect step- and branch-based assertions to FAIL. The
+quality-gate, template-leak, and fabricated-URL assertions still
+produce meaningful signal against any persona config.
+
+The retired synthetic `dae-script` persona lives at
+`personas/_dae-script.persona.ts` (leading underscore excludes it from
+auto-discovery) for reference.
 
 ## Expected failures
 

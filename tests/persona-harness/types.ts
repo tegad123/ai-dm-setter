@@ -6,18 +6,28 @@
 export type AssertionType =
   | 'STAGE_IS'
   | 'STAGE_ADVANCED'
+  | 'STEP_IS'
+  | 'STEP_REACHED'
   | 'FORBIDDEN_PHRASE_ABSENT'
   | 'PHRASE_PRESENT'
   | 'PHRASE_ABSENT'
   | 'PHRASE_MATCHES'
+  | 'AI_MESSAGE_CONTAINS'
   | 'CAPTURED_DATA_HAS'
   | 'CAPTURED_DATA_EQUALS'
+  | 'CAPTURED_DATA_VALUE'
   | 'LEAD_INTENT_TAG'
   | 'OUTCOME_IS'
   | 'AI_REPLY_NOT_EMPTY'
   | 'AI_REPLY_MAX_CHARS'
   | 'SCHEDULED_REPLY_EXISTS'
   | 'NOTIFICATION_CREATED'
+  | 'NO_QUALITY_GATE_FAILURE'
+  | 'NO_TEMPLATE_LEAK'
+  | 'NO_FABRICATED_URL'
+  | 'LINK_SENT'
+  | 'BRANCH_SELECTED'
+  | 'BRANCH_HISTORY_HAS_EVENT'
   | 'INBOUND_QUALIFICATION_WRITTEN';
 
 export interface Assertion {
@@ -25,8 +35,18 @@ export interface Assertion {
   value?: unknown;
   // For PHRASE_MATCHES: regex source string
   pattern?: string;
-  // For CAPTURED_DATA_*: data point key
+  // For CAPTURED_DATA_*: data point key. `field` is accepted as an
+  // alias for ergonomic scenario authoring.
   key?: string;
+  field?: string;
+  // For LINK_SENT: required URL substring
+  urlContains?: string;
+  // For BRANCH_* assertions: which script step the event refers to
+  step?: number;
+  // For BRANCH_HISTORY_HAS_EVENT: event type to find. Accepts the
+  // production enum values plus the alias 'step_skipped' which maps
+  // to a conditional_skip_decision with skipDecision='skip'.
+  eventType?: string;
   // Optional descriptive label for output
   label?: string;
 }

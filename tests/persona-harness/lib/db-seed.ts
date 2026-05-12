@@ -23,6 +23,30 @@ export interface SeededPersona {
   id: string;
   accountId: string;
   slug: string;
+  allowedUrls: string[];
+}
+
+export function collectAllowedUrls(config: PersonaSeedConfig): string[] {
+  const urls = new Set<string>();
+  const add = (v: unknown): void => {
+    if (typeof v === 'string' && v.startsWith('http')) urls.add(v);
+  };
+  add(config.freeValueLink);
+  const ds = config.downsellConfig as Record<string, unknown> | undefined;
+  if (ds) add(ds['link']);
+  const pc = config.promptConfig as Record<string, unknown> | undefined;
+  if (pc) {
+    for (const k of [
+      'bookingTypeformUrl',
+      'applicationFormUrl',
+      'downsellLink',
+      'fallbackContent',
+      'freeContentLink'
+    ]) {
+      add(pc[k]);
+    }
+  }
+  return Array.from(urls);
 }
 
 export interface SeededLead {
@@ -128,7 +152,12 @@ export async function seedPersona(
     ? await prisma.aIPersona.update({ where: { id }, data })
     : await prisma.aIPersona.create({ data: { id, ...data } });
 
-  return { id: persona.id, accountId, slug: personaSlug };
+  return {
+    id: persona.id,
+    accountId,
+    slug: personaSlug,
+    allowedUrls: collectAllowedUrls(config)
+  };
 }
 
 export async function seedScenarioLead(

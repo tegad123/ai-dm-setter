@@ -22,6 +22,8 @@ export interface TurnOutcome {
   conversationState: ConversationStateSnapshot | null;
   inboundQualificationCreated: boolean;
   notificationsCreated: number;
+  branchHistory: Array<Record<string, unknown>> | null;
+  qualityGateFailed: boolean;
 }
 
 export interface ConversationStateSnapshot {
@@ -50,6 +52,12 @@ export async function runTurn(input: TurnInvocation): Promise<TurnOutcome> {
   });
   const notificationsBefore = await prisma.notification.count({
     where: { lead: { conversation: { id: input.conversationId } } }
+  });
+  const failedScheduledBefore = await prisma.scheduledReply.count({
+    where: {
+      conversationId: input.conversationId,
+      status: 'FAILED_QUALITY_GATE'
+    }
   });
 
   const { processIncomingMessage } = await import(
@@ -108,6 +116,20 @@ export async function runTurn(input: TurnInvocation): Promise<TurnOutcome> {
   const notificationsAfter = await prisma.notification.count({
     where: { lead: { conversation: { id: input.conversationId } } }
   });
+  const failedScheduledAfter = await prisma.scheduledReply.count({
+    where: {
+      conversationId: input.conversationId,
+      status: 'FAILED_QUALITY_GATE'
+    }
+  });
+
+  const cap =
+    (conversation?.capturedDataPoints as Record<string, unknown> | null) ??
+    null;
+  const rawHistory = cap && cap['branchHistory'];
+  const branchHistory = Array.isArray(rawHistory)
+    ? (rawHistory as Array<Record<string, unknown>>)
+    : null;
 
   return {
     inboundMessageId,
@@ -117,11 +139,7 @@ export async function runTurn(input: TurnInvocation): Promise<TurnOutcome> {
       ? {
           systemStage: conversation.systemStage ?? null,
           currentScriptStep: conversation.currentScriptStep ?? null,
-          capturedDataPoints:
-            (conversation.capturedDataPoints as Record<
-              string,
-              unknown
-            > | null) ?? null,
+          capturedDataPoints: cap,
           leadIntentTag: conversation.leadIntentTag ?? null,
           outcome: conversation.outcome ?? null,
           aiActive: conversation.aiActive,
@@ -131,7 +149,9 @@ export async function runTurn(input: TurnInvocation): Promise<TurnOutcome> {
         }
       : null,
     inboundQualificationCreated: inboundQualAfter > inboundQualBefore,
-    notificationsCreated: notificationsAfter - notificationsBefore
+    notificationsCreated: notificationsAfter - notificationsBefore,
+    branchHistory,
+    qualityGateFailed: failedScheduledAfter > failedScheduledBefore
   };
 }
 
