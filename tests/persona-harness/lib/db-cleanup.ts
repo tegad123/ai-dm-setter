@@ -70,8 +70,11 @@ async function cleanup(
   const conversationIds = conversations.map((c) => c.id);
 
   // Delete in dependency order. Each statement is idempotent and
-  // returns a count so we can report orphan totals.
+  // returns a count. Most child tables also have onDelete: Cascade in
+  // the schema, but explicit deletes give clean visibility into what
+  // the harness has actually written.
   const ops = [
+    // Conversation children
     () =>
       conversationIds.length
         ? prisma.message.deleteMany({
@@ -122,6 +125,54 @@ async function cleanup(
       leadIds.length
         ? prisma.lead.deleteMany({ where: { id: { in: leadIds } } })
         : Promise.resolve({ count: 0 }),
+    // Training data — cascades from TrainingUpload, but delete leaves
+    // first so we see real counts.
+    () =>
+      prisma.trainingMessage.deleteMany({
+        where: { conversation: { accountId: { in: accountIds } } }
+      }),
+    () =>
+      prisma.trainingConversation.deleteMany({
+        where: { accountId: { in: accountIds } }
+      }),
+    () =>
+      prisma.trainingUpload.deleteMany({
+        where: { accountId: { in: accountIds } }
+      }),
+    () =>
+      prisma.trainingExample.deleteMany({
+        where: { accountId: { in: accountIds } }
+      }),
+    // Script tree — cascades from Script, leaf-first for visibility.
+    () =>
+      prisma.scriptAction.deleteMany({
+        where: { step: { script: { accountId: { in: accountIds } } } }
+      }),
+    () =>
+      prisma.scriptBranch.deleteMany({
+        where: { step: { script: { accountId: { in: accountIds } } } }
+      }),
+    () =>
+      prisma.scriptStep.deleteMany({
+        where: { script: { accountId: { in: accountIds } } }
+      }),
+    () =>
+      prisma.scriptFormField.deleteMany({
+        where: { form: { script: { accountId: { in: accountIds } } } }
+      }),
+    () =>
+      prisma.scriptForm.deleteMany({
+        where: { script: { accountId: { in: accountIds } } }
+      }),
+    () =>
+      prisma.script.deleteMany({
+        where: { accountId: { in: accountIds } }
+      }),
+    () =>
+      prisma.bridgingMessageTemplate.deleteMany({
+        where: { accountId: { in: accountIds } }
+      }),
+    // Persona + account
     () =>
       prisma.aIPersona.deleteMany({
         where: { accountId: { in: accountIds } }

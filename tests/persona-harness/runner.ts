@@ -13,10 +13,13 @@ import { readdirSync } from 'fs';
 import { resolve, join } from 'path';
 import { HARNESS_CONFIG, assertTestDb, getPrisma } from './lib/safety-guard';
 import {
+  newIdResolver,
   seedAccount,
   seedIntegrationCredential,
   seedPersona,
-  seedScenarioLead
+  seedScenarioLead,
+  seedScriptFixture,
+  seedTrainingFixture
 } from './lib/db-seed';
 import { cleanupByPersona, cleanupAll, reportOrphans } from './lib/db-cleanup';
 import {
@@ -148,7 +151,7 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
   let personaId: string;
   let allowedUrls: string[] = [];
   try {
-    const account = await seedAccount(persona.slug);
+    const account = await seedAccount(persona.slug, persona.accountConfig);
     accountId = account.id;
     await seedIntegrationCredential(accountId);
     const seededPersona = await seedPersona(
@@ -158,6 +161,39 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
     );
     personaId = seededPersona.id;
     allowedUrls = seededPersona.allowedUrls;
+
+    // Optional prod-dump extras
+    if (
+      persona.scriptConfig ||
+      (persona.trainingUploads && persona.trainingUploads.length)
+    ) {
+      const resolver = newIdResolver(persona.slug, accountId, personaId);
+      if (persona.scriptConfig) {
+        await seedScriptFixture(
+          accountId,
+          persona.slug,
+          persona.scriptConfig,
+          resolver
+        );
+        console.log(
+          `  seeded script: ${persona.scriptConfig.steps.length} step(s), ${persona.scriptConfig.branches.length} branch(es), ${persona.scriptConfig.actions.length} action(s)`
+        );
+      }
+      if (persona.trainingUploads && persona.trainingUploads.length) {
+        const seeded = await seedTrainingFixture(
+          accountId,
+          personaId,
+          persona.slug,
+          persona.trainingUploads,
+          persona.trainingConversations ?? [],
+          persona.trainingMessages ?? [],
+          resolver
+        );
+        console.log(
+          `  seeded training: ${seeded.uploadIds.length} upload(s), ${seeded.conversationIds.length} conv(s), ${seeded.messageIds.length} msg(s)`
+        );
+      }
+    }
   } catch (err) {
     console.error(`[harness] seed failed for ${persona.slug}:`, err);
     throw err;

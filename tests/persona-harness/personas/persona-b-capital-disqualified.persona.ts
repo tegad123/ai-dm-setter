@@ -1,67 +1,34 @@
 // Persona B — capital-disqualified trader, $500 → SLM downsell at Step 19.
 //
-// IMPORTANT: This file ships with a placeholder personaConfig so the
-// harness compiles and auto-discovers the scenario. The scenario
-// assertions (branchHistory events, step transitions, $497 SLM link,
-// "Anthony", "$1k") are written against the REAL production Persona B
-// behavior. Running them against the placeholder config below will
-// FAIL — that's expected.
-//
-// To get a meaningful pass/fail signal:
-//
-// 1. Dump the real persona config from production into the test DB
-//    via scripts/dump-daetradez-persona.ts (or equivalent). The dump
-//    should populate the real systemPrompt, rawScript, qualificationFlow,
-//    downsellConfig (with $497 SLM link), promptConfig (with Anthony as
-//    closer), and the parsed Script + ScriptStep + ScriptBranch rows.
-//
-// 2. Replace the personaConfig block below with the dumped values, OR
-//    add a `loadFromTestDb: { accountSlug, personaId }` field (not yet
-//    supported — file a follow-up).
-//
-// 3. The Script-step model (ScriptStep, ScriptBranch) is NOT seeded by
-//    this harness — it must already exist in the test DB for the
-//    step-based assertions to fire correctly.
-//
-// Until step 1+2 are done, expect this scenario to surface as FAIL on
-// most step/branch assertions. Quality-gate / template-leak / fabricated-
-// URL assertions will still produce meaningful signal against any persona.
+// Wires in the daetradez prod fixture (account + persona + script +
+// training messages). The fixture is populated by
+//   npm run db:copy-daetradez
+// against a read-only prod DB. Until that has been run, the unpopulated
+// fixture short-circuits at seed time with a clear error.
 
 import type { PersonaScenario } from '../types';
+import { daetradezFixture } from '../fixtures/daetradez-fixture';
 
-const SYNTHETIC_SYSTEM_PROMPT = `Placeholder system prompt for Persona B harness compilation.
-
-This must be replaced with the real production Persona B systemPrompt
-(closer: Anthony, minimum capital: $1500, SLM downsell at $497) before
-the scenario assertions below will produce reliable signal.
-`;
+if (!daetradezFixture._populated) {
+  // Throwing at module load means the runner surfaces this as a
+  // HARNESS_ERROR before any seed runs, with the actionable next step.
+  throw new Error(
+    '[persona-b] daetradez fixture is unpopulated. ' +
+      'Run `npm run db:copy-daetradez` with PROD_READ_DATABASE_URL set, ' +
+      'then re-run `npm run test:personas`.'
+  );
+}
 
 export const persona: PersonaScenario = {
   slug: 'persona-b-capital-disqualified',
   description:
     'Capital-disqualified trader with $500, should route to SLM downsell at Step 19',
-  personaConfig: {
-    personaName: 'Persona B (Harness)',
-    fullName: 'Dae Harness — Persona B',
-    companyName: 'DAE Trading',
-    tone: 'casual, direct',
-    systemPrompt: SYNTHETIC_SYSTEM_PROMPT,
-    promptConfig: {
-      whatYouSell: 'trading mentorship',
-      closerName: 'Anthony',
-      bookingTypeformUrl: 'https://test.qualifydms.io/apply',
-      downsellLink: 'https://whop.com/checkout/persona-b-slm-497'
-    },
-    downsellConfig: {
-      productName: 'Self-Led Mastery (SLM)',
-      price: 497,
-      pitchMessage:
-        'self-paced trading mastery while you build the capital base',
-      link: 'https://whop.com/checkout/persona-b-slm-497'
-    },
-    minimumCapitalRequired: 1500,
-    freeValueLink: 'https://test.qualifydms.io/youtube'
-  },
+  accountConfig: daetradezFixture.accountConfig,
+  personaConfig: daetradezFixture.personaConfig,
+  scriptConfig: daetradezFixture.script,
+  trainingUploads: daetradezFixture.trainingUploads,
+  trainingConversations: daetradezFixture.trainingConversations,
+  trainingMessages: daetradezFixture.trainingMessages,
   scenarios: [
     {
       id: 'persona-b-capital-disqualified',

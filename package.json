@@ -26,6 +26,7 @@
     "test:e2e:auth": "tsx tests/e2e/helpers/auth.ts",
     "test:conversations": "tsx tests/run-conversation-fixtures.ts",
     "test:personas": "tsx tests/persona-harness/runner.ts",
+    "db:copy-daetradez": "tsx tests/persona-harness/scripts/copy-daetradez-to-test.ts",
     "test:smoke": "tsx tests/integration/smoke-tests.ts",
     "test:smoke:seed": "tsx tests/integration/seed-test-db.ts",
     "test:smoke:cleanup": "tsx tests/integration/cleanup-test-db.ts",
