@@ -167,7 +167,7 @@ export const persona: PersonaScenario = {
           role: 'assertions',
           expect: [
             { type: 'STEP_IS', value: 12 },
-            { type: 'CAPTURED_DATA_HAS', field: 'deep_emotional_why' }
+            { type: 'CAPTURED_DATA_HAS', field: 'deep_why' }
           ]
         },
 

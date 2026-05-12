@@ -506,3 +506,170 @@ Observe:
   branch's [JUDGMENT].
 - Instead `snapshotCurrentScriptStep: 15` and the Urgency branch
   fires.
+
+### bug-005 — Captured-data key non-determinism + classifier mis-selection on Step 14 buy-in
+
+**Severity:** P1 — affects routing accuracy and assertion stability
+across multi-run consistency. Two distinct sub-issues that both
+surfaced in the same persona-b harness re-run.
+
+**Discovered:** Persona B harness re-run after bugs 001b / 002 /
+003 / 004 fixes, 2026-05-12.
+
+**Status:** Awaiting fix on `main` branch.
+
+#### Part A — Captured-data key naming is non-deterministic
+
+The same conceptual data (the lead's emotional why) gets stored
+under **different keys across otherwise identical runs**:
+
+```
+Run 1 (post bug-001 fix):
+  capturedKeys: [..., 'deep_emotional_why', ...]
+
+Run 2 (post commits e295922 + c492473, same scenario, same lead
+       messages, same Step 12 → 13 flow):
+  capturedKeys: [..., 'deep_why', ...]
+```
+
+The conversation path is identical, the lead message is identical
+(`"i just want to be the dad i never had, be home for bath time
+and story time"`), and the script step is identical (Step 12 /
+Obstacle Identification). Only the extraction-output key name
+differs.
+
+**Symptoms:**
+
+- Inconsistent key in `capturedDataPoints` across identical
+  conversations.
+- Any downstream code that reads by name (prereq checks, gates,
+  prompt-variable substitution) silently passes on one run and
+  fails on the next.
+- Harness scenarios can't reliably assert
+  `CAPTURED_DATA_HAS deep_why` (or any other variant). Commit
+  e295922 changed the scenario to `deep_emotional_why` based on
+  one log; the next run flipped back to `deep_why`. Commit 7
+  reverts to `deep_why` to match the most recent run, but the
+  underlying non-determinism remains.
+
+**Fix scope:**
+
+Captured-data extraction should write a **canonical key name**
+regardless of LLM phrasing variation. Either:
+
+1. Normalize all "why" extractions to a single key
+   (e.g. always `deep_why`) inside the extraction pipeline.
+2. Post-process extraction output through a canonical-name map
+   that collapses LLM-produced variants (`deep_emotional_why`,
+   `why`, `deep_motivation`, etc.) to a single key.
+
+This is **generic across all clients** — applies to any captured
+field where the AI extraction might produce variant key names.
+
+**File pointers:**
+
+- `src/lib/captured-data-extractor.ts` (or wherever extraction
+  output is normalized before being written to
+  `capturedDataPoints`)
+- `src/lib/script-state-recovery.ts` (where `capturedDataPoints`
+  is persisted; could also be the right layer to enforce
+  canonical names)
+
+#### Part B — Classifier mis-selects "Lukewarm buy-in" for clear conviction language
+
+At Step 14 (Buy-In Confirmation), the lead message
+`"honestly bro that would change everything for me and my family"`
+was classified into the `Lukewarm buy-in` branch.
+
+**Expected:** `Clear buy-in` branch. The script's branch
+definitions for Step 14 distinguish:
+
+```
+IF Clear buy-in:
+  [JUDGMENT] Clear buy-in = "yes bro that's exactly what I need"
+    / "100%" / "that would change everything" / "man that's
+    literally my problem" / any affirmative with real energy
+    behind it.
+
+IF Lukewarm buy-in:
+  [JUDGMENT] Lukewarm = "yeah that could work" / "maybe" /
+    "possibly" / "yeah that would help I guess" / anything
+    without conviction.
+```
+
+The lead message uses *"would change everything for me and my
+family"* — verbatim a Clear-buy-in indicator and explicit
+emotional weight (family). The classifier picked Lukewarm.
+
+**Symptoms (this harness run):**
+
+- Turn 22 reaches Step 15 (Urgency) via the lukewarm probe
+  instead of routing through Clear buy-in → Step 16.
+- The conversation receives an unnecessary "is now the time"
+  urgency push that the script explicitly says to skip when
+  momentum is already strong.
+- The `AI_MESSAGE_CONTAINS "ready"` assertion fails — the Clear
+  buy-in branch contains *"you ready to do what it takes to
+  actually fix this?"* but Lukewarm doesn't.
+
+From the harness log:
+
+```
+[branch-classifier] LLM RESULT: {
+  stepNumber: 14,
+  success: true,
+  selectedLabel: 'Lukewarm buy-in',
+  ...
+}
+
+× turn 22: "ready" missing from reply
+× turn 22: step expected 14, got 15
+```
+
+**Fix scope:**
+
+Three options, not mutually exclusive:
+
+1. Add training/example pairs that disambiguate emphatic
+   conviction ("would change everything", "for my family")
+   from hedging ("maybe", "could work") to the branch
+   classifier prompt.
+2. Strengthen the branch condition descriptions on the
+   daetradez Step 14 script so the LLM has more explicit
+   cues for Clear vs Lukewarm.
+3. Raise the threshold for "Lukewarm" selection so emphatic
+   language tips into Clear unless real hedging signals are
+   present.
+
+This is also **generic across all clients** — any branch
+classifier that disambiguates positive emphasis from neutral
+acceptance will hit the same edge.
+
+**File pointers:**
+
+- `src/lib/branch-classifier.ts` — the LLM classification prompt
+  and threshold logic for `Step 14` (see
+  `selectJudgeBranchForLead` or equivalent entry function)
+- `src/lib/ai-engine.ts` — branch-selection orchestration
+
+#### Reproduction
+
+Run `npm run test:personas` twice on `feature/persona-harness`
+(rebased onto `main`'s bug-001 fix). Observe:
+
+1. The captured key for the lead's "why" alternates between
+   `deep_why` and `deep_emotional_why` across runs (Part A).
+2. Turn 22's `STEP_IS=14` assertion fails because the classifier
+   picked Lukewarm; `aiHistoryLen=16` shows the lukewarm probe
+   fired but Step advanced anyway (Part B compounds with
+   bug-004's [WAIT] bypass).
+
+#### Re-evaluate
+
+When Part A is fixed, commit 7's `deep_why` field in
+[persona-b-capital-disqualified.persona.ts](personas/persona-b-capital-disqualified.persona.ts)
+should pass on every run (no longer brittle).
+
+When Part B is fixed, turn 22's STEP_IS and `"ready"` assertions
+should pass; the conversation routes Clear buy-in → Step 16
+directly, skipping the unnecessary Step 15 urgency push.
