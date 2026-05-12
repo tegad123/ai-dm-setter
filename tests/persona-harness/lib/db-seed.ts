@@ -111,11 +111,64 @@ export async function seedAccount(
   return { id: account.id, slug: account.slug };
 }
 
+// Deterministic fake IG Business Account ID — used both in the
+// IntegrationCredential metadata and in the URL the network stub
+// intercepts. 17 digits matches real Meta page-scoped IDs.
+const HARNESS_FAKE_IG_BUSINESS_ID = '99100000000000001';
+const HARNESS_FAKE_IG_TOKEN = 'IGAA_HARNESS_FAKE_TOKEN_DO_NOT_USE';
+const HARNESS_FAKE_META_TOKEN = 'EAA_HARNESS_FAKE_TOKEN_DO_NOT_USE';
+
 export async function seedIntegrationCredential(
   accountId: string
 ): Promise<void> {
   await assertTestDb();
   const prisma = await getPrisma();
+
+  // INSTAGRAM + META fake credentials. sendDM / getUserProfile /
+  // getConversations all check `if (!accessToken) throw` BEFORE
+  // hitting fetch — the network stub can't intercept that. Seed
+  // non-null tokens so the pre-fetch guard passes; the actual
+  // outbound fetch is intercepted by network-stub.ts and returns a
+  // synthetic 200. metadata.igBusinessAccountId is required by the
+  // URL construction in sendDM. Both rows are wiped per-persona
+  // by db-cleanup.ts.
+  for (const provider of ['INSTAGRAM', 'META'] as const) {
+    await prisma.integrationCredential.upsert({
+      where: {
+        accountId_provider: { accountId, provider }
+      },
+      create: {
+        accountId,
+        provider,
+        credentials: {
+          accessToken:
+            provider === 'INSTAGRAM'
+              ? HARNESS_FAKE_IG_TOKEN
+              : HARNESS_FAKE_META_TOKEN
+        },
+        metadata: {
+          igBusinessAccountId: HARNESS_FAKE_IG_BUSINESS_ID,
+          pageId: HARNESS_FAKE_IG_BUSINESS_ID
+        },
+        isActive: true,
+        verifiedAt: new Date()
+      },
+      update: {
+        credentials: {
+          accessToken:
+            provider === 'INSTAGRAM'
+              ? HARNESS_FAKE_IG_TOKEN
+              : HARNESS_FAKE_META_TOKEN
+        },
+        metadata: {
+          igBusinessAccountId: HARNESS_FAKE_IG_BUSINESS_ID,
+          pageId: HARNESS_FAKE_IG_BUSINESS_ID
+        },
+        isActive: true
+      }
+    });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return;
   await prisma.integrationCredential.upsert({
