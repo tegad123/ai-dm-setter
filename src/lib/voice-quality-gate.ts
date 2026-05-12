@@ -1234,7 +1234,8 @@ function requiredMessageInputsForOptions(
 ): RequiredMessageInput[] {
   if (
     Array.isArray(options?.activeBranchRequiredMessages) &&
-    options.activeBranchRequiredMessages.length > 0
+    (options.currentStepActiveBranchLabel ||
+      options.activeBranchRequiredMessages.length > 0)
   ) {
     return options.activeBranchRequiredMessages;
   }
@@ -1244,7 +1245,8 @@ function requiredMessageInputsForOptions(
 function scriptedQuestionsForOptions(options?: VoiceQualityOptions): string[] {
   if (
     Array.isArray(options?.activeBranchScriptedQuestions) &&
-    options.activeBranchScriptedQuestions.length > 0
+    (options.currentStepActiveBranchLabel ||
+      options.activeBranchScriptedQuestions.length > 0)
   ) {
     return options.activeBranchScriptedQuestions;
   }
@@ -1305,7 +1307,10 @@ function numericRequirements(text: string): number[] {
   );
 }
 
-function replyContainsNumericRequirement(reply: string, amount: number): boolean {
+function replyContainsNumericRequirement(
+  reply: string,
+  amount: number
+): boolean {
   return numericRequirements(reply).includes(amount);
 }
 

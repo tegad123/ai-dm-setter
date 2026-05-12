@@ -1918,6 +1918,42 @@ describe('active-branch-scoped quality gates', () => {
     );
   });
 
+  it('bug-058-empty-selected-branch-required-messages-are-authoritative', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        "that's exactly what i'm talking about bro. you already know the problem is structure, so let's keep this moving."
+      ],
+      {
+        activeBranchRequiredMessages: [],
+        activeBranchScriptedQuestions: [],
+        currentStepActiveBranchLabel: 'Already understands root problem',
+        currentStepActiveBranchIsJudgeOnly: true,
+        activeBranchHasAskAction: false,
+        currentStepRequiredMessages: [
+          "Bro what if I told you 99% of traders that say that actually don't know what the real problem is? Let me explain."
+        ],
+        currentStepScriptedQuestions: [
+          'Now if you had a system like that, one that guided you from A to B and removed the guesswork. what would that do for your trading bro?'
+        ],
+        currentStepHasAnyAskAction: true,
+        currentStepHasAskBranch: false
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('missing_required_question_on_ask_step:')
+      ),
+      false
+    );
+  });
+
   it('bug-37-placeholder-embedded-quote: enforces embedded quote only', () => {
     const quality = scoreVoiceQualityGroup(
       ['damn bro, that red screen can mess with you fast'],
