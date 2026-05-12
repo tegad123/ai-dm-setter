@@ -37,12 +37,23 @@ function normalizeCapturedDataPointKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+const CAPTURED_DATA_POINT_KEY_ALIASES: Record<string, string[]> = {
+  income_goal: ['incomeGoal'],
+  belief_break_delivered: ['beliefBreakDelivered']
+};
+
 function capturedDataPointRaw(
   points: Record<string, unknown> | null | undefined,
   key: string
 ): unknown {
   if (!points) return undefined;
   if (Object.prototype.hasOwnProperty.call(points, key)) return points[key];
+
+  for (const alias of CAPTURED_DATA_POINT_KEY_ALIASES[key] ?? []) {
+    if (Object.prototype.hasOwnProperty.call(points, alias)) {
+      return points[alias];
+    }
+  }
 
   const normalizedKey = normalizeCapturedDataPointKey(key);
   for (const [candidateKey, value] of Object.entries(points)) {

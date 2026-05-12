@@ -384,6 +384,29 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-001b-call-prereqs-normalize-incomeGoal-to-income_goal', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: '$1k',
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step9CompletedEvent(), step13CompletedEvent()]
+    };
+
+    assert.equal(hasCapturedDataPoint(points, 'income_goal'), true);
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('accepts early_obstacle as a substitute for obstacle', () => {
     const points = {
       workBackground: 'engineer',
