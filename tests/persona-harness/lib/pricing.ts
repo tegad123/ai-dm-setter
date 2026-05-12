@@ -20,6 +20,8 @@ const PRICING_TABLE: Array<[string, ModelPricing]> = [
   ['claude-sonnet-4', { inputPerMillion: 3, outputPerMillion: 15 }],
   ['claude-haiku-4-5', { inputPerMillion: 1, outputPerMillion: 5 }],
   ['claude-haiku-4', { inputPerMillion: 1, outputPerMillion: 5 }],
+  ['claude-3-5-haiku', { inputPerMillion: 0.8, outputPerMillion: 4 }],
+  ['claude-3-haiku', { inputPerMillion: 0.25, outputPerMillion: 1.25 }],
   ['gpt-5.4', { inputPerMillion: 2.5, outputPerMillion: 10 }],
   ['gpt-5-mini', { inputPerMillion: 0.15, outputPerMillion: 0.6 }],
   ['gpt-5', { inputPerMillion: 5, outputPerMillion: 15 }],

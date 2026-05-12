@@ -171,10 +171,10 @@ export async function seedIntegrationCredential(
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return;
-  // Default to Haiku 4.5 — ~3x cheaper than Sonnet for harness runs that
-  // mostly exercise routing/state-machine logic rather than nuanced
-  // language generation. Override with HARNESS_ANTHROPIC_MODEL when
-  // validating Sonnet-only regressions.
+  // Default to Haiku 4.5, the cheapest Claude model currently available
+  // to this harness account, for runs that mostly exercise routing/state-
+  // machine logic rather than nuanced language generation. Override with
+  // HARNESS_ANTHROPIC_MODEL when validating model-specific regressions.
   const model =
     process.env.HARNESS_ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
   await prisma.integrationCredential.upsert({
