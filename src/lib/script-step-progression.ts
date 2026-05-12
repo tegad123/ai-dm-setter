@@ -144,6 +144,20 @@ function hasCapturedDataPointFromStep(params: {
     const sourceStepNumber = capturedPointSourceStepNumber(point);
     if (sourceStepNumber === params.stepNumber) return true;
 
+    // Recovery may first persist a numeric target-income answer while the
+    // cursor is already on the follow-up/deep-why step. If durable history
+    // proves the target-income step was reached, trust the numeric value
+    // even when its source metadata points one or more steps later.
+    if (
+      params.requireNumeric &&
+      hasBranchHistory &&
+      sourceStepNumber !== null &&
+      sourceStepNumber > params.stepNumber &&
+      stepReachedByBranchHistory(params.points, params.stepNumber)
+    ) {
+      return true;
+    }
+
     // Durable branchHistory proves the expected step was reached, but older
     // capture writers sometimes stored flat camelCase values without source
     // metadata. Accept those no-source values only when the durable ledger

@@ -440,6 +440,28 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-009-call-prereqs-trust-late-sourced-incomeGoal-after-step-9-history', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 10
+      },
+      deep_why: 'be home for bath time and story time',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step9CompletedEvent(), step13CompletedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
     const points = {
       work_background: 'retail',
