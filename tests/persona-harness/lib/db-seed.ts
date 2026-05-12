@@ -171,6 +171,12 @@ export async function seedIntegrationCredential(
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return;
+  // Default to Haiku 4.5 — ~3x cheaper than Sonnet for harness runs that
+  // mostly exercise routing/state-machine logic rather than nuanced
+  // language generation. Override with HARNESS_ANTHROPIC_MODEL when
+  // validating Sonnet-only regressions.
+  const model =
+    process.env.HARNESS_ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
   await prisma.integrationCredential.upsert({
     where: {
       accountId_provider: { accountId, provider: 'ANTHROPIC' }
@@ -178,12 +184,12 @@ export async function seedIntegrationCredential(
     create: {
       accountId,
       provider: 'ANTHROPIC',
-      credentials: { apiKey, model: 'claude-sonnet-4-5-20250929' },
+      credentials: { apiKey, model },
       isActive: true,
       verifiedAt: new Date()
     },
     update: {
-      credentials: { apiKey, model: 'claude-sonnet-4-5-20250929' },
+      credentials: { apiKey, model },
       isActive: true
     }
   });
