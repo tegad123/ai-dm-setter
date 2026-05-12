@@ -418,6 +418,28 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-008-call-prereqs-trust-step-9-incomeGoal-source-even-when-branch-history-is-incomplete', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: '$1k',
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step13CompletedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
     const points = {
       work_background: 'retail',
