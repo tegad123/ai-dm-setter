@@ -71,7 +71,13 @@ const KNOWN_MULTI_WORD_TEMPLATE_VARIABLES = new Set([
   'full name',
   'phone number',
   'email address',
-  'time zone'
+  'time zone',
+  'their field',
+  'their job',
+  'their work',
+  'current work',
+  'work background',
+  'work situation'
 ]);
 
 const SEMANTIC_TEMPLATE_VARIABLE_ALIASES = new Map<string, string>([
@@ -82,7 +88,17 @@ const SEMANTIC_TEMPLATE_VARIABLE_ALIASES = new Map<string, string>([
   ['incometarget', 'incomeGoal'],
   ['targetincome', 'incomeGoal'],
   ['targettradingincome', 'incomeGoal'],
-  ['monthlytradinggoal', 'incomeGoal']
+  ['monthlytradinggoal', 'incomeGoal'],
+  ['theirfield', 'workBackground'],
+  ['field', 'workBackground'],
+  ['theirjob', 'workBackground'],
+  ['job', 'workBackground'],
+  ['jobtitle', 'workBackground'],
+  ['occupation', 'workBackground'],
+  ['theirwork', 'workBackground'],
+  ['currentwork', 'workBackground'],
+  ['workbackground', 'workBackground'],
+  ['worksituation', 'workBackground']
 ]);
 
 const DIRECTIVE_FIRST_WORDS = new Set([
@@ -429,6 +445,25 @@ function variableAliases(variableName: string): string[] {
   }
   if (normalized.includes('day') || normalized.includes('time')) {
     add(['dayAndTime', 'day_and_time', 'scheduledCallAt']);
+  }
+  if (
+    normalized.includes('workbackground') ||
+    normalized.includes('job') ||
+    normalized.includes('field') ||
+    normalized.includes('occupation') ||
+    normalized.includes('work')
+  ) {
+    add([
+      'workBackground',
+      'work_background',
+      'job',
+      'occupation',
+      'field',
+      'theirField',
+      'their_field',
+      'theirJob',
+      'their_job'
+    ]);
   }
 
   return Array.from(aliases);

@@ -35,6 +35,8 @@ describe('pre-prompt script variable resolution', () => {
     assert.equal(isValidTemplateVariableName('their stated goal'), true);
     assert.equal(isValidTemplateVariableName('trading goal'), true);
     assert.equal(isValidTemplateVariableName('income target'), true);
+    assert.equal(isValidTemplateVariableName('their field'), true);
+    assert.equal(isValidTemplateVariableName('their job'), true);
     assert.equal(
       isValidTemplateVariableName('acknowledge their experience'),
       false
@@ -49,9 +51,9 @@ describe('pre-prompt script variable resolution', () => {
     );
     assert.deepEqual(
       extractTemplateVariableNames(
-        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{acknowledge their experience}} {{deep_why}} {{day and time}} {{their stated goal}}'
+        '{{specific missing info e.g. "email" / "timezone" / "phone number"}} {{acknowledge their experience}} {{deep_why}} {{day and time}} {{their stated goal}} {{their field}}'
       ),
-      ['deep_why', 'day and time', 'their stated goal']
+      ['deep_why', 'day and time', 'their stated goal', 'their field']
     );
   });
 
@@ -135,6 +137,45 @@ describe('pre-prompt script variable resolution', () => {
         resolutions
       ),
       'But why is $1k so important to you though?'
+    );
+  });
+
+  it('bug-008-resolves-their-field-from-workBackground', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      [
+        "I know {{their field}} is different than trading.",
+        'How long have you been in {{their job}}?'
+      ],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            workBackground: {
+              value: 'retail management',
+              confidence: 'HIGH',
+              sourceFieldName: 'workBackground'
+            }
+          }
+        },
+        extractor: async () => {
+          throw new Error('extractor should not run');
+        }
+      }
+    );
+
+    assert.equal(
+      applyResolvedScriptVariables(
+        'I know {{their field}} is different than trading.',
+        resolutions
+      ),
+      'I know retail management is different than trading.'
+    );
+    assert.equal(
+      applyResolvedScriptVariables(
+        'How long have you been in {{their job}}?',
+        resolutions
+      ),
+      'How long have you been in retail management?'
     );
   });
 
