@@ -1228,6 +1228,32 @@ function literalRequiredMessages(
     .map((message) => message.content);
 }
 
+function requiredMessageInputsForOptions(
+  options?: VoiceQualityOptions
+): RequiredMessageInput[] {
+  if (
+    Array.isArray(options?.activeBranchRequiredMessages) &&
+    options.activeBranchRequiredMessages.length > 0
+  ) {
+    return options.activeBranchRequiredMessages;
+  }
+  return options?.currentStepRequiredMessages ?? [];
+}
+
+function bannedPhraseAppearsInRequiredLiteralMessage(
+  phrase: string,
+  options?: VoiceQualityOptions
+): boolean {
+  const normalizedPhrase = normalizeForVerbatimCompare(phrase);
+  if (!normalizedPhrase) return false;
+
+  return normalizeRequiredMessages(requiredMessageInputsForOptions(options))
+    .filter((message) => message.isPlaceholder !== true)
+    .some((message) =>
+      normalizeForVerbatimCompare(message.content).includes(normalizedPhrase)
+    );
+}
+
 export function detectMsgVerbatimViolation(
   generatedReply: string,
   currentStepMsgActions: RequiredMessageInput[]
@@ -1849,7 +1875,10 @@ export function scoreVoiceQuality(
 
   // 1. Banned phrases
   for (const phrase of BANNED_PHRASES) {
-    if (lower.includes(phrase)) {
+    if (
+      lower.includes(phrase) &&
+      !bannedPhraseAppearsInRequiredLiteralMessage(phrase, options)
+    ) {
       hardFails.push(`banned_phrase: "${phrase}"`);
     }
   }

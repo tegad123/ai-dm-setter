@@ -3449,6 +3449,46 @@ describe('bug-30-msg-verbatim-violation', () => {
       null
     );
   });
+
+  it('bug-003-required-verbatim-phrase-wins-over-banned-phrase', () => {
+    const requiredMessages = [
+      'Bro what if I told you 99% of traders that say that actually do not know what the real problem is? Let me explain.',
+      'When people come into the markets, they believe they need more discipline.',
+      'So what is really the bottleneck? It is the systems you have in place. That is what gets you from point A to point B.'
+    ];
+
+    const quality = scoreVoiceQualityGroup(requiredMessages, {
+      currentStepRequiredMessages: requiredMessages
+    });
+
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('banned_phrase: "let me explain"')
+      ),
+      false
+    );
+    assert.equal(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      ),
+      false
+    );
+  });
+
+  it('bug-003-still-blocks-banned-phrase-when-not-required-by-script', () => {
+    const quality = scoreVoiceQualityGroup(
+      ['let me explain how this works bro'],
+      {
+        currentStepRequiredMessages: ['here is the exact message']
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('banned_phrase: "let me explain"')
+      )
+    );
+  });
 });
 
 describe('fabricated URL guard', () => {
