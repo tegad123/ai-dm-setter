@@ -312,11 +312,14 @@ function cleanMoneyValue(value: string): string | null {
   const compact = value.replace(/,/g, '').trim();
   const match = compact.match(/\$?\s*(\d+(?:\.\d+)?)\s*([kKmM])?\b/);
   if (!match) return null;
-  const amount = match[1];
+  const amount = match[1].replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
   const suffix = match[2]?.toLowerCase() ?? '';
   if (suffix === 'k') return `$${amount}k`;
   if (suffix === 'm') return `$${amount}m`;
-  return /^\$/.test(value.trim()) ? `$${amount}` : amount;
+  const numericAmount = Number(amount);
+  return Number.isFinite(numericAmount)
+    ? formatCompactMoneyAmount(numericAmount)
+    : null;
 }
 
 function formatCompactMoneyAmount(value: number): string {
@@ -436,12 +439,19 @@ function resolveFromRecord(
   record: Record<string, unknown> | null | undefined
 ): string | null {
   if (!record) return null;
-  const normalizedAliases = new Set(
-    variableAliases(variableName).map((alias) => normalizeTemplateKey(alias))
+  const aliases = Array.from(
+    new Set(
+      variableAliases(variableName).map((alias) => normalizeTemplateKey(alias))
+    )
   );
+  const entries = Object.entries(record);
 
-  for (const [key, raw] of Object.entries(record)) {
-    if (!normalizedAliases.has(normalizeTemplateKey(key))) continue;
+  for (const alias of aliases) {
+    const matchedEntry = entries.find(
+      ([key]) => normalizeTemplateKey(key) === alias
+    );
+    if (!matchedEntry) continue;
+    const [, raw] = matchedEntry;
     const unwrapped = unwrapCapturedPoint(raw);
     const spec = getVariableValueSpec(variableName);
     const rawValue =

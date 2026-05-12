@@ -104,6 +104,40 @@ describe('pre-prompt script variable resolution', () => {
     );
   });
 
+  it('bug-007-prefers-canonical-incomeGoal-and-formats-numeric-strings', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['But why is {{their stated goal}} so important to you though?'],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            desiredOutcome: {
+              value: '$6 would help someday',
+              confidence: 'LOW',
+              sourceFieldName: 'desiredOutcome'
+            },
+            incomeGoal: {
+              value: '1000',
+              confidence: 'HIGH',
+              sourceFieldName: 'incomeGoal'
+            }
+          }
+        },
+        extractor: async () => {
+          throw new Error('extractor should not run');
+        }
+      }
+    );
+
+    assert.equal(
+      applyResolvedScriptVariables(
+        'But why is {{their stated goal}} so important to you though?',
+        resolutions
+      ),
+      'But why is $1k so important to you though?'
+    );
+  });
+
   it('bug-001-resolves-canonical-variable-aliases-in-judge-fallback', async () => {
     const resolutions = await resolveScriptVariablesForTexts(
       ['But why is {{their stated goal}} so important to you though?'],
@@ -206,7 +240,7 @@ describe('pre-prompt script variable resolution', () => {
         'they want to make 5000',
         'income_goal'
       ),
-      '5000'
+      '$5k'
     );
     assert.equal(
       parseScriptVariableExtractorValue('$3k a month from my job', 'capital'),
