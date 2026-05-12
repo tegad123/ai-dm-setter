@@ -1102,6 +1102,105 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
+  it('bug-017-completes-step-16-even-with-post-wait-branch-judgment', () => {
+    const script = {
+      id: 'persona_b_call_proposal_runtime_judgment_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 16,
+          title: 'Call Proposal',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Default',
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content:
+                    'Confirm pain, outcome, and emotional buy-in before proposing the call.'
+                },
+                {
+                  actionType: 'send_message',
+                  content:
+                    "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell."
+                },
+                { actionType: 'wait_duration', content: '2 seconds' },
+                {
+                  actionType: 'send_message',
+                  content:
+                    'With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?'
+                },
+                { actionType: 'wait_for_response', content: null },
+                {
+                  actionType: 'runtime_judgment',
+                  content:
+                    'If they accept, proceed to Call Proposal Response. If they hesitate, handle the objection.'
+                }
+              ]
+            }
+          ]
+        },
+        askStep(
+          17,
+          'Call Proposal Response',
+          'How much liquid capital would you say you have right now that you could put toward your trading and your education?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step16_a',
+        sender: 'AI',
+        content:
+          "I mean bro, based off what it seems, the main struggle you're facing is emotional control, but like I said your commitment is truly there I can tell.",
+        timestamp: new Date('2026-05-11T00:00:00Z'),
+        suggestionId: 'old_step16_suggestion'
+      },
+      {
+        id: 'ai_step16_b',
+        sender: 'AI',
+        content:
+          'With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?',
+        timestamp: new Date('2026-05-11T00:00:02Z'),
+        suggestionId: 'old_step16_suggestion'
+      },
+      {
+        id: 'lead_step16_accept',
+        sender: 'LEAD',
+        content: 'yeah that would be huge, lets do it',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 16,
+          stepTitle: 'Call Proposal',
+          selectedBranchLabel: 'Default',
+          suggestionId: 'fresh_unsent_step16_suggestion',
+          sentAt: '2026-05-11T00:01:01.000Z'
+        }
+      ]
+    };
+    const stage = computeSystemStage(script, points as any, history, {
+      previousCurrentScriptStep: 16,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 17);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 16 &&
+          event.stepCompletionReason === 'completed_by_call_proposal_reply'
+      ),
+      true
+    );
+  });
+
   it('bug-008-regression-does-not-auto-complete-multi-branch-routing-step-with-silent-branch', () => {
     const routingScript = {
       id: 'persona_b_market_routing_sequence',
