@@ -3413,6 +3413,79 @@ describe('bug-30-msg-verbatim-violation', () => {
     );
   });
 
+  it('bug-002-falls-back-to-direct-step-msg-when-selected-branch-has-no-msg', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'that goal makes sense bro',
+        "but why is $1k so important to you though?"
+      ],
+      {
+        activeBranchRequiredMessages: [],
+        currentStepRequiredMessages: [
+          'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.'
+        ],
+        currentStepScriptedQuestions: [
+          "But why is $1k so important to you though? Asking since the more I know the better I'll be able to help."
+        ]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('msg_verbatim_violation:')
+      )
+    );
+  });
+
+  it('bug-002-hard-fails-when-resolved-income-goal-is-dropped-from-ask', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.',
+        'But why is their stated goal so important to you though?'
+      ],
+      {
+        currentStepRequiredMessages: [
+          'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.'
+        ],
+        currentStepScriptedQuestions: [
+          "But why is $1k so important to you though? Asking since the more I know the better I'll be able to help."
+        ]
+      }
+    );
+
+    assert.ok(
+      quality.hardFails.some((failure) =>
+        failure.includes('required_question_value_missing:')
+      )
+    );
+  });
+
+  it('bug-002-allows-step-10-verbatim-msg-and-resolved-income-goal-ask', () => {
+    const quality = scoreVoiceQualityGroup(
+      [
+        'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.',
+        "But why is $1k so important to you though? Asking since the more I know the better I'll be able to help."
+      ],
+      {
+        currentStepRequiredMessages: [
+          'I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it is refreshing to hear this haha.'
+        ],
+        currentStepScriptedQuestions: [
+          "But why is $1k so important to you though? Asking since the more I know the better I'll be able to help."
+        ]
+      }
+    );
+
+    assert.equal(
+      quality.hardFails.some(
+        (failure) =>
+          failure.includes('msg_verbatim_violation:') ||
+          failure.includes('required_question_value_missing:')
+      ),
+      false
+    );
+  });
+
   it('hard-fails when multiple required [MSG] actions are merged into one bubble', () => {
     const requiredMessages = [
       'Bro what if I told you 99% of traders that say that actually do not know what the real problem is?',

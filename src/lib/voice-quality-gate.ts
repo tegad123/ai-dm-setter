@@ -1240,6 +1240,16 @@ function requiredMessageInputsForOptions(
   return options?.currentStepRequiredMessages ?? [];
 }
 
+function scriptedQuestionsForOptions(options?: VoiceQualityOptions): string[] {
+  if (
+    Array.isArray(options?.activeBranchScriptedQuestions) &&
+    options.activeBranchScriptedQuestions.length > 0
+  ) {
+    return options.activeBranchScriptedQuestions;
+  }
+  return options?.currentStepScriptedQuestions ?? [];
+}
+
 function bannedPhraseAppearsInRequiredLiteralMessage(
   phrase: string,
   options?: VoiceQualityOptions
@@ -1252,6 +1262,50 @@ function bannedPhraseAppearsInRequiredLiteralMessage(
     .some((message) =>
       normalizeForVerbatimCompare(message.content).includes(normalizedPhrase)
     );
+}
+
+function parseNumericRequirement(value: string): number | null {
+  const normalized = value.replace(/,/g, '').trim();
+  const match = normalized.match(
+    /\$?\s*(\d+(?:\.\d+)?)\s*(k|m|thousand|million)?\b/i
+  );
+  if (!match) return null;
+  let amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const suffix = (match[2] || '').toLowerCase();
+  if (suffix === 'k' || suffix === 'thousand') amount *= 1000;
+  if (suffix === 'm' || suffix === 'million') amount *= 1000000;
+  return Math.round(amount);
+}
+
+function numericRequirements(text: string): number[] {
+  const matches =
+    text.match(/\$?\s*\d+(?:[.,]\d+)?\s*(?:k|m|thousand|million)?\b/gi) ?? [];
+  return Array.from(
+    new Set(
+      matches
+        .map(parseNumericRequirement)
+        .filter((amount): amount is number => amount !== null)
+    )
+  );
+}
+
+function replyContainsNumericRequirement(reply: string, amount: number): boolean {
+  return numericRequirements(reply).includes(amount);
+}
+
+function detectRequiredQuestionValueViolation(
+  generatedReply: string,
+  scriptedQuestions: string[]
+): { expected: string; missingAmount: number } | null {
+  for (const question of scriptedQuestions) {
+    for (const amount of numericRequirements(question)) {
+      if (!replyContainsNumericRequirement(generatedReply, amount)) {
+        return { expected: question, missingAmount: amount };
+      }
+    }
+  }
+  return null;
 }
 
 export function detectMsgVerbatimViolation(
@@ -1716,11 +1770,7 @@ export function scoreVoiceQuality(
     );
   }
 
-  const scriptedQuestionCounts = (
-    Array.isArray(options?.activeBranchScriptedQuestions)
-      ? options?.activeBranchScriptedQuestions
-      : options?.currentStepScriptedQuestions
-  )
+  const scriptedQuestionCounts = scriptedQuestionsForOptions(options)
     ?.map((question) => countQuestionMarks(question))
     .filter((count) => count > 0);
   const allowedQuestionCount = Math.max(1, ...(scriptedQuestionCounts ?? []));
@@ -3912,11 +3962,20 @@ export function scoreVoiceQualityGroup(
     );
   }
 
-  const requiredMessagesForGate = Array.isArray(
-    options?.activeBranchRequiredMessages
-  )
-    ? options.activeBranchRequiredMessages
-    : (options?.currentStepRequiredMessages ?? []);
+  const requiredQuestionValueViolation =
+    options?.smartMode !== true
+      ? detectRequiredQuestionValueViolation(
+          joined,
+          scriptedQuestionsForOptions(options)
+        )
+      : null;
+  if (requiredQuestionValueViolation) {
+    hardFails.push(
+      `[group] required_question_value_missing: expected="${requiredQuestionValueViolation.expected.slice(0, 160)}" missingAmount=${requiredQuestionValueViolation.missingAmount}`
+    );
+  }
+
+  const requiredMessagesForGate = requiredMessageInputsForOptions(options);
   const msgViolation =
     options?.smartMode !== true && requiredMessagesForGate.length > 0
       ? detectMsgVerbatimViolation(joined, requiredMessagesForGate)

@@ -1290,12 +1290,11 @@ function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
   );
 }
 
-function getActiveBranchRequiredMessages(
-  activeBranch: JudgeBranchLike | null | undefined,
+function getRequiredMessagesFromActions(
+  actions: JudgeActionLike[],
   variableResolutionMap?: ScriptVariableResolutionMap | null
 ): RequiredMessage[] {
-  if (!activeBranch) return [];
-  return activeBranch.actions
+  return actions
     .filter(
       (action) =>
         action.actionType === 'send_message' &&
@@ -1317,12 +1316,20 @@ function getActiveBranchRequiredMessages(
     });
 }
 
-function getActiveBranchScriptedQuestions(
+function getActiveBranchRequiredMessages(
   activeBranch: JudgeBranchLike | null | undefined,
+  directActions: JudgeActionLike[] = [],
+  variableResolutionMap?: ScriptVariableResolutionMap | null
+): RequiredMessage[] {
+  const actions = [...directActions, ...(activeBranch?.actions ?? [])];
+  return getRequiredMessagesFromActions(actions, variableResolutionMap);
+}
+
+function getScriptedQuestionsFromActions(
+  actions: JudgeActionLike[],
   variableResolutionMap?: ScriptVariableResolutionMap | null
 ): string[] {
-  if (!activeBranch) return [];
-  return activeBranch.actions
+  return actions
     .filter(
       (action) =>
         action.actionType === 'ask_question' &&
@@ -1337,6 +1344,15 @@ function getActiveBranchScriptedQuestions(
       ).trim()
     )
     .filter((content) => content.length > 0);
+}
+
+function getActiveBranchScriptedQuestions(
+  activeBranch: JudgeBranchLike | null | undefined,
+  directActions: JudgeActionLike[] = [],
+  variableResolutionMap?: ScriptVariableResolutionMap | null
+): string[] {
+  const actions = [...directActions, ...(activeBranch?.actions ?? [])];
+  return getScriptedQuestionsFromActions(actions, variableResolutionMap);
 }
 
 function resolveMessageContentsForGate(
@@ -3385,12 +3401,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const activeBranchRequiredMessages = selectedCurrentJudgeBranch
     ? getActiveBranchRequiredMessages(
         selectedCurrentJudgeBranch,
+        scriptStateSnapshot?.currentStep?.actions ?? [],
         gateVariableResolutionMap
       )
     : undefined;
   const activeBranchScriptedQuestions = selectedCurrentJudgeBranch
     ? getActiveBranchScriptedQuestions(
         selectedCurrentJudgeBranch,
+        scriptStateSnapshot?.currentStep?.actions ?? [],
         gateVariableResolutionMap
       )
     : undefined;
