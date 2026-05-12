@@ -52,6 +52,7 @@ import {
   detectMsgBubbleSequenceViolation,
   detectMsgVerbatimViolation,
   extractRequiredQuotes,
+  containsIncomeGoalQuestion,
   scoreVoiceQualityGroup
 } from '../../src/lib/voice-quality-gate';
 import { computeSystemStage } from '../../src/lib/script-state-recovery';
@@ -482,6 +483,90 @@ describe('checkCallProposalPrereqs', () => {
 
     assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
     assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('bug-014-call-prereqs-trust-flat-numeric-incomeGoal-after-step-9-ask-fired', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '1000',
+      deep_why: 'be home for bath time and story time',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 8,
+          stepTitle: 'Replace vs Supplement',
+          selectedBranchLabel: 'Default',
+          completedAt: '2026-05-11T15:08:00.000Z'
+        }
+      ]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), false);
+    assert.equal(
+      incomeGoalSatisfiedByExpectedStep(points, 9, {
+        expectedStepAsked: true
+      }),
+      true
+    );
+    assert.deepEqual(checkCallProposalPrereqs(points), [
+      CALL_PROPOSAL_PREREQS.find((p) => p.id === 'income_goal')
+    ]);
+    assert.deepEqual(
+      checkCallProposalPrereqs(points, { incomeGoalAsked: true }),
+      []
+    );
+  });
+
+  it('bug-014-does-not-trust-incomeGoal-explicitly-sourced-before-step-9', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 8
+      },
+      deep_why: 'be home for bath time and story time',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 8,
+          stepTitle: 'Replace vs Supplement',
+          selectedBranchLabel: 'Default',
+          completedAt: '2026-05-11T15:08:00.000Z'
+        }
+      ]
+    };
+
+    assert.equal(
+      incomeGoalSatisfiedByExpectedStep(points, 9, {
+        expectedStepAsked: true
+      }),
+      false
+    );
+    assert.equal(
+      checkCallProposalPrereqs(points, { incomeGoalAsked: true })[0].id,
+      'income_goal'
+    );
+  });
+
+  it('bug-014-detects-script-exact-income-goal-question-with-money-word', () => {
+    assert.equal(
+      containsIncomeGoalQuestion(
+        'Got it. So how much money are you trying to make with trading on a monthly basis?'
+      ),
+      true
+    );
   });
 
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
