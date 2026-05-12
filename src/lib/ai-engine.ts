@@ -969,40 +969,63 @@ async function resolveAnthropicApiKeyWithSource(accountId?: string | null) {
   return envKey ? { apiKey: envKey, keySource: 'env' as const } : null;
 }
 
-async function classifyJudgeBranchWithHaiku(params: {
-  step: JudgeStepLike;
-  leadMessage: string;
-  accountId?: string | null;
-}): Promise<JudgeBranchClassifierOutcome> {
-  const { step, leadMessage, accountId } = params;
-  const keyResolution = await resolveAnthropicApiKeyWithSource(accountId);
-  const apiKey = keyResolution?.apiKey ?? null;
-  console.warn('[branch-classifier] LLM ATTEMPT:', {
-    stepNumber: step.stepNumber,
-    hasAnthropicKey: !!apiKey,
-    keySource: keyResolution?.keySource ?? 'env'
-  });
-  if (!apiKey) {
-    console.warn('[branch-classifier] LLM RESULT:', {
-      stepNumber: step.stepNumber,
-      success: false,
-      selectedLabel: null,
-      error: 'missing_anthropic_key',
-      timedOut: false
-    });
-    return {
-      selectedLabel: null,
-      error: 'missing_anthropic_key',
-      timedOut: false
-    };
+async function resolveOpenAIApiKeyWithSource(accountId?: string | null) {
+  if (accountId) {
+    const openaiCreds = await getCredentials(accountId, 'OPENAI');
+    if (typeof openaiCreds?.apiKey === 'string') {
+      const byokKey = openaiCreds.apiKey.trim();
+      if (byokKey) {
+        return {
+          apiKey: byokKey,
+          keySource: 'byok' as const,
+          model:
+            (openaiCreds.model as string | undefined) || OPENAI_DEFAULT_MODEL
+        };
+      }
+    }
   }
 
+  const envKey = process.env.OPENAI_API_KEY?.trim() || null;
+  if (!envKey) return null;
+
+  const envProvider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
+  return {
+    apiKey: envKey,
+    keySource: 'env' as const,
+    model:
+      envProvider === 'openai' && process.env.AI_MODEL
+        ? process.env.AI_MODEL
+        : OPENAI_DEFAULT_MODEL
+  };
+}
+
+async function resolveJudgeBranchProviderPreference(
+  accountId?: string | null
+): Promise<'openai' | 'anthropic'> {
+  if (accountId) {
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { aiProvider: true }
+    });
+    if (account?.aiProvider === 'anthropic') return 'anthropic';
+    if (account?.aiProvider === 'openai') return 'openai';
+  }
+
+  return (process.env.AI_PROVIDER || 'openai').toLowerCase() === 'anthropic'
+    ? 'anthropic'
+    : 'openai';
+}
+
+function buildJudgeBranchLLMPrompt(
+  step: JudgeStepLike,
+  leadMessage: string
+): string {
   const branchLines = step.branches
     .map(
       (branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`
     )
     .join('\n');
-  const prompt = `You are a branch router for a sales conversation.
+  return `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
 
 Lead message: ${leadMessage}
@@ -1013,7 +1036,14 @@ ${branchLines}
 Use the operator's runtime judgment criteria in the branch text as the source of truth. When branches distinguish clear conviction from lukewarm interest, emphatic language, specific stakes, and strong personal importance should match the clear/committed branch; hedging language such as "maybe", "could", "possibly", or "I guess" should match the lukewarm/uncertain branch.
 
 Respond with ONLY the exact branchLabel of the best match. No explanation. No punctuation. Just the label.`;
+}
 
+async function classifyJudgeBranchWithAnthropic(params: {
+  step: JudgeStepLike;
+  prompt: string;
+  apiKey: string;
+}): Promise<JudgeBranchClassifierOutcome> {
+  const { step, prompt, apiKey } = params;
   const controller = new AbortController();
   let didTimeout = false;
   const timeout = setTimeout(() => {
@@ -1081,6 +1111,149 @@ Respond with ONLY the exact branchLabel of the best match. No explanation. No pu
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function classifyJudgeBranchWithOpenAI(params: {
+  step: JudgeStepLike;
+  prompt: string;
+  apiKey: string;
+  model: string;
+}): Promise<JudgeBranchClassifierOutcome> {
+  const { step, prompt, apiKey, model } = params;
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timeout = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, 3000);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        max_completion_tokens: 50,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }]
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      console.warn('[branch-classifier] LLM RESULT:', {
+        stepNumber: step.stepNumber,
+        provider: 'openai',
+        success: false,
+        selectedLabel: null,
+        error: `http_${response.status}`,
+        timedOut: didTimeout
+      });
+      return {
+        selectedLabel: null,
+        error: `http_${response.status}`,
+        timedOut: didTimeout
+      };
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
+    const text = data.choices?.[0]?.message?.content?.trim() || null;
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      provider: 'openai',
+      success: !!text,
+      selectedLabel: text,
+      error: null,
+      timedOut: didTimeout
+    });
+    return { selectedLabel: text, error: null, timedOut: didTimeout };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      provider: 'openai',
+      success: false,
+      selectedLabel: null,
+      error,
+      timedOut: didTimeout
+    });
+    return { selectedLabel: null, error, timedOut: didTimeout };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function classifyJudgeBranchWithLLM(params: {
+  step: JudgeStepLike;
+  leadMessage: string;
+  accountId?: string | null;
+}): Promise<JudgeBranchClassifierOutcome> {
+  const { step, leadMessage, accountId } = params;
+  const [preference, anthropicKey, openaiKey] = await Promise.all([
+    resolveJudgeBranchProviderPreference(accountId),
+    resolveAnthropicApiKeyWithSource(accountId),
+    resolveOpenAIApiKeyWithSource(accountId)
+  ]);
+  const provider =
+    preference === 'anthropic' && anthropicKey
+      ? 'anthropic'
+      : preference === 'openai' && openaiKey
+        ? 'openai'
+        : openaiKey
+          ? 'openai'
+          : anthropicKey
+            ? 'anthropic'
+            : null;
+
+  console.warn('[branch-classifier] LLM ATTEMPT:', {
+    stepNumber: step.stepNumber,
+    provider,
+    preference,
+    hasAnthropicKey: !!anthropicKey?.apiKey,
+    hasOpenAIKey: !!openaiKey?.apiKey,
+    keySource:
+      provider === 'anthropic'
+        ? anthropicKey?.keySource
+        : provider === 'openai'
+          ? openaiKey?.keySource
+          : 'none'
+  });
+
+  if (!provider) {
+    console.warn('[branch-classifier] LLM RESULT:', {
+      stepNumber: step.stepNumber,
+      success: false,
+      selectedLabel: null,
+      error: 'missing_llm_key',
+      timedOut: false
+    });
+    return {
+      selectedLabel: null,
+      error: 'missing_llm_key',
+      timedOut: false
+    };
+  }
+
+  const prompt = buildJudgeBranchLLMPrompt(step, leadMessage);
+  if (provider === 'anthropic') {
+    return classifyJudgeBranchWithAnthropic({
+      step,
+      prompt,
+      apiKey: anthropicKey!.apiKey
+    });
+  }
+
+  return classifyJudgeBranchWithOpenAI({
+    step,
+    prompt,
+    apiKey: openaiKey!.apiKey,
+    model: openaiKey!.model
+  });
 }
 
 export async function selectJudgeBranchForLead(
@@ -1154,7 +1327,7 @@ export async function selectJudgeBranchForLead(
     const cached = options?.cache?.get(cacheKey);
     if (cached) return cached;
 
-    const classifier = options?.classifier ?? classifyJudgeBranchWithHaiku;
+    const classifier = options?.classifier ?? classifyJudgeBranchWithLLM;
     const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
       let classifierOutcome: JudgeBranchClassifierOutcome;
       try {
