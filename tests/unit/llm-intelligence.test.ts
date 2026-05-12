@@ -23,7 +23,71 @@ import {
   extractBookingInfoHeuristically,
   parseBookingInfoExtractionOutput
 } from '../../src/lib/booking-info-extractor';
+import { callHaikuText } from '../../src/lib/haiku-text';
 import { scoreVoiceQualityGroup } from '../../src/lib/voice-quality-gate';
+
+describe('provider-aware helper LLM text calls', () => {
+  it('routes helper text calls through OpenAI when OpenAI is configured', async () => {
+    const originalFetch = globalThis.fetch;
+    const previousEnv = {
+      AI_PROVIDER: process.env.AI_PROVIDER,
+      AI_MODEL: process.env.AI_MODEL,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY
+    };
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = (async (url, init) => {
+      requests.push({
+        url: String(url),
+        body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'short extracted value' } }]
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        }
+      );
+    }) as typeof fetch;
+
+    process.env.AI_PROVIDER = 'openai';
+    process.env.AI_MODEL = 'gpt-4o-mini';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    delete process.env.ANTHROPIC_API_KEY;
+
+    try {
+      const result = await callHaikuText({
+        prompt: 'Return a short value.',
+        maxTokens: 12,
+        temperature: 0,
+        timeoutMs: 1000,
+        logPrefix: '[test-helper-llm]'
+      });
+
+      assert.equal(result.provider, 'openai');
+      assert.equal(result.model, 'gpt-4o-mini');
+      assert.equal(result.text, 'short extracted value');
+      assert.equal(
+        requests[0]?.url,
+        'https://api.openai.com/v1/chat/completions'
+      );
+      assert.equal(requests[0]?.body.model, 'gpt-4o-mini');
+      assert.equal(requests[0]?.body.max_completion_tokens, 12);
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+});
 
 describe('pre-prompt script variable resolution', () => {
   it('bug-X-variable-name-validation: ignores directive placeholders with examples', () => {

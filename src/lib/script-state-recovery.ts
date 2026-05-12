@@ -1,7 +1,7 @@
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { containsCapitalQuestion } from '@/lib/voice-quality-gate';
-import { getCredentials } from '@/lib/credential-store';
+import { callHaikuText } from '@/lib/haiku-text';
 import {
   BOOKING_INFO_FIELD_NAMES,
   type BookingInfoFields,
@@ -352,6 +352,7 @@ type ConditionalStepSkipClassifierResult = {
   destinationStepNumber: number | null;
   reason: string | null;
   error?: string | null;
+  classifierModel?: string | null;
 };
 
 type ConditionalStepSkipClassifier = (params: {
@@ -413,41 +414,18 @@ function hasConditionalSkipHint(content: string | null | undefined): boolean {
   return !!content?.trim() && CONDITIONAL_SKIP_HINT_PATTERN.test(content);
 }
 
-async function resolveAnthropicApiKey(
-  accountId: string
-): Promise<string | null> {
-  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
-  if (typeof anthropicCreds?.apiKey === 'string') {
-    const byokKey = anthropicCreds.apiKey.trim();
-    if (byokKey) return byokKey;
-  }
-  return process.env.ANTHROPIC_API_KEY?.trim() || null;
-}
-
 function recentConversationForSkipClassifier(history: ScriptHistoryMessage[]) {
   return sortedHistory(history).slice(-10);
 }
 
-async function classifyConditionalStepSkipWithHaiku(params: {
+async function classifyConditionalStepSkipWithLLM(params: {
   accountId: string;
   directiveText: string;
   directives: ConditionalStepSkipDirective[];
   recentConversation: ScriptHistoryMessage[];
   priorBranchHistory: BranchHistoryEvent | null;
 }): Promise<ConditionalStepSkipClassifierResult> {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-
   try {
-    const apiKey = await resolveAnthropicApiKey(params.accountId);
-    if (!apiKey) {
-      return {
-        decision: 'continue',
-        destinationStepNumber: null,
-        reason: 'missing_anthropic_key',
-        error: 'missing_anthropic_key'
-      };
-    }
-
     const directiveLines = params.directives
       .map(
         (directive) =>
@@ -476,43 +454,25 @@ Decide whether the operator's runtime_judgment means the conversation should ski
 Respond with ONLY compact JSON:
 {"decision":"skip"|"continue","destinationStepNumber":number|null,"reason":"short reason"}`;
 
-    const controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(), 3000);
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: CONDITIONAL_SKIP_MODEL,
-        max_tokens: 120,
-        temperature: 0,
-        messages: [{ role: 'user', content: prompt }]
-      }),
-      signal: controller.signal
+    const result = await callHaikuText({
+      accountId: params.accountId,
+      maxTokens: 120,
+      temperature: 0,
+      timeoutMs: 3000,
+      logPrefix: '[conditional-step-skip]',
+      prompt
     });
-
-    if (!response.ok) {
+    if (!result.text) {
       return {
         decision: 'continue',
         destinationStepNumber: null,
-        reason: `http_${response.status}`,
-        error: `http_${response.status}`
+        reason: result.error || 'empty_llm_response',
+        error: result.error || 'empty_llm_response',
+        classifierModel: result.model
       };
     }
 
-    const data = (await response.json()) as {
-      content?: Array<{ type?: string; text?: string }>;
-    };
-    const text =
-      data.content
-        ?.map((part) => (typeof part.text === 'string' ? part.text : ''))
-        .join('')
-        .trim() ?? '';
-    const jsonText = text.match(/\{[\s\S]*\}/)?.[0] ?? text;
+    const jsonText = result.text.match(/\{[\s\S]*\}/)?.[0] ?? result.text;
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
     const rawDecision =
       typeof parsed.decision === 'string'
@@ -535,17 +495,17 @@ Respond with ONLY compact JSON:
       reason:
         typeof parsed.reason === 'string' && parsed.reason.trim()
           ? parsed.reason.trim()
-          : null
+          : null,
+      classifierModel: result.model
     };
   } catch (err) {
     return {
       decision: 'continue',
       destinationStepNumber: null,
       reason: err instanceof Error ? err.message : String(err),
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      classifierModel: null
     };
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -935,6 +895,7 @@ function appendConditionalSkipEvent(
     decision: 'skip' | 'continue' | null;
     reason: string | null;
     error?: string | null;
+    classifierModel?: string | null;
   }
 ) {
   appendBranchHistoryEventToPoints(points, {
@@ -954,7 +915,7 @@ function appendConditionalSkipEvent(
     skipDecision: params.decision,
     skipReason: params.reason,
     skipError: params.error ?? null,
-    classifierModel: CONDITIONAL_SKIP_MODEL
+    classifierModel: params.classifierModel ?? CONDITIONAL_SKIP_MODEL
   });
 }
 
@@ -1037,7 +998,7 @@ export async function applyConditionalStepSkip(params: {
     return { step: params.currentStep, reason: null };
   }
 
-  const classifier = params.classifier ?? classifyConditionalStepSkipWithHaiku;
+  const classifier = params.classifier ?? classifyConditionalStepSkipWithLLM;
   let classification: ConditionalStepSkipClassifierResult;
   try {
     classification = await classifier({
@@ -1052,7 +1013,8 @@ export async function applyConditionalStepSkip(params: {
       decision: 'continue',
       destinationStepNumber: null,
       reason: err instanceof Error ? err.message : String(err),
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      classifierModel: null
     };
   }
   const allowedDestinations = new Set(
@@ -1095,7 +1057,8 @@ export async function applyConditionalStepSkip(params: {
       classification.error ??
       (classification.decision === 'skip' && !canSkip
         ? 'invalid_or_non_forward_destination'
-        : null)
+        : null),
+    classifierModel: classification.classifierModel ?? null
   });
 
   if (!canSkip) return { step: params.currentStep, reason: null };
