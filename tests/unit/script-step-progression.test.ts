@@ -418,6 +418,28 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-008-call-prereqs-trust-step-9-incomeGoal-source-even-when-branch-history-is-incomplete', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: '$1k',
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step13CompletedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
     const points = {
       work_background: 'retail',
@@ -1532,7 +1554,107 @@ describe('bug-34-llm-branch-classifier', () => {
     assert.equal(match.confidence, 'llm_classified');
   });
 
-  it('does not call classifier for medium/high token confidence', async () => {
+  it('uses classifier for medium token confidence instead of force-routing a sibling branch', async () => {
+    const exactHarnessStep = {
+      stepNumber: 4,
+      title: 'Market Response Routing',
+      actions: [{ actionType: 'runtime_judgment', content: null }],
+      branches: [
+        {
+          branchLabel: 'Going well',
+          conditionDescription:
+            'lead says markets are good, profitable, no major issues',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                "If they say things are fine but there's nothing to work toward, the convo is dead. You need to find a gap."
+            },
+            { actionType: 'send_message', content: 'Love to see it bro.' },
+            {
+              actionType: 'ask_question',
+              content:
+                "So are you looking to scale up, or what's the next level look like for you?"
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          branchLabel: 'Going badly — vague',
+          conditionDescription:
+            "vague: lead says not going well but doesn't specify why",
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'Gotcha, I appreciate you being real about that.'
+            },
+            {
+              actionType: 'ask_question',
+              content:
+                'What would you say is the main obstacle stopping you from getting where you want to be?'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          branchLabel:
+            'Obstacle given — surface level (one word like "discipline" or "psychology")',
+          conditionDescription:
+            'lead gives one word answer like "discipline", "psychology", "mindset", "emotions"',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                'A one-word answer isn\'t enough. Probe deeper — you need specifics. "Discipline" could mean 10 different things. Don\'t accept the surface answer and move on. Keep asking until they have given a deep enough obstacle that we can use.'
+            },
+            { actionType: 'send_message', content: '{{acknowledge it}}' },
+            {
+              actionType: 'ask_question',
+              content:
+                "Can you break that down for me bro? Like what does that actually look like when you're in a trade?"
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          branchLabel: 'Obstacle given — detailed and emotional',
+          conditionDescription:
+            'lead describes specific struggle with emotional weight — mentions specific behaviors, feelings, or situations',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                'Store as {{obstacle}}. When someone opens up about their pain without being asked, their buying temperature is significantly higher. Do NOT gloss over this. Acknowledge specifically using their exact words. Then bridge naturally to job context (Step 5) — skip Steps 3 and 4 if {{early_obstacle}} was already captured in Step 2. The obstacle is already stored. Move to "give me a bit more context on your situation" and advance to Step 5.'
+            },
+            {
+              actionType: 'send_message',
+              content:
+                '{{acknowledge specifically using their own words — 1 sentence. Then add: "give me a bit more context on your situation though" to keep momentum}}'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        }
+      ]
+    };
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      exactHarnessStep,
+      "honestly bro it's been brutal, i keep blowing my small accounts revenge trading. started with 2k, now i'm down to like 800 bucks and my wife doesn't even know",
+      {
+        classifier: async () => {
+          calls++;
+          return 'Obstacle given — detailed and emotional';
+        }
+      }
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(match.branchLabel, 'Obstacle given — detailed and emotional');
+    assert.equal(match.confidence, 'llm_classified');
+    assert.equal(match.tokenScoringResult?.confidence, 'medium');
+  });
+
+  it('does not call classifier for high token confidence', async () => {
     let calls = 0;
     const match = await selectJudgeBranchForLead(
       bug34JudgeStep,
@@ -1547,7 +1669,7 @@ describe('bug-34-llm-branch-classifier', () => {
 
     assert.equal(calls, 0);
     assert.equal(match.branchLabel, 'Going well');
-    assert.ok(match.confidence === 'medium' || match.confidence === 'high');
+    assert.equal(match.confidence, 'high');
   });
 
   it('bug-005b routes clear conviction language using branch runtime judgment criteria', async () => {
@@ -1569,8 +1691,7 @@ describe('bug-34-llm-branch-classifier', () => {
               },
               {
                 actionType: 'ask_question',
-                content:
-                  'you ready to do what it takes to actually fix this?'
+                content: 'you ready to do what it takes to actually fix this?'
               }
             ]
           },
@@ -3508,7 +3629,7 @@ describe('bug-30-msg-verbatim-violation', () => {
     const quality = scoreVoiceQualityGroup(
       [
         'that goal makes sense bro',
-        "but why is $1k so important to you though?"
+        'but why is $1k so important to you though?'
       ],
       {
         activeBranchRequiredMessages: [],
@@ -3674,7 +3795,9 @@ describe('bug-30-msg-verbatim-violation', () => {
     const quality = scoreVoiceQualityGroup(
       ['Specifically, you need to tell me your why.'],
       {
-        currentStepScriptedQuestions: ['What would that income change for you?'],
+        currentStepScriptedQuestions: [
+          'What would that income change for you?'
+        ],
         currentStepHasAnyAskAction: true
       }
     );

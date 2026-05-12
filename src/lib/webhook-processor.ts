@@ -6254,18 +6254,16 @@ async function applyAutoTags(
     }
 
     // Apply to lead (idempotent via unique constraint)
-    await prisma.leadTag
-      .create({
-        data: {
-          leadId,
-          tagId: tag.id,
-          appliedBy: 'AI',
-          confidence
-        }
-      })
-      .catch(() => {
-        // Already exists — ignore duplicate
-      });
+    await prisma.leadTag.upsert({
+      where: { leadId_tagId: { leadId, tagId: tag.id } },
+      create: {
+        leadId,
+        tagId: tag.id,
+        appliedBy: 'AI',
+        confidence
+      },
+      update: { confidence }
+    });
   }
 }
 

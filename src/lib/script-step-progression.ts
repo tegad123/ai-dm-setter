@@ -170,10 +170,6 @@ export function incomeGoalSatisfiedByExpectedStep(
   points: Record<string, unknown> | null | undefined,
   stepNumber = 9
 ): boolean {
-  const hasBranchHistory = branchHistoryEvents(points).length > 0;
-  if (hasBranchHistory && !stepReachedByBranchHistory(points, stepNumber)) {
-    return false;
-  }
   return hasCapturedDataPointFromStep({
     points,
     keys: ['incomeGoal', 'income_goal'],

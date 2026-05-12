@@ -564,6 +564,233 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(completion?.leadMessageId, 'lead_step1');
   });
 
+  it('bug-006-regression-auto-completes-work-tenure-from-aliased-captured-key', () => {
+    const workScript = {
+      id: 'work_tenure_alias_sequence',
+      steps: [
+        askStep(1, 'Work Background', 'What do you do for work?'),
+        askStep(2, 'Work Tenure', 'How long you been doing that?'),
+        askStep(
+          3,
+          'Monthly Income',
+          'How much is your job bringing in on a monthly basis?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step1',
+        sender: 'AI',
+        content: 'What do you do for work?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step1',
+        sender: 'LEAD',
+        content: 'i work in retail, been doing it about 3 years',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      tenureInYears: {
+        value: 'about 3 years',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step1',
+        extractionMethod: 'runtime_judgment_alias',
+        extractedAt: '2026-05-11T00:01:00.000Z',
+        sourceFieldName: 'tenureInYears',
+        sourceStepNumber: 1
+      }
+    };
+
+    const stage = computeSystemStage(workScript, points as any, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 3);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 2 &&
+          event.stepCompletionReason === 'volunteered_data_auto_complete'
+      ),
+      true
+    );
+  });
+
+  it('bug-006-regression-persona-b-work-answer-skips-step-6-to-income-step', () => {
+    const workScript = {
+      id: 'persona_b_work_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 5,
+          title: 'Work Background',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'alright so give me a bit of context bro.'
+            },
+            {
+              actionType: 'ask_question',
+              content:
+                'what do you do for work? just so i get a better understanding of your current situation.'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        {
+          ...baseStep,
+          stepNumber: 6,
+          title: 'Work Tenure',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                "yeah i feel you, i mean i'm not an expert in their field haha but i do know it's quite different than trading man."
+            },
+            {
+              actionType: 'ask_question',
+              content: 'How long you been doing that?'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        askStep(
+          7,
+          'Monthly Income',
+          'And as of right now, how much is your job bringing in on a monthly basis?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step5',
+        sender: 'AI',
+        content:
+          'alright so give me a bit of context bro.\n\nwhat do you do for work? just so i get a better understanding of your current situation.',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step5',
+        sender: 'LEAD',
+        content: 'i work in retail, been doing it about 3 years',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script: workScript
+    });
+
+    const stage = computeSystemStage(workScript, points as any, history, {
+      previousCurrentScriptStep: 5,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.workDuration as any)?.value, 'about 3 years');
+    assert.equal(stage.step?.stepNumber, 7);
+  });
+
+  it('bug-008-regression-does-not-auto-complete-multi-branch-routing-step-with-silent-branch', () => {
+    const routingScript = {
+      id: 'persona_b_market_routing_sequence',
+      steps: [
+        askStep(
+          3,
+          'Market Assessment',
+          'Nice, so how have the markets been treating you so far? Any main problems coming up?'
+        ),
+        {
+          ...baseStep,
+          stepNumber: 4,
+          title: 'Market Response Routing',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Going badly — vague',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content: 'Gotcha, I appreciate you being real about that.'
+                },
+                {
+                  actionType: 'ask_question',
+                  content:
+                    'What would you say is the main obstacle stopping you from getting where you want to be?'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            },
+            {
+              branchLabel: 'Obstacle given — detailed and emotional',
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content: 'Store as {{obstacle}}.'
+                },
+                {
+                  actionType: 'send_message',
+                  content:
+                    '{{acknowledge specifically what they said using their own words}}'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            }
+          ]
+        },
+        askStep(
+          5,
+          'Current Situation — Job',
+          'What do you do for work? Just so I get a better understanding of your current situation.'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step3',
+        sender: 'AI',
+        content:
+          'Nice, so how have the markets been treating you so far? Any main problems coming up?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step3',
+        sender: 'LEAD',
+        content:
+          'honestly its been brutal, i keep blowing my small accounts revenge trading',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      obstacle: {
+        value: 'revenge trading',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step3',
+        extractionMethod: 'runtime_judgment',
+        extractedAt: '2026-05-11T00:01:00.000Z',
+        sourceFieldName: 'obstacle',
+        sourceStepNumber: 3
+      }
+    };
+
+    const stage = computeSystemStage(routingScript, points as any, history, {
+      previousCurrentScriptStep: 3,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 4);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 4
+      ),
+      false
+    );
+  });
+
   it('bug-53-current-income-answer-does-not-populate-target-income-goal', () => {
     const incomeScript = {
       id: 'income_semantics_sequence',
@@ -1168,7 +1395,8 @@ describe('routing-only branch completion', () => {
     assert.equal(stage.step?.stepNumber, 1);
     assert.equal(
       readBranchHistoryEvents(points as any).some(
-        (event) => event.eventType === 'step_completed' && event.stepNumber === 1
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 1
       ),
       false
     );

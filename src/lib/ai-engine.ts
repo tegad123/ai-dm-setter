@@ -998,7 +998,9 @@ async function classifyJudgeBranchWithHaiku(params: {
   }
 
   const branchLines = step.branches
-    .map((branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`)
+    .map(
+      (branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`
+    )
     .join('\n');
   const prompt = `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
@@ -1119,7 +1121,9 @@ export async function selectJudgeBranchForLead(
         confidence: tokenMatch.confidence,
         selectedLabel: tokenMatch.branchLabel ?? null,
         willAttemptLLM:
-          tokenMatch.confidence === 'none' || tokenMatch.confidence === 'low'
+          tokenMatch.confidence === 'none' ||
+          tokenMatch.confidence === 'low' ||
+          tokenMatch.confidence === 'medium'
       });
     } catch (err) {
       console.error('[branch-classifier] TOKEN SCORE ERROR:', {
@@ -1141,7 +1145,7 @@ export async function selectJudgeBranchForLead(
       !step ||
       !hasRuntimeJudgmentAction(step) ||
       !leadMessage?.trim() ||
-      (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
+      tokenMatch.confidence === 'high'
     ) {
       return withJudgeClassifierTrace(tokenMatch, baseTrace);
     }

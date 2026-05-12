@@ -1,0 +1,955 @@
+================================================================
+Email:    daetradez2003@gmail.com
+User:     cmnc6h65k0004l904vop1bfio
+Account:  cmnc6h63r0000l904c72g18aq  slug="daetradez2003"  name="daetradez's Workspace"
+================================================================
+
+SCRIPTS ON ACCOUNT (4 total)
+----------------------------------------------------------------
+  [      ]  id=cmoxfstxj002sjm04095bajyc  steps=22  name="DAETRADEZ — B2C DM SETTING SCRIPT V3 (Copy)"  createdVia=blank  parsedAt=null  updatedAt=2026-05-08T21:38:29.323Z
+  [      ]  id=cmoxfssnh0001la041zyppzmc  steps=22  name="DAETRADEZ — B2C DM SETTING SCRIPT V3 (Copy)"  createdVia=blank  parsedAt=null  updatedAt=2026-05-08T21:38:27.725Z
+  [      ]  id=cmoxfsrpb0001jm04ricawu46  steps=22  name="DAETRADEZ — B2C DM SETTING SCRIPT V3 (Copy)"  createdVia=blank  parsedAt=null  updatedAt=2026-05-08T21:38:26.436Z
+  [ACTIVE]  id=cmow4xp2z0001kz04o2mgt7v6  steps=22  name="DAETRADEZ — B2C DM SETTING SCRIPT V3"  createdVia=upload_parsed  parsedAt=2026-05-07T23:46:34.425Z  updatedAt=2026-05-08T02:00:21.728Z
+
+================================================================
+ACTIVE SCRIPT  (id=cmow4xp2z0001kz04o2mgt7v6)
+Name:        DAETRADEZ — B2C DM SETTING SCRIPT V3
+Description: (none)
+createdVia:  upload_parsed
+isDefault:   false
+createdAt:   2026-05-07T23:46:34.427Z
+updatedAt:   2026-05-08T02:00:21.728Z
+lastParsedAt: 2026-05-07T23:46:34.425Z
+Step count:  22
+================================================================
+
+──── STEP 1: Intro ────
+  step.id:           cmow4xp6h0007kz04k30000h4
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "CTA Inbound (clicked ManyChat automation)"
+    branch.id:          cmow4xp7d0009kz0445nuuffi
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xp89000akz04dpq330gd)
+        content: Btw bro while you're watching that video I did want to ask
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [ask_question] (sortOrder=1, action.id=cmow4xp89000bkz040cnin83q)
+        content: Are you new in the markets or have you been trading for a while?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xp89000ckz04yls24edg)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "CTA Inbound — didn't click button"
+    branch.id:          cmow4xp95000ekz04k50y7u4b
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xpa0000fkz04s3a8hevu)
+        content: You need to press the "yes, send it over" button for it to work bro 🤣
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xpa0000gkz04mp0veew1)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Outbound (story views / post likes)"
+    branch.id:          cmow4xpaw000ikz04wfdkmyiu
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xpbr000jkz040alvuq94)
+        content: {{NAME}}, I see you've been rocking with the content! Respect my guy 💪🏿
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xpbr000kkz04c58i9j9r)
+        content: So are you new in the markets or have you been trading for a while?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xpbr000lkz04qqvrat9d)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Warm Inbound (DM'd directly)"
+    branch.id:          cmow4xpcm000nkz0407r6wrmm
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xpdh000okz041cif4ng1)
+        content: Hey {{NAME}}, respect for reaching out! Let's see if I can help you out here 💪🏿
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xpdh000pkz045xd24f7d)
+        content: So are you new in the markets or have you been trading for a while?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xpdh000qkz049opwmig7)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 2: Experience Depth ────
+  step.id:           cmow4xpec000skz04tyxkmjue
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Already in markets"
+    branch.id:          cmow4xpf7000ukz04xt2vgumn
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5j7rc0001jo04bit6vyoc)
+        content: If their reply mentions a struggle, frustration, or obstacle unprompted → store as {{early_obstacle}}. Someone who volunteers their pain without being asked is significantly warmer than someone who is closed off — treat them accordingly, they're giving you an open door.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpg2000vkz04k0wu84fg)
+        content: Okay great so you're not totally new to the game.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [ask_question] (sortOrder=2, action.id=cmow4xpg2000wkz04gm9dqm2w)
+        content: How long have you been in the markets for?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpg2000xkz04xakb6i8q)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "New to markets"
+    branch.id:          cmow4xpgx000zkz04yr3zwzm9
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5kj6m0003l104oulpxzyd)
+        content: [JUDGE]: If their reply mentions a struggle, frustration, or obstacle unprompted → store as {{early_obstacle}}.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpht0010kz04j6q13hn8)
+        content: Love to see it bro, most people don't even take that first step.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpht0011kz04ew9q0j64)
+        content: So what got you interested in trading in the first place?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpht0012kz045rydja9z)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 3: Market Assessment ────
+  step.id:           cmow4xpio0014kz04awezzibs
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xpjj0016kz04s6lwr76i
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5lmd20003jo04vmm6l7x7)
+        content: If lead is new to markets → skip to STEP 5. If lead already shared their obstacle in STEP 1 or STEP 2 → still ask this question. You need to understand the full picture before proposing anything.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpke0017kz04ja3lp5mg)
+        content: {{acknowledge their experience}}
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpke0018kz04m2dffbs6)
+        content: Nice, so how have the markets been treating you so far? Any main problems coming up?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpke0019kz0451yguz1i)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 4: Market Response Routing ────
+  step.id:           cmow4xpl9001bkz04slwtko82
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Going well"
+    branch.id:          cmow4xpm4001dkz04tkqbz258
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5n3dc0005l104y5rcenrm)
+        content: If they say things are fine but there's nothing to work toward, the convo is dead. You need to find a gap — something they want that they don't have yet.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpmy001ekz047mo90o78)
+        content: Love to see it bro.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpmy001fkz049huce6fj)
+        content: So are you looking to scale up, or what's the next level look like for you?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpmy001gkz04o71a24h1)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Going badly — vague"
+    branch.id:          cmow4xpnt001ikz04axbigriw
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xpoo001jkz04tcl6fqr6)
+        content: Gotcha, I appreciate you being real about that.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xpoo001kkz04ol50zrvs)
+        content: What would you say is the main obstacle stopping you from getting where you want to be?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xpoo001lkz049no09z3e)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Obstacle given — surface level (one word like "discipline" or "psychology")"
+    branch.id:          cmow4xppj001nkz04zons14sx
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5oqsf0007l104gkh1g5o7)
+        content: A one-word answer isn't enough. Probe deeper — you need specifics. "Discipline" could mean 10 different things. Don't accept the surface answer and move on. Keep asking until they have given a deep enough obstacle that we can use.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpqe001okz04y2edw87g)
+        content: {{acknowledge it}}
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpqe001pkz040iwp6y4v)
+        content: Can you break that down for me bro? Like what does that actually look like when you're in a trade?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpqe001qkz04z254oazk)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Obstacle given — detailed and emotional"
+    branch.id:          cmow4xpr9001skz04nmr37v9l
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5r3270009l1040lcs8g33)
+        content: Store as {{obstacle}}. When someone opens up about their pain without being asked, their buying temperature is significantly higher. Do NOT gloss over this with "okay I see" and move to the next question. Sit in what they told you. Acknowledge it specifically. Reference the actual words they used. This is ammo for the entire rest of the conversation AND for Anthony on the call.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xps3001tkz044nvqn3x6)
+        content: {{acknowledge specifically what they said using their own words — make them feel deeply heard}}
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xps3001ukz04hsae6l6g)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 5: Current Situation — Job ────
+  step.id:           cmow4xpsy001wkz04mjpx9o0q
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xptt001ykz04te4kksag
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5s7zy000bl104ms3xnizr)
+        content: Keep the transition natural. You're having a conversation, not running an interrogation. If they just poured out emotional pain about trading, don't pivot robotically to "so what do you do for work." Bridge it: "alright so let me understand the full picture here bro" or "give me some context on your situation."
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpup001zkz04f51am4tt)
+        content: Alright so give me a bit of context bro.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpup0020kz04tezb54tk)
+        content: What do you do for work? Just so I get a better understanding of your current situation.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpup0021kz0410avp5wl)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 6: Job Acknowledgment ────
+  step.id:           cmow4xpvk0023kz0448gtggpx
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xpwf0025kz04u1kq7ko0
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5tvhw0001ks04ip34eqdk)
+        content: Make them feel heard on their job. If they're in healthcare, service, or a physically demanding job → show genuine respect. If it's something you've experienced → say that. Don't just say "cool" and move on. But also don't over-do it — one genuine comment, then move forward.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpxa0026kz049sc1iy4p)
+        content: {{Comment on their job genuinely — "I respect that" / "I've been there" / acknowledge it.}}
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpxa0027kz041je93fd8)
+        content: How long you been doing that?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpxa0028kz043c3jpyq3)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 7: Monthly Income ────
+  step.id:           cmow4xpy6002akz042kgq6bd2
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xpz1002ckz04ihcqah9h
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow5yg3v0003ks04xvpidlj5)
+        content: If their job makes it obvious they earn well (engineer, doctor, business owner in developed country) → skip to STEP 8. Never skip this for everyone else — you need this number. It tells you what they can afford, what their income goal means relative to their current situation, and it's critical info for Anthony. But ask it naturally, not like a loan application.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xpzw002dkz04w5rn904d)
+        content: Yeah I feel you, I mean I'm not an expert in {{their field}} haha but I do know it's quite different than trading man.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xpzw002ekz04ductdzo3)
+        content: And as of right now, how much is your job bringing in on a monthly basis?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xpzw002fkz04dh85cdh2)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 8: Replace vs Supplement ────
+  step.id:           cmow4xq0r002hkz04w93kpe5q
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xq1m002jkz04hmuryxjm
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [ask_question] (sortOrder=0, action.id=cmow4xq2h002kkz046bmve9b0)
+        content: Gotcha — and are you thinking of replacing your job completely with trading or just generating some extra income on the side?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xq2h002lkz04blq2tis3)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 9: Income Goal ────
+  step.id:           cmow4xq3c002nkz04u1qfh9ru
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Wants to replace"
+    branch.id:          cmow4xq47002pkz0462hz7yu3
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [ask_question] (sortOrder=0, action.id=cmow4xq51002qkz048z8d8k8v)
+        content: That's dope. How much would you need to be making from trading in order to replace it fully?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xq51002rkz049p05ywji)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Wants to supplement"
+    branch.id:          cmow4xq5w002tkz04s2b6s6kq
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [ask_question] (sortOrder=0, action.id=cmow4xq6q002ukz04dlvldr8u)
+        content: Got it. So how much money are you trying to make with trading on a monthly basis?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xq6q002vkz04h7ucsuzv)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Follow-up if needed"
+    branch.id:          cmow4xq7k002xkz04olrm77c0
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow61jjy000dl104h60355mt)
+        content: If they say a number like "4-5K" and they're making less than that at their job → that's a big goal for them. Note that internally. If the goal seems way higher than their current income, they likely make less than you think — adjust your read. Also check: "is that how much you'd need to match your current income, or how far away would that be?"
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xq8f002ykz049jrj5cpd)
+        content: And is that how much you'd need if you ever wanted to replace your current income, or how far away would that be?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xq8f002zkz04c0u1vvo2)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 10: Desired Outcome — Deep Why ────
+  step.id:           cmow4xq990031kz04rc9rk587
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xqa40033kz041pvvif54
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow63e840005ks04n00ki4q0)
+        content: This is where most setters fail. They get a surface answer ("financial freedom" / "more money") and accept it. That's not enough. You need the real reason — the thing that keeps them up at night, the person they're doing this for. If they mention family, kids, parents, wanting to retire someone, wanting to be present — that is LEVERAGE. That is what makes the call proposal land. That is what Anthony uses to close. Do not rush past this step.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqaz0034kz04qgvnhnnl)
+        content: I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xqaz0035kz04bzdo92ij)
+        content: But why is {{their stated goal}} so important to you though? Asking since the more I know the better I'll be able to help.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xqaz0036kz04bvcomffg)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 11: Desired Outcome — Probe if Surface ────
+  step.id:           cmow4xqbu0038kz04ruq8wv09
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Already deep"
+    branch.id:          cmow4xqcp003akz04o1v8erpv
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow66sn10009ks04ea3bh9pg)
+        content:  If their STEP 10 answer references specific family reasons, emotional weight, wanting to prove something to someone, wanting to retire a parent, wanting to be present for their kids, or any pain tied to their real life → store as {{deep_why}}, skip to STEP 12. This is the most valuable data in the entire conversation.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Surface — needs second probe"
+    branch.id:          cmow4xqee003dkz045sgzdgmy
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow64vhp0007ks04dg3rmfyh)
+        content: Surface answers: more money, bigger house, travel, cars, vague "financial freedom," "want a better life." These are symptoms of a deeper reason. Probe one more time. If they're still surface after two probes, work with what you have — some people open up on the call, not in DMs.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqf8003ekz04hpk3t13r)
+        content: I hear you on that bro.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xqf8003fkz04vzp26hxy)
+        content: But like specifically is there something personal you're hoping trading will help you achieve? Something beyond just the money?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=3, action.id=cmow4xqf8003gkz04nswbp7jp)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 12: Obstacle Identification ────
+  step.id:           cmow4xqg3003ikz0429gtld2c
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Already captured"
+    branch.id:          cmow4xqgy003kkz04kvd30lp7
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6cxhj0003l204retr6jps)
+        content: If {{obstacle}} already stored from STEP 3 or STEP 4 → skip to STEP 13.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Default"
+    branch.id:          cmow4xqin003nkz04ogzwf7w1
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=1, action.id=cmow4xqjh003okz04sbaglh7m)
+        content: Love that bro, I can see the commitment just by the way you speak.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xqjh003pkz046xokwq1a)
+        content: What do you feel is the main thing holding you back that you would ideally want some guidance on man?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xqjh003qkz04qnf6vlv1)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 13: Belief Break — Reframe ────
+  step.id:           cmow4xqkd003skz046efpy1o5
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Already understands root problem"
+    branch.id:          cmow4xql7003ukz041wsxi481
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6amuy000hl1049nd6f74x)
+        content:  If {{obstacle}} is a root problem they already identified (no system, no structure, just guessing) → skip to STEP 14.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Psychology / Discipline symptom"
+    branch.id:          cmow4xqmx003xkz0464554aow
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6gazm000jl1044jd9kahv)
+        content:  If {{obstacle}} is a symptom — revenge trading, can't stick to rules, emotional, chasing losses, greed, bad entries, overtrading, hitting stop loss, improper analysis, going in and out at wrong time — use this branch. These are ALL symptoms of one root problem: lack of a structured system. The reframe shifts their belief about what's actually wrong. When you shift someone's belief and perspective, their authority perception of you skyrockets. They become much more receptive to everything you recommend after this moment.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqns003ykz04p29sqhag)
+        content: Bro what if I told you 99% of traders that say that actually don't know what the real problem is? Let me explain.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_duration] (sortOrder=2, action.id=cmow4xqns003zkz04tt0p5ic8)
+        waitDuration: 5s
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_message] (sortOrder=3, action.id=cmow4xqns0040kz04x4cbg6md)
+        content: When people come into the markets, they believe they need more discipline or the best strategy in the world to be successful. But here's the thing discipline takes time to build, and almost all strategies work. It's the person behind them using it that matters.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_duration] (sortOrder=4, action.id=cmow4xqns0041kz04hhm38um2)
+        waitDuration: 5s
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_message] (sortOrder=5, action.id=cmow4xqns0042kz046fcc29av)
+        content: So what's really the bottleneck? It's the systems you have in place. A detailed, structured system that tells you every single thing to do from point A to point B. one that removes all emotional decisions and guesswork that's what actually makes a profitable trader profitable.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [ask_question] (sortOrder=6, action.id=cmow4xqns0043kz04o4e75ira)
+        content: Now if you had a system like that, one that guided you from A to B and removed the guesswork. what would that do for your trading bro?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=7, action.id=cmow4xqns0044kz04hg4rt6j8)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Beginner / Overwhelmed / New to markets"
+    branch.id:          cmow4xqoo0046kz047rxu7lgv
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6k53u000ll104zwd74y8x)
+        content: If lead is new to markets and their obstacle is being overwhelmed, too much info, or not knowing where to start → use this branch.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqpj0047kz04u7247ar8)
+        content: Brother, that's totally normal. And believe it or not, it's actually a good spot to be in because you're not carrying all the bad habits most traders pick up when they start out on their own.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_duration] (sortOrder=2, action.id=cmow4xqpj0048kz04nm370u0t)
+        waitDuration: 3s
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [send_message] (sortOrder=3, action.id=cmow4xqpj0049kz04gwouvdl1)
+        content: The most important thing though is being able to get the proper guidance and knowledge from the jump, so you avoid those mistakes entirely instead of having to unlearn them later.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [ask_question] (sortOrder=4, action.id=cmow4xqpj004akz04ppp0fwbq)
+        content: So is getting the right guidance and knowledge your number one priority right now?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=5, action.id=cmow4xqpj004bkz04s10c0g0f)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 14: Buy-In Confirmation ────
+  step.id:           cmow4xqqe004dkz04x7jzcfic
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Clear buy-in"
+    branch.id:          cmow4xqr9004fkz04326ajwrb
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6lxdj000nl104nxs7n3lc)
+        content:  Clear buy-in = "yes bro that's exactly what I need" / "100%" / "that would change everything" / "man that's literally my problem" / any affirmative with real energy behind it. If momentum is already high → skip STEP 15, go to STEP 16.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqs3004gkz04ycypk5h4)
+        content: {{match their energy — acknowledge genuinely}}
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xqs3004hkz046ih75313)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Lukewarm buy-in"
+    branch.id:          cmow4xqsx004jkz04tib40o43
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow6urqc0005l204kvlsr027)
+        content: Lukewarm = "yeah that could work" / "maybe" / "possibly" / "yeah that would help I guess" / anything without conviction. Do NOT proceed to call proposal off a lukewarm response. You will burn the lead. Use humor to cut the tension — don't be aggressive, you've built rapport up to this point and you don't want to burn it by clashing egos.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xqts004lkz048o96bhr0)
+        content: Could? 😂 brother I'm genuinely trying to help you out and point you in the best direction possible. I'm not here to sell you anything. I just want to make sure that if there's something holding you back we actually address it. What's really on your mind?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=2, action.id=cmow4xqts004mkz046qo2hcto)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [runtime_judgment] (sortOrder=3, action.id=cmow6y3qm0001lb04h8ay6wya)
+        content:  If they warm up and give a real yes → proceed to STEP 15. If they come back with a real objection (usually cost or time) → handle that objection. If they stay cold and closed off → exit gracefully: "No stress at all bro. I'm here to give not take from you. If you ever want to revisit this just hit me up 💪🏿"
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Reframe pushed them back into goals"
+    branch.id:          cmow4xqun004okz04bz14a1sj
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow71ohr0003lb042niep1ia)
+        content: The reframe question ("what would that do for your trading?") is designed to push them back into talking about their desired outcome. If they respond with goal-language ("bro I'd finally be able to quit my job" / "I could actually provide for my family") → store as additional {{desired_outcome}}. This is fresh, emotional, post-reframe language — the most valuable data you'll collect. Proceed to STEP 15 or 16.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow71o630001lb04dp4v0hpx)
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xqvi004pkz04e7z7id3c)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 15: Urgency (CONDITIONAL) ────
+  step.id:           cmow4xqwc004rkz045cux5fm4
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Needs final push"
+    branch.id:          cmow4xqx7004tkz04sbefgiqv
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow72o5l0007l204zn4iyun2)
+        content: Only enter this step if the conversation still needs a push. If momentum is already strong and they're clearly bought in → skip to STEP 16. Don't add unnecessary steps that could unsell them — once desire is built, too many extra questions can actually remove it.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xqy2004ukz046rx54krb)
+        content: I mean bro — is now the time to actually overcome {{obstacle}} and be able to {{desired_outcome}}?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xqy2004vkz04130y54jk)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Alternative framing"
+    branch.id:          cmow4xqyy004xkz041nst41sa
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [ask_question] (sortOrder=0, action.id=cmow4xqzs004ykz049jjua4wp)
+        content: So why is now so important for you to let go of these obstacles and overcome them bro? Why now and not idk 6 months from now?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=1, action.id=cmow4xqzs004zkz044vk5jkgm)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 16: Call Proposal ────
+  step.id:           cmow4xr0m0051kz04p3yo9fgz
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xr1h0053kz041bnwu708
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow75y320005lb04op2zcmkn)
+        content: Before proposing the call, confirm you have all three: {{obstacle}} identified, {{desired_outcome}} articulated, and emotional buy-in confirmed. If any of these are missing, the call will be weak or they'll no-show. Do not propose the call just because you want the set — propose it because the lead is genuinely ready. Tie the proposal back to their specific pain and their specific goal. Don't use a generic pitch — reference what they actually told you.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xr2f0054kz04k0q60j1f)
+        content: I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_duration] (sortOrder=2, action.id=cmow4xr2f0055kz046tk56leb)
+        waitDuration: 2s
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [send_message] (sortOrder=3, action.id=cmow4xr2f0056kz0484qvuvm3)
+        content: With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=4, action.id=cmow4xr2f0057kz04d9647tui)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "They already asked about mentorship"
+    branch.id:          cmow4xr3b0059kz04f8xv25lk
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow77ge80003lb04hmotsj1a)
+        content: when they have already inquired about joining the mentorship by themselves and we have qualified them.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xr45005akz04dckpjuxz)
+        content: I respect that you're ready to take action bro. Let me set you up with my right hand guy Anthony he'll break down a full roadmap tailored to your situation and map out the steps to get you to {{income_goal}}. Sound good?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=2, action.id=cmow4xr45005bkz04tnv4e8h8)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 17: Call Proposal Response ────
+  step.id:           cmow4xr50005dkz04rj7dlvc5
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Yes"
+    branch.id:          cmow4xr5v005fkz041hwe3z6x
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [send_message] (sortOrder=0, action.id=cmow4xr6q005gkz0413p19njh)
+        content: Aight brother, I'm giving you a shot. Schedule a date for the call that works best for you and text me whenever you're done.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [send_link] (sortOrder=1, action.id=cmow4xr6q005hkz04783mrrae)
+        linkUrl: https://form.typeform.com/to/AGUtPdmb
+        linkLabel: Booking Typeform
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_message] (sortOrder=2, action.id=cmow4xr6q005ikz04rw6bufj4)
+        content: Let me know once you're all booked so I can send over some helpful resources for you to go through in the meantime!
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xr6q005jkz04i2bkur4h)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Hesitation"
+    branch.id:          cmow4xr7l005lkz04fq3jin9j
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7g7i80005lb0443utx6p9)
+        content: Hesitation is normal. Don't panic and don't stack messages trying to convince them. Say your piece and let them breathe.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=2, action.id=cmow4xr8f005nkz04mk6hn9jn)
+        content: Totally get it bro. this deserves real thought. That's actually why I proposed the call in the first place. It's not a commitment to anything. it's a way for you to get all the info you need and see if our approach even makes sense for you. Would you be opposed to that?
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=3, action.id=cmow4xr8f005okz04v66e9fl2)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Hesitation — second attempt failed"
+    branch.id:          cmow4xr9b005qkz044mirs5vs
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7lumt000blb0477jlpsz5)
+        content: If they're still not committing after two attempts → don't force it. Offer free value instead. This actually builds more trust than pushing. Omar tested this approach and got leads saying they'd save up and come back.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xra5005rkz0439m90zny)
+        content: Tell you what. no pressure at all bro. In the meantime, check out my YouTube. There's a ton of free content on there that can genuinely help you right now. And I also do mentorships, so if you ever have questions or want to take it further, I'm right here.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_link] (sortOrder=2, action.id=cmow4xra5005skz041h6f59cy)
+        linkUrl: https://www.youtube.com/@DAETRADEZ
+        linkLabel: YouTube Channel
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=3, action.id=cmow4xra5005tkz046da37sb7)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Specific objection"
+    branch.id:          cmow4xrb0005vkz04hnsu4ixr
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7sn8v000blb0410o7p4yx)
+        content: Handle objections then re-propose the call naturally at the end. Don't just handle the objection and leave it — always bring it back around to the call.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [wait_for_response] (sortOrder=1, action.id=cmow4xrbv005ykz04paltzyla)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Hesitation — still unsure after first response"
+    branch.id:          cmow7ix6x000bl204wf7bnn3o
+    condition:          (none)
+    parserConfidence:   (none)
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7k3ug0009lb04fmykcr7m)
+        content: USE IF THEY ARE STILL UNSURE OF TAKING THE CALL.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow7jev20007lb04zqski64z)
+        content:  It's literally just a conversation bro. zero commitment. Worst case you walk away with a clearer picture of what you need to do. I just want to make sure you have the right info to make the best decision for yourself.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+
+──── STEP 18: Qualification — DQ Check ────
+  step.id:           cmow4xrcr0060kz0422fgsmx2
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Qualified"
+    branch.id:          cmow4xrdm0062kz04wur16z67
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7upa7000dlb047soe8cdi)
+        content: If Typeform answers look clean (sufficient capital, good location, credit viable) → skip to STEP 20.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "US/CA — flagged low capital"
+    branch.id:          cmow4xrfa0065kz04xdbzek1o
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow7xe56000fl204srcgfeeg)
+        content: Do NOT assume they can't afford it based on their age, job, or what they said in DMs. A college student could have credit. A part-time worker could have savings. Anthony had a lead (Mark Jenkins) who looked terrible on paper financially but still got his wife to agree to put it on her credit card. Always pitch with full conviction first — you can downsell later if needed.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xrg60066kz0410utcl49)
+        content: To be transparent bro, getting the right education and system in place does require an investment in yourself. it's not a get-rich-quick thing. Typically it takes $2-3K to get the best results and {{customize to their stated goal}}.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [ask_question] (sortOrder=2, action.id=cmow4xrg60067kz04g7h9lnev)
+        content: So after you get all the info you need on the call and if you feel like we're a good fit, would this kind of budget be realistic for you?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xrg60068kz047kci0i58)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Need to clarify account type"
+    branch.id:          cmow4xrh1006akz04tf6xiy5h
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow88esx000flb04e30mr5hk)
+        content: It's unreasonable to ask someone to remove money from their live trading account to pay for a call. But it IS valid to ask whether they're trading with prop firm funded capital or their own live money — this gives you real financial context without being invasive. Someone who says "I have $10K" might have $10K of funded prop money they can't touch, not $10K cash.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [ask_question] (sortOrder=1, action.id=cmow4xrhv006bkz04su1app1y)
+        content: Quick question bro. when you said you have {{amount}} set aside, is that in a prop firm funded account or is that your own capital in a live account?
+        parserConfidence=high  parserStatus=filled  userConfirmed=true
+      [wait_for_response] (sortOrder=2, action.id=cmow4xrhv006ckz04gv0oh8j2)
+        parserConfidence=high  parserStatus=filled  userConfirmed=true
+  Branch: "International lead"
+    branch.id:          cmow4xriq006ekz04mg490fpg
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [ask_question] (sortOrder=0, action.id=cmow4xrjl006fkz04uikz1ma7)
+        content: Prop money aside bro, how much capital do you actually have to invest in getting this right?
+        parserConfidence=high  parserStatus=filled  userConfirmed=true
+      [wait_for_response] (sortOrder=1, action.id=cmow4xrjl006gkz042hcpwzeg)
+        parserConfidence=high  parserStatus=filled  userConfirmed=true
+
+──── STEP 19: Financial Qualification Response ────
+  step.id:           cmow4xrkg006ikz04lca5hlnj
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Can afford — qualified"
+    branch.id:          cmow4xrlb006kkz042yjfpuqd
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8edx60001lh04jnbkn9vu)
+        content:  If they can afford $2K+ → flag as qualified for Anthony, go to STEP 20.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Credit option (US/CA/UK)"
+    branch.id:          cmow4xrn0006nkz04u57vjdyl
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8fkyy000hl204nt6ffz8n)
+        content: If they can't afford upfront but are US/CA → explore financing. Don't write them off. Don't let their financial situation kill the desire you've already built.
+      
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xrnu006okz04puboqhx8)
+        content: I hear you! We may have some options to get you started without a big upfront investment through a financing partner. That's something Anthony can walk you through on the call.
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [ask_question] (sortOrder=2, action.id=cmow4xrnu006pkz04af42i9c6)
+        content: What's your credit score like roughly? And could you realistically handle around $600/month to invest in this?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=3, action.id=cmow4xrnu006qkz04calo4xpb)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Credit viable"
+    branch.id:          cmow4xrop006skz04uvyqkqp7
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8gwc3000hlb042kqzf7i1)
+        content: Flag for Anthony to discuss financing on call → go to STEP 20. Don't try to close the financing in DMs — that's Anthony's job on the call.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Downsell — YouTube (under $500)"
+    branch.id:          cmow4xrqe006vkz044f9by5hg
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8hvvf0003lh040zmv7nfy)
+        content: Be graceful. Don't make them feel bad about their situation. Frame it as "I don't want to put you in a compromised spot" not "you can't afford this." Leave the door open — these people come back when they're ready.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xrr8006wkz04gnvtqvgq)
+        content: No worries bro. I appreciate your transparency, last thing I'd want is for you to be in a compromised spot. Probably the best place for you right now would be my YouTube. There's a ton of free content that can help you start building a foundation.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_link] (sortOrder=2, action.id=cmow4xrr8006xkz04bn2tbcx0)
+        linkUrl: https://www.youtube.com/@DAETRADEZ
+        linkLabel: YouTube Channel
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_message] (sortOrder=3, action.id=cmow4xrr9006ykz04ygz3xdrk)
+        content: Check it out and when you're in a better spot financially, hit me up 💪🏿
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+  Branch: "Downsell Course ($500–$1500)"
+    branch.id:          cmow4xrs40070kz0410x5nini
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8lklw000jlb04lgxjsf7x)
+        content: If they Only have 500-1500. offer the session liquidity model course.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xrsz0071kz0410rfugx0)
+        content: No worries bro. I don't want to leave you hanging though. I actually have a self-paced course that covers the full system, enough to help you understand the model and start building on your own until you're ready for the full mentorship.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=2, action.id=cmow4xrsz0072kz049bqta57p)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [send_message] (sortOrder=3, action.id=cmow8kjx00005lh047jvh71gc)
+        content: Is that something you would be interested in?
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [wait_for_response] (sortOrder=4, action.id=cmow8n68z0007lh04dy2dg6ug)
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [runtime_judgment] (sortOrder=5, action.id=cmow8na5z0009lh04bumi9ine)
+        content: If they immediately say they aren't interested then soft exit. if they are interested in it or ask about the price say this instead
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=6, action.id=cmow8qcrt000llb04nyxtw7h7)
+        content: Its a self paced course going over everything I personally teach my students. I make them all start with the course before even beginning the mentorship program. so right now it is the best option for where you are at. it is $497 one time payment and access for life.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+  Branch: "Instant DQ"
+    branch.id:          cmow4xrtu0074kz04fd3hmr22
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8teqj000blh04llzt3oqc)
+        content: If someone clearly has no money, no credit, no way to invest → don't waste their time or yours. But still leave them with value and keep the door open. Have conviction in the free content too — it still helps people.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xruo0075kz04sgglkdsh)
+        content: To be transparent bro, trading requires startup capital for a successful launch,  it's not a get-rich-quick thing. I recommend you save up until you're in a better spot. In the meanwhile, you can get more informed for free on my YouTube.
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [send_link] (sortOrder=2, action.id=cmow4xruo0076kz04upr11s5w)
+        linkUrl: https://www.youtube.com/@DAETRADEZ
+        linkLabel: YouTube Channel
+        parserConfidence=high  parserStatus=(none)  userConfirmed=true
+      [wait_for_response] (sortOrder=3, action.id=cmow4xruo0077kz04leav9qa4)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 20: Booking Confirmation ────
+  step.id:           cmow4xrvk0079kz04l06aesxa
+  stateKey:          (null)
+  description:       (none)
+  objective:         (none)
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  high
+  userConfirmed:     false
+  Branch: "Default"
+    branch.id:          cmow4xrwe007bkz04hnl5yc5d
+    condition:          (none)
+    parserConfidence:   high
+    userConfirmed:      false
+      [runtime_judgment] (sortOrder=0, action.id=cmow8vc2k000dlh04u5ggnmoq)
+        content: Send this IMMEDIATELY after they confirm booking. Do not wait. the training showed what happens when you book someone and then go silent for a week — zero reminders, no thank you page, no engagement. The lead goes cold and the no-show rate goes through the roof. This step is non-negotiable and time-sensitive.
+        parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+      [send_message] (sortOrder=1, action.id=cmow4xrx9007ckz04qb255zw6)
+        content: Awesome {{NAME}}, just got your booking on my end and got you locked in with my head coach Anthony for {{day}}. You should've received an email invite with the Zoom link and a text with a link to check out. Did both come through on your end?
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+      [wait_for_response] (sortOrder=2, action.id=cmow4xrxa007dkz04p2skzxh6)
+        parserConfidence=high  parserStatus=filled  userConfirmed=false
+
+──── STEP 21: Homework Commitment ────
+  step.id:           cmow8xj4q000nlb04lkpw95wr
+  stateKey:          (null)
+  description:       
+  objective:         
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  (none)
+  userConfirmed:     false
+  Direct actions (no branch):
+    [send_message] (sortOrder=0, action.id=cmow8yksm0003ie04lt9nm1nr)
+      content: Can you commit to going through the video on that link before your call? Will help you hit the ground running with Anthony.
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+    [runtime_judgment] (sortOrder=0, action.id=cmow8ykhw0001ie044rt8zyrt)
+      content: If They received everything continue with this step if they didnt route to step 22
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+    [wait_for_response] (sortOrder=1, action.id=cmow8ymf80005ie04ik2c1rl1)
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+
+──── STEP 22: didnt receive homework ────
+  step.id:           cmow91dlg0007ie04n1dnlxvy
+  stateKey:          (null)
+  description:       
+  objective:         
+  canonicalQuestion: (none)
+  artifactField:     (none)
+  parserConfidence:  (none)
+  userConfirmed:     false
+  Direct actions (no branch):
+    [runtime_judgment] (sortOrder=0, action.id=cmow91lj2000tlb045iism817)
+      content: only use this step if they confirmed they did not receive the booking link or call details on their end
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+    [send_message] (sortOrder=1, action.id=cmow927hh000vlb046adc7fu2)
+      content: No worries I'll go grab it for you. Here's the page with the video
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+    [send_link] (sortOrder=2, action.id=cmow92qvj0009ie04vu2k7sy9)
+      linkUrl: https://daetradingaccelerator.com/thank-you-confirmation
+      linkLabel: Thank You page
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false
+    [send_message] (sortOrder=3, action.id=cmow93vhf000bie04cigf92ob)
+      content: Can you commit to going through this before your call?
+    
+      parserConfidence=(none)  parserStatus=(none)  userConfirmed=false

@@ -252,9 +252,22 @@ async function subscribeInstagramWebhooks(
   igUserId: string,
   accountId: string
 ): Promise<string | null> {
-  // Returns the discovered IG Business Account ID (the 17841… format Meta
-  // sends in webhook entry.id), or null if no linked page could be found.
+  // Returns the IG Business Account ID (17841… format Meta sends in
+  // webhook entry.id), or null if no subscription path worked.
   try {
+    // Approach 0: Instagram Login API direct subscription. Works for IG
+    // accounts that DON'T have a linked Facebook Page (the only path that
+    // exists for IG-Login-only signups). Use the IG Business Account ID
+    // (17841…) which `GET /me?fields=user_id` returns — NOT the
+    // App-Scoped 26… ID that token-exchange returns as `tokenData.user_id`.
+    const igDirectId = await subscribeViaInstagramDirect(igAccessToken);
+    if (igDirectId) {
+      console.log(
+        `[instagram-oauth] Approach 0 succeeded: subscribed via IG-direct path, igBusinessAccountId=${igDirectId}`
+      );
+      return igDirectId;
+    }
+
     // Approach 1: Check if this account already has a META credential with a pageId
     const { getCredentials } = await import('@/lib/credential-store');
     const metaCreds = await getCredentials(accountId, 'META');
@@ -357,6 +370,66 @@ async function subscribeInstagramWebhooks(
     return null;
   } catch (err) {
     console.error('[instagram-oauth] Webhook subscription error:', err);
+    return null;
+  }
+}
+
+// Subscribe via Instagram Login API direct path. No Facebook Page required.
+// Returns the resolved 17841… IG Business Account ID on success, else null.
+async function subscribeViaInstagramDirect(
+  igAccessToken: string
+): Promise<string | null> {
+  const IG_GRAPH_V21 = `${GRAPH_API}/v21.0`;
+  try {
+    // Resolve the 17841… ID via /me?fields=user_id. This IS the value
+    // Meta sends as entry.id in webhooks for IG Login API accounts.
+    const meRes = await fetch(
+      `${IG_GRAPH_V21}/me?fields=user_id,username&access_token=${igAccessToken}`
+    );
+    if (!meRes.ok) {
+      const err = await meRes.text();
+      console.warn(
+        `[instagram-oauth] IG-direct: /me?fields=user_id failed ${meRes.status}: ${err.slice(0, 300)}`
+      );
+      return null;
+    }
+    const me = (await meRes.json()) as { user_id?: string };
+    const igBizId = me.user_id ? String(me.user_id) : null;
+    if (!igBizId || !/^17841\d+$/.test(igBizId)) {
+      console.warn(
+        `[instagram-oauth] IG-direct: /me?fields=user_id returned non-17841 value (${igBizId}). ` +
+          `Token may lack instagram_business_basic scope.`
+      );
+      return null;
+    }
+    const subUrl =
+      `${IG_GRAPH_V21}/${igBizId}/subscribed_apps?` +
+      new URLSearchParams({
+        subscribed_fields: [
+          'messages',
+          'messaging_postbacks',
+          'message_reactions',
+          'messaging_seen',
+          'messaging_referral'
+        ].join(','),
+        access_token: igAccessToken
+      });
+    const subRes = await fetch(subUrl, { method: 'POST' });
+    const subBody = await subRes.text();
+    if (!subRes.ok) {
+      console.warn(
+        `[instagram-oauth] IG-direct: POST /${igBizId}/subscribed_apps failed ${subRes.status}: ${subBody.slice(0, 300)}`
+      );
+      return null;
+    }
+    console.log(
+      `[instagram-oauth] IG-direct: subscribed igBizId=${igBizId}: ${subBody.slice(0, 200)}`
+    );
+    return igBizId;
+  } catch (err) {
+    console.warn(
+      `[instagram-oauth] IG-direct error: ${(err as Error).message}`
+    );
     return null;
   }
 }

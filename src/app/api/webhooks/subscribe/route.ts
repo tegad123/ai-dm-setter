@@ -17,6 +17,7 @@ import { requireAuth, AuthError } from '@/lib/auth-guard';
 // ---------------------------------------------------------------------------
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
+const IG_GRAPH_API = 'https://graph.instagram.com/v21.0';
 
 export async function POST(request: NextRequest) {
   try {
@@ -180,28 +181,94 @@ export async function POST(request: NextRequest) {
       }
 
       // ── Subscribe Instagram account (INSTAGRAM provider) ──
+      // IG Login API direct path: works without a linked Facebook Page.
+      // Always re-resolve igBusinessAccountId from /me?fields=user_id —
+      // the value may be stale or missing in metadata, and only the 17841
+      // ID works for both POST /subscribed_apps and webhook entry.id matching.
       if (cred.provider === 'INSTAGRAM') {
-        const igUserId =
-          meta.igUserId || meta.igBusinessAccountId || meta.instagramAccountId;
-        if (!igUserId) {
+        let igBizId: string | null = null;
+        let resolveDetail = '';
+        try {
+          const meRes = await fetch(
+            `${IG_GRAPH_API}/me?fields=user_id,username&access_token=${accessToken}`
+          );
+          const meBody = await meRes.text();
+          if (meRes.ok) {
+            const me = JSON.parse(meBody) as { user_id?: string };
+            if (me.user_id && /^17841\d+$/.test(String(me.user_id))) {
+              igBizId = String(me.user_id);
+            } else {
+              resolveDetail = `Non-17841 from /me?fields=user_id: ${meBody.slice(0, 200)}`;
+            }
+          } else {
+            resolveDetail = `/me?fields=user_id HTTP ${meRes.status}: ${meBody.slice(0, 200)}`;
+          }
+        } catch (err) {
+          resolveDetail = `resolve threw: ${(err as Error).message}`;
+        }
+
+        if (!igBizId) {
           results.push({
             provider: 'INSTAGRAM',
             pageId: 'N/A',
             pageName,
             success: false,
-            error: 'No IG user ID in metadata'
+            error: `Could not resolve IG Business Account ID. ${resolveDetail}`
           });
           continue;
         }
 
-        // Log what we have for debugging
-        results.push({
-          provider: 'INSTAGRAM',
-          pageId: igUserId,
-          pageName,
-          success: true,
-          details: `IG credential found. Token starts: ${accessToken.slice(0, 8)}... metadata: ${JSON.stringify(meta).slice(0, 200)}`
-        });
+        try {
+          const subUrl =
+            `${IG_GRAPH_API}/${igBizId}/subscribed_apps?` +
+            new URLSearchParams({
+              subscribed_fields:
+                'messages,messaging_postbacks,message_reactions,messaging_seen,messaging_referral',
+              access_token: accessToken
+            });
+          const subRes = await fetch(subUrl, { method: 'POST' });
+          const subBody = await subRes.text();
+          if (subRes.ok) {
+            console.log(
+              `[webhook-subscribe] INSTAGRAM ${igBizId} (${pageName}) subscribed:`,
+              subBody
+            );
+            // Persist the resolved ID so the webhook router can match entry.id
+            if (meta.igBusinessAccountId !== igBizId) {
+              await prisma.integrationCredential.update({
+                where: { id: cred.id },
+                data: { metadata: { ...meta, igBusinessAccountId: igBizId } }
+              });
+            }
+            results.push({
+              provider: 'INSTAGRAM',
+              pageId: igBizId,
+              pageName,
+              success: true,
+              details: subBody
+            });
+          } else {
+            console.error(
+              `[webhook-subscribe] INSTAGRAM ${igBizId} subscription failed:`,
+              subBody
+            );
+            results.push({
+              provider: 'INSTAGRAM',
+              pageId: igBizId,
+              pageName,
+              success: false,
+              error: subBody
+            });
+          }
+        } catch (err) {
+          results.push({
+            provider: 'INSTAGRAM',
+            pageId: igBizId,
+            pageName,
+            success: false,
+            error: String(err)
+          });
+        }
       }
     }
 

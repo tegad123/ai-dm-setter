@@ -1457,7 +1457,8 @@ function stepCompletionFromHistory(
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
     if (hasRuntimeJudgmentAfterWait(actions)) {
-      lastReason = 'wait_followed_by_runtime_judgment_requires_reclassification';
+      lastReason =
+        'wait_followed_by_runtime_judgment_requires_reclassification';
       continue;
     }
 
@@ -2634,7 +2635,14 @@ const DATA_REQUIREMENT_ALIASES: Record<string, string[]> = {
     'work_duration',
     'jobTenure',
     'job_tenure',
-    'workExperienceDuration'
+    'workTenure',
+    'work_tenure',
+    'jobDuration',
+    'job_duration',
+    'workExperienceDuration',
+    'work_experience_duration',
+    'tenureInYears',
+    'tenure_in_years'
   ],
   monthlyIncome: ['monthly_income', 'jobIncome', 'currentIncome'],
   replaceOrSupplement: [
@@ -3114,8 +3122,12 @@ function recentPointForRequirement(params: {
   const keys = [params.requirement.key, ...params.requirement.aliases];
   const matches: RecentCapturedDataPoint[] = [];
 
+  const seenKeys = new Set<string>();
   for (const key of keys) {
-    const point = params.points[key];
+    const normalizedKey = canonicalCapturedDataPointKey(key);
+    if (seenKeys.has(normalizedKey)) continue;
+    seenKeys.add(normalizedKey);
+    const point = capturedPointForKey(params.points, key);
     if (
       !isCapturedDataPoint(point) ||
       point.confidence !== HIGH_CONFIDENCE ||
@@ -3164,8 +3176,21 @@ function volunteeredDataSkipCompletion(
     points,
     step.stepNumber
   );
+  const paths = stepCompletionPaths(step, selectedBranchLabel);
 
-  for (const path of stepCompletionPaths(step, selectedBranchLabel)) {
+  if (
+    !selectedBranchLabel &&
+    step.branches.length > 1 &&
+    paths.some(
+      (path) =>
+        hasWaitAction(path.actions) &&
+        !path.actions.some((action) => action.actionType === 'ask_question')
+    )
+  ) {
+    return null;
+  }
+
+  for (const path of paths) {
     if (!hasWaitAction(path.actions)) continue;
     const asks = path.actions.filter(
       (action) =>
