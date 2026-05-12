@@ -106,6 +106,33 @@ describe('pre-prompt script variable resolution', () => {
     );
   });
 
+  it('bug-013-can-preserve-unresolved-variable-slots-when-resolution-is-only-fallback', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      [
+        "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell."
+      ],
+      {
+        accountId: 'acct_test',
+        context: {},
+        extractor: async () => null
+      }
+    );
+
+    const template =
+      "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell.";
+
+    assert.equal(
+      applyResolvedScriptVariables(template, resolutions),
+      "I mean bro, based off what it seems, the main struggle you're facing is what you mentioned earlier, but like I said your commitment is truly there I can tell."
+    );
+    assert.equal(
+      applyResolvedScriptVariables(template, resolutions, {
+        includeFallback: false
+      }),
+      template
+    );
+  });
+
   it('bug-007-prefers-canonical-incomeGoal-and-formats-numeric-strings', async () => {
     const resolutions = await resolveScriptVariablesForTexts(
       ['But why is {{their stated goal}} so important to you though?'],
@@ -143,7 +170,7 @@ describe('pre-prompt script variable resolution', () => {
   it('bug-008-resolves-their-field-from-workBackground', async () => {
     const resolutions = await resolveScriptVariablesForTexts(
       [
-        "I know {{their field}} is different than trading.",
+        'I know {{their field}} is different than trading.',
         'How long have you been in {{their job}}?'
       ],
       {

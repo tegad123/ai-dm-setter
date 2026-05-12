@@ -766,7 +766,8 @@ export async function resolveScriptVariablesForTexts(
 
 export function applyResolvedScriptVariables(
   text: string | null | undefined,
-  resolutionMap?: ScriptVariableResolutionMap | null
+  resolutionMap?: ScriptVariableResolutionMap | null,
+  options: { includeFallback?: boolean } = {}
 ): string | null | undefined {
   if (!text || !resolutionMap) return text;
   return text.replace(/\{\{\s*([^{}]{1,160})\s*\}\}/g, (match, rawName) => {
@@ -776,6 +777,12 @@ export function applyResolvedScriptVariables(
       resolutionMap.byNormalizedName.get(
         normalizeTemplateKey(canonicalTemplateVariableName(variableName))
       );
+    if (
+      resolution?.source === 'fallback' &&
+      options.includeFallback === false
+    ) {
+      return match;
+    }
     return resolution?.value ?? match;
   });
 }

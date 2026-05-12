@@ -1326,7 +1326,8 @@ function getRequiredMessagesFromActions(
       const content =
         applyResolvedScriptVariables(
           action.content?.trim() ?? '',
-          variableResolutionMap
+          variableResolutionMap,
+          { includeFallback: false }
         )?.trim() ?? '';
       const isPlaceholder = isRuntimePlaceholderOnly(content);
       return {
@@ -1359,7 +1360,9 @@ function getScriptedQuestionsFromActions(
     )
     .map((action) =>
       (
-        applyResolvedScriptVariables(action.content, variableResolutionMap) ??
+        applyResolvedScriptVariables(action.content, variableResolutionMap, {
+          includeFallback: false
+        }) ??
         action.content ??
         ''
       ).trim()
@@ -1383,7 +1386,9 @@ function resolveMessageContentsForGate(
   return contents
     .map((content) =>
       (
-        applyResolvedScriptVariables(content, variableResolutionMap) ?? content
+        applyResolvedScriptVariables(content, variableResolutionMap, {
+          includeFallback: false
+        }) ?? content
       ).trim()
     )
     .filter((content) => content.length > 0);

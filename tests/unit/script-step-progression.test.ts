@@ -462,6 +462,28 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-012-call-prereqs-trust-late-sourced-incomeGoal-after-later-step-history', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 10
+      },
+      deep_why: 'be home for bath time and story time',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step13CompletedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
     const points = {
       work_background: 'retail',
@@ -3579,6 +3601,15 @@ describe('bug-30-msg-verbatim-violation', () => {
       "Yeah I feel you, I mean I'm not an expert in {{their field}} haha but I do know it's quite different than trading man.";
     const generated =
       "Yeah I feel you, I mean I'm not an expert in their field haha but I do know it's quite different than trading man.";
+
+    assert.equal(detectMsgVerbatimViolation(generated, [required]), null);
+  });
+
+  it('bug-013-allows-runtime-variable-slot-with-specific-generated-value', () => {
+    const required =
+      "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell.";
+    const generated =
+      "I mean bro, based off what it seems, the main struggle you're facing is emotional control, but like I said your commitment is truly there I can tell.";
 
     assert.equal(detectMsgVerbatimViolation(generated, [required]), null);
   });
