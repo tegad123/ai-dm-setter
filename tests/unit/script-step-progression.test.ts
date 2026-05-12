@@ -440,6 +440,28 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  it('bug-009-call-prereqs-trust-late-sourced-incomeGoal-after-step-9-history', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 10
+      },
+      deep_why: 'be home for bath time and story time',
+      obstacle: 'emotional control',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step9CompletedEvent(), step13CompletedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
   it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
     const points = {
       work_background: 'retail',
@@ -1691,8 +1713,7 @@ describe('bug-34-llm-branch-classifier', () => {
               },
               {
                 actionType: 'ask_question',
-                content:
-                  'you ready to do what it takes to actually fix this?'
+                content: 'you ready to do what it takes to actually fix this?'
               }
             ]
           },
@@ -3630,7 +3651,7 @@ describe('bug-30-msg-verbatim-violation', () => {
     const quality = scoreVoiceQualityGroup(
       [
         'that goal makes sense bro',
-        "but why is $1k so important to you though?"
+        'but why is $1k so important to you though?'
       ],
       {
         activeBranchRequiredMessages: [],
@@ -3796,7 +3817,9 @@ describe('bug-30-msg-verbatim-violation', () => {
     const quality = scoreVoiceQualityGroup(
       ['Specifically, you need to tell me your why.'],
       {
-        currentStepScriptedQuestions: ['What would that income change for you?'],
+        currentStepScriptedQuestions: [
+          'What would that income change for you?'
+        ],
         currentStepHasAnyAskAction: true
       }
     );
