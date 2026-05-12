@@ -673,3 +673,279 @@ should pass on every run (no longer brittle).
 When Part B is fixed, turn 22's STEP_IS and `"ready"` assertions
 should pass; the conversation routes Clear buy-in → Step 16
 directly, skipping the unnecessary Step 15 urgency push.
+
+### bug-006 — `incomeGoal → income_goal` mapping STILL missing after bug-001b fix
+
+**Severity:** P0 — blocks all Persona B conversations at Step 16
+(same call_proposal deadlock as bug-001 / bug-001b).
+
+**Discovered:** Persona B harness run 3, after Codex shipped all
+six prior fixes (bug-001, bug-002, bug-003, bug-004, bug-005A,
+bug-005B). 2026-05-12.
+
+**Status:** Awaiting fix on `main` branch.
+
+#### Symptoms
+
+After commit `9ed1158` on `main` shipped the bug-001b fix
+(adding `incomeGoal → income_goal` to the captured-key
+normalizer), the harness re-run **still surfaces the same
+`call_proposal_prereqs_missing` for `income_goal` at Step 16**:
+
+```
+[ai-engine] Voice quality FAIL attempt 1/3:
+  hardFails: [
+    "[bubble=1] call_proposal_prereqs_missing:
+     missing=step 9 (income_goal)"
+  ]
+```
+
+And from `script-debug` at the same turn:
+
+```
+capturedKeys: [..., 'incomeGoal', ...]
+```
+
+`incomeGoal` IS in `capturedDataPoints`. The bug-001b fix
+clearly added a normalization somewhere — but the lookup path
+that the Step 16 prereq check uses didn't pick it up. The fix
+covered one site; there's at least one more.
+
+#### Fix scope
+
+Audit **every place** in `src/lib/voice-quality-gate.ts` (and
+adjacent prereq-check code) that reads captured-data prereq
+fields. The bug-001b fix patched one lookup. Other lookups
+(including the one Step 16 hits) still read the raw camelCase
+key without normalization.
+
+**Recommended:** factor out a single canonical normalization
+function — `resolveCapturedKey(rawKey: string): string` — and
+route every prereq lookup through it. This prevents bug-007a,
+bug-007b, ... showing up the next time a new prereq field is
+added.
+
+#### File pointers
+
+- `src/lib/voice-quality-gate.ts` — `call_proposal_prereqs_missing`
+  rule and all other prereq checks; audit every `capturedDataPoints[...]`
+  read for missing normalization
+- `src/lib/script-step-progression.ts` — where commit 9ed1158
+  added the first map; co-locate the canonical normalizer here
+  if it isn't already centralized
+
+#### Reproduction
+
+```bash
+cd ai-dm-setter
+git fetch origin main
+git checkout feature/persona-harness
+git rebase main          # pull in 9ed1158
+npm run test:personas
+```
+
+Watch turn 13 (Step 16 — Call Proposal). Expected: 3 retries,
+`call_proposal_prereqs_missing: missing=step 9 (income_goal)`,
+`HARNESS_ERROR`, scenario halts — same shape as bug-001b.
+
+### bug-007 — Step 10 numeric substitution corrupted ($1k → $6)
+
+**Severity:** P1 — breaks the call-proposal narrative; the
+operator-authored Step 10 [ASK] is the emotional pivot ("why is
+$1k so important to you?") and shipping `$6` instead destroys
+the impact.
+
+**Discovered:** Persona B harness run 3, 2026-05-12.
+
+**Status:** Awaiting fix on `main` branch.
+
+#### Symptoms
+
+The script flow on this turn was:
+
+1. Turn 7 (Step 9, Income Goal, Wants to supplement branch):
+   captured `incomeGoal = 1000` from lead's `"1k extra a month"`.
+2. Turn 8 (Step 10, Desired Outcome — Deep Why):
+   `[ASK]` template = `"But why is $1k so important to you though?
+   Asking since the more I know the better I'll be able to help."`
+
+The template's `$1k` is a variable substitution token resolved
+from `capturedDataPoints.incomeGoal`. What shipped was:
+
+```
+[ASK] REQUIRED QUESTION: "But why is $6 so important to you though?..."
+```
+
+`$6` is **not** any value in `capturedDataPoints`. `incomeGoal`
+was correctly captured as `1000`. Something between resolver
+input (`1000`) and rendered token (`$6`) corrupted the value.
+
+#### Possible cause
+
+Substring indexing instead of formatting:
+
+- `Math.floor(1000 / 1000)` → 1, then formatted as `"$1k"` —
+  the documented path that works elsewhere.
+- A different code path may have done something like
+  `String(amount)[0]` (returns `'1'`) plus `'k'` — correct
+  ASCII collision but doesn't explain `$6`.
+- More likely: a number-to-tier mapping (e.g. brackets) or a
+  pricing/threshold lookup tripped a wrong index. `$6` is the
+  6th element of *something*, or an off-by-one into a tier
+  table.
+- Or: a multiplier got mis-applied (`1000 / 167 ≈ 6`).
+
+The harness can't distinguish these from logs alone — Codex
+should add an instrumentation log of the raw and formatted
+value at the moment of substitution.
+
+#### Fix scope
+
+Investigate `src/lib/script-variable-resolver.ts` numeric
+formatting paths used by Step 10's `[ASK]`. Specifically:
+
+1. What does the resolver receive for `incomeGoal` at this
+   substitution call? (Add temporary debug log.)
+2. What format function is applied? Is there a tier-bracket
+   or pricing table that might mis-resolve to `$6`?
+3. Confirm the `$1k` rendering used elsewhere (e.g. inside the
+   capital-question copy at Step 18) goes through the same
+   path or a different one.
+
+If it's a divergent path, unify it on the canonical formatter
+used by working steps.
+
+#### File pointers
+
+- `src/lib/script-variable-resolver.ts` — variable substitution
+  and numeric formatting
+- `src/lib/ai-engine.ts` — the call site that invokes the
+  resolver for Step 10 [ASK]
+
+#### Reproduction
+
+Run the persona-b harness; observe the AI reply on turn 14
+(Step 10, post-lead `"honestly just like 1k extra a month would
+change everything"`). Expected: `"But why is $1k so important
+to you though?"`. Actual: `"But why is $6 so important to you
+though?"`.
+
+### bug-008 — `{{their field}}` literal leak in Step 7
+
+**Severity:** P1 — breaks Step 7 [MSG] delivery, fires R34
+metadata-leak gate, escalates to operator pause (no platform
+send). Affects every persona that uses `{{their field}}` (or
+`{{their job}}` / `{{field}}`) as a variable. Also observed in
+**earlier production conversations tonight**, not just the
+harness — this is shipping to real leads.
+
+**Discovered:** Persona B harness run 3 + concurrent production
+session observation, 2026-05-12.
+
+**Status:** Awaiting fix on `main` branch.
+
+#### Symptoms
+
+Step 7 (Monthly Income, Default branch) has:
+
+```
+[MSG] REQUIRED MESSAGE: "Yeah I feel you, I mean I'm not an
+  expert in {{their field}} haha but I do know it's quite
+  different than trading man."
+```
+
+Lead context: `workBackground = "retail"` (captured at Step 5).
+
+**Expected:** `"Yeah I feel you, I mean I'm not an expert in
+retail haha but I do know it's quite different than trading
+man."`
+
+**Actual:** Unresolved literal `{{their field}}` ships through
+to the verbatim check, R34 metadata-leak rule fires, gate
+exhausts retries, escalates to operator:
+
+```
+[ai-engine] Voice quality FAIL:
+  hardFails: ['[bubble=0] r34_metadata_leak:
+    matched "{{their field}}" via /\{\{[^}]+\}\}/']
+[webhook-processor] r34_metadata_leak_at_ship — Pausing AI,
+  notifying operator, no platform send.
+```
+
+#### Root cause
+
+`{{their field}}` is not in the current variable-resolver alias
+map. Compare to the alias added earlier tonight in commits
+`8c6ccc4` + `eaaf17a` for `{{their stated goal}} → incomeGoal`.
+Same class of fix needed for the work-related variables.
+
+#### Fix scope
+
+Add to `src/lib/script-variable-resolver.ts` aliases:
+
+```ts
+'their field' → workBackground
+'their job' → workBackground
+'field' → workBackground
+'job' → workBackground
+```
+
+Same shape as the `{{their stated goal}}` → `incomeGoal` alias
+already in place. Audit the daetradez script (and other live
+scripts) for other natural-language variable references that
+operators have authored but the resolver doesn't yet recognize.
+
+This is **generic across all clients** — any persona script
+that uses prose-style variable references (`{{their X}}`)
+needs the alias map kept current. Long-term: consider an
+extraction pass over the script that warns the operator at
+edit time if a `{{...}}` token doesn't resolve to a known alias.
+
+#### File pointers
+
+- `src/lib/script-variable-resolver.ts` — alias map
+- `src/lib/voice-quality-gate.ts` — R34 metadata-leak rule
+  (the canary that surfaced this; not the fix site)
+
+#### Reproduction
+
+Run the persona-b harness. Turn 9 (Step 7 — Monthly Income):
+observe `[ASK-BRANCH EVAL]` reply containing unresolved
+`{{their field}}` literal, R34 fires, operator pause.
+Production sessions tonight showed the same.
+
+### Side note — banned_word vs operator-required verbatim conflict (also seen at Step 11)
+
+Same class as **bug-003** ("Let me explain." on Step 13). At
+Step 11 (Desired Outcome — Probe if Surface, "Surface — needs
+second probe" branch), the operator-authored `[ASK]` contains
+the word "specifically":
+
+```
+[ASK] REQUIRED QUESTION: "But like specifically is there
+  something personal you're hoping trading will help you achieve?
+  Something beyond just the money?"
+```
+
+The voice quality gate's `banned_word` list includes
+"specifically". Gate exhausted 3 retries, shipped best-effort
+paraphrase:
+
+```
+[ai-engine] Voice quality FAIL attempt 1/3:
+  hardFails: ['[bubble=0] banned_word: "specifically"']
+...
+[ai-engine] Voice quality gate exhausted 3 attempts — sending
+  best effort
+```
+
+This is the **same architectural conflict** documented in
+bug-003. If Codex's bug-003 fix narrowly exempted only the
+specific "Let me explain." occurrence, the same pattern recurs
+here. The architectural fix — exempt the entire `banned_word`
+and `banned_phrase` list when content sits inside an
+operator-required verbatim `[MSG]` or `[ASK]` block — would
+cover both Step 13 and Step 11 in one stroke.
+
+If bug-003 was already fixed architecturally, this note is
+informational only and turn 18 should pass on the next run.
