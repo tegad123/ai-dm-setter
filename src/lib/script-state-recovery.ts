@@ -2199,13 +2199,27 @@ function extractValueAfterPrompt<T>(params: {
     }
     const value = parse(msg.content);
     if (value !== null && value !== undefined && value !== '') {
-      const sourceStepNumber = steps?.length
+      const inferredSourceStepNumber = steps?.length
         ? stepNumberForAskMessage(steps, prompt.content)
         : null;
+      const fallbackSourceStepNumber = params.sourceStepNumberFallback ?? null;
+      const hasFallbackSourceStep =
+        fallbackSourceStepNumber !== null &&
+        (steps?.some((step) => step.stepNumber === fallbackSourceStepNumber) ??
+          false);
+      const sourceStepNumber =
+        field === 'incomeGoal' &&
+        hasFallbackSourceStep &&
+        fallbackSourceStepNumber !== null &&
+        (inferredSourceStepNumber === null ||
+          inferredSourceStepNumber < fallbackSourceStepNumber)
+          ? fallbackSourceStepNumber
+          : inferredSourceStepNumber;
       setPoint(points, field, value, 'HIGH', msg.id ?? null, method, {
         sourceFieldName: field,
         sourceStepNumber:
-          sourceStepNumber ?? params.sourceStepNumberFallback ?? null,
+          sourceStepNumber ??
+          (hasFallbackSourceStep ? fallbackSourceStepNumber : null),
         sourceQuestion: prompt.content
       });
       // After successful capture, reset prompt so we don't re-capture

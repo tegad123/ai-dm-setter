@@ -871,6 +871,59 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
+  it('bug-015-stamps-income-goal-prompt-as-step-9-when-step-7-question-is-similar', () => {
+    const script = {
+      id: 'persona_b_income_goal_with_monthly_income_sequence',
+      steps: [
+        askStep(
+          7,
+          'Monthly Income',
+          'And as of right now, how much is your job bringing in on a monthly basis?'
+        ),
+        askStep(
+          9,
+          'Income Goal',
+          'Got it. So how much money are you trying to make with trading on a monthly basis?'
+        )
+      ]
+    } as any;
+    const points = extractCapturedDataPointsForTest({
+      history: [
+        {
+          id: 'ai_step9_exact',
+          sender: 'AI',
+          content:
+            'Got it. So how much money are you trying to make with trading on a monthly basis?',
+          timestamp: new Date('2026-05-11T00:00:00Z')
+        },
+        {
+          id: 'lead_step9_amount',
+          sender: 'LEAD',
+          content:
+            'honestly just like 1k extra a month would change everything',
+          timestamp: new Date('2026-05-11T00:01:00Z')
+        }
+      ],
+      script
+    });
+
+    assert.equal((points.incomeGoal as any)?.value, 1000);
+    assert.equal((points.incomeGoal as any)?.sourceStepNumber, 9);
+    assert.deepEqual(
+      checkCallProposalPrereqs({
+        workBackground: 'retail',
+        monthlyIncome: 2000,
+        replaceOrSupplement: 'supplement',
+        incomeGoal: points.incomeGoal,
+        deepWhy: 'be home for bath time and story time',
+        obstacle: 'emotional control',
+        beliefBreakDelivered: 'complete',
+        buyInConfirmed: true
+      }),
+      []
+    );
+  });
+
   it('bug-009-regression-step-16-call-proposal-completes-after-acceptance', () => {
     const script = {
       id: 'persona_b_call_proposal_sequence',
