@@ -135,15 +135,16 @@ function hasCapturedDataPointFromStep(params: {
     const sourceStepNumber = capturedPointSourceStepNumber(point);
     if (sourceStepNumber === params.stepNumber) return true;
 
-    // Durable branchHistory proves the expected step completed, but older
+    // Durable branchHistory proves the expected step was reached, but older
     // capture writers sometimes stored flat camelCase values without source
     // metadata. Accept those no-source values only when the durable ledger
-    // already pins this exact step as completed; explicit wrong-source values
-    // still fail so current-vs-target amount fields do not bleed together.
+    // already pins this exact step as selected/completed; explicit wrong-source
+    // values still fail so current-vs-target amount fields do not bleed
+    // together.
     if (
       hasBranchHistory &&
       sourceStepNumber === null &&
-      stepCompletedByBranchHistory(params.points, params.stepNumber)
+      stepReachedByBranchHistory(params.points, params.stepNumber)
     ) {
       return true;
     }
@@ -161,7 +162,7 @@ export function incomeGoalSatisfiedByExpectedStep(
   stepNumber = 9
 ): boolean {
   const hasBranchHistory = branchHistoryEvents(points).length > 0;
-  if (hasBranchHistory && !stepCompletedByBranchHistory(points, stepNumber)) {
+  if (hasBranchHistory && !stepReachedByBranchHistory(points, stepNumber)) {
     return false;
   }
   return hasCapturedDataPointFromStep({
@@ -228,6 +229,25 @@ function stepCompletedByBranchHistory(
   });
 }
 
+function stepReachedByBranchHistory(
+  points: Record<string, unknown> | null | undefined,
+  stepNumber: number
+): boolean {
+  return branchHistoryEvents(points).some((event) => {
+    if (
+      event.eventType !== 'branch_selected' &&
+      event.eventType !== 'step_completed'
+    ) {
+      return false;
+    }
+    const eventStepNumber =
+      typeof event.stepNumber === 'number'
+        ? event.stepNumber
+        : Number(event.stepNumber);
+    return eventStepNumber === stepNumber;
+  });
+}
+
 function buyInConfirmedByBranchHistory(
   points: Record<string, unknown> | null | undefined,
   stepNumber: number
@@ -279,6 +299,13 @@ function prereqSatisfiedByCapturedState(
 
   if (prereq.id === 'income_goal') {
     return incomeGoalSatisfiedByExpectedStep(points, prereq.stepNumber);
+  }
+
+  if (
+    prereq.id === 'belief_break_delivered' &&
+    stepCompletedByBranchHistory(points, prereq.stepNumber)
+  ) {
+    return true;
   }
 
   return prereq.acceptableKeys.some((key) => {

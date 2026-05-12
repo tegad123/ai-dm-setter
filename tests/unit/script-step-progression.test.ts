@@ -87,6 +87,26 @@ function step9CompletedEvent() {
   };
 }
 
+function step9SelectedEvent() {
+  return {
+    eventType: 'branch_selected',
+    stepNumber: 9,
+    stepTitle: 'Income Goal',
+    selectedBranchLabel: 'Wants to supplement',
+    sentAt: '2026-05-11T15:04:00.000Z'
+  };
+}
+
+function step13CompletedEvent() {
+  return {
+    eventType: 'step_completed',
+    stepNumber: 13,
+    stepTitle: 'Belief Break — Reframe',
+    selectedBranchLabel: 'Psychology / Discipline symptom',
+    completedAt: '2026-05-11T15:13:00.000Z'
+  };
+}
+
 // ---------------------------------------------------------------------------
 // hasCapturedDataPoint — accepts both flat and {value,confidence} shapes
 // ---------------------------------------------------------------------------
@@ -328,6 +348,39 @@ describe('checkCallProposalPrereqs', () => {
     };
 
     assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('bug-001-call-prereqs-accept-flat-income-goal-after-step-9-selection', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '$1k',
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step9SelectedEvent()]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('bug-001-call-prereqs-accept-completed-belief-break-history', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '$1k',
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'bubble2',
+      buyInConfirmed: true,
+      branchHistory: [step9CompletedEvent(), step13CompletedEvent()]
+    };
+
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
