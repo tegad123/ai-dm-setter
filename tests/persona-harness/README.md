@@ -25,6 +25,7 @@ read-only consumer. Verification step 5 (`git diff --stat main...HEAD --
    ANTHROPIC_API_KEY=sk-ant-...
    # optional
    OPENAI_API_KEY=sk-...
+   HARNESS_OPENAI_MODEL=gpt-4o-mini
    PERSONA_HARNESS_MAX_COST_USD=0.50
    ```
 3. Run:

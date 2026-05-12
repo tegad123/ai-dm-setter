@@ -169,6 +169,27 @@ export async function seedIntegrationCredential(
     });
   }
 
+  const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
+  if (openaiApiKey) {
+    const model = process.env.HARNESS_OPENAI_MODEL || 'gpt-4o-mini';
+    await prisma.integrationCredential.upsert({
+      where: {
+        accountId_provider: { accountId, provider: 'OPENAI' }
+      },
+      create: {
+        accountId,
+        provider: 'OPENAI',
+        credentials: { apiKey: openaiApiKey, model },
+        isActive: true,
+        verifiedAt: new Date()
+      },
+      update: {
+        credentials: { apiKey: openaiApiKey, model },
+        isActive: true
+      }
+    });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return;
   // Default to Haiku 4.5, the cheapest Claude model currently available

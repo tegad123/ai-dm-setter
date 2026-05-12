@@ -25,6 +25,7 @@ const PRICING_TABLE: Array<[string, ModelPricing]> = [
   ['gpt-5.4', { inputPerMillion: 2.5, outputPerMillion: 10 }],
   ['gpt-5-mini', { inputPerMillion: 0.15, outputPerMillion: 0.6 }],
   ['gpt-5', { inputPerMillion: 5, outputPerMillion: 15 }],
+  ['gpt-4o-mini', { inputPerMillion: 0.15, outputPerMillion: 0.6 }],
   ['gpt-4', { inputPerMillion: 5, outputPerMillion: 15 }]
 ];
 
