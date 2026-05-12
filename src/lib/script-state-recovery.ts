@@ -1149,6 +1149,30 @@ function actionContentMatches(
   return completionOverlap(required, actual) >= 0.35;
 }
 
+const CALL_PROPOSAL_MESSAGE_PATTERNS: RegExp[] = [
+  /\bset\s+up\s+a\s+(quick\s+)?(call|chat|convo|conversation|zoom|time)\b/i,
+  /\b(book(ing)?|schedule|hop(ping)?\s*on|jump(ing)?\s*on|get\s*you\s*on|get\s*on)\s+a?\s*(quick\s+)?(call|chat|convo|conversation|zoom)\b/i,
+  /\b(quick|15[\s-]?min(ute)?)\s+(call|chat|convo)\b/i,
+  /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
+  /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
+  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+];
+
+function isCallProposalStep(step: ScriptStepWithRecovery): boolean {
+  const key = normalizedStepKey(step);
+  return (
+    (key.includes('CALL_PROPOSAL') || key.includes('SOFT_PITCH')) &&
+    !key.includes('RESPONSE')
+  );
+}
+
+function isCallProposalMessage(content: string | null | undefined): boolean {
+  if (!content || typeof content !== 'string') return false;
+  return CALL_PROPOSAL_MESSAGE_PATTERNS.some((pattern) =>
+    pattern.test(content)
+  );
+}
+
 function contentIsRuntimePlaceholderOnly(
   content: string | null | undefined
 ): boolean {
@@ -1457,6 +1481,43 @@ function incompleteStepCompletion(
   };
 }
 
+function callProposalCompletionFromHistory(params: {
+  step: ScriptStepWithRecovery;
+  history: ScriptHistoryMessage[];
+  afterTimeMs: number;
+  selectedBranchLabel: string | null;
+  selectedSuggestionId: string | null;
+  historyMessagesWithSelectedSuggestionId: number | null;
+}): StepCompletionResult | null {
+  if (!isCallProposalStep(params.step)) return null;
+
+  const proposalMessage =
+    params.history.find(
+      (message) =>
+        (message.sender === 'AI' || message.sender === 'HUMAN') &&
+        new Date(message.timestamp).getTime() > params.afterTimeMs &&
+        isCallProposalMessage(message.content)
+    ) ?? null;
+  const leadReply = proposalMessage
+    ? hasLeadReplyAfter(params.history, proposalMessage)
+    : null;
+  if (!proposalMessage || !leadReply) return null;
+
+  return {
+    complete: true,
+    completedAt: new Date(leadReply.timestamp).getTime(),
+    aiMessageId: proposalMessage.id ?? null,
+    aiMessageIds: proposalMessage.id ? [proposalMessage.id] : [],
+    leadMessageId: leadReply.id ?? null,
+    sentAt: new Date(proposalMessage.timestamp).toISOString(),
+    reason: 'completed_by_call_proposal_reply',
+    selectedBranchLabel: params.selectedBranchLabel,
+    selectedSuggestionId: params.selectedSuggestionId,
+    historyMessagesWithSelectedSuggestionId:
+      params.historyMessagesWithSelectedSuggestionId
+  };
+}
+
 function stepCompletionFromHistory(
   step: ScriptStepWithRecovery,
   points: CapturedDataPoints,
@@ -1562,6 +1623,18 @@ function stepCompletionFromHistory(
         : selectedSuggestionId
           ? 'waitable_message_not_found_for_selected_suggestion'
           : 'waitable_message_not_found_in_history_after_cursor';
+    }
+
+    const callProposalCompletion = callProposalCompletionFromHistory({
+      step,
+      history: sorted,
+      afterTimeMs,
+      selectedBranchLabel,
+      selectedSuggestionId,
+      historyMessagesWithSelectedSuggestionId
+    });
+    if (callProposalCompletion) {
+      return callProposalCompletion;
     }
   }
 

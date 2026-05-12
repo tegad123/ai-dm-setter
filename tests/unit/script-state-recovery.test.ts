@@ -1014,6 +1014,94 @@ describe('computeSystemStage generic sequencing', () => {
     );
   });
 
+  it('bug-016-completes-step-16-after-paraphrased-call-proposal-reply', () => {
+    const script = {
+      id: 'persona_b_call_proposal_paraphrase_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 16,
+          title: 'Call Proposal',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell."
+            },
+            { actionType: 'wait_duration', content: '2 seconds' },
+            {
+              actionType: 'send_message',
+              content:
+                'With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        askStep(
+          17,
+          'Call Proposal Response',
+          'How much liquid capital would you say you have right now that you could put toward your trading and your education?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step16_a',
+        sender: 'AI',
+        content:
+          "I mean bro, based off what it seems, the main struggle you're facing is emotional control, but like I said your commitment is truly there I can tell.",
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'ai_step16_b',
+        sender: 'AI',
+        content:
+          'I think a quick call with Anthony could help map out the next steps from here. Would that help?',
+        timestamp: new Date('2026-05-11T00:00:02Z')
+      },
+      {
+        id: 'lead_step16_accept',
+        sender: 'LEAD',
+        content: 'yeah that would be huge, lets do it',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      obstacle: {
+        value: 'emotional control',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_obstacle',
+        extractionMethod: 'runtime_judgment',
+        extractedAt: '2026-05-11T00:00:00.000Z'
+      },
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 16,
+          stepTitle: 'Call Proposal',
+          selectedBranchLabel: 'Default',
+          suggestionId: 'new_unsent_step16_suggestion',
+          sentAt: '2026-05-11T00:01:01.000Z'
+        }
+      ]
+    };
+    const stage = computeSystemStage(script, points as any, history, {
+      previousCurrentScriptStep: 16,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 17);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 16 &&
+          event.stepCompletionReason === 'completed_by_call_proposal_reply'
+      ),
+      true
+    );
+  });
+
   it('bug-008-regression-does-not-auto-complete-multi-branch-routing-step-with-silent-branch', () => {
     const routingScript = {
       id: 'persona_b_market_routing_sequence',
