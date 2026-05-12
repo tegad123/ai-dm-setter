@@ -213,13 +213,41 @@ async function runPersona(persona: PersonaScenario): Promise<PersonaResult> {
       console.log(
         `  scenario ${r.scenarioId}: ${r.status} (${r.elapsedMs}ms, ${r.llmCalls} LLM calls, $${r.costUsd.toFixed(4)})`
       );
-      if (r.status === 'FAIL') {
+      // Print per-turn detail for any non-PASS outcome — including
+      // HARNESS_ERROR. Earlier runs swallowed assertion results when
+      // a turn threw, which hid prior-turn signal behind the error.
+      const isUnsuccessful =
+        r.status === 'FAIL' ||
+        r.status === 'HARNESS_ERROR' ||
+        r.status === 'RATE_LIMIT_EXHAUSTED';
+      if (isUnsuccessful) {
+        // Count how many assertions actually evaluated before the throw.
+        let evaluatedAssertions = 0;
+        let failedAssertions = 0;
         for (const t of r.turns) {
           for (const a of t.assertions) {
+            evaluatedAssertions += 1;
             if (!a.passed) {
+              failedAssertions += 1;
               console.log(`    × turn ${t.index}: ${a.message}`);
             }
           }
+        }
+        const turnsCompleted = r.turns.length;
+        const totalTurns = persona.scenarios.find((s) => s.id === r.scenarioId)
+          ?.turns.length;
+        console.log(
+          `    turns ran: ${turnsCompleted}${
+            totalTurns ? ` / ${totalTurns}` : ''
+          } | assertions: ${evaluatedAssertions - failedAssertions} pass, ${failedAssertions} fail`
+        );
+        if (r.error) {
+          console.log(`    error: ${r.error.split('\n')[0]}`);
+        }
+        if (r.status === 'HARNESS_ERROR') {
+          console.log(
+            `    note: HARNESS_ERROR halts the scenario; downstream assertions did not run.`
+          );
         }
       }
     }
