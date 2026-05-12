@@ -172,6 +172,25 @@ export function parseCapturedDataPointsFromResponse(
   return Object.keys(out).length > 0 ? out : null;
 }
 
+const NUMERIC_CAPTURE_KEYS = new Set([
+  'capital',
+  'incomeGoal',
+  'monthlyIncome',
+  'verifiedCapitalUsd'
+]);
+
+function capturedValueContainsAmount(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'string') {
+    return /\b\$?\s*\d+(?:[.,]\d+)?\s*[km]?\b/i.test(value.trim());
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if ('value' in record) return capturedValueContainsAmount(record.value);
+  }
+  return false;
+}
+
 /**
  * Merge incoming captures into the existing capturedDataPoints record.
  * Newer non-empty values overwrite older ones (operator's intent: the
@@ -190,7 +209,15 @@ export function mergeCapturedDataPoints(
   if (!incoming) return base;
   for (const [key, value] of Object.entries(incoming)) {
     if (typeof value !== 'string' || value.trim().length === 0) continue;
-    base[canonicalCapturedDataPointKey(key)] = value;
+    const canonicalKey = canonicalCapturedDataPointKey(key);
+    if (
+      NUMERIC_CAPTURE_KEYS.has(canonicalKey) &&
+      capturedValueContainsAmount(base[canonicalKey]) &&
+      !capturedValueContainsAmount(value)
+    ) {
+      continue;
+    }
+    base[canonicalKey] = value;
   }
   return base;
 }

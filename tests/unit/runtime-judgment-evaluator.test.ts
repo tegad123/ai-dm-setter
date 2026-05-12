@@ -278,6 +278,48 @@ describe('mergeCapturedDataPoints', () => {
     });
   });
 
+  it('bug-011-does-not-downgrade-numeric-income-goal-with-vague-runtime-capture', () => {
+    const existing = {
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step9',
+        extractionMethod: 'amount_after_step_9_prompt',
+        extractedAt: '2026-05-11T00:00:00.000Z',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      }
+    };
+    const incoming = {
+      income_goal: 'extra to help with bills'
+    };
+
+    assert.deepEqual(mergeCapturedDataPoints(existing, incoming), {
+      incomeGoal: existing.incomeGoal
+    });
+  });
+
+  it('bug-011-allows-newer-numeric-income-goal-to-replace-existing-amount', () => {
+    const existing = {
+      incomeGoal: {
+        value: 1000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step9',
+        extractionMethod: 'amount_after_step_9_prompt',
+        extractedAt: '2026-05-11T00:00:00.000Z',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      }
+    };
+    const incoming = {
+      income_goal: '$1500 a month'
+    };
+
+    assert.deepEqual(mergeCapturedDataPoints(existing, incoming), {
+      incomeGoal: '$1500 a month'
+    });
+  });
+
   it('returns a new object — does not mutate inputs', () => {
     const existing = { a: '1' };
     const incoming = { b: '2' };
