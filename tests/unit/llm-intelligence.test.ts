@@ -95,6 +95,70 @@ describe('pre-prompt script variable resolution', () => {
       ),
       'What would $1k mean for the family?'
     );
+    assert.equal(
+      applyResolvedScriptVariables(
+        'I can see why {{income_goal}} matters.',
+        resolutions
+      ),
+      'I can see why $1k matters.'
+    );
+  });
+
+  it('bug-001-resolves-canonical-variable-aliases-in-judge-fallback', async () => {
+    const resolutions = await resolveScriptVariablesForTexts(
+      ['But why is {{their stated goal}} so important to you though?'],
+      {
+        accountId: 'acct_test',
+        context: {
+          capturedDataPoints: {
+            incomeGoal: {
+              value: 1000,
+              confidence: 'HIGH',
+              sourceFieldName: 'incomeGoal'
+            }
+          }
+        },
+        extractor: async () => {
+          throw new Error('extractor should not run');
+        }
+      }
+    );
+
+    const violation = await detectJudgeBranchViolation({
+      latestLeadMessage: 'yes that makes sense',
+      generatedMessages: ['not the required script message'],
+      variableResolutionMap: resolutions,
+      classifier: async () => 'Default',
+      step: {
+        stepNumber: 16,
+        title: 'Call Proposal',
+        actions: [],
+        branches: [
+          {
+            branchLabel: 'Default',
+            conditionDescription: null,
+            actions: [
+              {
+                actionType: 'runtime_judgment',
+                content: 'Use the selected branch.'
+              },
+              {
+                actionType: 'send_message',
+                content:
+                  'Based on {{income_goal}}, it might make sense to set up a roadmap call.'
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    assert.equal(violation.blocked, true);
+    assert.equal(
+      violation.fallbackMessages[0],
+      'Based on $1k, it might make sense to set up a roadmap call.'
+    );
+    assert.equal(violation.fallbackMessages[0]?.includes('{{'), false);
   });
 
   it('bug-X-haiku-strict-parsing: treats NONE plus reasoning as null', () => {

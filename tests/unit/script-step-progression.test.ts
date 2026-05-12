@@ -116,6 +116,20 @@ describe('hasCapturedDataPoint', () => {
     assert.equal(hasCapturedDataPoint(points, 'workBackground'), true);
   });
 
+  it('bug-001-normalizes-camel-snake-captured-keys', () => {
+    assert.equal(
+      hasCapturedDataPoint({ incomeGoal: '$1k' }, 'income_goal'),
+      true
+    );
+    assert.equal(
+      hasCapturedDataPoint(
+        { beliefBreakDelivered: { value: 'complete' } },
+        'belief_break_delivered'
+      ),
+      true
+    );
+  });
+
   it('treats boolean flat captures correctly', () => {
     assert.equal(
       hasCapturedDataPoint({ buyInConfirmed: true }, 'buyInConfirmed'),
@@ -294,6 +308,23 @@ describe('checkCallProposalPrereqs', () => {
           completedAt: '2026-05-11T22:35:54.390Z'
         }
       ]
+    };
+
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('bug-001-call-prereqs-accept-camelcase-captures-with-durable-step-history', () => {
+    const points = {
+      workBackground: 'retail',
+      monthlyIncome: '2000',
+      replaceOrSupplement: 'supplement',
+      incomeGoal: '$1k',
+      deep_why: 'help with bills without stressing every month',
+      obstacle: 'revenge trading',
+      beliefBreakDelivered: 'complete',
+      buyInConfirmed: true,
+      branchHistory: [step9CompletedEvent()]
     };
 
     assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);

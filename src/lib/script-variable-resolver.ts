@@ -708,7 +708,11 @@ export async function resolveScriptVariablesForTexts(
       };
     }
 
+    const normalizedCanonical = normalizeTemplateKey(
+      canonicalTemplateVariableName(variableName)
+    );
     byNormalizedName.set(normalized, resolution);
+    byNormalizedName.set(normalizedCanonical, resolution);
     resolvedVariables.push(resolution);
   }
 
@@ -721,9 +725,12 @@ export function applyResolvedScriptVariables(
 ): string | null | undefined {
   if (!text || !resolutionMap) return text;
   return text.replace(/\{\{\s*([^{}]{1,160})\s*\}\}/g, (match, rawName) => {
-    const resolution = resolutionMap.byNormalizedName.get(
-      normalizeTemplateKey(String(rawName).trim())
-    );
+    const variableName = String(rawName).trim();
+    const resolution =
+      resolutionMap.byNormalizedName.get(normalizeTemplateKey(variableName)) ??
+      resolutionMap.byNormalizedName.get(
+        normalizeTemplateKey(canonicalTemplateVariableName(variableName))
+      );
     return resolution?.value ?? match;
   });
 }

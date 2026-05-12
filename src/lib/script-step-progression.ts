@@ -33,12 +33,32 @@
 // which pipeline wrote the value.
 // ---------------------------------------------------------------------------
 
+function normalizeCapturedDataPointKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function capturedDataPointRaw(
+  points: Record<string, unknown> | null | undefined,
+  key: string
+): unknown {
+  if (!points) return undefined;
+  if (Object.prototype.hasOwnProperty.call(points, key)) return points[key];
+
+  const normalizedKey = normalizeCapturedDataPointKey(key);
+  for (const [candidateKey, value] of Object.entries(points)) {
+    if (normalizeCapturedDataPointKey(candidateKey) === normalizedKey) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 export function hasCapturedDataPoint(
   points: Record<string, unknown> | null | undefined,
   key: string
 ): boolean {
-  if (!points) return false;
-  const raw = points[key];
+  const raw = capturedDataPointRaw(points, key);
   if (raw === null || raw === undefined) return false;
   if (typeof raw === 'string') return raw.trim().length > 0;
   if (typeof raw === 'number') return Number.isFinite(raw);
@@ -60,8 +80,7 @@ function capturedPointValue(
   points: Record<string, unknown> | null | undefined,
   key: string
 ): unknown {
-  if (!points) return null;
-  const raw = points[key];
+  const raw = capturedDataPointRaw(points, key);
   if (raw === null || raw === undefined) return null;
   if (typeof raw === 'object' && !Array.isArray(raw)) {
     const wrapped = raw as Record<string, unknown>;
@@ -74,8 +93,7 @@ function capturedPointRecord(
   points: Record<string, unknown> | null | undefined,
   key: string
 ): Record<string, unknown> | null {
-  if (!points) return null;
-  const raw = points[key];
+  const raw = capturedDataPointRaw(points, key);
   return raw && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : null;
@@ -116,6 +134,19 @@ function hasCapturedDataPointFromStep(params: {
 
     const sourceStepNumber = capturedPointSourceStepNumber(point);
     if (sourceStepNumber === params.stepNumber) return true;
+
+    // Durable branchHistory proves the expected step completed, but older
+    // capture writers sometimes stored flat camelCase values without source
+    // metadata. Accept those no-source values only when the durable ledger
+    // already pins this exact step as completed; explicit wrong-source values
+    // still fail so current-vs-target amount fields do not bleed together.
+    if (
+      hasBranchHistory &&
+      sourceStepNumber === null &&
+      stepCompletedByBranchHistory(params.points, params.stepNumber)
+    ) {
+      return true;
+    }
 
     // Legacy conversations/tests may have flat capturedDataPoints and no
     // durable branchHistory yet. Preserve that fallback only when the
