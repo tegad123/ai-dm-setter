@@ -33,31 +33,29 @@
 // which pipeline wrote the value.
 // ---------------------------------------------------------------------------
 
+import { equivalentCapturedDataPointKeys } from '@/lib/captured-data-keys';
+
 function normalizeCapturedDataPointKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
-
-const CAPTURED_DATA_POINT_KEY_ALIASES: Record<string, string[]> = {
-  income_goal: ['incomeGoal'],
-  belief_break_delivered: ['beliefBreakDelivered']
-};
 
 function capturedDataPointRaw(
   points: Record<string, unknown> | null | undefined,
   key: string
 ): unknown {
   if (!points) return undefined;
-  if (Object.prototype.hasOwnProperty.call(points, key)) return points[key];
 
-  for (const alias of CAPTURED_DATA_POINT_KEY_ALIASES[key] ?? []) {
-    if (Object.prototype.hasOwnProperty.call(points, alias)) {
-      return points[alias];
+  for (const candidate of equivalentCapturedDataPointKeys(key)) {
+    if (Object.prototype.hasOwnProperty.call(points, candidate)) {
+      return points[candidate];
     }
   }
 
-  const normalizedKey = normalizeCapturedDataPointKey(key);
+  const normalizedKeys = new Set(
+    equivalentCapturedDataPointKeys(key).map(normalizeCapturedDataPointKey)
+  );
   for (const [candidateKey, value] of Object.entries(points)) {
-    if (normalizeCapturedDataPointKey(candidateKey) === normalizedKey) {
+    if (normalizedKeys.has(normalizeCapturedDataPointKey(candidateKey))) {
       return value;
     }
   }

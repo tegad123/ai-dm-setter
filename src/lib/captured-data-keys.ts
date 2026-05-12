@@ -3,6 +3,29 @@
 // represent the same operator intent, not merely values that look similar.
 
 const CAPTURED_DATA_KEY_ALIASES: Record<string, string[]> = {
+  workBackground: [
+    'work_background',
+    'job',
+    'occupation',
+    'field',
+    'theirField',
+    'their_field',
+    'theirJob',
+    'their_job'
+  ],
+  monthlyIncome: ['monthly_income', 'incomeMonthly', 'income_monthly'],
+  replaceOrSupplement: ['replace_or_supplement'],
+  incomeGoal: [
+    'income_goal',
+    'desiredIncome',
+    'desired_income',
+    'tradingIncomeGoal',
+    'trading_income_goal',
+    'incomeTarget',
+    'income_target',
+    'targetIncome',
+    'target_income'
+  ],
   deep_why: [
     'deepWhy',
     'deep_emotional_why',
@@ -16,7 +39,11 @@ const CAPTURED_DATA_KEY_ALIASES: Record<string, string[]> = {
     'desiredOutcome',
     'desired_outcome',
     'why'
-  ]
+  ],
+  beliefBreakDelivered: ['belief_break_delivered'],
+  buyInConfirmed: ['buy_in_confirmed'],
+  callInterestConfirmed: ['call_interest_confirmed'],
+  callProposalAccepted: ['call_proposal_accepted']
 };
 
 function normalizeCapturedDataKey(key: string): string {

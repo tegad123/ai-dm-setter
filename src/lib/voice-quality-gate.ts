@@ -19,6 +19,7 @@ import {
   isRuntimePlaceholderOnly,
   maxQuestionSimilarityToScript
 } from '@/lib/script-step-progression';
+import { equivalentCapturedDataPointKeys } from '@/lib/captured-data-keys';
 import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
 
 export interface QualityResult {
@@ -1614,7 +1615,27 @@ function capturedDataPointHasValue(
   key: string
 ): boolean {
   if (!points || typeof points !== 'object') return false;
-  const point = points[key];
+  let point: unknown;
+  for (const candidate of equivalentCapturedDataPointKeys(key)) {
+    if (Object.prototype.hasOwnProperty.call(points, candidate)) {
+      point = points[candidate];
+      break;
+    }
+  }
+  if (point === undefined) {
+    const normalizedCandidates = new Set(
+      equivalentCapturedDataPointKeys(key).map((candidate) =>
+        candidate.toLowerCase().replace(/[^a-z0-9]/g, '')
+      )
+    );
+    for (const [candidate, value] of Object.entries(points)) {
+      const normalized = candidate.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normalizedCandidates.has(normalized)) {
+        point = value;
+        break;
+      }
+    }
+  }
   if (point === null || point === undefined) return false;
 
   if (typeof point === 'object' && 'value' in point) {

@@ -142,9 +142,20 @@ describe('hasCapturedDataPoint', () => {
       true
     );
     assert.equal(
+      hasCapturedDataPoint({ income_goal: '$1k' }, 'incomeGoal'),
+      true
+    );
+    assert.equal(
       hasCapturedDataPoint(
         { beliefBreakDelivered: { value: 'complete' } },
         'belief_break_delivered'
+      ),
+      true
+    );
+    assert.equal(
+      hasCapturedDataPoint(
+        { belief_break_delivered: { value: 'complete' } },
+        'beliefBreakDelivered'
       ),
       true
     );
@@ -404,6 +415,30 @@ describe('checkCallProposalPrereqs', () => {
 
     assert.equal(hasCapturedDataPoint(points, 'income_goal'), true);
     assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    assert.deepEqual(checkCallProposalPrereqs(points), []);
+  });
+
+  it('bug-006-call-prereqs-use-unified-captured-key-normalization', () => {
+    const points = {
+      work_background: 'retail',
+      monthly_income: '2000',
+      replace_or_supplement: 'supplement',
+      incomeGoal: {
+        value: '$1k',
+        confidence: 'HIGH',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      deepWhy: 'help with bills without stressing every month',
+      earlyObstacle: 'revenge trading',
+      belief_break_delivered: 'complete',
+      buy_in_confirmed: true,
+      branchHistory: [step9CompletedEvent(), step13CompletedEvent()]
+    };
+
+    assert.equal(hasCapturedDataPoint(points, 'workBackground'), true);
+    assert.equal(hasCapturedDataPoint(points, 'income_goal'), true);
+    assert.equal(hasCapturedDataPoint(points, 'beliefBreakDelivered'), true);
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
