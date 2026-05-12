@@ -26,6 +26,15 @@ This harness is read-only with respect to production source.
 
 ### bug-001 — persona-b-capital-disqualified / call-proposal stage — prereq gate uses snake_case keys but script captures camelCase; AI ships unresolved `{{...}}` template literals on fallback
 
+**Status: PARTIAL FIX (2026-05-12).** Codex shipped 8c6ccc4 + eaaf17a
+on `main` adding the `beliefBreakDelivered → belief_break_delivered`
+mapping and template-variable resolution in the self-recovery
+fallback. Re-running the harness with the fix confirms
+`belief_break_delivered` is no longer reported missing. However the
+companion mapping for `incomeGoal → income_goal` was not added, so
+the same deadlock recurs at Step 16 with one prereq still missing —
+tracked separately as **bug-001b** below.
+
 - Discovered: 2026-05-12
 - Persona file: [tests/persona-harness/personas/persona-b-capital-disqualified.persona.ts](personas/persona-b-capital-disqualified.persona.ts)
 - Discovered at: turn 13 (Step 16 — Call Proposal)
@@ -151,3 +160,83 @@ This is not a harness bug. The harness is doing its job: it
 exercised the real production pipeline end-to-end against the real
 persona + script + training data, and surfaced a deadlock that
 would have shipped to leads.
+
+### bug-001b — incomeGoal → income_goal mapping missing (companion to bug-001)
+
+**Severity:** P0 — blocks all Persona B conversations at Step 16
+(same deadlock symptom as bug-001).
+
+**Discovered:** Persona B harness re-run after bug-001 partial fix,
+2026-05-12.
+
+**Status:** Awaiting fix on `main` branch.
+
+#### Symptoms
+
+After the bug-001 fix shipped (commits 8c6ccc4 + eaaf17a on `main`),
+re-running the harness produces a single-prereq variant of the same
+deadlock:
+
+```
+[ai-engine] Voice quality FAIL attempt 1/3: {
+  hardFails: [
+    "[bubble=1] call_proposal_prereqs_missing:
+     missing=step 9 (income_goal).
+     Resume the script from step 9 — lead's monthly income goal
+     from trading. Do NOT propose a call until every prerequisite
+     is captured."
+  ]
+}
+```
+
+And from the same turn's `script-debug current step selection`:
+
+```
+capturedKeys: [
+  'obstacle',
+  'incomeGoal',          ← IS captured, camelCase
+  ...
+  'beliefBreakDelivered' ← also camelCase; now recognized by 001 fix
+]
+```
+
+`incomeGoal` is present in `capturedDataPoints` but the call-proposal
+prereq check still looks for `income_goal`. After 3 retries the AI
+escalates to human and the conversation deadlocks identically to
+pre-fix bug-001.
+
+#### Fix scope
+
+Same normalization Codex added for `beliefBreakDelivered`. Add the
+`incomeGoal → income_goal` entry to whichever map/normalizer was
+introduced in commit 8c6ccc4 (`src/lib/script-step-progression.ts`).
+Likely a single-line change. While there, audit the rest of
+`capturedKeys` for any other camelCase keys the prereq check
+references in snake_case — proactive coverage would prevent
+bug-001c.
+
+#### Files likely involved
+
+- `src/lib/script-step-progression.ts` — where the bug-001 fix
+  introduced the camelCase → snake_case map for captured-key prereq
+  resolution. Add the `incomeGoal` entry here.
+- `src/lib/voice-quality-gate.ts` — `call_proposal_prereqs_missing`
+  rule that's still failing.
+
+#### Reproduction
+
+```bash
+cd ai-dm-setter
+npm run test:personas
+```
+
+Watch turn 13 (Step 16 — Call Proposal). Expected: 3 retries,
+`call_proposal_prereqs_missing: missing=step 9 (income_goal)`,
+`HARNESS_ERROR`, scenario halts.
+
+#### Re-evaluate
+
+When the second-half fix lands, the Step 16 deadlock should resolve
+fully and turns 14–20 (capital question, SLM downsell, `LINK_SENT
+whop.com/checkout`, `$497`, `NO_FABRICATED_URL`) will fire for the
+first time, producing real signal on the SLM downsell path.

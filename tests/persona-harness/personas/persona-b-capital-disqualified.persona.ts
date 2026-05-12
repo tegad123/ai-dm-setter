@@ -56,7 +56,7 @@ export const persona: PersonaScenario = {
           role: 'assertions',
           expect: [
             { type: 'STEP_IS', value: 3 },
-            { type: 'CAPTURED_DATA_HAS', field: 'tradingTenure' },
+            { type: 'CAPTURED_DATA_HAS', field: 'tradingExperienceDuration' },
             { type: 'NO_QUALITY_GATE_FAILURE' }
           ]
         },
@@ -76,7 +76,7 @@ export const persona: PersonaScenario = {
               step: 4,
               value: 'Obstacle given — detailed and emotional'
             },
-            { type: 'CAPTURED_DATA_HAS', field: 'early_obstacle' }
+            { type: 'CAPTURED_DATA_HAS', field: 'obstacle' }
           ]
         },
 
@@ -167,7 +167,7 @@ export const persona: PersonaScenario = {
           role: 'assertions',
           expect: [
             { type: 'STEP_IS', value: 12 },
-            { type: 'CAPTURED_DATA_HAS', field: 'deepWhy' }
+            { type: 'CAPTURED_DATA_HAS', field: 'deep_emotional_why' }
           ]
         },
 
