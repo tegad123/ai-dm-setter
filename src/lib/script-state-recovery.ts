@@ -1155,7 +1155,8 @@ const CALL_PROPOSAL_MESSAGE_PATTERNS: RegExp[] = [
   /\b(quick|15[\s-]?min(ute)?)\s+(call|chat|convo)\b/i,
   /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
   /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
-  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
+  /\b(point\s+you\s+in\s+the\s+right\s+direction|break\s+down\s+a\s+roadmap|working\s+together\s+looks\s+like|would\s+that\s+help)\b/i
 ];
 
 function isCallProposalStep(step: ScriptStepWithRecovery): boolean {
@@ -1275,6 +1276,7 @@ function stepHasHistoryCompletionSignal(
   step: ScriptStepWithRecovery,
   points: CapturedDataPoints
 ): boolean {
+  if (isCallProposalStep(step)) return true;
   if (step.canonicalQuestion?.trim()) return true;
 
   const selectedBranchLabel = selectedBranchLabelForStep(
@@ -1552,6 +1554,17 @@ function stepCompletionFromHistory(
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
     if (hasRuntimeJudgmentAfterWait(actions)) {
+      const callProposalCompletion = callProposalCompletionFromHistory({
+        step,
+        history: sorted,
+        afterTimeMs,
+        selectedBranchLabel,
+        selectedSuggestionId,
+        historyMessagesWithSelectedSuggestionId
+      });
+      if (callProposalCompletion) {
+        return callProposalCompletion;
+      }
       lastReason =
         'wait_followed_by_runtime_judgment_requires_reclassification';
       continue;
