@@ -1119,7 +1119,9 @@ export async function selectJudgeBranchForLead(
         confidence: tokenMatch.confidence,
         selectedLabel: tokenMatch.branchLabel ?? null,
         willAttemptLLM:
-          tokenMatch.confidence === 'none' || tokenMatch.confidence === 'low'
+          tokenMatch.confidence === 'none' ||
+          tokenMatch.confidence === 'low' ||
+          tokenMatch.confidence === 'medium'
       });
     } catch (err) {
       console.error('[branch-classifier] TOKEN SCORE ERROR:', {
@@ -1141,7 +1143,7 @@ export async function selectJudgeBranchForLead(
       !step ||
       !hasRuntimeJudgmentAction(step) ||
       !leadMessage?.trim() ||
-      (tokenMatch.confidence !== 'none' && tokenMatch.confidence !== 'low')
+      tokenMatch.confidence === 'high'
     ) {
       return withJudgeClassifierTrace(tokenMatch, baseTrace);
     }
