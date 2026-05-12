@@ -998,7 +998,9 @@ async function classifyJudgeBranchWithHaiku(params: {
   }
 
   const branchLines = step.branches
-    .map((branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`)
+    .map(
+      (branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`
+    )
     .join('\n');
   const prompt = `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
@@ -1324,7 +1326,8 @@ function getRequiredMessagesFromActions(
       const content =
         applyResolvedScriptVariables(
           action.content?.trim() ?? '',
-          variableResolutionMap
+          variableResolutionMap,
+          { includeFallback: false }
         )?.trim() ?? '';
       const isPlaceholder = isRuntimePlaceholderOnly(content);
       return {
@@ -1357,7 +1360,9 @@ function getScriptedQuestionsFromActions(
     )
     .map((action) =>
       (
-        applyResolvedScriptVariables(action.content, variableResolutionMap) ??
+        applyResolvedScriptVariables(action.content, variableResolutionMap, {
+          includeFallback: false
+        }) ??
         action.content ??
         ''
       ).trim()
@@ -1381,7 +1386,9 @@ function resolveMessageContentsForGate(
   return contents
     .map((content) =>
       (
-        applyResolvedScriptVariables(content, variableResolutionMap) ?? content
+        applyResolvedScriptVariables(content, variableResolutionMap, {
+          includeFallback: false
+        }) ?? content
       ).trim()
     )
     .filter((content) => content.length > 0);

@@ -146,14 +146,15 @@ function hasCapturedDataPointFromStep(params: {
 
     // Recovery may first persist a numeric target-income answer while the
     // cursor is already on the follow-up/deep-why step. If durable history
-    // proves the target-income step was reached, trust the numeric value
-    // even when its source metadata points one or more steps later.
+    // proves the target-income step was reached or the conversation has
+    // already moved beyond it, trust the numeric value even when its source
+    // metadata points one or more steps later.
     if (
       params.requireNumeric &&
       hasBranchHistory &&
       sourceStepNumber !== null &&
       sourceStepNumber > params.stepNumber &&
-      stepReachedByBranchHistory(params.points, params.stepNumber)
+      stepReachedOrPassedByBranchHistory(params.points, params.stepNumber)
     ) {
       return true;
     }
@@ -167,7 +168,7 @@ function hasCapturedDataPointFromStep(params: {
     if (
       hasBranchHistory &&
       sourceStepNumber === null &&
-      stepReachedByBranchHistory(params.points, params.stepNumber)
+      stepReachedOrPassedByBranchHistory(params.points, params.stepNumber)
     ) {
       return true;
     }
@@ -264,6 +265,25 @@ function stepReachedByBranchHistory(
         ? event.stepNumber
         : Number(event.stepNumber);
     return eventStepNumber === stepNumber;
+  });
+}
+
+function stepReachedOrPassedByBranchHistory(
+  points: Record<string, unknown> | null | undefined,
+  stepNumber: number
+): boolean {
+  return branchHistoryEvents(points).some((event) => {
+    if (
+      event.eventType !== 'branch_selected' &&
+      event.eventType !== 'step_completed'
+    ) {
+      return false;
+    }
+    const eventStepNumber =
+      typeof event.stepNumber === 'number'
+        ? event.stepNumber
+        : Number(event.stepNumber);
+    return Number.isFinite(eventStepNumber) && eventStepNumber >= stepNumber;
   });
 }
 
