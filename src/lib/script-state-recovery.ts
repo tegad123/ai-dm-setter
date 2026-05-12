@@ -1227,6 +1227,7 @@ function stepHasHistoryCompletionSignal(
 
   return stepCompletionActionPaths(step, selectedBranchLabel).some(
     (actions) => {
+      if (hasRuntimeJudgmentAfterWait(actions)) return false;
       const { asks, messages, waits } = waitableActionsForPath(actions);
       return asks.length > 0 || (messages.length > 0 && waits.length > 0);
     }
@@ -1284,6 +1285,23 @@ function hasWaitAction(actions: StepCompletionAction[]): boolean {
       action.actionType === 'wait_for_response' ||
       action.actionType === 'wait_duration'
   );
+}
+
+function hasRuntimeJudgmentAfterWait(actions: StepCompletionAction[]): boolean {
+  let sawWait = false;
+  for (const action of actions) {
+    if (
+      action.actionType === 'wait_for_response' ||
+      action.actionType === 'wait_duration'
+    ) {
+      sawWait = true;
+      continue;
+    }
+    if (sawWait && action.actionType === 'runtime_judgment') {
+      return true;
+    }
+  }
+  return false;
 }
 
 function pathIsAutoCompletableRoutingOnly(
@@ -1421,6 +1439,11 @@ function stepCompletionFromHistory(
       : 'no_completion_match';
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
+    if (hasRuntimeJudgmentAfterWait(actions)) {
+      lastReason = 'wait_followed_by_runtime_judgment_requires_reclassification';
+      continue;
+    }
+
     const { asks, messages, waits } = waitableActionsForPath(actions);
 
     for (const action of [...asks, ...canonicalCandidates]) {

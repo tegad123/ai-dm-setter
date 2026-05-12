@@ -1126,6 +1126,54 @@ describe('routing-only branch completion', () => {
     assert.equal(withReply.step?.stepNumber, 2);
   });
 
+  it('bug-004-holds-wait-then-judge-branch-for-reclassification', () => {
+    const step1 = branchStep(1, 'Buy-In Confirmation', 'Lukewarm buy-in', [
+      {
+        actionType: 'send_message',
+        content:
+          "bruh 😂 brother I'm genuinely trying to help you out... So what's really on your mind?"
+      },
+      { actionType: 'wait_for_response', content: null },
+      {
+        actionType: 'runtime_judgment',
+        content:
+          'If they warm up and clearly say they are ready, proceed to STEP 2. Otherwise stay here.'
+      }
+    ]);
+    const step2 = askStep(2, 'Urgency', 'Is now the time to overcome this?');
+    const script = { id: 'wait_then_judge', steps: [step1, step2] } as any;
+    const points = branchSelectedPoints(
+      1,
+      'Buy-In Confirmation',
+      'Lukewarm buy-in'
+    );
+
+    const stage = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        sender: 'AI',
+        content:
+          "bruh 😂 brother I'm genuinely trying to help you out... So what's really on your mind?",
+        timestamp: '2026-05-11T00:00:30.000Z'
+      },
+      {
+        id: 'lead_reply',
+        sender: 'LEAD',
+        content: "yeah man im ready, i'm tired of being stuck",
+        timestamp: '2026-05-11T00:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 1);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) => event.eventType === 'step_completed' && event.stepNumber === 1
+      ),
+      false
+    );
+  });
+
   it('does not auto-complete JUDGE plus ASK plus WAIT before the lead replies', () => {
     const step1 = branchStep(1, 'Clarifying Question', 'Needs answer', [
       { actionType: 'runtime_judgment', content: 'Ask the next question.' },
