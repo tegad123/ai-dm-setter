@@ -694,6 +694,195 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 7);
   });
 
+  it('bug-009-regression-step-4-bridge-captures-job-context-and-skips-to-income', () => {
+    const script = {
+      id: 'persona_b_step4_bridge_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 4,
+          title: 'Market Response Routing',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Obstacle given — detailed and emotional',
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content:
+                    'Store as {{obstacle}}. Move to "give me a bit more context on your situation" and advance to Step 5.'
+                },
+                {
+                  actionType: 'send_message',
+                  content:
+                    '{{acknowledge specifically using their own words, then ask for context}}'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            }
+          ]
+        },
+        askStep(
+          5,
+          'Current Situation — Job',
+          'What do you do for work? Just so I get a better understanding of your current situation.'
+        ),
+        askStep(6, 'Job Acknowledgment', 'How long you been doing that?'),
+        askStep(
+          7,
+          'Monthly Income',
+          'And as of right now, how much is your job bringing in on a monthly basis?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step4',
+        sender: 'AI',
+        content:
+          "bro that's heavy, revenge trading and blowing small accounts is brutal. give me a bit more context on your situation though",
+        timestamp: new Date('2026-05-11T00:00:00Z'),
+        suggestionId: 's_step4'
+      },
+      {
+        id: 'lead_step4',
+        sender: 'LEAD',
+        content: 'i work in retail, been doing it about 3 years',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      existing: {
+        obstacle: {
+          value: 'revenge trading',
+          confidence: 'HIGH',
+          extractedFromMessageId: 'lead_obstacle',
+          extractionMethod: 'runtime_judgment',
+          extractedAt: '2026-05-11T00:00:00.000Z'
+        },
+        branchHistory: [
+          {
+            eventType: 'branch_selected',
+            stepNumber: 4,
+            stepTitle: 'Market Response Routing',
+            selectedBranchLabel: 'Obstacle given — detailed and emotional',
+            suggestionId: 's_step4',
+            sentAt: '2026-05-11T00:00:00.000Z'
+          }
+        ]
+      },
+      history,
+      script
+    });
+    const stage = computeSystemStage(script, points as any, history, {
+      previousCurrentScriptStep: 4,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal((points.workBackground as any)?.value, 'retail');
+    assert.equal((points.workDuration as any)?.value, 'about 3 years');
+    assert.equal(stage.step?.stepNumber, 7);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 5 &&
+          event.stepCompletionReason === 'volunteered_data_auto_complete'
+      ),
+      true
+    );
+  });
+
+  it('bug-009-regression-step-16-call-proposal-completes-after-acceptance', () => {
+    const script = {
+      id: 'persona_b_call_proposal_sequence',
+      steps: [
+        {
+          ...baseStep,
+          stepNumber: 16,
+          title: 'Call Proposal',
+          actions: [
+            {
+              actionType: 'send_message',
+              content:
+                "I mean bro, based off what it seems, the main struggle you're facing is {{obstacle}}, but like I said your commitment is truly there I can tell."
+            },
+            { actionType: 'wait_duration', content: '2 seconds' },
+            {
+              actionType: 'send_message',
+              content:
+                'With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?'
+            },
+            { actionType: 'wait_for_response', content: null }
+          ]
+        },
+        askStep(
+          17,
+          'Call Proposal Response',
+          'How much liquid capital would you say you have right now that you could put toward your trading and your education?'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step16_a',
+        sender: 'AI',
+        content:
+          "I mean bro, based off what it seems, the main struggle you're facing is emotional control, but like I said your commitment is truly there I can tell.",
+        timestamp: new Date('2026-05-11T00:00:00Z'),
+        suggestionId: 's_step16'
+      },
+      {
+        id: 'ai_step16_b',
+        sender: 'AI',
+        content:
+          'With that said bro, I definitely think I can point you in the right direction. If it makes sense we can set up a time with my right hand guy Anthony to break down a roadmap for you to reach your goals. We can talk about what working together looks like from there but at least I can give you the fundamental steps you can put in place to start making easier profits right away. Would that help?',
+        timestamp: new Date('2026-05-11T00:00:02Z'),
+        suggestionId: 's_step16'
+      },
+      {
+        id: 'lead_step16',
+        sender: 'LEAD',
+        content: 'yeah that would be huge, lets do it',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      obstacle: {
+        value: 'emotional control',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_obstacle',
+        extractionMethod: 'runtime_judgment',
+        extractedAt: '2026-05-11T00:00:00.000Z'
+      },
+      branchHistory: [
+        {
+          eventType: 'branch_selected',
+          stepNumber: 16,
+          stepTitle: 'Call Proposal',
+          selectedBranchLabel: 'Default',
+          suggestionId: 's_step16',
+          sentAt: '2026-05-11T00:00:00.000Z'
+        }
+      ]
+    };
+    const stage = computeSystemStage(script, points as any, history, {
+      previousCurrentScriptStep: 16,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 17);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' &&
+          event.stepNumber === 16 &&
+          event.stepCompletionReason === 'completed_by_message_wait_reply'
+      ),
+      true
+    );
+  });
+
   it('bug-008-regression-does-not-auto-complete-multi-branch-routing-step-with-silent-branch', () => {
     const routingScript = {
       id: 'persona_b_market_routing_sequence',
