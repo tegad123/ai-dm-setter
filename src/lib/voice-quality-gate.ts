@@ -1712,7 +1712,9 @@ export function scoreVoiceQuality(
   // 2026-05-08). The regen directive in ai-engine references the
   // first missing prereq so the model resumes from the right step.
   if (detectCallProposalAttempt(reply)) {
-    const missing = checkCallProposalPrereqs(options?.capturedDataPoints);
+    const missing = checkCallProposalPrereqs(options?.capturedDataPoints, {
+      incomeGoalAsked: options?.incomeGoalAsked === true
+    });
     if (missing.length > 0) {
       const firstMissing = missing[0];
       const summary = missing
@@ -3667,7 +3669,7 @@ export function containsIncomeGoalQuestion(text: string): boolean {
   const patterns: RegExp[] = [
     /\b(income|money|earnings?|revenue)\s+goal\b/i,
     /\bgoal\b.{0,40}\b(make|earn|income|month|monthly|week|weekly)\b/i,
-    /\bhow much (do you|are you trying to|would you like to|you wanna|you want to)\s+(make|earn)\b/i,
+    /\bhow much (money\s+)?(do you|are you trying to|would you like to|you wanna|you want to)\s+(make|earn)\b/i,
     /\bwhat('s| is)\s+(your\s+)?(income|earning|monthly|weekly|money)\s+goal\b/i,
     /\bwhat('s| is)\s+the\s+number\s+you('re| are)?\s+(trying|looking|wanting)\s+to\s+(hit|make|earn)\b/i,
     /\bhow much (per|a)\s+(month|week)\b/i,

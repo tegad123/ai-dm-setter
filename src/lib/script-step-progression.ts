@@ -131,6 +131,7 @@ function hasCapturedDataPointFromStep(params: {
   keys: string[];
   stepNumber: number;
   requireNumeric?: boolean;
+  expectedStepAsked?: boolean;
 }): boolean {
   const hasBranchHistory = branchHistoryEvents(params.points).length > 0;
   for (const key of params.keys) {
@@ -159,6 +160,19 @@ function hasCapturedDataPointFromStep(params: {
       return true;
     }
 
+    // In live pipeline runs, branchHistory/source metadata can lag behind
+    // the transcript even though the scripted ask has actually fired. If
+    // the AI history proves the expected ask happened, a numeric value in
+    // the right captured slot is sufficient unless it is explicitly sourced
+    // before the expected step.
+    if (
+      params.requireNumeric &&
+      params.expectedStepAsked &&
+      (sourceStepNumber === null || sourceStepNumber >= params.stepNumber)
+    ) {
+      return true;
+    }
+
     // Durable branchHistory proves the expected step was reached, but older
     // capture writers sometimes stored flat camelCase values without source
     // metadata. Accept those no-source values only when the durable ledger
@@ -183,13 +197,15 @@ function hasCapturedDataPointFromStep(params: {
 
 export function incomeGoalSatisfiedByExpectedStep(
   points: Record<string, unknown> | null | undefined,
-  stepNumber = 9
+  stepNumber = 9,
+  evidence?: { expectedStepAsked?: boolean }
 ): boolean {
   return hasCapturedDataPointFromStep({
     points,
     keys: ['incomeGoal', 'income_goal'],
     stepNumber,
-    requireNumeric: true
+    requireNumeric: true,
+    expectedStepAsked: evidence?.expectedStepAsked === true
   });
 }
 
@@ -320,7 +336,8 @@ function buyInConfirmedByBranchHistory(
 
 function prereqSatisfiedByCapturedState(
   points: Record<string, unknown> | null | undefined,
-  prereq: Pick<CallProposalPrereq, 'id' | 'stepNumber' | 'acceptableKeys'>
+  prereq: Pick<CallProposalPrereq, 'id' | 'stepNumber' | 'acceptableKeys'>,
+  evidence?: { incomeGoalAsked?: boolean }
 ): boolean {
   if (
     prereq.id === 'buy_in_confirmed' &&
@@ -337,7 +354,9 @@ function prereqSatisfiedByCapturedState(
   }
 
   if (prereq.id === 'income_goal') {
-    return incomeGoalSatisfiedByExpectedStep(points, prereq.stepNumber);
+    return incomeGoalSatisfiedByExpectedStep(points, prereq.stepNumber, {
+      expectedStepAsked: evidence?.incomeGoalAsked === true
+    });
   }
 
   if (
@@ -449,10 +468,11 @@ export const CALL_PROPOSAL_PREREQS: CallProposalPrereq[] = [
  * proposal is allowed.
  */
 export function checkCallProposalPrereqs(
-  points: Record<string, unknown> | null | undefined
+  points: Record<string, unknown> | null | undefined,
+  evidence?: { incomeGoalAsked?: boolean }
 ): CallProposalPrereq[] {
   return CALL_PROPOSAL_PREREQS.filter(
-    (prereq) => !prereqSatisfiedByCapturedState(points, prereq)
+    (prereq) => !prereqSatisfiedByCapturedState(points, prereq, evidence)
   );
 }
 
