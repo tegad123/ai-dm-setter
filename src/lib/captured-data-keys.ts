@@ -14,6 +14,30 @@ const CAPTURED_DATA_KEY_ALIASES: Record<string, string[]> = {
     'their_job'
   ],
   monthlyIncome: ['monthly_income', 'incomeMonthly', 'income_monthly'],
+  workDuration: [
+    'work_duration',
+    'jobTenure',
+    'job_tenure',
+    'workTenure',
+    'work_tenure',
+    'jobDuration',
+    'job_duration',
+    'workExperienceDuration',
+    'work_experience_duration',
+    'tenureInYears',
+    'tenure_in_years'
+  ],
+  tradingExperienceDuration: [
+    'trading_experience_duration',
+    'tradingExperience',
+    'trading_experience',
+    'marketExperience',
+    'market_experience',
+    'marketsExperience',
+    'markets_experience',
+    'experienceDuration',
+    'experience_duration'
+  ],
   replaceOrSupplement: ['replace_or_supplement'],
   incomeGoal: [
     'income_goal',

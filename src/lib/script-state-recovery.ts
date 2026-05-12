@@ -2634,7 +2634,14 @@ const DATA_REQUIREMENT_ALIASES: Record<string, string[]> = {
     'work_duration',
     'jobTenure',
     'job_tenure',
-    'workExperienceDuration'
+    'workTenure',
+    'work_tenure',
+    'jobDuration',
+    'job_duration',
+    'workExperienceDuration',
+    'work_experience_duration',
+    'tenureInYears',
+    'tenure_in_years'
   ],
   monthlyIncome: ['monthly_income', 'jobIncome', 'currentIncome'],
   replaceOrSupplement: [
@@ -3114,8 +3121,12 @@ function recentPointForRequirement(params: {
   const keys = [params.requirement.key, ...params.requirement.aliases];
   const matches: RecentCapturedDataPoint[] = [];
 
+  const seenKeys = new Set<string>();
   for (const key of keys) {
-    const point = params.points[key];
+    const normalizedKey = canonicalCapturedDataPointKey(key);
+    if (seenKeys.has(normalizedKey)) continue;
+    seenKeys.add(normalizedKey);
+    const point = capturedPointForKey(params.points, key);
     if (
       !isCapturedDataPoint(point) ||
       point.confidence !== HIGH_CONFIDENCE ||
