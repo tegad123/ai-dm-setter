@@ -629,8 +629,7 @@ function scoreJudgeBranch(
   const leadTokens = new Set(tokenizeForJudgeMatch(leadMessage));
   if (leadTokens.size === 0) return 0;
 
-  const branchText =
-    `${branch.branchLabel} ${branch.conditionDescription || ''}`.toLowerCase();
+  const branchText = judgeBranchRoutingText(branch).toLowerCase();
   const branchTokens = tokenizeForJudgeMatch(branchText);
   let score = 0;
 
@@ -670,6 +669,25 @@ function scoreJudgeBranch(
   }
 
   return score;
+}
+
+function judgeBranchRoutingText(branch: JudgeBranchLike): string {
+  const runtimeJudgmentText = branch.actions
+    .filter(
+      (action) =>
+        action.actionType === 'runtime_judgment' &&
+        typeof action.content === 'string' &&
+        action.content.trim().length > 0
+    )
+    .map((action) => String(action.content).trim());
+
+  return [
+    branch.branchLabel,
+    branch.conditionDescription || '',
+    ...runtimeJudgmentText
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function scoreJudgeBranchesForLead(
@@ -980,10 +998,7 @@ async function classifyJudgeBranchWithHaiku(params: {
   }
 
   const branchLines = step.branches
-    .map(
-      (branch) =>
-        `- ${branch.branchLabel}: ${branch.conditionDescription || ''}`
-    )
+    .map((branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`)
     .join('\n');
   const prompt = `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
@@ -992,6 +1007,8 @@ Lead message: ${leadMessage}
 
 Branches:
 ${branchLines}
+
+Use the operator's runtime judgment criteria in the branch text as the source of truth. When branches distinguish clear conviction from lukewarm interest, emphatic language, specific stakes, and strong personal importance should match the clear/committed branch; hedging language such as "maybe", "could", "possibly", or "I guess" should match the lukewarm/uncertain branch.
 
 Respond with ONLY the exact branchLabel of the best match. No explanation. No punctuation. Just the label.`;
 

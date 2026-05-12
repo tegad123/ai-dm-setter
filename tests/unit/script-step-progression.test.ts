@@ -1515,6 +1515,62 @@ describe('bug-34-llm-branch-classifier', () => {
     assert.ok(match.confidence === 'medium' || match.confidence === 'high');
   });
 
+  it('bug-005b routes clear conviction language using branch runtime judgment criteria', async () => {
+    let calls = 0;
+    const match = await selectJudgeBranchForLead(
+      {
+        stepNumber: 14,
+        title: 'Buy-In Confirmation',
+        actions: [{ actionType: 'runtime_judgment', content: null }],
+        branches: [
+          {
+            branchLabel: 'Clear buy-in',
+            conditionDescription: 'lead has real conviction and buy-in',
+            actions: [
+              {
+                actionType: 'runtime_judgment',
+                content:
+                  'Clear buy-in = "yes bro that is exactly what I need" / "100%" / "that would change everything" / "man that is literally my problem" / any affirmative with real energy behind it.'
+              },
+              {
+                actionType: 'ask_question',
+                content:
+                  'you ready to do what it takes to actually fix this?'
+              }
+            ]
+          },
+          {
+            branchLabel: 'Lukewarm buy-in',
+            conditionDescription: 'lead shows weak or uncertain interest',
+            actions: [
+              {
+                actionType: 'runtime_judgment',
+                content:
+                  'Lukewarm = "yeah that could work" / "maybe" / "possibly" / "yeah that would help I guess" / anything without conviction.'
+              },
+              {
+                actionType: 'send_message',
+                content: "what's really on your mind?"
+              },
+              { actionType: 'wait_for_response', content: null }
+            ]
+          }
+        ]
+      },
+      'honestly bro that would change everything for me and my family',
+      {
+        classifier: async () => {
+          calls++;
+          return 'Lukewarm buy-in';
+        }
+      }
+    );
+
+    assert.equal(calls, 0);
+    assert.equal(match.branchLabel, 'Clear buy-in');
+    assert.ok(match.confidence === 'medium' || match.confidence === 'high');
+  });
+
   it('ignores placeholder-only [MSG] actions when checking judge branch violations', async () => {
     const step = {
       stepNumber: 6,
