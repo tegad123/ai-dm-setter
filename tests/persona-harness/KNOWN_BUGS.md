@@ -240,3 +240,269 @@ When the second-half fix lands, the Step 16 deadlock should resolve
 fully and turns 14–20 (capital question, SLM downsell, `LINK_SENT
 whop.com/checkout`, `$497`, `NO_FABRICATED_URL`) will fire for the
 first time, producing real signal on the SLM downsell path.
+
+### bug-002 — Step 10 verbatim drift: `$1k` substitution missing OR opening verbatim phrase not rendered
+
+**Severity:** P1 — Persona B turn 14 produces a Step 10 reply that
+neither preserves the required opener verbatim nor carries the
+substituted income-goal variable. Lead-facing voice survives but
+operator-authored copy is silently dropped.
+
+**Discovered:** 2026-05-12, persona-b harness rebased onto main
+(bug-001 partial fix applied).
+
+**Status:** Awaiting fix on `main`.
+
+#### Symptoms
+
+Step 10 (Desired Outcome — Deep Why) has a required verbatim
+opener and a templated `$1k` ASK pulled from the lead's captured
+`incomeGoal`:
+
+```
+[MSG] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder):
+  "I respect that bro, I truly do. I hear so many people talk
+   about cars and materialistic stuff so it's refreshing to hear
+   this haha."
+[ASK] REQUIRED QUESTION (ask immediately after the preceding [MSG]):
+  "But why is $1k so important to you though? Asking since the
+   more I know the better I'll be able to help."
+```
+
+Both harness assertions failed on turn 14:
+
+```
+× turn 14: "I respect that bro" missing from reply
+× turn 14: "$1k" missing from reply
+```
+
+This is despite `capturedKeys` already containing `incomeGoal:1000`
+at turn 7, and the serializer log on turn 7 (Step 10 entry) showing
+the script editor pre-substituted `$1k` into the canonical message
+text. So the script-side substitution worked, but the reply that
+shipped didn't match either the substituted ASK or the verbatim
+[MSG] opener.
+
+The voice-quality-gate logs for turn 14 show `aiGen=8.0s` with
+`Stage override applied ... -> Desired Outcome — Deep Why` but no
+verbatim-violation hard fail at the gate. The gate accepted a
+paraphrase.
+
+#### Fix scope hint
+
+Two possibilities, both worth investigation:
+
+1. The verbatim check at Step 10 may not be enforcing the
+   [MSG] field as strictly as it does at Steps 1 / 13 where
+   verbatim violations DO trigger retries. Check whether Step 10's
+   `RUNTIME MESSAGE DIRECTIVE` form (vs. `REQUIRED MESSAGE`
+   verbatim form) accidentally relaxes the gate.
+2. The `$1k` substitution may have happened in the prompt the LLM
+   saw, but the LLM-generated reply chose its own number wording
+   that didn't survive the no-verbatim-enforcement at this step.
+
+#### Files likely involved
+
+- `src/lib/voice-quality-gate.ts` — `msg_verbatim_violation` rule;
+  check whether Step 10's [MSG] is opted out
+- `src/lib/script-variable-resolver.ts` — `$1k` substitution in the
+  required [ASK] text
+- `src/lib/ai-engine.ts` — the regen loop that successfully forces
+  verbatim retries at other steps
+
+#### Reproduction
+
+```bash
+cd ai-dm-setter
+npm run test:personas
+```
+
+After bug-001b is fixed and the conversation reaches Step 10
+cleanly, the harness will surface this failure at turn 14. With
+bug-001b still open, Step 10 fires on turn 7 of the harness (lead
+message "honestly just like 1k extra a month would change
+everything") — observe the AI reply generated at `aiGen=8.0s`
+stage=`Desired Outcome — Deep Why` and verify it lacks `I respect
+that bro` and `$1k`.
+
+### bug-003 — Step 13 belief-break required verbatim phrases exhausted 3 retries and shipped paraphrase as best-effort
+
+**Severity:** P0 — Persona B turn 20. The Belief Break is the
+single most important emotional pivot in the daetradez script and
+its required wording is shipping as paraphrase, meaning the
+authority transfer (per the operator's [JUDGMENT] block: "shifts
+their belief about what's actually wrong... authority perception
+of you skyrockets") fails to land in production.
+
+**Discovered:** 2026-05-12, persona-b harness rebased onto main
+(bug-001 partial fix applied).
+
+**Status:** Awaiting fix on `main`.
+
+#### Symptoms
+
+Step 13 — Belief Break — Reframe (branch: "Psychology / Discipline
+symptom") has three required verbatim [MSG] blocks. Three harness
+assertions failed on turn 20:
+
+```
+× turn 20: "99% of traders" missing from reply
+× turn 20: "systems you have in place" missing from reply
+× turn 20: "point A to point B" missing from reply
+```
+
+The voice quality gate exhausted retries with a `banned_phrase`
+hard-fail that is *itself produced by the required verbatim*:
+
+```
+[ai-engine] Voice quality FAIL attempt 1/3: {
+  score: '0.00',
+  hardFails: [ '[bubble=0] banned_phrase: "let me explain"' ],
+  message: "bro what if i told you 99% of traders that say that
+            actually don't know what the real problem is? le..."
+}
+[ai-engine] Voice quality gate exhausted 3 attempts — sending best effort
+```
+
+The script's literal verbatim text contains "Let me explain." —
+which is on the banned-phrase list. So the gate forbids a phrase
+the operator-authored script REQUIRES. The two enforcement layers
+are in direct conflict, and the gate wins by exhausting retries
+and shipping a paraphrase that drops the rest of the Belief Break
+content.
+
+Two retry passes also tripped a `[JUDGE] branch mismatch — forcing
+regen` against the same branch, suggesting the regen loop is
+fighting itself.
+
+#### Fix scope hint
+
+Either:
+
+1. Whitelist "let me explain" when it appears inside an
+   operator-required [MSG] verbatim block (preferred — fixes the
+   class of bug, not just this instance).
+2. Edit the daetradez script to remove "Let me explain." from the
+   Step 13 required text (single-script fix, doesn't address the
+   underlying conflict).
+3. Make verbatim [MSG] enforcement higher-priority than the
+   banned-phrase list so verbatim wins when they collide.
+
+Option 1 is the architectural fix. Codex should audit the
+`banned_phrases` array for any other strings that appear in
+operator-authored required [MSG] blocks across all live persona
+scripts.
+
+#### Files likely involved
+
+- `src/lib/voice-quality-gate.ts` — `banned_phrase` rule; needs
+  exemption for content inside operator-required verbatim [MSG]
+  blocks
+- `src/lib/ai-engine.ts` — the `[JUDGE] branch mismatch — forcing
+  regen` loop that fires on top of the verbatim gate failure
+- `src/lib/script-state-recovery.ts` — branch-history recording
+  during retry-and-regen cycles
+
+#### Reproduction
+
+```bash
+cd ai-dm-setter
+npm run test:personas
+```
+
+(Once bug-001b is fixed, the harness will reach turn 20 cleanly.)
+Observe turn 20 logs:
+- `Voice quality FAIL attempt 1/3 ... banned_phrase: "let me explain"`
+- `Voice quality gate exhausted 3 attempts — sending best effort`
+- Three `AI_MESSAGE_CONTAINS` assertions failing on the canonical
+  Belief Break phrases.
+
+### bug-004 — Step 14 Lukewarm buy-in branch auto-advanced to Step 15 without waiting for lead reply
+
+**Severity:** P0 — Persona B turn 22. The `[WAIT]` directive that
+gates further progression on a lukewarm response was bypassed,
+causing the script to advance into Step 15 (Urgency) prematurely.
+Per the operator's [JUDGMENT] in Step 14: *"Do NOT proceed to call
+proposal off a lukewarm response. You will burn the lead."* —
+exactly the failure mode the script was authored to prevent.
+
+**Discovered:** 2026-05-12, persona-b harness rebased onto main
+(bug-001 partial fix applied).
+
+**Status:** Awaiting fix on `main`.
+
+#### Symptoms
+
+The persona-b scenario expects Step 14 (Buy-In Confirmation) to
+remain active across two lead turns: first asking the lukewarm
+probe, then waiting for the real-yes response. The harness saw
+the step jump from 14 to 15 between turns:
+
+```
+× turn 22: "ready" missing from reply
+× turn 22: step expected 14, got 15
+```
+
+From `script-debug` on turn 22:
+
+```
+snapshotCurrentScriptStep: 15,        ← advanced
+inferredStepNumberForGate: 15,
+conversationTurnCount: 12,
+currentStepTitle: 'Urgency (CONDITIONAL)',
+```
+
+The Step 14 lukewarm branch definition has:
+
+```
+IF Lukewarm buy-in:
+    [MSG] REQUIRED MESSAGE: "bruh 😂 brother I'm genuinely trying
+      to help you out... So what's really on your mind?"
+    [WAIT] Wait for response       ← should hold the step
+    [JUDGMENT] If they warm up... → proceed to STEP 15.
+```
+
+The branch fired the message but the [WAIT] directive did not
+hold. Step advanced on the very next inbound (which in the
+scenario is `"yeah man im ready..."` — the [JUDGMENT] would have
+correctly promoted this to Step 15 *if read*, but the harness
+shows advancement happens before the judgment runs).
+
+#### Fix scope hint
+
+Investigate whether [WAIT] step-hold is checked before [JUDGMENT]
+re-evaluation in the script step-progression machinery. The
+expected control flow is:
+
+1. AI sends [MSG] from Step 14 lukewarm branch.
+2. Lead replies.
+3. [JUDGMENT] re-evaluates branch (warm-up → promote, real
+   objection → stay, cold → exit).
+4. Only if [JUDGMENT] says promote, advance to Step 15.
+
+It looks like the advance is firing on step 3 inputs without
+honoring the lukewarm [WAIT].
+
+#### Files likely involved
+
+- `src/lib/script-step-progression.ts` — [WAIT] honoring vs.
+  step-advance logic
+- `src/lib/branch-classifier.ts` — branch re-evaluation on the
+  follow-up turn
+- `src/lib/script-state-recovery.ts` — `step_completed` event
+  emission that triggers the advance
+
+#### Reproduction
+
+```bash
+cd ai-dm-setter
+npm run test:personas
+```
+
+(Once bug-001b is fixed, the harness will reach turn 22 cleanly.)
+Observe:
+- Turn 21 (lead "yeah man im ready, im tired of being stuck"):
+  the script should stay on Step 14 and re-evaluate the lukewarm
+  branch's [JUDGMENT].
+- Instead `snapshotCurrentScriptStep: 15` and the Urgency branch
+  fires.
