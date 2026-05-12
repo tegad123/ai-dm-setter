@@ -3175,8 +3175,21 @@ function volunteeredDataSkipCompletion(
     points,
     step.stepNumber
   );
+  const paths = stepCompletionPaths(step, selectedBranchLabel);
 
-  for (const path of stepCompletionPaths(step, selectedBranchLabel)) {
+  if (
+    !selectedBranchLabel &&
+    step.branches.length > 1 &&
+    paths.some(
+      (path) =>
+        hasWaitAction(path.actions) &&
+        !path.actions.some((action) => action.actionType === 'ask_question')
+    )
+  ) {
+    return null;
+  }
+
+  for (const path of paths) {
     if (!hasWaitAction(path.actions)) continue;
     const asks = path.actions.filter(
       (action) =>

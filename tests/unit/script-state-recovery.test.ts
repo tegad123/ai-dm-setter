@@ -694,6 +694,103 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 7);
   });
 
+  it('bug-008-regression-does-not-auto-complete-multi-branch-routing-step-with-silent-branch', () => {
+    const routingScript = {
+      id: 'persona_b_market_routing_sequence',
+      steps: [
+        askStep(
+          3,
+          'Market Assessment',
+          'Nice, so how have the markets been treating you so far? Any main problems coming up?'
+        ),
+        {
+          ...baseStep,
+          stepNumber: 4,
+          title: 'Market Response Routing',
+          actions: [],
+          branches: [
+            {
+              branchLabel: 'Going badly — vague',
+              actions: [
+                {
+                  actionType: 'send_message',
+                  content: 'Gotcha, I appreciate you being real about that.'
+                },
+                {
+                  actionType: 'ask_question',
+                  content:
+                    'What would you say is the main obstacle stopping you from getting where you want to be?'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            },
+            {
+              branchLabel: 'Obstacle given — detailed and emotional',
+              actions: [
+                {
+                  actionType: 'runtime_judgment',
+                  content: 'Store as {{obstacle}}.'
+                },
+                {
+                  actionType: 'send_message',
+                  content:
+                    '{{acknowledge specifically what they said using their own words}}'
+                },
+                { actionType: 'wait_for_response', content: null }
+              ]
+            }
+          ]
+        },
+        askStep(
+          5,
+          'Current Situation — Job',
+          'What do you do for work? Just so I get a better understanding of your current situation.'
+        )
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step3',
+        sender: 'AI',
+        content:
+          'Nice, so how have the markets been treating you so far? Any main problems coming up?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        id: 'lead_step3',
+        sender: 'LEAD',
+        content:
+          'honestly its been brutal, i keep blowing my small accounts revenge trading',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    const points = {
+      obstacle: {
+        value: 'revenge trading',
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_step3',
+        extractionMethod: 'runtime_judgment',
+        extractedAt: '2026-05-11T00:01:00.000Z',
+        sourceFieldName: 'obstacle',
+        sourceStepNumber: 3
+      }
+    };
+
+    const stage = computeSystemStage(routingScript, points as any, history, {
+      previousCurrentScriptStep: 3,
+      maxAdvanceSteps: 1
+    });
+
+    assert.equal(stage.step?.stepNumber, 4);
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 4
+      ),
+      false
+    );
+  });
+
   it('bug-53-current-income-answer-does-not-populate-target-income-goal', () => {
     const incomeScript = {
       id: 'income_semantics_sequence',
