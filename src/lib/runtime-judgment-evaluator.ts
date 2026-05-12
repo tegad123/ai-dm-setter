@@ -29,6 +29,11 @@
 // script-serializer). Tests exercise these helpers directly.
 // ---------------------------------------------------------------------------
 
+import {
+  canonicalCapturedDataPointKey,
+  canonicalizeCapturedDataPointRecord
+} from '@/lib/captured-data-keys';
+
 /** Matches `{{variable_name}}` (snake or camel). Captures the var name. */
 const VARIABLE_PATTERN = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g;
 
@@ -162,7 +167,7 @@ export function parseCapturedDataPointsFromResponse(
     const str = typeof value === 'string' ? value : String(value);
     const trimmed = str.trim();
     if (trimmed.length === 0) continue;
-    out[key] = trimmed;
+    out[canonicalCapturedDataPointKey(key)] = trimmed;
   }
   return Object.keys(out).length > 0 ? out : null;
 }
@@ -180,12 +185,12 @@ export function mergeCapturedDataPoints(
 ): Record<string, unknown> {
   const base: Record<string, unknown> =
     existing && typeof existing === 'object' && !Array.isArray(existing)
-      ? { ...existing }
+      ? canonicalizeCapturedDataPointRecord({ ...existing })
       : {};
   if (!incoming) return base;
   for (const [key, value] of Object.entries(incoming)) {
     if (typeof value !== 'string' || value.trim().length === 0) continue;
-    base[key] = value;
+    base[canonicalCapturedDataPointKey(key)] = value;
   }
   return base;
 }

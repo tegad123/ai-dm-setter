@@ -11,6 +11,11 @@ import {
   isBookingInfoRequestText
 } from '@/lib/booking-info-extractor';
 import { removeInvalidScriptVariableResolutionKeys } from '@/lib/script-variable-resolver';
+import {
+  canonicalCapturedDataPointKey,
+  canonicalizeCapturedDataPointRecord,
+  equivalentCapturedDataPointKeys
+} from '@/lib/captured-data-keys';
 
 export type DataPointConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 export type RecoveryPriority = 'HOT' | 'MEDIUM' | 'LOW';
@@ -553,25 +558,36 @@ function isCapturedDataPoint(value: unknown): value is CapturedDataPoint {
   );
 }
 
+function capturedPointForKey(
+  points: CapturedDataPoints,
+  key: string
+): CapturedDataPoint | undefined {
+  for (const candidate of equivalentCapturedDataPointKeys(key)) {
+    const point = points[candidate];
+    if (isCapturedDataPoint(point)) return point;
+  }
+  return undefined;
+}
+
 function pointValue<T = unknown>(
   points: CapturedDataPoints,
   key: string,
   requireHigh = true
 ): T | null {
-  const point = points[key];
-  if (!isCapturedDataPoint(point)) return null;
+  const point = capturedPointForKey(points, key);
+  if (!point) return null;
   if (requireHigh && point.confidence !== HIGH_CONFIDENCE) return null;
   return point.value as T;
 }
 
 function pointIsHigh(points: CapturedDataPoints, key: string): boolean {
-  const point = points[key];
-  return isCapturedDataPoint(point) && point.confidence === HIGH_CONFIDENCE;
+  const point = capturedPointForKey(points, key);
+  return !!point && point.confidence === HIGH_CONFIDENCE;
 }
 
 function pointIsPresent(points: CapturedDataPoints, key: string): boolean {
-  const point = points[key];
-  if (!isCapturedDataPoint(point)) return false;
+  const point = capturedPointForKey(points, key);
+  if (!point) return false;
   return point.confidence === HIGH_CONFIDENCE && point.value !== null;
 }
 
@@ -588,7 +604,8 @@ function setPoint<T>(
     sourceQuestion?: string | null;
   }
 ) {
-  const existing = points[key];
+  const canonicalKey = canonicalCapturedDataPointKey(key);
+  const existing = points[canonicalKey];
   if (
     isCapturedDataPoint(existing) &&
     existing.confidence === HIGH_CONFIDENCE &&
@@ -597,7 +614,7 @@ function setPoint<T>(
     return;
   }
 
-  points[key] = {
+  points[canonicalKey] = {
     value,
     confidence,
     extractedFromMessageId,
@@ -2354,7 +2371,9 @@ function extractDataPoints(params: {
   durableStatus?: string | null;
   durableAmount?: number | null;
 }): CapturedDataPoints {
-  const points = { ...asRecord(params.existing) } as CapturedDataPoints;
+  const points = canonicalizeCapturedDataPointRecord({
+    ...asRecord(params.existing)
+  }) as CapturedDataPoints;
   const threshold = params.persona?.minimumCapitalRequired ?? null;
 
   extractCapitalDataPoints({

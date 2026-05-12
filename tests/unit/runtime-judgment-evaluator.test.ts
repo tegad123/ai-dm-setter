@@ -181,6 +181,17 @@ describe('parseCapturedDataPointsFromResponse', () => {
     });
   });
 
+  it('bug-005a canonicalizes deep-why key variants from LLM output', () => {
+    assert.deepEqual(
+      parseCapturedDataPointsFromResponse({
+        deep_emotional_why: 'be home for bath time and story time'
+      }),
+      {
+        deep_why: 'be home for bath time and story time'
+      }
+    );
+  });
+
   it('drops empty / null / undefined values', () => {
     const raw = {
       kept: 'real value',
@@ -220,6 +231,19 @@ describe('mergeCapturedDataPoints', () => {
     const incoming = { early_obstacle: 'new fresher phrase' };
     assert.deepEqual(mergeCapturedDataPoints(existing, incoming), {
       early_obstacle: 'new fresher phrase',
+      other: 'kept'
+    });
+  });
+
+  it('bug-005a keeps deep why under one canonical captured-data key', () => {
+    const existing = {
+      deep_emotional_why: 'old family why',
+      other: 'kept'
+    };
+    const incoming = { deepWhy: 'be home for my family' };
+
+    assert.deepEqual(mergeCapturedDataPoints(existing, incoming), {
+      deep_why: 'be home for my family',
       other: 'kept'
     });
   });
