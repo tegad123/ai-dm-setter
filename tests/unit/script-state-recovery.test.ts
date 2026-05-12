@@ -8,6 +8,7 @@ import {
   parseConditionalStepSkipDirectives,
   readBranchHistoryEvents
 } from '../../src/lib/script-state-recovery';
+import { checkCallProposalPrereqs } from '../../src/lib/script-step-progression';
 
 const baseStep = {
   stateKey: null,
@@ -790,6 +791,83 @@ describe('computeSystemStage generic sequencing', () => {
           event.stepCompletionReason === 'volunteered_data_auto_complete'
       ),
       true
+    );
+  });
+
+  it('bug-010-captures-explicit-work-disclosure-even-before-work-ask', () => {
+    const script = {
+      id: 'persona_b_work_sequence',
+      steps: [
+        askStep(
+          5,
+          'Current Situation — Job',
+          'What do you do for work? Just so I get a better understanding of your current situation.'
+        )
+      ]
+    } as any;
+    const points = extractCapturedDataPointsForTest({
+      history: [
+        {
+          id: 'lead_volunteered_work',
+          sender: 'LEAD',
+          content: 'i work in retail, been doing it about 3 years',
+          timestamp: new Date('2026-05-11T00:01:00Z')
+        }
+      ],
+      script
+    });
+
+    assert.equal((points.workBackground as any)?.value, 'retail');
+    assert.equal(
+      (points.workBackground as any)?.extractionMethod,
+      'explicit_work_background_disclosure'
+    );
+  });
+
+  it('bug-010-stamps-paraphrased-income-goal-prompt-as-step-9', () => {
+    const script = {
+      id: 'persona_b_income_goal_sequence',
+      steps: [
+        askStep(
+          9,
+          'Income Goal',
+          'Got it. So how much money are you trying to make with trading on a monthly basis?'
+        )
+      ]
+    } as any;
+    const points = extractCapturedDataPointsForTest({
+      history: [
+        {
+          id: 'ai_step9_paraphrase',
+          sender: 'AI',
+          content: 'what would you want trading to bring you each month?',
+          timestamp: new Date('2026-05-11T00:00:00Z')
+        },
+        {
+          id: 'lead_step9_amount',
+          sender: 'LEAD',
+          content:
+            'honestly just like 1k extra a month would change everything',
+          timestamp: new Date('2026-05-11T00:01:00Z')
+        }
+      ],
+      script
+    });
+
+    assert.equal((points.incomeGoal as any)?.value, 1000);
+    assert.equal((points.incomeGoal as any)?.sourceStepNumber, 9);
+    assert.deepEqual(
+      checkCallProposalPrereqs({
+        workBackground: 'retail',
+        monthlyIncome: 2000,
+        replaceOrSupplement: 'supplement',
+        incomeGoal: points.incomeGoal,
+        deepWhy: 'be home for bath time and story time',
+        obstacle: 'emotional control',
+        beliefBreakDelivered: 'complete',
+        buyInConfirmed: true
+      }),
+      []
     );
   });
 
@@ -1584,7 +1662,8 @@ describe('routing-only branch completion', () => {
     assert.equal(stage.step?.stepNumber, 1);
     assert.equal(
       readBranchHistoryEvents(points as any).some(
-        (event) => event.eventType === 'step_completed' && event.stepNumber === 1
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 1
       ),
       false
     );

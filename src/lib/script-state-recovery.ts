@@ -1491,7 +1491,8 @@ function stepCompletionFromHistory(
 
   for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
     if (hasRuntimeJudgmentAfterWait(actions)) {
-      lastReason = 'wait_followed_by_runtime_judgment_requires_reclassification';
+      lastReason =
+        'wait_followed_by_runtime_judgment_requires_reclassification';
       continue;
     }
 
@@ -2176,6 +2177,7 @@ function extractValueAfterPrompt<T>(params: {
   field: string;
   promptPattern: RegExp;
   method: string;
+  sourceStepNumberFallback?: number | null;
   parse: (leadContent: string) => T | null;
 }) {
   const { points, history, steps, field, promptPattern, method, parse } =
@@ -2197,11 +2199,13 @@ function extractValueAfterPrompt<T>(params: {
     }
     const value = parse(msg.content);
     if (value !== null && value !== undefined && value !== '') {
+      const sourceStepNumber = steps?.length
+        ? stepNumberForAskMessage(steps, prompt.content)
+        : null;
       setPoint(points, field, value, 'HIGH', msg.id ?? null, method, {
         sourceFieldName: field,
-        sourceStepNumber: steps?.length
-          ? stepNumberForAskMessage(steps, prompt.content)
-          : null,
+        sourceStepNumber:
+          sourceStepNumber ?? params.sourceStepNumberFallback ?? null,
         sourceQuestion: prompt.content
       });
       // After successful capture, reset prompt so we don't re-capture
@@ -2264,6 +2268,7 @@ function extractIncomeGoal(params: {
     steps: params.script?.steps ?? [],
     field: 'incomeGoal',
     method: 'amount_after_step_9_prompt',
+    sourceStepNumberFallback: 9,
     promptPattern:
       /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,40}\b(trading|markets?)\b|what\s+(are|do)\s+you\s+(?:(?:trying|wanting|hoping|looking)\s+to|tryna)\s+(get\s+to|make|hit|reach).{0,50}\b(trading|markets?)\b|what\s+would\s+you\s+want\s+trading\s+to\s+bring|if\s+trading.{0,80}how\s+much.{0,40}\bbring\b|how\s+much.{0,40}\bbring\s+in\s+monthly\b|how\s+much.{0,40}from\s+trading|trading\s+to\s+bring\s+you|need\s+from\s+trading|make\s+from\s+trading|replace\s+(it|my\s+(job|nursing|income))\s+fully)/i,
     parse: (content) => {
@@ -2333,10 +2338,67 @@ function extractWorkBackground(params: {
         trimmed,
         'HIGH',
         msg.id ?? null,
-        'phrase_after_step_5_prompt'
+        'phrase_after_step_5_prompt',
+        {
+          sourceFieldName: 'workBackground',
+          sourceStepNumber: 5,
+          sourceQuestion: prompt.content
+        }
       );
       prompt = null;
     }
+  }
+}
+
+function parseExplicitWorkBackgroundDisclosure(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(
+    /\b(?:i\s+work(?:ing)?|i\s*'?m|i\s+am)\s+(?:as\s+an?\s+|as\s+|in\s+|at\s+|for\s+|an?\s+)?([^,.]+?)(?:\s*,|\s+been\b|\s+for\b|$)/i
+  );
+  if (!match?.[1]) return null;
+
+  const phrase = match[1]
+    .replace(/^(an?\s+|in\s+|at\s+|for\s+|the\s+|my\s+|a\s+job\s+in\s+)/i, '')
+    .replace(/[.!,]+$/, '')
+    .trim();
+
+  if (
+    !/\b(retail|sales|construction|nurs|engineer|teacher|driver|server|restaurant|warehouse|manager|student|school|business|self[-\s]?employed|job|work)\b/i.test(
+      phrase
+    )
+  ) {
+    return null;
+  }
+
+  return phrase.length >= 2 ? phrase.slice(0, 80) : null;
+}
+
+function extractExplicitWorkBackgroundDisclosures(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  if (pointIsPresent(params.points, 'workBackground')) return;
+
+  for (const msg of sortedHistory(params.history)) {
+    if (msg.sender !== 'LEAD') continue;
+    const value = parseExplicitWorkBackgroundDisclosure(msg.content);
+    if (!value) continue;
+
+    setPoint(
+      params.points,
+      'workBackground',
+      value,
+      'HIGH',
+      msg.id ?? null,
+      'explicit_work_background_disclosure',
+      {
+        sourceFieldName: 'workBackground',
+        sourceStepNumber: 5,
+        sourceQuestion: null
+      }
+    );
   }
 }
 
@@ -2444,6 +2506,10 @@ function extractDataPoints(params: {
     script: params.script
   });
   extractWorkBackground({ points, history: params.history });
+  extractExplicitWorkBackgroundDisclosures({
+    points,
+    history: params.history
+  });
   extractMonthlyIncomeFromJob({
     points,
     history: params.history,
@@ -2866,7 +2932,10 @@ function stepNumberForWaitablePromptMessage(
     const requirements = upcomingRequirementsAfterStep(steps, step.stepNumber);
     const canCaptureUpcomingData = requirements.length > 0;
 
-    for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
+    for (const actions of stepCompletionActionPaths(
+      step,
+      selectedBranchLabel
+    )) {
       const { asks, messages, waits } = waitableActionsForPath(actions);
       if (asks.length > 0 || messages.length === 0 || waits.length === 0) {
         continue;
@@ -3085,10 +3154,7 @@ function parseWorkBackgroundPhrase(content: string): string | null {
     /\b(?:i\s+)?(?:work(?:ing)?|am|i'm)\s+(?:as\s+an?\s+|as\s+|in\s+|at\s+|for\s+)?([^,.]+?)(?:\s*,|\s+been\b|\s+for\b|$)/i
   );
   const phrase = (match?.[1] ?? trimmed)
-    .replace(
-      /^(an?\s+|in\s+|at\s+|for\s+|the\s+|my\s+|a\s+job\s+in\s+)/i,
-      ''
-    )
+    .replace(/^(an?\s+|in\s+|at\s+|for\s+|the\s+|my\s+|a\s+job\s+in\s+)/i, '')
     .replace(/[.!,]+$/, '')
     .trim();
 
