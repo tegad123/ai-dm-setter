@@ -591,6 +591,21 @@ function pointIsPresent(points: CapturedDataPoints, key: string): boolean {
   return point.confidence === HIGH_CONFIDENCE && point.value !== null;
 }
 
+const NUMERIC_AMOUNT_POINT_KEYS = new Set([
+  'monthlyIncome',
+  'incomeGoal',
+  'verifiedCapitalUsd',
+  'capital'
+]);
+
+function normalizePointValueForKey<T>(key: string, value: T): T | number {
+  if (typeof value !== 'string') return value;
+  if (!NUMERIC_AMOUNT_POINT_KEYS.has(key)) return value;
+
+  const amount = extractAmountUSD(value);
+  return amount ?? value;
+}
+
 function setPoint<T>(
   points: CapturedDataPoints,
   key: string,
@@ -605,6 +620,7 @@ function setPoint<T>(
   }
 ) {
   const canonicalKey = canonicalCapturedDataPointKey(key);
+  const normalizedValue = normalizePointValueForKey(canonicalKey, value);
   const existing = points[canonicalKey];
   if (
     isCapturedDataPoint(existing) &&
@@ -615,7 +631,7 @@ function setPoint<T>(
   }
 
   points[canonicalKey] = {
-    value,
+    value: normalizedValue,
     confidence,
     extractedFromMessageId,
     extractionMethod,
@@ -1275,6 +1291,24 @@ function findSetterMessagesForActions(
   return sentMessages;
 }
 
+function selectedSuggestionMessagesForActions(
+  history: ScriptHistoryMessage[],
+  actions: StepCompletionAction[],
+  suggestionId: string | null,
+  afterTimeMs = Number.NEGATIVE_INFINITY
+): ScriptHistoryMessage[] | null {
+  if (!suggestionId) return null;
+
+  const selectedMessages = selectedSuggestionMessagesAfter(
+    history,
+    suggestionId,
+    afterTimeMs
+  );
+  if (selectedMessages.length < actions.length) return null;
+
+  return selectedMessages.slice(0, actions.length);
+}
+
 function selectedSuggestionMessagesAfter(
   history: ScriptHistoryMessage[],
   suggestionId: string | null,
@@ -1490,12 +1524,19 @@ function stepCompletionFromHistory(
     }
 
     if (asks.length === 0 && messages.length > 0 && waits.length) {
-      const sentMessages = findSetterMessagesForActions(
-        sorted,
-        messages,
-        afterTimeMs,
-        selectedSuggestionId
-      );
+      const sentMessages =
+        findSetterMessagesForActions(
+          sorted,
+          messages,
+          afterTimeMs,
+          selectedSuggestionId
+        ) ??
+        selectedSuggestionMessagesForActions(
+          sorted,
+          messages,
+          selectedSuggestionId,
+          afterTimeMs
+        );
       const lastSent = sentMessages?.at(-1) ?? null;
       const leadReply = lastSent ? hasLeadReplyAfter(sorted, lastSent) : null;
       if (lastSent && leadReply) {
@@ -2282,19 +2323,10 @@ function extractWorkBackground(params: {
     ) {
       continue;
     }
-    // The lead's answer to "what do you do for work" is captured as a
-    // brief noun phrase. Strip leading "I work as / I'm a / I do" so
-    // capturedDataPoints.workBackground stays clean ("nurse" not
-    // "I work as a nurse").
-    const trimmed = msg.content
-      .trim()
-      .replace(
-        /^(i\s+work\s+as\s+(an?\s+)?|i'?m\s+(an?\s+|a\s+)?|i\s+do\s+|i'?m\s+in\s+|i\s+am\s+(an?\s+)?)/i,
-        ''
-      )
-      .replace(/[.!,]+$/, '')
-      .slice(0, 80);
-    if (trimmed.length >= 2) {
+    // Keep the captured job as a brief noun phrase ("retail", not the
+    // full sentence with tenure attached).
+    const trimmed = parseWorkBackgroundPhrase(msg.content);
+    if (trimmed && trimmed.length >= 2) {
       setPoint(
         points,
         'workBackground',
@@ -2821,6 +2853,63 @@ function stepNumberForAskMessage(
   return null;
 }
 
+function stepNumberForWaitablePromptMessage(
+  steps: ScriptStepWithRecovery[],
+  points: CapturedDataPoints,
+  messageContent: string
+): number | null {
+  for (const step of steps) {
+    const selectedBranchLabel = selectedBranchLabelForStep(
+      points,
+      step.stepNumber
+    );
+    const requirements = upcomingRequirementsAfterStep(steps, step.stepNumber);
+    const canCaptureUpcomingData = requirements.length > 0;
+
+    for (const actions of stepCompletionActionPaths(step, selectedBranchLabel)) {
+      const { asks, messages, waits } = waitableActionsForPath(actions);
+      if (asks.length > 0 || messages.length === 0 || waits.length === 0) {
+        continue;
+      }
+
+      const explicitMessageMatch = messages.some((action) =>
+        actionContentMatches(action.content, messageContent)
+      );
+      if (explicitMessageMatch) return step.stepNumber;
+
+      const hasRuntimeMessageDirective = messages.some((action) =>
+        contentIsRuntimePlaceholderOnly(action.content)
+      );
+      if (
+        hasRuntimeMessageDirective &&
+        canCaptureUpcomingData &&
+        /\b(context|situation|work|job|doing\s+for\s+work|current\s+situation)\b/i.test(
+          messageContent
+        )
+      ) {
+        return step.stepNumber;
+      }
+    }
+  }
+
+  return null;
+}
+
+function stepNumberForPromptMessage(params: {
+  steps: ScriptStepWithRecovery[];
+  points: CapturedDataPoints;
+  messageContent: string;
+}): number | null {
+  return (
+    stepNumberForAskMessage(params.steps, params.messageContent) ??
+    stepNumberForWaitablePromptMessage(
+      params.steps,
+      params.points,
+      params.messageContent
+    )
+  );
+}
+
 function immediateLeadReplyAfterPrompt(
   messages: ScriptHistoryMessage[],
   promptIndex: number
@@ -2981,6 +3070,31 @@ function parseReplaceOrSupplementDecision(
   return null;
 }
 
+function parseWorkBackgroundPhrase(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  if (
+    !/\b(work|job|retail|sales|construction|nurs|engineer|teacher|driver|server|restaurant|warehouse|manager|student|school|business|self[-\s]?employed)\b/i.test(
+      trimmed
+    )
+  ) {
+    return null;
+  }
+
+  const match = trimmed.match(
+    /\b(?:i\s+)?(?:work(?:ing)?|am|i'm)\s+(?:as\s+an?\s+|as\s+|in\s+|at\s+|for\s+)?([^,.]+?)(?:\s*,|\s+been\b|\s+for\b|$)/i
+  );
+  const phrase = (match?.[1] ?? trimmed)
+    .replace(
+      /^(an?\s+|in\s+|at\s+|for\s+|the\s+|my\s+|a\s+job\s+in\s+)/i,
+      ''
+    )
+    .replace(/[.!,]+$/, '')
+    .trim();
+
+  return phrase.length >= 2 ? phrase.slice(0, 80) : null;
+}
+
 function parseVolunteeredRequirementValue(
   requirementKey: string,
   content: string
@@ -2997,6 +3111,8 @@ function parseVolunteeredRequirementValue(
     }
     case 'replaceOrSupplement':
       return parseReplaceOrSupplementDecision(content);
+    case 'workBackground':
+      return parseWorkBackgroundPhrase(content);
     case 'obstacle': {
       const trimmed = content.trim();
       if (
@@ -3039,7 +3155,11 @@ function extractVolunteeredDataForUpcomingAsks(params: {
     const prompt = messages[index];
     if (prompt.sender !== 'AI' && prompt.sender !== 'HUMAN') continue;
 
-    const stepNumber = stepNumberForAskMessage(steps, prompt.content);
+    const stepNumber = stepNumberForPromptMessage({
+      steps,
+      points: params.points,
+      messageContent: prompt.content
+    });
     if (!stepNumber) continue;
 
     const leadReply = immediateLeadReplyAfterPrompt(messages, index);
@@ -3144,7 +3264,14 @@ function recentPointForRequirement(params: {
       ) ?? null;
     if (!leadMessage) continue;
     const leadTime = new Date(leadMessage.timestamp).getTime();
-    if (!Number.isFinite(leadTime) || leadTime < params.afterTimeMs) {
+    const sameTurnVolunteeredChain =
+      /^volunteered_/.test(point.extractionMethod) &&
+      leadTime <= params.afterTimeMs &&
+      params.afterTimeMs - leadTime <= 1;
+    if (
+      !Number.isFinite(leadTime) ||
+      (leadTime < params.afterTimeMs && !sameTurnVolunteeredChain)
+    ) {
       continue;
     }
     if (
