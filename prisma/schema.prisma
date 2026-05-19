@@ -252,6 +252,19 @@ model Account {
   awayModeFacebook           Boolean     @default(false)
   awayModeFacebookEnabledAt  DateTime?
 
+  // Per-account default for AI autonomy on NEW inbound conversations.
+  // When true (the default), inbound webhooks create conversations
+  // with BOTH aiActive=true AND autoSendOverride=true — the AI takes
+  // the lead through the qualification flow autonomously without
+  // per-conversation operator opt-in. When false, matches the
+  // 2026-05-06 review-first policy: aiActive=false on create,
+  // operator must explicitly toggle AI on per conversation. The
+  // per-conversation toggle (Conversation.aiActive) always overrides
+  // this default for an individual thread regardless of account
+  // setting. Default true to honor the autonomous-from-first-DM
+  // product value proposition.
+  defaultAiActive            Boolean     @default(true)
+
   // Master switch for the per-conversation suggestion-review banner.
   // When false, the banner never renders for this account regardless
   // of pending AISuggestion rows — the AI still generates suggestions

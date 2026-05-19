@@ -672,13 +672,15 @@ export function isRescheduleSignal(text: string | null | undefined): boolean {
  *   (b) operator explicitly enabled per-conversation override
  *       (autoSendOverride=true, set by the ai-toggle route)
  *
- * Why awayMode is back: Conversation.aiActive @default(true) in the
- * schema means every row starts with aiActive=true. A pure aiActive
- * gate would fire on every lead on every account regardless of whether
- * the operator enabled AI. The awayMode || autoSendOverride term is
- * the account/intent check that scopes auto-send to accounts where
- * the operator turned it on, plus any conversations where they
- * explicitly overrode it per-conversation.
+ * History note: prior to 2026-05-18 the schema default for
+ * Conversation.aiActive was true and this gate's awayMode term was
+ * what scoped auto-send to opted-in accounts. The 2026-05-06
+ * migration flipped that default to false (defensive: review-first
+ * for every new lead). The 2026-05-18 fix introduces
+ * Account.defaultAiActive (default true) and sets BOTH aiActive AND
+ * autoSendOverride to that value on inbound conversation create —
+ * so the awayMode term remains a platform-wide kill switch but is
+ * no longer required for autonomous behavior on new leads.
  */
 export function shouldAutoSendReply(args: {
   aiActive: boolean;
@@ -1065,11 +1067,19 @@ export async function processIncomingMessage(
       select: {
         awayMode: true,
         awayModeInstagram: true,
-        awayModeFacebook: true
+        awayModeFacebook: true,
+        defaultAiActive: true
       }
     });
     const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
-    const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
+    // defaultAiActive is the per-account autonomy switch (added
+    // 2026-05-18, restores autonomous-from-first-DM behavior).
+    // Ongoing-conversation messages still start AI off — the
+    // existing thread has its own state that the operator
+    // controls.
+    const shouldEnableAI = isOngoing
+      ? false
+      : (account?.defaultAiActive ?? true);
 
     // ── ManyChat handoff detection + recovery (2026-04-30, expanded 2026-05-06) ──
     // For Instagram leads on accounts that have a ManyChat
@@ -1173,13 +1183,21 @@ export async function processIncomingMessage(
         conversation: {
           create: {
             personaId: newConversationPersonaId,
-            // POLICY (2026-05-06): new conversations are created with
-            // AI OFF. Operator must explicitly toggle AI on. This
-            // overrides the legacy awayMode-based default. Going
-            // forward awayMode no longer auto-enables AI on new
-            // inbound leads — same applies to ongoing-conversation
-            // detection (the old `shouldEnableAI` ternary is gone).
-            aiActive: false,
+            // POLICY (2026-05-18, supersedes 2026-05-06): new
+            // conversations honor the account's `defaultAiActive`
+            // setting. Default true → AI takes over autonomously
+            // without per-conversation opt-in (matches the
+            // autonomous-from-first-DM product value prop).
+            // Default false → review-first mode, AI off until
+            // operator toggles per conversation. Ongoing-conversation
+            // messages (`isOngoing`) still start AI off regardless,
+            // because the existing thread has its own operator-
+            // controlled state. `autoSendOverride` mirrors aiActive
+            // so auto-send fires without requiring account-level
+            // `awayMode` to be on — Away Mode becomes a platform-
+            // wide kill switch, not the gating mechanism.
+            aiActive: shouldEnableAI,
+            autoSendOverride: shouldEnableAI,
             unreadCount: 1,
             leadEmail: detectedEmail,
             source: initialSource,

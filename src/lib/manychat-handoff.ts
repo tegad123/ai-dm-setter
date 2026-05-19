@@ -109,7 +109,11 @@ export async function processManyChatHandoff(params: {
 
   const account = await prisma.account.findUnique({
     where: { manyChatWebhookKey: webhookKey },
-    select: { id: true, awayModeInstagram: true }
+    select: {
+      id: true,
+      awayModeInstagram: true,
+      defaultAiActive: true
+    }
   });
   if (!account) {
     throw new ManyChatHandoffError('Invalid webhook key', 401);
@@ -248,10 +252,15 @@ export async function processManyChatHandoff(params: {
       data: {
         leadId: existingLead.id,
         personaId,
-        // POLICY (2026-05-06): new conversations always start with AI
-        // OFF. Operator must explicitly toggle on. awayModeInstagram
-        // no longer auto-enables AI on new ManyChat handoffs.
-        aiActive: false,
+        // POLICY (2026-05-18, supersedes 2026-05-06): ManyChat-
+        // originated conversations honor Account.defaultAiActive.
+        // Default true → AI handles new ManyChat handoffs
+        // autonomously (matches the autonomous product value prop).
+        // autoSendOverride mirrors aiActive so platform-level
+        // awayMode is no longer required for auto-send to fire on
+        // new leads.
+        aiActive: account.defaultAiActive,
+        autoSendOverride: account.defaultAiActive,
         unreadCount: 0,
         source: 'MANYCHAT',
         leadSource: 'OUTBOUND',
@@ -286,10 +295,11 @@ export async function processManyChatHandoff(params: {
         conversation: {
           create: {
             personaId: newLeadPersonaId,
-            // POLICY (2026-05-06): new conversations always start with AI
-            // OFF. Operator must explicitly toggle on. awayModeInstagram
-            // no longer auto-enables AI on new ManyChat handoffs.
-            aiActive: false,
+            // POLICY (2026-05-18, supersedes 2026-05-06): see
+            // sibling create at top of this function. Honors
+            // Account.defaultAiActive; autoSendOverride mirrors.
+            aiActive: account.defaultAiActive,
+            autoSendOverride: account.defaultAiActive,
             unreadCount: 0,
             source: 'MANYCHAT',
             leadSource: 'OUTBOUND',
