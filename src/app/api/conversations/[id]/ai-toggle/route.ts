@@ -7,6 +7,24 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // LEGACY ROUTE TELEMETRY (2026-05-20): the dashboard toggles AI via
+  // POST /toggle-ai (see src/lib/api.ts). Nothing in this codebase calls
+  // PATCH /ai-toggle. We can't rule out an external caller (mobile app,
+  // automation), so instead of deleting blind we log every hit. If prod
+  // logs show zero `[ai-toggle][LEGACY-ROUTE-HIT]` over a reasonable
+  // window, this route is safe to delete. If something does hit it, this
+  // line identifies the caller. Tracked under QD-060 cleanup.
+  console.warn(
+    '[ai-toggle][LEGACY-ROUTE-HIT] PATCH /api/conversations/:id/ai-toggle called —',
+    JSON.stringify({
+      url: request.url,
+      userAgent: request.headers.get('user-agent'),
+      referer: request.headers.get('referer'),
+      origin: request.headers.get('origin'),
+      ts: new Date().toISOString()
+    })
+  );
+
   try {
     const auth = await requireAuth(request);
     const { id } = await params;

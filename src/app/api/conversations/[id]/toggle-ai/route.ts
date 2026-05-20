@@ -65,9 +65,14 @@ export async function POST(
       // true for this convo regardless of platform config. Trigger the
       // handoff flow which reads history + generates if the last msg is
       // from the lead.
+      //
+      // aiActive=true is set here explicitly (not only via handleAIHandoff)
+      // so the toggle persists even if that helper's behavior changes —
+      // otherwise a refactor there would silently re-introduce QD-060
+      // (toggle reverts to OFF on refresh because the DB never got true).
       await prisma.conversation.update({
         where: { id },
-        data: { autoSendOverride: true }
+        data: { aiActive: true, autoSendOverride: true }
       });
       await handleAIHandoff(id, conversation.lead.accountId);
 
