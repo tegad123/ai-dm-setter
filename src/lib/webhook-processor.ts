@@ -1183,21 +1183,22 @@ export async function processIncomingMessage(
         conversation: {
           create: {
             personaId: newConversationPersonaId,
-            // POLICY (2026-05-18, supersedes 2026-05-06): new
+            // POLICY (2026-05-21, supersedes 2026-05-18): new
             // conversations honor the account's `defaultAiActive`
-            // setting. Default true → AI takes over autonomously
-            // without per-conversation opt-in (matches the
-            // autonomous-from-first-DM product value prop).
-            // Default false → review-first mode, AI off until
-            // operator toggles per conversation. Ongoing-conversation
-            // messages (`isOngoing`) still start AI off regardless,
-            // because the existing thread has its own operator-
-            // controlled state. `autoSendOverride` mirrors aiActive
-            // so auto-send fires without requiring account-level
-            // `awayMode` to be on — Away Mode becomes a platform-
-            // wide kill switch, not the gating mechanism.
+            // setting for whether the AI is engaged (`aiActive`), but
+            // **Away Mode remains the gate for auto-sending**. We do NOT
+            // force `autoSendOverride` on create — it stays false so
+            // `shouldAutoSendReply` (= aiActive && (awayMode ||
+            // autoSendOverride)) only auto-responds when the account's
+            // Away Mode is ON. With Away Mode OFF the AI still generates
+            // but stays in suggestion mode for operator review (and a
+            // brand-new lead never auto-replies before opt-in — the
+            // @l.galeza risk). `autoSendOverride` is set true only by the
+            // operator's explicit per-conversation AI toggle.
+            // (Corrects the 2026-05-18 QD-059 fix, which mirrored
+            // autoSendOverride=aiActive and bypassed Away Mode.)
             aiActive: shouldEnableAI,
-            autoSendOverride: shouldEnableAI,
+            autoSendOverride: false,
             unreadCount: 1,
             leadEmail: detectedEmail,
             source: initialSource,

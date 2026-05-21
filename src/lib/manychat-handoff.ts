@@ -252,15 +252,15 @@ export async function processManyChatHandoff(params: {
       data: {
         leadId: existingLead.id,
         personaId,
-        // POLICY (2026-05-18, supersedes 2026-05-06): ManyChat-
-        // originated conversations honor Account.defaultAiActive.
-        // Default true → AI handles new ManyChat handoffs
-        // autonomously (matches the autonomous product value prop).
-        // autoSendOverride mirrors aiActive so platform-level
-        // awayMode is no longer required for auto-send to fire on
-        // new leads.
+        // POLICY (2026-05-21, supersedes 2026-05-18): ManyChat-
+        // originated conversations honor Account.defaultAiActive for
+        // whether the AI is engaged, but Away Mode remains the gate for
+        // auto-send. autoSendOverride stays false so auto-respond only
+        // fires when the account's Away Mode is ON; otherwise the AI
+        // stays in suggestion mode. (Corrects the 2026-05-18 fix that
+        // mirrored autoSendOverride=defaultAiActive and bypassed Away Mode.)
         aiActive: account.defaultAiActive,
-        autoSendOverride: account.defaultAiActive,
+        autoSendOverride: false,
         unreadCount: 0,
         source: 'MANYCHAT',
         leadSource: 'OUTBOUND',
@@ -295,11 +295,12 @@ export async function processManyChatHandoff(params: {
         conversation: {
           create: {
             personaId: newLeadPersonaId,
-            // POLICY (2026-05-18, supersedes 2026-05-06): see
-            // sibling create at top of this function. Honors
-            // Account.defaultAiActive; autoSendOverride mirrors.
+            // POLICY (2026-05-21, supersedes 2026-05-18): see sibling
+            // create at top of this function. Honors Account.defaultAiActive
+            // for aiActive; autoSendOverride stays false so Away Mode gates
+            // auto-send (auto-respond only when Away Mode is ON).
             aiActive: account.defaultAiActive,
-            autoSendOverride: account.defaultAiActive,
+            autoSendOverride: false,
             unreadCount: 0,
             source: 'MANYCHAT',
             leadSource: 'OUTBOUND',
