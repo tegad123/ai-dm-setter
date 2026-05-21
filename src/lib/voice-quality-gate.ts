@@ -2008,11 +2008,19 @@ export function scoreVoiceQuality(
   // 5. Em dash or en dash. Match the explicit Unicode code points so
   // lookalike/editor substitutions are obvious in tests and reviews:
   // U+2014 em dash, U+2013 en dash.
+  //
+  // 2026-05-21: demoted from hard fail \u2192 soft signal. `sanitizeDashCharacters`
+  // already strips em/en dashes on every delivery path, so hard-failing here
+  // just burned 3 regen attempts (often escalating an otherwise-good reply to
+  // a human) on a problem the sanitizer fixes deterministically. This was
+  // model-independent thrash \u2014 both Haiku and Sonnet emit dashes. Keep a small
+  // penalty so the model is still nudged away from them, but never block/
+  // escalate on a dash alone.
   if (/\u2014/.test(reply)) {
-    hardFails.push('em_dash');
+    softSignals.em_dash = -0.1;
   }
   if (/\u2013/.test(reply)) {
-    hardFails.push('en_dash');
+    softSignals.en_dash = -0.1;
   }
 
   // R29: once Whisper succeeded, the AI has the voice-note content. The
