@@ -1072,14 +1072,16 @@ export async function processIncomingMessage(
       }
     });
     const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
-    // defaultAiActive is the per-account autonomy switch (added
-    // 2026-05-18, restores autonomous-from-first-DM behavior).
-    // Ongoing-conversation messages still start AI off — the
-    // existing thread has its own state that the operator
-    // controls.
+    // POLICY (2026-05-21, Tega): a NEW lead only gets AI turned ON when the
+    // account's Away Mode is ON for this platform. Away Mode OFF → aiActive
+    // stays false — no new lead gets AI, no exceptions. Only existing
+    // conversations the operator explicitly toggled on stay active.
+    // `defaultAiActive` is an additional per-account opt-out (can keep AI off
+    // even in Away Mode). Ongoing-conversation messages always start AI off —
+    // the existing thread keeps its operator-controlled state.
     const shouldEnableAI = isOngoing
       ? false
-      : (account?.defaultAiActive ?? true);
+      : awayModeForPlatform && (account?.defaultAiActive ?? true);
 
     // ── ManyChat handoff detection + recovery (2026-04-30, expanded 2026-05-06) ──
     // For Instagram leads on accounts that have a ManyChat

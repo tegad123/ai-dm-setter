@@ -252,14 +252,12 @@ export async function processManyChatHandoff(params: {
       data: {
         leadId: existingLead.id,
         personaId,
-        // POLICY (2026-05-21, supersedes 2026-05-18): ManyChat-
-        // originated conversations honor Account.defaultAiActive for
-        // whether the AI is engaged, but Away Mode remains the gate for
-        // auto-send. autoSendOverride stays false so auto-respond only
-        // fires when the account's Away Mode is ON; otherwise the AI
-        // stays in suggestion mode. (Corrects the 2026-05-18 fix that
-        // mirrored autoSendOverride=defaultAiActive and bypassed Away Mode.)
-        aiActive: account.defaultAiActive,
+        // POLICY (2026-05-21, Tega): a NEW ManyChat lead only gets AI turned
+        // ON when the account's Instagram Away Mode is ON. Away Mode OFF →
+        // aiActive=false, no exceptions (ManyChat handoffs must NOT auto-enable
+        // AI regardless of Away Mode). autoSendOverride stays false; only the
+        // operator's explicit per-conversation toggle turns AI on otherwise.
+        aiActive: account.awayModeInstagram && account.defaultAiActive,
         autoSendOverride: false,
         unreadCount: 0,
         source: 'MANYCHAT',
@@ -295,11 +293,10 @@ export async function processManyChatHandoff(params: {
         conversation: {
           create: {
             personaId: newLeadPersonaId,
-            // POLICY (2026-05-21, supersedes 2026-05-18): see sibling
-            // create at top of this function. Honors Account.defaultAiActive
-            // for aiActive; autoSendOverride stays false so Away Mode gates
-            // auto-send (auto-respond only when Away Mode is ON).
-            aiActive: account.defaultAiActive,
+            // POLICY (2026-05-21, Tega): see sibling create at top of this
+            // function. A new ManyChat lead gets AI ON only when Instagram
+            // Away Mode is ON; otherwise aiActive=false (no exceptions).
+            aiActive: account.awayModeInstagram && account.defaultAiActive,
             autoSendOverride: false,
             unreadCount: 0,
             source: 'MANYCHAT',
