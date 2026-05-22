@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { TagManager } from '@/features/tags/components/tag-manager';
 
 export const metadata = {
-  title: 'DMsetter — Tag Management'
+  title: 'Convlo — Tag Management'
 };
 
 export default function TagsSettingsPage() {

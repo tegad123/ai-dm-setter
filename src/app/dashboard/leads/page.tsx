@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { LeadsViewToggle } from '@/features/leads/components/leads-view-toggle';
 
 export const metadata = {
-  title: 'DMsetter — Leads'
+  title: 'Convlo — Leads'
 };
 
 export default function LeadsPage() {

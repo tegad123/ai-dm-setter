@@ -1570,7 +1570,7 @@ export async function processIncomingMessage(
           title,
           body:
             `${resolvedName} (@${resolvedHandle}) replied while this conversation was awaiting human review. ` +
-            'QualifyDMs cleared the stale review flag and resumed AI scheduling.',
+            'Convlo cleared the stale review flag and resumed AI scheduling.',
           leadId: lead.id
         }
       });
@@ -5574,7 +5574,7 @@ export async function processAdminMessage(
   // Save as HUMAN message (genuinely sent by a human admin).
   // humanSource='PHONE' — this message came via Meta's echo webhook,
   // i.e. the operator typed it in the native Instagram / Messenger
-  // app on their phone rather than through QualifyDMs. The UI uses
+  // app on their phone rather than through Convlo. The UI uses
   // this to render a "from phone" badge.
   const message = await prisma.message.create({
     data: {

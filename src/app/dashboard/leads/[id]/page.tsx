@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import LeadDetail from '@/features/leads/components/lead-detail';
 
 export const metadata = {
-  title: 'DMsetter — Lead Detail'
+  title: 'Convlo — Lead Detail'
 };
 
 export default async function LeadDetailPage({

@@ -182,7 +182,7 @@ async function resolveEmailTarget(
 // ── Subject + body formatting ──────────────────────────────────────
 function buildSubject(type: EscalationType, leadName?: string): string {
   const who = leadName ?? 'lead';
-  return `🚨 ${LABEL[type]} — ${who} | QualifyDMs`;
+  return `🚨 ${LABEL[type]} — ${who} | Convlo`;
 }
 
 function buildTextBody(params: {
@@ -207,5 +207,5 @@ Details: ${params.details}
 Time: ${now} UTC${linkBlock}
 
 —
-QualifyDMs · Manage notification settings: https://qualifydms.io/dashboard/settings/notifications`;
+Convlo · Manage notification settings: https://qualifydms.io/dashboard/settings/notifications`;
 }

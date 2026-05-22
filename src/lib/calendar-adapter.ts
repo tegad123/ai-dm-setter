@@ -88,7 +88,7 @@ function lcHeaders(apiKey: string): Record<string, string> {
  * Fetch real availability across configured calendar providers.
  *
  * Resolution order:
- *   1. LeadConnector / HighLevel (preferred for DMsetter tenants)
+ *   1. LeadConnector / HighLevel (preferred for Convlo tenants)
  *   2. Calendly (fallback)
  *   3. Cal.com (fallback)
  *
@@ -172,7 +172,7 @@ export async function getUnifiedAvailability(
 
 /**
  * Book a call via the first configured calendar provider.
- * LeadConnector takes priority — it is the canonical DMsetter integration.
+ * LeadConnector takes priority — it is the canonical Convlo integration.
  */
 export async function bookUnifiedAppointment(
   accountId: string,
@@ -434,7 +434,7 @@ export async function bookLeadConnectorAppointment(
     lastName,
     email,
     phone: params.leadPhone || undefined,
-    source: params.platform ? `DMsetter ${params.platform}` : 'DMsetter DM',
+    source: params.platform ? `Convlo ${params.platform}` : 'Convlo DM',
     tags: ['dmsetter', 'auto-booked']
   };
 

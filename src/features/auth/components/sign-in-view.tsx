@@ -13,7 +13,7 @@ export default function SignInViewPage() {
           <div className='bg-primary text-primary-foreground mr-2 flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold'>
             AI
           </div>
-          DMsetter
+          Convlo
         </div>
         <InteractiveGridPattern
           className={cn(
@@ -24,10 +24,10 @@ export default function SignInViewPage() {
         <div className='relative z-20 mt-auto'>
           <blockquote className='space-y-2'>
             <p className='text-lg'>
-              &ldquo;The DMsetter has completely transformed how we handle lead
+              &ldquo;The Convlo has completely transformed how we handle lead
               qualification and booking.&rdquo;
             </p>
-            <footer className='text-sm'>DMsetter</footer>
+            <footer className='text-sm'>Convlo</footer>
           </blockquote>
         </div>
       </div>

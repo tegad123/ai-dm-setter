@@ -48,7 +48,7 @@ export const manyChatHandoffSchema = z.object({
   // Lead's button-click response inside the ManyChat flow (e.g. "Yes,
   // send it over!" — what they tapped after the opener). Button taps
   // are internal to ManyChat — they don't fire IG webhooks, so without
-  // this field the conversation in QualifyDMs would show only the
+  // this field the conversation in Convlo would show only the
   // opener and never the lead's first engagement signal. When the
   // operator wires a SECOND External Request in ManyChat right after
   // the button-click step, this field carries the button label back
@@ -57,7 +57,7 @@ export const manyChatHandoffSchema = z.object({
   leadResponseText: z.string().min(1).max(2000).optional(),
   // Most ManyChat flows keep running after this External Request
   // (send the resource, wait, follow up). In that setup the request is
-  // only a context sync and QualifyDMs should wait for the next real
+  // only a context sync and Convlo should wait for the next real
   // lead DM before AI takes over. Set scheduleAi=true only for flows
   // where this request is the final handoff point.
   scheduleAi: manyChatBoolean.optional().default(false)
@@ -362,7 +362,7 @@ export async function processManyChatHandoff(params: {
   // Schedule the AI reply when the lead actually engaged (button click
   // landed as a new LEAD message) and the conversation is AI-eligible.
   // Most flows should leave scheduleAi=false because ManyChat still has
-  // downstream messages to send after the button click. QualifyDMs will
+  // downstream messages to send after the button click. Convlo will
   // pick up when the lead replies via the normal Instagram webhook.
   if (
     payload.scheduleAi === true &&
@@ -389,7 +389,7 @@ export async function processManyChatHandoff(params: {
     );
   } else if (leadResponseInserted) {
     console.log(
-      `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so QualifyDMs will wait for the lead's next Instagram reply.`
+      `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so Convlo will wait for the lead's next Instagram reply.`
     );
   }
 

@@ -17,7 +17,7 @@ const META_THEME_COLORS = {
 };
 
 export const metadata: Metadata = {
-  title: 'DMsetter',
+  title: 'Convlo',
   description: 'AI-powered DM automation dashboard'
 };
 

@@ -112,10 +112,10 @@ export default function AppSidebar() {
                 </div>
                 <div className='grid flex-1 text-left text-sm leading-tight'>
                   <span className='truncate font-semibold'>
-                    {account?.brandName || account?.name || 'DMsetter'}
+                    {account?.brandName || account?.name || 'Convlo'}
                   </span>
                   <span className='text-muted-foreground truncate text-xs'>
-                    DMsetter
+                    Convlo
                   </span>
                 </div>
               </Link>

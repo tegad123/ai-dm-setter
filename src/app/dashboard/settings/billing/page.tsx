@@ -12,7 +12,7 @@ export default async function BillingSettingsPage() {
       <div>
         <h2 className='text-2xl font-bold tracking-tight'>Billing</h2>
         <p className='text-muted-foreground'>
-          Billing controls are managed by the QualifyDMs team.
+          Billing controls are managed by the Convlo team.
         </p>
       </div>
     </div>
