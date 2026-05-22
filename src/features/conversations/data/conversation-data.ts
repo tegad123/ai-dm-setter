@@ -30,7 +30,7 @@ export interface Message {
   // in the "Human Setter" label when present.
   sentByUser?: { id: string; name: string; email?: string } | null;
   // Where a HUMAN message originated:
-  //   'DASHBOARD' — typed into the QualifyDMs app (POST /messages)
+  //   'DASHBOARD' — typed into the Convlo app (POST /messages)
   //   'PHONE'     — sent from the native Instagram / Messenger app,
   //                 captured via is_echo=true webhook
   // Null on AI / LEAD senders and legacy rows.

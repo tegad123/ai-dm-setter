@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { ContentTable } from '@/features/content/components/content-table';
 
 export const metadata = {
-  title: 'DMsetter — Content Attribution'
+  title: 'Convlo — Content Attribution'
 };
 
 export default function ContentPage() {

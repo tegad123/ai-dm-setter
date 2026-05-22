@@ -12,7 +12,7 @@ export default function PrivacyPolicy() {
             1. Information We Collect
           </h2>
           <p>
-            DMsetter collects information you provide when connecting your
+            Convlo collects information you provide when connecting your
             Facebook Page and Instagram Business account, including page access
             tokens, page names, and Instagram usernames. We also process
             messages received through Facebook Messenger and Instagram Direct

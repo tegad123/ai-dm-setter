@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { TeamView } from '@/features/team/components/team-view';
 
 export const metadata = {
-  title: 'DMsetter — Team'
+  title: 'Convlo — Team'
 };
 
 export default function TeamPage() {

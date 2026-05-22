@@ -260,7 +260,7 @@ export async function POST(
         // WHICH operator sent it (Daniel vs another setter on the
         // team) instead of the generic "Human Setter" label.
         // humanSource='DASHBOARD' — this message was typed into the
-        // QualifyDMs UI rather than the native Meta app.
+        // Convlo UI rather than the native Meta app.
         ...(sender === 'HUMAN'
           ? {
               sentByUserId: auth.userId,

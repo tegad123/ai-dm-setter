@@ -1,5 +1,5 @@
 /**
- * Lead Scoring Engine — QualifyDMs
+ * Lead Scoring Engine — Convlo
  *
  * Computes two scores after every message exchange:
  *   1. qualityScore (0-100) on Lead — "How likely is this person to buy?"

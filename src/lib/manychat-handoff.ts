@@ -48,7 +48,7 @@ export const manyChatHandoffSchema = z.object({
   // Lead's button-click response inside the ManyChat flow (e.g. "Yes,
   // send it over!" — what they tapped after the opener). Button taps
   // are internal to ManyChat — they don't fire IG webhooks, so without
-  // this field the conversation in QualifyDMs would show only the
+  // this field the conversation in Convlo would show only the
   // opener and never the lead's first engagement signal. When the
   // operator wires a SECOND External Request in ManyChat right after
   // the button-click step, this field carries the button label back
@@ -57,7 +57,7 @@ export const manyChatHandoffSchema = z.object({
   leadResponseText: z.string().min(1).max(2000).optional(),
   // Most ManyChat flows keep running after this External Request
   // (send the resource, wait, follow up). In that setup the request is
-  // only a context sync and QualifyDMs should wait for the next real
+  // only a context sync and Convlo should wait for the next real
   // lead DM before AI takes over. Set scheduleAi=true only for flows
   // where this request is the final handoff point.
   scheduleAi: manyChatBoolean.optional().default(false)
@@ -109,7 +109,11 @@ export async function processManyChatHandoff(params: {
 
   const account = await prisma.account.findUnique({
     where: { manyChatWebhookKey: webhookKey },
-    select: { id: true, awayModeInstagram: true }
+    select: {
+      id: true,
+      awayModeInstagram: true,
+      defaultAiActive: true
+    }
   });
   if (!account) {
     throw new ManyChatHandoffError('Invalid webhook key', 401);
@@ -248,10 +252,13 @@ export async function processManyChatHandoff(params: {
       data: {
         leadId: existingLead.id,
         personaId,
-        // POLICY (2026-05-06): new conversations always start with AI
-        // OFF. Operator must explicitly toggle on. awayModeInstagram
-        // no longer auto-enables AI on new ManyChat handoffs.
-        aiActive: false,
+        // POLICY (2026-05-21, Tega): a NEW ManyChat lead only gets AI turned
+        // ON when the account's Instagram Away Mode is ON. Away Mode OFF →
+        // aiActive=false, no exceptions (ManyChat handoffs must NOT auto-enable
+        // AI regardless of Away Mode). autoSendOverride stays false; only the
+        // operator's explicit per-conversation toggle turns AI on otherwise.
+        aiActive: account.awayModeInstagram && account.defaultAiActive,
+        autoSendOverride: false,
         unreadCount: 0,
         source: 'MANYCHAT',
         leadSource: 'OUTBOUND',
@@ -286,10 +293,11 @@ export async function processManyChatHandoff(params: {
         conversation: {
           create: {
             personaId: newLeadPersonaId,
-            // POLICY (2026-05-06): new conversations always start with AI
-            // OFF. Operator must explicitly toggle on. awayModeInstagram
-            // no longer auto-enables AI on new ManyChat handoffs.
-            aiActive: false,
+            // POLICY (2026-05-21, Tega): see sibling create at top of this
+            // function. A new ManyChat lead gets AI ON only when Instagram
+            // Away Mode is ON; otherwise aiActive=false (no exceptions).
+            aiActive: account.awayModeInstagram && account.defaultAiActive,
+            autoSendOverride: false,
             unreadCount: 0,
             source: 'MANYCHAT',
             leadSource: 'OUTBOUND',
@@ -354,7 +362,7 @@ export async function processManyChatHandoff(params: {
   // Schedule the AI reply when the lead actually engaged (button click
   // landed as a new LEAD message) and the conversation is AI-eligible.
   // Most flows should leave scheduleAi=false because ManyChat still has
-  // downstream messages to send after the button click. QualifyDMs will
+  // downstream messages to send after the button click. Convlo will
   // pick up when the lead replies via the normal Instagram webhook.
   if (
     payload.scheduleAi === true &&
@@ -381,7 +389,7 @@ export async function processManyChatHandoff(params: {
     );
   } else if (leadResponseInserted) {
     console.log(
-      `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so QualifyDMs will wait for the lead's next Instagram reply.`
+      `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so Convlo will wait for the lead's next Instagram reply.`
     );
   }
 

@@ -57,6 +57,7 @@ import {
   applyResolvedScriptVariables,
   isValidTemplateVariableName,
   persistScriptVariableResolutions,
+  resolveEmittedPlaceholders,
   resolveScriptVariablesForTexts,
   type ScriptVariableResolutionContext,
   type ScriptVariableResolutionMap
@@ -3897,6 +3898,42 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       mismatchMatchedReason: futureStepMismatch.matchedReason
     });
 
+    // Day 4 — resolve-before-strip. The LLM sometimes emits a literal
+    // "{{name}}"/"{{their goal}}" it learned from script/training examples.
+    // If we can resolve those placeholders to the lead's real values via the
+    // already-built gate resolution map, ship a personalized message instead
+    // of surgically stripping them (which yields incoherent copy) or
+    // escalating to a human. Only {{...}} tokens are touched; any that don't
+    // resolve stay literal and fall through to the existing strip → re-prompt
+    // → escalate chain below, so a true unresolvable leak is still blocked.
+    if (
+      gateVariableResolutionMap &&
+      Array.isArray(parsed.messages) &&
+      parsed.messages.some((m) => /\{\{[^}]+\}\}/.test(m))
+    ) {
+      const resolvedEmitted = resolveEmittedPlaceholders(
+        parsed.messages,
+        gateVariableResolutionMap
+      );
+      if (resolvedEmitted.changed) {
+        parsed = {
+          ...parsed,
+          message: resolvedEmitted.messages[0] ?? parsed.message,
+          messages: resolvedEmitted.messages,
+          // If resolution cleared a parser-detected leak, drop the stale flag
+          // so an already-fixed reply doesn't enter the strip/escalate branch.
+          parserMetadataLeak: detectMetadataLeak(
+            resolvedEmitted.messages.join('\n')
+          ).leak
+            ? parsed.parserMetadataLeak
+            : null
+        };
+        console.warn(
+          `[ai-engine] Day4 resolve-before-strip: resolved emitted {{placeholders}} via gate variable map (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+    }
+
     const parsedMetadataLeak = parsed.parserMetadataLeak;
     const generatedTextForLeakCheck = parsed.messages.join('\n');
     const postParseMetadataLeak = detectMetadataLeak(generatedTextForLeakCheck);
@@ -5779,6 +5816,49 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('markdown_in_single_bubble:') ||
             f.includes('repeated_capital_question:')
         );
+        // Verbatim-MSG recovery (2026-05-21): when the ONLY blocking issue is
+        // that the model paraphrased a required operator-authored [MSG], don't
+        // escalate to a human — the system already HAS the exact text, so
+        // deterministically inject it. Asking the LLM to reproduce a fixed
+        // string and checking word overlap is model-independent-fragile (both
+        // Haiku at 0.34 and Sonnet at 0.25 overlap fail it on the belief-break
+        // reframe). Only fires when no OTHER hard-unshippable gate is present
+        // and we have literal (non-placeholder) required text to send.
+        const nonVerbatimHardUnshippable = quality.hardFails.some(
+          (f) =>
+            f.includes('bracketed_placeholder_leaked:') ||
+            f.includes('link_promise_without_url:') ||
+            f.includes('fabricated_url_in_reply:') ||
+            f.includes('call_pitch_before_capital_verification:') ||
+            f.includes('closer_or_call_in_downsell:') ||
+            f.includes('capital_question_premature:') ||
+            f.includes('mandatory_ask_skipped:') ||
+            f.includes('step_distance_violation:') ||
+            f.includes('step_10_deep_why_skipped:') ||
+            f.includes('call_proposal_prereqs_missing:') ||
+            f.includes('silent_branch_violated_with_question:') ||
+            f.includes('missing_required_question_on_ask_step:')
+        );
+        const verbatimViolation = quality.hardFails.some((f) =>
+          f.includes('msg_verbatim_violation:')
+        );
+        const literalInjectMsgs = (activeBranchRequiredMessages ?? [])
+          .filter(
+            (m) =>
+              !m.isPlaceholder &&
+              typeof m.content === 'string' &&
+              m.content.trim().length > 0
+          )
+          .map((m) => m.content.trim());
+        if (literalInjectMsgs.length === 0) {
+          const fb = currentStepRequiredMessagesForGate[0]?.trim();
+          if (fb) literalInjectMsgs.push(fb);
+        }
+        const verbatimRecoverable =
+          verbatimViolation &&
+          !nonVerbatimHardUnshippable &&
+          literalInjectMsgs.length > 0;
+
         if (allBubblesEmpty) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
@@ -5787,6 +5867,31 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           qualityGateTerminalFailure = true;
           qualityGateFailureReason = 'empty_output_after_quality_retries';
           qualityGateHardFails = [...quality.hardFails];
+        } else if (verbatimRecoverable) {
+          parsed.message = literalInjectMsgs[0];
+          parsed.messages = literalInjectMsgs;
+          parsed.escalateToHuman = false;
+          finalQualityScore = quality.score;
+          console.warn(
+            `[ai-engine] msg_verbatim_violation recovered by deterministic injection of operator [MSG] (${literalInjectMsgs.length} bubble(s)) — shipping verbatim, no escalate, on convo ${activeConversationId}`
+          );
+          if (activeConversationId) {
+            await prisma.bookingRoutingAudit
+              .create({
+                data: {
+                  conversationId: activeConversationId,
+                  accountId,
+                  personaMinimumCapital: capitalThreshold,
+                  routingAllowed: false,
+                  regenerationForced: true,
+                  blockReason: 'verbatim_msg_injected',
+                  aiStageReported: parsed.stage || null,
+                  aiSubStageReported: parsed.subStage || null,
+                  contentPreview: literalInjectMsgs.join(' | ').slice(0, 200)
+                }
+              })
+              .catch(() => null);
+          }
         } else if (hardUnshippable) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts with UNSHIPPABLE hard fail — forcing escalate_to_human on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`

@@ -6,8 +6,8 @@
 //
 // Config:
 //   RESEND_API_KEY           — Resend API key (starts with "re_")
-//   EMAIL_FROM               — verified sender, e.g. "QualifyDMs <alerts@yourdomain.com>"
-//                              Defaults to "QualifyDMs <onboarding@resend.dev>"
+//   EMAIL_FROM               — verified sender, e.g. "Convlo <alerts@yourdomain.com>"
+//                              Defaults to "Convlo <onboarding@resend.dev>"
 //                              for local / pre-DNS dev if unset.
 //
 // If RESEND_API_KEY is missing, sendEmail() logs a warning + returns
@@ -31,7 +31,7 @@ export interface SendEmailResult {
 }
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
-const DEFAULT_FROM = 'QualifyDMs <onboarding@resend.dev>';
+const DEFAULT_FROM = 'Convlo <onboarding@resend.dev>';
 
 export async function sendEmail(
   input: SendEmailInput

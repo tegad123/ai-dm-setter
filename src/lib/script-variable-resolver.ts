@@ -787,6 +787,32 @@ export function applyResolvedScriptVariables(
   });
 }
 
+/**
+ * Resolve `{{placeholder}}` tokens the LLM emitted directly into its generated
+ * message bubbles, using an already-built resolution map.
+ *
+ * Used at the metadata-leak guard in ai-engine: a generated "{{name}}" we can
+ * resolve to the lead's real value should ship as a personalized message
+ * rather than being surgically stripped (which yields incoherent copy) or
+ * escalated to a human. Placeholders with no resolution are left untouched so
+ * they still fall through to the strip → re-prompt → escalate chain.
+ */
+export function resolveEmittedPlaceholders(
+  messages: string[],
+  resolutionMap?: ScriptVariableResolutionMap | null
+): { messages: string[]; changed: boolean } {
+  if (!resolutionMap || !Array.isArray(messages)) {
+    return { messages, changed: false };
+  }
+  let changed = false;
+  const resolved = messages.map((message) => {
+    const out = applyResolvedScriptVariables(message, resolutionMap) ?? message;
+    if (out !== message) changed = true;
+    return out;
+  });
+  return { messages: resolved, changed };
+}
+
 export async function persistScriptVariableResolutions(params: {
   conversationId?: string | null;
   resolutions: ScriptVariableResolution[];

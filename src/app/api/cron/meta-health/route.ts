@@ -26,6 +26,7 @@
 import prisma from '@/lib/prisma';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { broadcastNotification } from '@/lib/realtime';
+import { checkTokenHealth } from '@/lib/meta-token-health';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60;
@@ -107,6 +108,7 @@ export async function GET(req: NextRequest) {
     const alertedAccounts = new Set<string>();
     let checked = 0;
     let tokenBad = 0;
+    let transientSkipped = 0;
     let subscriptionBad = 0;
 
     for (const cred of creds) {
@@ -118,39 +120,41 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // ── 1. Token validity ───────────────────────────────────────
-      try {
-        const dbgRes = await fetch(
-          `${GRAPH_API}/debug_token?input_token=${accessToken}&access_token=${appAccessToken}`
-        );
-        const dbgBody = await dbgRes.text();
-        let parsed: { data?: { is_valid?: boolean; error?: unknown } } = {};
-        try {
-          parsed = JSON.parse(dbgBody);
-        } catch {
-          // fallthrough
-        }
-        const isValid = parsed?.data?.is_valid === true;
-        if (!isValid) {
+      // ── 1. Token validity (QD-005: retry-with-backoff + error-code
+      // classification via checkTokenHealth helper). The helper
+      // retries up to 3x on transient Meta errors (code 2, code 4,
+      // HTTP 5xx, fetch throws) before giving up. Only `revoked`
+      // results fire the operator-facing alert — `transient_exhausted`
+      // is logged and the next 15-min cron tick re-checks.
+      const health = await checkTokenHealth({
+        accessToken,
+        appAccessToken,
+        graphApiBase: GRAPH_API
+      });
+      if (!health.ok) {
+        if (health.reason === 'revoked') {
           tokenBad++;
           if (!alertedAccounts.has(cred.accountId)) {
             const fired = await fireThrottledAlert(
               cred.accountId,
               'Meta credential invalidated',
               'Meta credential invalidated — reconnect required',
-              `Health check: Meta access token for this account is no longer valid. Debug_token response: ${dbgBody.slice(0, 400)}. Until you reconnect via Settings → Integrations, AI replies WILL NOT deliver and new inbound DMs may not reach the app.`
+              `Health check: Meta access token for this account is no longer valid (${health.details}). Until you reconnect via Settings → Integrations, AI replies WILL NOT deliver and new inbound DMs may not reach the app.`
             );
             if (fired) alertedAccounts.add(cred.accountId);
           }
-          // No point checking webhook subscription if the token is dead
-          // (the check would just return 400).
-          continue;
+        } else {
+          // transient_exhausted — Meta-side hiccup that didn't clear
+          // within 3 retries. Log + count, but DO NOT alert the
+          // operator. The next cron tick (15 min) will probe again.
+          transientSkipped++;
+          console.warn(
+            `[cron/meta-health] transient probe failure for account ${cred.accountId} (suppressed alert): ${health.lastError}`
+          );
         }
-      } catch (err) {
-        console.error(
-          `[cron/meta-health] debug_token threw for account ${cred.accountId}:`,
-          err
-        );
+        // No point checking webhook subscription if we can't verify
+        // the token (revoked: subsequent call would 401; transient:
+        // would just compound the noise).
         continue;
       }
 
@@ -210,6 +214,7 @@ export async function GET(req: NextRequest) {
       ok: true,
       checked,
       tokenBad,
+      transientSkipped,
       subscriptionBad,
       alerted: alertedAccounts.size
     });

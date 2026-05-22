@@ -104,7 +104,7 @@ export function LandingPage() {
       <div className='nav-wrap'>
         <nav className='nav'>
           <a href='#' className='logo'>
-            <span className='logo-mark'>Q</span>QualifyDMs
+            <span className='logo-mark'>C</span>Convlo
           </a>
           <div className='nav-links'>
             <a href='#how'>How It Works</a>
@@ -334,7 +334,7 @@ export function LandingPage() {
           <div className='compare-table reveal'>
             <div className='ct-head'></div>
             <div className='ct-head'>Human DM Setter</div>
-            <div className='ct-head hl'>QualifyDMs AI</div>
+            <div className='ct-head hl'>Convlo AI</div>
 
             <div className='ct-label'>Response time</div>
             <div className='ct-cell'>
@@ -412,7 +412,7 @@ export function LandingPage() {
               What our <span className='acc'>clients say.</span>
             </h2>
             <p className='section-sub center'>
-              High-ticket creators automating their DM sales with QualifyDMs.
+              High-ticket creators automating their DM sales with Convlo.
             </p>
           </div>
 
@@ -531,7 +531,7 @@ export function LandingPage() {
           </h2>
           <p className='reveal d1'>
             Book a free 30-minute strategy call. We&apos;ll show you exactly how
-            QualifyDMs works on a live account with real conversations.
+            Convlo works on a live account with real conversations.
           </p>
           <div className='reveal d2'>
             <Link href='/auth/sign-up' className='btn btn-primary btn-lg'>
@@ -559,7 +559,7 @@ export function LandingPage() {
       <footer>
         <div className='wrap foot'>
           <a href='#' className='logo'>
-            <span className='logo-mark'>Q</span>QualifyDMs
+            <span className='logo-mark'>C</span>Convlo
           </a>
           <div className='foot-links'>
             <a href='#'>Home</a>
@@ -579,7 +579,7 @@ export function LandingPage() {
               </svg>
             </a>
           </div>
-          <div className='foot-copy'>© 2026 QualifyDMs</div>
+          <div className='foot-copy'>© 2026 Convlo</div>
         </div>
       </footer>
     </div>

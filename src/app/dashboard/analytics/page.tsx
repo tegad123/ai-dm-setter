@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { AnalyticsView } from '@/features/analytics/components/analytics-view';
 
 export const metadata = {
-  title: 'DMsetter — Analytics'
+  title: 'Convlo — Analytics'
 };
 
 export default function AnalyticsPage() {

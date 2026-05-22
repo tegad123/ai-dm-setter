@@ -4,7 +4,6 @@ import {
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
-  IconCommand,
   IconCreditCard,
   IconFile,
   IconFileText,
@@ -47,9 +46,30 @@ import {
 
 export type Icon = React.ComponentType<IconProps>;
 
+// Convlo brand mark — an open "C" ring (currentColor, adapts to theme) with a
+// brand-blue dot in the aperture. Replaces the old placeholder IconCommand.
+const ConvloMark = ({ size = 24, className }: IconProps) => (
+  <svg
+    xmlns='http://www.w3.org/2000/svg'
+    width={size}
+    height={size}
+    viewBox='0 0 24 24'
+    fill='none'
+    className={className}
+  >
+    <path
+      d='M17.6 6.7 A 7.8 7.8 0 1 0 17.6 17.3'
+      stroke='currentColor'
+      strokeWidth='3'
+      strokeLinecap='round'
+    />
+    <circle cx='12.3' cy='12' r='2' fill='#3B82F6' />
+  </svg>
+);
+
 export const Icons = {
   dashboard: IconLayoutDashboard,
-  logo: IconCommand,
+  logo: ConvloMark,
   login: IconLogin,
   close: IconX,
   product: IconBox,

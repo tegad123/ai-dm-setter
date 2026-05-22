@@ -1,7 +1,7 @@
 import { ConversationsView } from '@/features/conversations/components/conversations-view';
 
 export const metadata = {
-  title: 'DMsetter — Conversations'
+  title: 'Convlo — Conversations'
 };
 
 export const dynamic = 'force-dynamic';

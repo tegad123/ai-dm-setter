@@ -1,5 +1,5 @@
 /**
- * Scoring Integration Hook — QualifyDMs
+ * Scoring Integration Hook — Convlo
  *
  * Wires the lead scoring engine into two places:
  *

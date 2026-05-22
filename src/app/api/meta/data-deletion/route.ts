@@ -111,6 +111,6 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     status: 'complete',
     confirmation_code: code,
-    message: 'Your data has been deleted from DMsetter.'
+    message: 'Your data has been deleted from Convlo.'
   });
 }

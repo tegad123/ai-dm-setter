@@ -93,13 +93,13 @@ function describeMetaDeliveryError(params: {
     return 'Instagram permissions are missing or revoked. Reconnect Instagram and confirm messaging permissions.';
   }
   if (params.metaCode === 2 || params.httpStatus === 500) {
-    return 'Meta returned a transient server error. QualifyDMs will retry automatically.';
+    return 'Meta returned a transient server error. Convlo will retry automatically.';
   }
   if (params.permanent) {
     return 'Meta rejected delivery permanently. Operator action is required.';
   }
   if (params.transient) {
-    return 'Meta marked this as temporary. QualifyDMs will retry automatically.';
+    return 'Meta marked this as temporary. Convlo will retry automatically.';
   }
   if (
     typeof params.httpStatus === 'number' &&

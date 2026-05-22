@@ -2,7 +2,7 @@ import PageContainer from '@/components/layout/page-container';
 import { TeamPerformanceView } from '@/features/analytics/components/team-performance-view';
 
 export const metadata = {
-  title: 'DMsetter — Team Performance'
+  title: 'Convlo — Team Performance'
 };
 
 export default function TeamPerformancePage() {

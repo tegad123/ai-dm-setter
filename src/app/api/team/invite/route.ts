@@ -101,17 +101,17 @@ export async function POST(request: NextRequest) {
     // Best-effort email — no-ops gracefully if RESEND_API_KEY isn't set.
     const inviteEmail = await sendEmail({
       to: email,
-      subject: `${auth.name} invited you to QualifyDMs`,
+      subject: `${auth.name} invited you to Convlo`,
       text: `Hey,
 
-${auth.name} invited you to their QualifyDMs workspace as a ${role.toLowerCase().replace('_', ' ')}.
+${auth.name} invited you to their Convlo workspace as a ${role.toLowerCase().replace('_', ' ')}.
 
 Sign up here to accept: ${inviteUrl}
 
 Sign up with this email address (${email}) so the invite gets matched correctly.
 
 —
-QualifyDMs`
+Convlo`
     });
 
     return NextResponse.json({

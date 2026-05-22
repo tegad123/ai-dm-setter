@@ -62,16 +62,16 @@ export async function POST(request: NextRequest) {
     const inviteUrl = `${origin.replace(/\/$/, '')}/auth/sign-up?email=${encodeURIComponent(email)}&role=manager`;
     const inviteEmail = await sendEmail({
       to: email,
-      subject: 'You were invited to manage QualifyDMs client accounts',
+      subject: 'You were invited to manage Convlo client accounts',
       text: `Hey ${name},
 
-You were invited to QualifyDMs as a manager.
+You were invited to Convlo as a manager.
 
 Accept the invite here: ${inviteUrl}
 
 Use this email address (${email}) when you sign up so the invite attaches to your manager role.
 
-QualifyDMs`
+Convlo`
     });
 
     return NextResponse.json({

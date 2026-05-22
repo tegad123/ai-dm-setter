@@ -672,13 +672,15 @@ export function isRescheduleSignal(text: string | null | undefined): boolean {
  *   (b) operator explicitly enabled per-conversation override
  *       (autoSendOverride=true, set by the ai-toggle route)
  *
- * Why awayMode is back: Conversation.aiActive @default(true) in the
- * schema means every row starts with aiActive=true. A pure aiActive
- * gate would fire on every lead on every account regardless of whether
- * the operator enabled AI. The awayMode || autoSendOverride term is
- * the account/intent check that scopes auto-send to accounts where
- * the operator turned it on, plus any conversations where they
- * explicitly overrode it per-conversation.
+ * History note: prior to 2026-05-18 the schema default for
+ * Conversation.aiActive was true and this gate's awayMode term was
+ * what scoped auto-send to opted-in accounts. The 2026-05-06
+ * migration flipped that default to false (defensive: review-first
+ * for every new lead). The 2026-05-18 fix introduces
+ * Account.defaultAiActive (default true) and sets BOTH aiActive AND
+ * autoSendOverride to that value on inbound conversation create —
+ * so the awayMode term remains a platform-wide kill switch but is
+ * no longer required for autonomous behavior on new leads.
  */
 export function shouldAutoSendReply(args: {
   aiActive: boolean;
@@ -1065,11 +1067,21 @@ export async function processIncomingMessage(
       select: {
         awayMode: true,
         awayModeInstagram: true,
-        awayModeFacebook: true
+        awayModeFacebook: true,
+        defaultAiActive: true
       }
     });
     const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
-    const shouldEnableAI = isOngoing ? false : awayModeForPlatform;
+    // POLICY (2026-05-21, Tega): a NEW lead only gets AI turned ON when the
+    // account's Away Mode is ON for this platform. Away Mode OFF → aiActive
+    // stays false — no new lead gets AI, no exceptions. Only existing
+    // conversations the operator explicitly toggled on stay active.
+    // `defaultAiActive` is an additional per-account opt-out (can keep AI off
+    // even in Away Mode). Ongoing-conversation messages always start AI off —
+    // the existing thread keeps its operator-controlled state.
+    const shouldEnableAI = isOngoing
+      ? false
+      : awayModeForPlatform && (account?.defaultAiActive ?? true);
 
     // ── ManyChat handoff detection + recovery (2026-04-30, expanded 2026-05-06) ──
     // For Instagram leads on accounts that have a ManyChat
@@ -1173,13 +1185,22 @@ export async function processIncomingMessage(
         conversation: {
           create: {
             personaId: newConversationPersonaId,
-            // POLICY (2026-05-06): new conversations are created with
-            // AI OFF. Operator must explicitly toggle AI on. This
-            // overrides the legacy awayMode-based default. Going
-            // forward awayMode no longer auto-enables AI on new
-            // inbound leads — same applies to ongoing-conversation
-            // detection (the old `shouldEnableAI` ternary is gone).
-            aiActive: false,
+            // POLICY (2026-05-21, supersedes 2026-05-18): new
+            // conversations honor the account's `defaultAiActive`
+            // setting for whether the AI is engaged (`aiActive`), but
+            // **Away Mode remains the gate for auto-sending**. We do NOT
+            // force `autoSendOverride` on create — it stays false so
+            // `shouldAutoSendReply` (= aiActive && (awayMode ||
+            // autoSendOverride)) only auto-responds when the account's
+            // Away Mode is ON. With Away Mode OFF the AI still generates
+            // but stays in suggestion mode for operator review (and a
+            // brand-new lead never auto-replies before opt-in — the
+            // @l.galeza risk). `autoSendOverride` is set true only by the
+            // operator's explicit per-conversation AI toggle.
+            // (Corrects the 2026-05-18 QD-059 fix, which mirrored
+            // autoSendOverride=aiActive and bypassed Away Mode.)
+            aiActive: shouldEnableAI,
+            autoSendOverride: false,
             unreadCount: 1,
             leadEmail: detectedEmail,
             source: initialSource,
@@ -1549,7 +1570,7 @@ export async function processIncomingMessage(
           title,
           body:
             `${resolvedName} (@${resolvedHandle}) replied while this conversation was awaiting human review. ` +
-            'QualifyDMs cleared the stale review flag and resumed AI scheduling.',
+            'Convlo cleared the stale review flag and resumed AI scheduling.',
           leadId: lead.id
         }
       });
@@ -5553,7 +5574,7 @@ export async function processAdminMessage(
   // Save as HUMAN message (genuinely sent by a human admin).
   // humanSource='PHONE' — this message came via Meta's echo webhook,
   // i.e. the operator typed it in the native Instagram / Messenger
-  // app on their phone rather than through QualifyDMs. The UI uses
+  // app on their phone rather than through Convlo. The UI uses
   // this to render a "from phone" badge.
   const message = await prisma.message.create({
     data: {

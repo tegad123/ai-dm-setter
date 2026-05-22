@@ -184,11 +184,20 @@ export async function GET(req: NextRequest) {
     );
 
     // Step 5: Subscribe to webhook events so Meta forwards DMs.
-    // Instagram DM webhooks are delivered via the linked Facebook Page.
-    // We need to find the Page that owns this IG account and subscribe it.
-    // The discovered IG Business Account ID (17841… format) is what Meta
-    // sends as `entry.id` in webhook payloads — it MUST be persisted to
-    // credential metadata so the webhook router can resolve the account.
+    //
+    // 5a. PRIMARY (QD-004b) — subscribe the Instagram-Login account directly
+    // on the Instagram graph. This is the ONLY path that works for a
+    // standalone Instagram-Login connection (which has no accessible Facebook
+    // Page). Previously the callback only attempted the page-based subscribe
+    // below, which fails for IG-Login tokens — so Meta stored DMs but never
+    // pushed a webhook, and inbound DMs silently never reached the app.
+    const igLoginSubscribed =
+      await subscribeInstagramDirectWebhooks(accessToken);
+
+    // 5b. SECONDARY — if this IG account is linked to a Facebook Page, also
+    // subscribe the page and discover the 17841… IG Business Account ID that
+    // Meta sends as `entry.id` for page-delivered webhook events. Persisted
+    // to credential metadata so the webhook router can resolve the account.
     // (See incident 2026-05-04: PR #9 removed the single-account fallback
     // that masked this lookup gap.)
     const discoveredIgBusinessAccountId = await subscribeInstagramWebhooks(
@@ -197,30 +206,41 @@ export async function GET(req: NextRequest) {
       state.accountId
     );
 
-    if (discoveredIgBusinessAccountId) {
-      await saveCredentials(
-        state.accountId,
-        'INSTAGRAM',
-        { accessToken },
-        {
-          igUserId,
-          instagramAccountId: igUserId,
-          igBusinessAccountId: discoveredIgBusinessAccountId,
-          username,
-          name,
-          profilePicture,
-          followersCount: String(followersCount)
-        }
-      );
+    // Persist the final metadata once — ALWAYS, even when page discovery
+    // fails (the common IG-Login case), so the direct-subscription state and
+    // any discovered business-account ID are both recorded.
+    await saveCredentials(
+      state.accountId,
+      'INSTAGRAM',
+      { accessToken },
+      {
+        igUserId,
+        instagramAccountId: igUserId,
+        ...(discoveredIgBusinessAccountId
+          ? { igBusinessAccountId: discoveredIgBusinessAccountId }
+          : {}),
+        username,
+        name,
+        profilePicture,
+        followersCount: String(followersCount),
+        webhookSubscribed: igLoginSubscribed,
+        webhookSubscribedAt: new Date().toISOString()
+      }
+    );
+
+    if (igLoginSubscribed) {
       console.log(
-        `[instagram-oauth] Persisted IG Business Account ID ${discoveredIgBusinessAccountId} ` +
-          `for @${username} (igUserId=${igUserId}). Webhook routing will now resolve this account.`
+        `[instagram-oauth] Direct IG webhook subscription active for @${username} (${igUserId})` +
+          (discoveredIgBusinessAccountId
+            ? `; also persisted IG Business Account ID ${discoveredIgBusinessAccountId}.`
+            : '.')
       );
     } else {
       console.warn(
-        `[instagram-oauth] Could not discover IG Business Account ID for @${username} (${igUserId}). ` +
-          `Webhook routing for this account will fail until an operator runs ` +
-          `scripts/set-ig-business-account-id.ts manually with the entry.id from a real webhook.`
+        `[instagram-oauth] Could not subscribe @${username} (${igUserId}) to webhooks ` +
+          `(direct IG subscribe failed${discoveredIgBusinessAccountId ? '' : ' and no linked page found'}). ` +
+          `Inbound DMs will not arrive until the subscription succeeds — retry the connection ` +
+          `or POST /me/subscribed_apps?subscribed_fields=messages with the IG token.`
       );
     }
 
@@ -358,6 +378,58 @@ async function subscribeInstagramWebhooks(
   } catch (err) {
     console.error('[instagram-oauth] Webhook subscription error:', err);
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// QD-004b — Subscribe an Instagram-Login account to messaging webhooks
+// directly on the Instagram graph (graph.instagram.com/me/subscribed_apps).
+// This is the correct (and only) subscribe path for a standalone
+// Instagram-Login connection: it has no Facebook Page, so the page-based
+// subscribe never applies. Returns true only if the subscription is
+// confirmed by a follow-up read of /me/subscribed_apps.
+// ---------------------------------------------------------------------------
+
+async function subscribeInstagramDirectWebhooks(
+  igAccessToken: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${GRAPH_API}/v21.0/me/subscribed_apps?subscribed_fields=messages`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${igAccessToken}` }
+      }
+    );
+    const body = await res.text();
+    if (!res.ok) {
+      console.error(
+        '[instagram-oauth] Direct IG webhook subscribe failed:',
+        res.status,
+        body.slice(0, 300)
+      );
+      return false;
+    }
+
+    // Verify it actually persisted — a 200 with {"success":true} can still
+    // be empty if the app lacks the messaging permission, so read it back.
+    const verifyRes = await fetch(
+      `${GRAPH_API}/v21.0/me/subscribed_apps?access_token=${igAccessToken}`
+    );
+    const verifyBody = await verifyRes.text();
+    const confirmed =
+      verifyRes.ok &&
+      /"subscribed_fields"\s*:\s*\[[^\]]*messages/.test(verifyBody);
+    console.log(
+      `[instagram-oauth] Direct IG webhook subscribe ${confirmed ? 'confirmed' : 'UNCONFIRMED'}: ${verifyBody.slice(0, 200)}`
+    );
+    return confirmed;
+  } catch (err: any) {
+    console.error(
+      '[instagram-oauth] Direct IG webhook subscribe threw:',
+      err?.message || err
+    );
+    return false;
   }
 }
 

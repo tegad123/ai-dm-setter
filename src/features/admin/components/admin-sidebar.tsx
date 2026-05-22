@@ -64,7 +64,7 @@ export function AdminSidebar({ role }: { role: string }) {
     <aside className='w-64 shrink-0 border-r border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900'>
       <div className='mb-6 px-2'>
         <h1 className='text-sm font-semibold tracking-wide text-zinc-500 uppercase'>
-          QualifyDMs Admin
+          Convlo Admin
         </h1>
         <p className='text-xs text-zinc-400'>Platform operator console</p>
       </div>
