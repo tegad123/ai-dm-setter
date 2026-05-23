@@ -11,6 +11,7 @@ const PROVIDERS = [
   'ELEVENLABS',
   'LEADCONNECTOR',
   'CALENDLY',
+  'GOOGLE_CALENDAR',
   'MANYCHAT',
   'TYPEFORM'
 ] as const;

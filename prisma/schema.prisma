@@ -115,6 +115,7 @@ enum IntegrationProvider {
   ANTHROPIC
   CALENDLY
   CALCOM
+  GOOGLE_CALENDAR
   MANYCHAT
   TYPEFORM
 }

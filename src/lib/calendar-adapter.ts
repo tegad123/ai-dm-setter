@@ -1,5 +1,9 @@
 import { getCredentials } from '@/lib/credential-store';
 import { randomUUID } from 'crypto';
+import {
+  getGoogleCalendarAvailability,
+  bookGoogleCalendarAppointment
+} from '@/lib/google-calendar';
 
 // ---------------------------------------------------------------------------
 // Diagnostic logging — temporary verbose logging for booking diagnosis.
@@ -35,7 +39,7 @@ export interface TimeSlot {
 }
 
 export interface AvailabilityResult {
-  provider: 'leadconnector' | 'calendly' | 'calcom' | 'none';
+  provider: 'leadconnector' | 'calendly' | 'calcom' | 'google' | 'none';
   slots: TimeSlot[];
   timezone?: string;
 }
@@ -54,7 +58,7 @@ export interface BookingParams {
 
 export interface BookingResult {
   success: boolean;
-  provider: 'leadconnector' | 'calendly' | 'calcom' | 'none';
+  provider: 'leadconnector' | 'calendly' | 'calcom' | 'google' | 'none';
   appointmentId?: string;
   contactId?: string;
   confirmationUrl?: string;
@@ -167,6 +171,31 @@ export async function getUnifiedAvailability(
     return { provider: 'calcom', slots };
   }
 
+  // 4. Google Calendar
+  const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
+  if (googleCreds?.refreshToken || googleCreds?.accessToken) {
+    try {
+      const slots = await getGoogleCalendarAvailability(
+        accountId,
+        googleCreds as {
+          accessToken?: string;
+          refreshToken?: string;
+          calendarId?: string;
+        },
+        range,
+        timezone
+      );
+      calLog(
+        'UnifiedAvailability.googleSuccess',
+        { slotCount: slots.length },
+        reqId
+      );
+      return { provider: 'google', slots, timezone };
+    } catch (err) {
+      calLog('UnifiedAvailability.googleFailed', { error: String(err) }, reqId);
+    }
+  }
+
   return { provider: 'none', slots: [] };
 }
 
@@ -256,6 +285,30 @@ export async function bookUnifiedAppointment(
       params
     );
     return { ...result, provider: 'calcom', startTime: params.slotStart };
+  }
+
+  // 4. Google Calendar
+  const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
+  if (googleCreds?.refreshToken || googleCreds?.accessToken) {
+    const result = await bookGoogleCalendarAppointment(
+      accountId,
+      googleCreds as {
+        accessToken?: string;
+        refreshToken?: string;
+        calendarId?: string;
+      },
+      params
+    );
+    calLog(
+      'UnifiedBooking.googleResult',
+      {
+        success: result.success,
+        appointmentId: result.appointmentId,
+        error: result.error
+      },
+      reqId
+    );
+    return result;
   }
 
   return {

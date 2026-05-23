@@ -30,6 +30,7 @@ type Provider =
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'CALENDLY'
+  | 'GOOGLE_CALENDAR'
   | 'MANYCHAT'
   | 'TYPEFORM';
 type AIProvider = 'OPENAI' | 'ANTHROPIC';
@@ -112,6 +113,7 @@ export default function IntegrationsPage() {
     ELEVENLABS: false,
     LEADCONNECTOR: false,
     CALENDLY: false,
+    GOOGLE_CALENDAR: false,
     MANYCHAT: false,
     TYPEFORM: false
   });
@@ -180,6 +182,10 @@ export default function IntegrationsPage() {
   const [igMetadata, setIgMetadata] = useState<Record<string, any> | null>(
     null
   );
+  const [googleMetadata, setGoogleMetadata] = useState<Record<
+    string,
+    any
+  > | null>(null);
 
   // Loading
   const [loading, setLoading] = useState(true);
@@ -220,6 +226,9 @@ export default function IntegrationsPage() {
         }
         if (i.provider === 'INSTAGRAM' && i.metadata) {
           setIgMetadata(i.metadata as any);
+        }
+        if (i.provider === 'GOOGLE_CALENDAR' && i.metadata) {
+          setGoogleMetadata(i.metadata as any);
         }
         // Hydrate LeadConnector config from metadata (non-secret values)
         if (i.provider === 'LEADCONNECTOR' && i.metadata) {
@@ -295,10 +304,19 @@ export default function IntegrationsPage() {
     } else if (connected === 'instagram') {
       toast.success(`Instagram @${ig || 'account'} connected!`);
       window.history.replaceState({}, '', window.location.pathname);
+    } else if (connected === 'google-calendar') {
+      const email = params.get('email');
+      toast.success(`Google Calendar connected${email ? ` (${email})` : ''}!`);
+      window.history.replaceState({}, '', window.location.pathname);
     } else if (error) {
       const errorMessages: Record<string, string> = {
         meta_denied: 'Facebook login was cancelled',
         instagram_denied: 'Instagram login was cancelled',
+        google_denied: 'Google Calendar authorization was cancelled',
+        google_token_exchange: 'Failed to exchange Google token',
+        google_missing_scopes:
+          'Calendar access was not granted. Please reconnect and tick the calendar permission checkboxes (or "Select all") so the AI can read availability and book calls.',
+        google_unknown: 'Google Calendar connection failed — please try again',
         missing_params: 'OAuth callback missing parameters',
         invalid_state: 'Invalid OAuth state — please try again',
         platform_config: 'Platform not configured — contact support',
@@ -311,7 +329,10 @@ export default function IntegrationsPage() {
         unknown: 'Connection failed — please try again'
       };
       toast.error(errorMessages[error] || `Connection error: ${error}`, {
-        duration: error === 'no_pages' ? 15000 : 5000
+        duration:
+          error === 'no_pages' || error === 'google_missing_scopes'
+            ? 15000
+            : 5000
       });
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -656,6 +677,7 @@ export default function IntegrationsPage() {
       }
       if (provider === 'META') setMetaMetadata(null);
       if (provider === 'INSTAGRAM') setIgMetadata(null);
+      if (provider === 'GOOGLE_CALENDAR') setGoogleMetadata(null);
     } catch {
       toast.error('Failed to disconnect');
     }
@@ -1117,6 +1139,92 @@ export default function IntegrationsPage() {
                 onClick={() => disconnectProvider('CALENDLY')}
               >
                 Disconnect
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Card: Google Calendar (OAuth) */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-3'>
+                <div className='ring-border flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white ring-1'>
+                  <svg viewBox='0 0 24 24' className='h-5 w-5' fill='none'>
+                    <rect
+                      x='3'
+                      y='4.5'
+                      width='18'
+                      height='16'
+                      rx='2'
+                      fill='#4285F4'
+                    />
+                    <rect
+                      x='3'
+                      y='4.5'
+                      width='18'
+                      height='4'
+                      rx='2'
+                      fill='#1A73E8'
+                    />
+                    <rect
+                      x='10'
+                      y='11'
+                      width='4'
+                      height='4'
+                      rx='0.5'
+                      fill='#fff'
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle>Google Calendar</CardTitle>
+                  <CardDescription>
+                    Let the AI check your availability and book calls directly
+                    on your Google Calendar (with a Google Meet link).
+                  </CardDescription>
+                </div>
+              </div>
+              <StatusBadge connected={statuses.GOOGLE_CALENDAR} />
+            </div>
+          </CardHeader>
+          <CardContent>
+            {statuses.GOOGLE_CALENDAR ? (
+              <div className='space-y-1'>
+                {googleMetadata?.email && (
+                  <p className='text-sm font-semibold'>
+                    {googleMetadata.email}
+                  </p>
+                )}
+                <p className='text-muted-foreground text-sm'>
+                  Connected — the AI books qualified leads onto this Google
+                  Calendar automatically.
+                </p>
+              </div>
+            ) : (
+              <p className='text-muted-foreground text-sm'>
+                Connect your Google account so the AI can read your free/busy
+                times and create events when a lead books a call.
+              </p>
+            )}
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            {statuses.GOOGLE_CALENDAR ? (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('GOOGLE_CALENDAR')}
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  window.location.href = '/api/auth/google-calendar/connect';
+                }}
+              >
+                Connect Google Calendar
               </Button>
             )}
           </CardFooter>
