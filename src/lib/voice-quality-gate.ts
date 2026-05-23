@@ -61,9 +61,13 @@ export const METADATA_LEAK_PATTERNS: RegExp[] = [
   /\[[\s{]*"[^"]+"\s*:\s*[^\]]+\]/,
 
   // Variable-style placeholders and script/template leakage.
-  /\[[A-Z][A-Z_\s]+\]/,
+  // 2026-05-23: case-insensitive so lowercase template placeholders like
+  // "[your offer]", "[their goal]", "[name]" are caught too — not just
+  // ALL-CAPS "[BOOKING LINK]". A lead must never receive an unfilled bracket
+  // placeholder. Letter-led, 3+ chars inside, so "[9:30]" / "[ok]" don't trip.
+  /\[[A-Za-z][A-Za-z0-9 _]{2,40}\]/,
   /\{\{[^}]+\}\}/,
-  /<[A-Z_]+>/,
+  /<[A-Za-z_]+>/,
 
   // System annotations and URL-encoded structured data fragments.
   /\(note\s*:\s*[^)]+\)/i,
@@ -2088,7 +2092,10 @@ export function scoreVoiceQuality(
   // course-payment / Whop / checkout variants that were specifically
   // surfaced by the George 2026-04-08 incident, and lets the retry
   // directive provide the EXACT replacement URL on regen.
-  const BRACKETED_PLACEHOLDER_REGEX = /\[[A-Z][A-Z0-9 _]{2,}\]/;
+  // Case-insensitive (2026-05-23): also catches lowercase template
+  // placeholders like "[your offer]" that leaked to a lead, not just
+  // ALL-CAPS link tokens.
+  const BRACKETED_PLACEHOLDER_REGEX = /\[[A-Za-z][A-Za-z0-9 _]{2,}\]/;
   // Course-payment / Whop / checkout variants — case-insensitive so a
   // lowercase variant like "[course payment link]" doesn't slip past
   // the all-caps generic regex. Each is its own pattern so the failure
