@@ -4,6 +4,7 @@ import {
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconCalendar,
   IconCreditCard,
   IconFile,
   IconFileText,
@@ -69,6 +70,7 @@ const ConvloMark = ({ size = 24, className }: IconProps) => (
 
 export const Icons = {
   dashboard: IconLayoutDashboard,
+  calendar: IconCalendar,
   logo: ConvloMark,
   login: IconLogin,
   close: IconX,
