@@ -4826,6 +4826,10 @@ async function sendAIReply(
   // in the post-delivery block below.
   let bookingAttempted = false;
   let bookingSucceeded = false;
+  // Link-mode (Calendly): the provider can't confirm server-side, so we drop a
+  // real scheduling link and let the lead self-book. This is NOT a confirmed
+  // booking — we never mark the lead BOOKED or claim "locked in" off it.
+  let bookingRequiresLeadAction = false;
   const bookingSlotIso = result.selectedSlotIso ?? null;
   if (result.subStage === 'BOOKING_CONFIRM' && bookingSlotIso) {
     bookingAttempted = true;
@@ -4839,30 +4843,52 @@ async function sendAIReply(
         slotStart: bookingSlotIso,
         timezone: result.leadTimezone ?? undefined
       });
-      bookingSucceeded = booking.success && booking.provider !== 'none';
-      if (bookingSucceeded) {
-        const meetUrl =
-          booking.meetingUrl ||
-          booking.confirmationUrl ||
-          booking.bookingUrl ||
-          null;
+
+      if (booking.requiresLeadAction) {
+        // ── Link-mode (Calendly) ──────────────────────────────────
+        // Append the working scheduling link; the lead picks a time and
+        // confirms on the provider. Do not treat as a confirmed booking.
+        bookingRequiresLeadAction = true;
+        const link = booking.bookingUrl || booking.confirmationUrl || null;
         if (
-          meetUrl &&
+          link &&
           Array.isArray(result.messages) &&
           result.messages.length > 0 &&
-          !result.messages.some((m) => m.includes(meetUrl))
+          !result.messages.some((m) => m.includes(link))
         ) {
           const i = result.messages.length - 1;
-          result.messages[i] = `${result.messages[i]}\n${meetUrl}`;
+          result.messages[i] = `${result.messages[i]}\n${link}`;
           result.reply = result.messages.join('\n');
         }
         console.log(
-          `[webhook-processor] auto-booked via ${booking.provider} (appt=${booking.appointmentId}) for ${conversationId}`
+          `[webhook-processor] calendly link-mode (success=${booking.success}) for ${conversationId} — dropped scheduling link, awaiting self-book`
         );
       } else {
-        console.warn(
-          `[webhook-processor] auto-book FAILED (provider=${booking.provider} error=${booking.error}) for ${conversationId} — shipping safe holding line, no fake confirmation`
-        );
+        bookingSucceeded = booking.success && booking.provider !== 'none';
+        if (bookingSucceeded) {
+          const meetUrl =
+            booking.meetingUrl ||
+            booking.confirmationUrl ||
+            booking.bookingUrl ||
+            null;
+          if (
+            meetUrl &&
+            Array.isArray(result.messages) &&
+            result.messages.length > 0 &&
+            !result.messages.some((m) => m.includes(meetUrl))
+          ) {
+            const i = result.messages.length - 1;
+            result.messages[i] = `${result.messages[i]}\n${meetUrl}`;
+            result.reply = result.messages.join('\n');
+          }
+          console.log(
+            `[webhook-processor] auto-booked via ${booking.provider} (appt=${booking.appointmentId}) for ${conversationId}`
+          );
+        } else {
+          console.warn(
+            `[webhook-processor] auto-book FAILED (provider=${booking.provider} error=${booking.error}) for ${conversationId} — shipping safe holding line, no fake confirmation`
+          );
+        }
       }
     } catch (err) {
       console.error(
@@ -4871,7 +4897,9 @@ async function sendAIReply(
       );
       bookingSucceeded = false;
     }
-    if (!bookingSucceeded) {
+    // Only swap to a holding line on a true booking failure — never when a
+    // scheduling link was dropped (link-mode) or the booking actually succeeded.
+    if (!bookingSucceeded && !bookingRequiresLeadAction) {
       const holding = 'give me one sec to get that locked in for you 🙏';
       result.reply = holding;
       result.messages = [holding];
@@ -4970,7 +4998,15 @@ async function sendAIReply(
   // Re-enabled 2026-05-23 (Tega) now that Google Calendar is a reliable
   // provider.
   if (result.subStage === 'BOOKING_CONFIRM' && bookingAttempted) {
-    if (bookingSucceeded && bookingSlotIso) {
+    if (bookingRequiresLeadAction) {
+      // Link-mode (Calendly): a working scheduling link was dropped above. The
+      // lead self-books and the provider confirms — we do NOT mark BOOKED here
+      // (that happens via a provider webhook or a human). Leave the stage as-is
+      // so the lead stays in the active funnel until they pick a time.
+      console.log(
+        `[webhook-processor] BOOKING_CONFIRM link-mode for ${conversationId} — scheduling link sent, stage unchanged pending self-book`
+      );
+    } else if (bookingSucceeded && bookingSlotIso) {
       const scheduledCallAt = new Date(bookingSlotIso);
       await prisma.conversation
         .update({ where: { id: conversationId }, data: { scheduledCallAt } })

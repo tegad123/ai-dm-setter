@@ -11,6 +11,7 @@ const PROVIDERS = [
   'ELEVENLABS',
   'LEADCONNECTOR',
   'CALENDLY',
+  'CALCOM',
   'GOOGLE_CALENDAR',
   'MANYCHAT',
   'TYPEFORM'
@@ -28,7 +29,11 @@ export async function GET(req: NextRequest) {
     const [account, credentials] = await Promise.all([
       prisma.account.findUnique({
         where: { id: auth.accountId },
-        select: { id: true, manyChatWebhookKey: true }
+        select: {
+          id: true,
+          manyChatWebhookKey: true,
+          activeCalendarProvider: true
+        }
       }),
       prisma.integrationCredential.findMany({
         where: { accountId: auth.accountId },
@@ -56,6 +61,7 @@ export async function GET(req: NextRequest) {
             'ELEVENLABS',
             'LEADCONNECTOR',
             'CALENDLY',
+            'CALCOM',
             'MANYCHAT',
             'TYPEFORM'
           ].includes(provider)
@@ -92,7 +98,8 @@ export async function GET(req: NextRequest) {
       account: account
         ? {
             id: account.id,
-            manyChatWebhookKey: account.manyChatWebhookKey
+            manyChatWebhookKey: account.manyChatWebhookKey,
+            activeCalendarProvider: account.activeCalendarProvider ?? null
           }
         : null,
       personaConfig: persona?.promptConfig ?? null
