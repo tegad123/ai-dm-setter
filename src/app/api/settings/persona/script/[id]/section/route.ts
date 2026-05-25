@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 import Anthropic from '@anthropic-ai/sdk';
 import { SECTION_REGENERATE_PROMPT } from '@/lib/persona-breakdown-prompts';
@@ -281,6 +282,8 @@ export async function POST(
         { status: error.status }
       );
     }
+    const aiErr = AIServiceError.from(error);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     console.error(
       'POST /api/settings/persona/script/[id]/section error:',
       error

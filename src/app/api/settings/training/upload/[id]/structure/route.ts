@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 import Anthropic from '@anthropic-ai/sdk';
 import {
@@ -303,6 +304,8 @@ export async function POST(
         { status: error.status }
       );
     }
+    const aiErr = AIServiceError.from(error);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     const errMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('[training-structure] Error:', errMsg);
 

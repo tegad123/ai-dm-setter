@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 // Vercel Blob removed — PDF base64 stored in DB directly
 import Anthropic from '@anthropic-ai/sdk';
@@ -254,6 +255,8 @@ export async function POST(req: NextRequest) {
         { status: error.status }
       );
     }
+    const aiErr = AIServiceError.from(error);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     const errMsg = error instanceof Error ? error.message : String(error);
     const errStack =
       error instanceof Error
