@@ -214,9 +214,12 @@ export async function getUnifiedAvailability(
       if (calcomCreds?.apiKey) {
         const slots = await getCalcomAvailability(
           calcomCreds.apiKey as string,
-          range
+          range,
+          calcomCreds.eventTypeId ? Number(calcomCreds.eventTypeId) : undefined,
+          timezone,
+          reqId
         );
-        return { provider: 'calcom', slots };
+        return { provider: 'calcom', slots, timezone };
       }
     } else if (key === 'GOOGLE_CALENDAR') {
       const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
@@ -349,9 +352,11 @@ export async function bookUnifiedAppointment(
       if (calcomCreds?.apiKey) {
         const result = await bookCalcomAppointment(
           calcomCreds.apiKey as string,
-          params
+          params,
+          calcomCreds.eventTypeId ? Number(calcomCreds.eventTypeId) : undefined,
+          reqId
         );
-        return { ...result, provider: 'calcom', startTime: params.slotStart };
+        return { ...result, startTime: params.slotStart };
       }
     } else if (key === 'GOOGLE_CALENDAR') {
       const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
@@ -906,54 +911,214 @@ async function getCalendlyAvailability(
 }
 
 // ---------------------------------------------------------------------------
-// Cal.com — fallback
+// Cal.com — v2 API (v1 was decommissioned 2026; returns HTTP 410)
+//
+// Auth: Bearer <cal_live_…>. Endpoints are date-versioned via the
+// `cal-api-version` header (different version per endpoint family). Bookings
+// only need a start + eventTypeId; Cal.com computes the end from the event
+// type's configured length.
 // ---------------------------------------------------------------------------
+
+const CALCOM_V2_BASE = 'https://api.cal.com/v2';
+const CALCOM_VER_EVENT_TYPES = '2024-06-14';
+const CALCOM_VER_SLOTS = '2024-09-04';
+const CALCOM_VER_BOOKINGS = '2024-08-13';
+const SLOT_MINUTES = 30; // default slot length when an event type omits it
+const DEFAULT_WINDOW_DAYS = 14; // default availability look-ahead
+
+function calcomHeaders(
+  apiKey: string,
+  version: string
+): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'cal-api-version': version
+  };
+}
+
+/**
+ * Resolve which Cal.com event type to use. Honors a stored preferredId
+ * (from integration metadata); otherwise falls back to the account's first
+ * event type. Returns the id + configured length so availability can compute
+ * slot end times.
+ */
+async function getCalcomEventType(
+  apiKey: string,
+  preferredId?: number,
+  requestId?: string
+): Promise<{ id: number; lengthMinutes: number } | null> {
+  try {
+    const res = await fetch(`${CALCOM_V2_BASE}/event-types`, {
+      headers: calcomHeaders(apiKey, CALCOM_VER_EVENT_TYPES)
+    });
+    if (!res.ok) {
+      calLog(
+        'Calcom.eventTypes.failed',
+        { status: res.status, body: (await res.text()).slice(0, 300) },
+        requestId
+      );
+      return null;
+    }
+    const data = await res.json();
+    const list: any[] = Array.isArray(data?.data) ? data.data : [];
+    if (list.length === 0) return null;
+    const chosen =
+      (preferredId && list.find((e) => e.id === preferredId)) || list[0];
+    return {
+      id: chosen.id,
+      lengthMinutes: chosen.lengthInMinutes ?? chosen.length ?? SLOT_MINUTES
+    };
+  } catch (err) {
+    calLog('Calcom.eventTypes.threw', { error: String(err) }, requestId);
+    return null;
+  }
+}
 
 async function getCalcomAvailability(
   apiKey: string,
-  _dateRange?: { start: string; end: string }
+  dateRange?: { start: string; end: string },
+  eventTypeId?: number,
+  timeZone: string = 'UTC',
+  requestId?: string
 ): Promise<TimeSlot[]> {
   try {
-    const res = await fetch(
-      'https://api.cal.com/v1/availability?apiKey=' + apiKey
-    );
-    if (!res.ok) return [];
+    const et = await getCalcomEventType(apiKey, eventTypeId, requestId);
+    if (!et) return [];
+
+    const now = new Date();
+    const startDay = (dateRange?.start ? new Date(dateRange.start) : now)
+      .toISOString()
+      .slice(0, 10);
+    const endDay = (
+      dateRange?.end
+        ? new Date(dateRange.end)
+        : new Date(now.getTime() + DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    const qs = new URLSearchParams({
+      eventTypeId: String(et.id),
+      start: startDay,
+      end: endDay,
+      timeZone
+    });
+    const res = await fetch(`${CALCOM_V2_BASE}/slots?${qs.toString()}`, {
+      headers: calcomHeaders(apiKey, CALCOM_VER_SLOTS)
+    });
+    if (!res.ok) {
+      calLog(
+        'Calcom.slots.failed',
+        { status: res.status, body: (await res.text()).slice(0, 300) },
+        requestId
+      );
+      return [];
+    }
     const data = await res.json();
-    return (data.slots || []).map((s: any) => ({
-      start: s.start,
-      end: s.end
-    }));
-  } catch {
+    // Shape: { data: { "YYYY-MM-DD": [{ start: ISO }, ...], ... } }
+    const byDay = (data?.data ?? {}) as Record<string, { start: string }[]>;
+    const slots: TimeSlot[] = [];
+    for (const day of Object.values(byDay)) {
+      if (!Array.isArray(day)) continue;
+      for (const s of day) {
+        const start = new Date(s.start);
+        if (isNaN(start.getTime())) continue;
+        slots.push({
+          start: start.toISOString(),
+          end: new Date(
+            start.getTime() + et.lengthMinutes * 60_000
+          ).toISOString()
+        });
+      }
+    }
+    calLog('Calcom.slots.parsed', { count: slots.length }, requestId);
+    return slots;
+  } catch (err) {
+    calLog('Calcom.availability.threw', { error: String(err) }, requestId);
     return [];
   }
 }
 
 async function bookCalcomAppointment(
   apiKey: string,
-  params: BookingParams
+  params: BookingParams,
+  eventTypeId?: number,
+  requestId?: string
 ): Promise<BookingResult> {
   try {
-    const res = await fetch(
-      'https://api.cal.com/v1/bookings?apiKey=' + apiKey,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: params.leadName,
-          email: params.leadEmail || '',
-          start: params.slotStart,
-          notes: params.notes || ''
-        })
-      }
+    const et = await getCalcomEventType(apiKey, eventTypeId, requestId);
+    if (!et) {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: 'No Cal.com event type available to book'
+      };
+    }
+
+    const safeHandle = (params.leadHandle || 'lead').replace(
+      /[^a-zA-Z0-9._-]/g,
+      ''
     );
-    if (!res.ok)
-      return { success: false, provider: 'calcom', error: 'Booking failed' };
-    const data = await res.json();
+    const email =
+      params.leadEmail ||
+      `${safeHandle || 'lead'}+${(
+        params.platform || 'dm'
+      ).toLowerCase()}@dmsetter-leads.com`;
+
+    const body = {
+      start: new Date(params.slotStart).toISOString(),
+      eventTypeId: et.id,
+      attendee: {
+        name: params.leadName || 'Lead',
+        email,
+        timeZone: params.timezone || 'UTC',
+        language: 'en'
+      },
+      ...(params.notes
+        ? { bookingFieldsResponses: { notes: params.notes } }
+        : {})
+    };
+
+    const res = await fetch(`${CALCOM_V2_BASE}/bookings`, {
+      method: 'POST',
+      headers: calcomHeaders(apiKey, CALCOM_VER_BOOKINGS),
+      body: JSON.stringify(body)
+    });
+    const text = await res.text();
+    calLog(
+      'Calcom.booking.response',
+      { status: res.status, body: text.slice(0, 600) },
+      requestId
+    );
+    if (!res.ok) {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: `Cal.com booking ${res.status}: ${text.slice(0, 200)}`
+      };
+    }
+    const data = JSON.parse(text);
+    if (data?.status && data.status !== 'success') {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: `Cal.com booking failed: ${text.slice(0, 200)}`
+      };
+    }
+    const b = data?.data ?? data;
+    const meetingUrl =
+      b?.meetingUrl ||
+      b?.location ||
+      (typeof b?.location === 'object' ? b?.location?.url : '') ||
+      '';
     return {
       success: true,
       provider: 'calcom',
-      bookingId: data.id,
-      bookingUrl: data.url
+      appointmentId: b?.id ? String(b.id) : undefined,
+      bookingId: b?.uid || (b?.id ? String(b.id) : undefined),
+      meetingUrl,
+      startTime: params.slotStart
     };
   } catch (err) {
     return { success: false, provider: 'calcom', error: String(err) };
