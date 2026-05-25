@@ -264,6 +264,13 @@ export function CallDetailsPanel({ conversationId }: Props) {
       toast.error('Call time must be in the future');
       return;
     }
+    // QD-014: guard against typo'd far-future dates (mirrors server check).
+    const sixMonthsOut = new Date();
+    sixMonthsOut.setMonth(sixMonthsOut.getMonth() + 6);
+    if (new Date(iso).getTime() > sixMonthsOut.getTime()) {
+      toast.error('Call date cannot be more than 6 months from now');
+      return;
+    }
     setSaving(true);
     try {
       const updated = await apiFetch<CallDetailsState>(
@@ -327,6 +334,14 @@ export function CallDetailsPanel({ conversationId }: Props) {
   const hasCall = !!state?.scheduledCallAt;
   const displayTz =
     state?.scheduledCallTimezone || state?.leadTimezone || 'UTC';
+
+  // QD-014: cap the native date picker at 6 months out (mirrors handleSave +
+  // the server check). Expressed in the selected timezone for consistency.
+  const maxCallDateTimeLocal = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 6);
+    return toLocalDateTimeInput(d.toISOString(), timezone);
+  })();
 
   return (
     <div className='rounded-lg border p-3'>
@@ -468,6 +483,7 @@ export function CallDetailsPanel({ conversationId }: Props) {
               id='call-dt'
               type='datetime-local'
               value={datetimeLocal}
+              max={maxCallDateTimeLocal}
               onChange={(e) => setDatetimeLocal(e.target.value)}
               className='h-8 text-xs'
             />

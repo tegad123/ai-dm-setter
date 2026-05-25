@@ -405,10 +405,16 @@ export function useNotifications(userId?: string) {
 
 export function useTags() {
   const { data, loading, error, refetch } = useApiFetch(() => getTags(), []);
-  const tags = (data as any)?.tags ?? ([] as Tag[]);
+  // getTags() already unwraps to the Tag[] array (it returns `data.tags || data`).
+  // The previous code read `data.tags` off that array → always undefined →
+  // tags were always empty, so account tags never showed in the Leads picker
+  // (QD-046). Use the array directly; tolerate a stray wrapper just in case.
+  const tags: Tag[] = Array.isArray(data)
+    ? (data as Tag[])
+    : ((data as any)?.tags ?? []);
 
   return {
-    tags: tags as Tag[],
+    tags,
     loading,
     error,
     refetch
