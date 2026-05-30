@@ -13,12 +13,74 @@
 
 import { google } from 'googleapis';
 import { randomUUID } from 'crypto';
+import prisma from '@/lib/prisma';
 import { setCredentials } from '@/lib/credential-store';
 import type {
   TimeSlot,
   BookingParams,
   BookingResult
 } from '@/lib/calendar-adapter';
+
+/**
+ * Detect Google's `invalid_grant` — what we get when Google has REVOKED the
+ * refresh token itself (vs. an expired access token, which the SDK refreshes
+ * silently). Common causes:
+ *   - OAuth app in "Testing" publishing status (refresh tokens expire after
+ *     7 days regardless of activity)
+ *   - User revoked access in their Google account
+ *   - Refresh token unused for 6+ months
+ *   - Password change
+ *
+ * The SDK surfaces this in different shapes depending on the call site, so
+ * we duck-type on a few of them.
+ */
+function isInvalidGrantError(err: unknown): boolean {
+  const e = (err ?? {}) as {
+    message?: string;
+    code?: string | number;
+    response?: { data?: { error?: string } };
+    error?: string;
+  };
+  const msg = String(e.message ?? '').toLowerCase();
+  if (msg.includes('invalid_grant')) return true;
+  if (e.error === 'invalid_grant') return true;
+  if (e.response?.data?.error === 'invalid_grant') return true;
+  return false;
+}
+
+/**
+ * When Google has revoked the refresh token, the integration is dead until
+ * the operator re-consents. Mark it inactive so the calendar selector hides
+ * Google from booking, and create a SYSTEM notification so the operator
+ * actually finds out (instead of every future booking silently failing).
+ */
+async function markGoogleIntegrationInvalid(
+  accountId: string,
+  reason: string
+): Promise<void> {
+  try {
+    await prisma.integrationCredential.updateMany({
+      where: { accountId, provider: 'GOOGLE_CALENDAR' },
+      data: { isActive: false }
+    });
+    await prisma.notification.create({
+      data: {
+        accountId,
+        type: 'SYSTEM',
+        title: 'Google Calendar disconnected',
+        body: `Google revoked the calendar access token (${reason}). Reconnect from Settings → Integrations so the AI can book calls again. This usually happens when the OAuth app is in "Testing" mode (7-day token expiry) — publishing the consent screen prevents it.`
+      }
+    });
+    console.warn(
+      `[google-calendar] Marked GOOGLE_CALENDAR inactive for account=${accountId} (reason=${reason}). Operator notified.`
+    );
+  } catch (e) {
+    console.error(
+      '[google-calendar] failed to mark integration invalid (non-fatal):',
+      e
+    );
+  }
+}
 
 export interface GoogleCalendarCreds {
   accessToken?: string;
@@ -82,6 +144,22 @@ function weekdayInTimezone(date: Date, timeZone: string): number {
 }
 
 export async function getGoogleCalendarAvailability(
+  accountId: string,
+  creds: GoogleCalendarCreds,
+  range?: { start: string; end: string },
+  timezone: string = 'UTC'
+): Promise<TimeSlot[]> {
+  try {
+    return await fetchGoogleAvailability(accountId, creds, range, timezone);
+  } catch (err) {
+    if (isInvalidGrantError(err)) {
+      await markGoogleIntegrationInvalid(accountId, 'invalid_grant');
+    }
+    throw err;
+  }
+}
+
+async function fetchGoogleAvailability(
   accountId: string,
   creds: GoogleCalendarCreds,
   range?: { start: string; end: string },
@@ -194,6 +272,15 @@ export async function bookGoogleCalendarAppointment(
       startTime: startIso
     };
   } catch (err) {
+    if (isInvalidGrantError(err)) {
+      await markGoogleIntegrationInvalid(accountId, 'invalid_grant');
+      return {
+        success: false,
+        provider: 'google',
+        error:
+          'Google Calendar disconnected — refresh token revoked. Reconnect from Settings → Integrations.'
+      };
+    }
     return {
       success: false,
       provider: 'google',
