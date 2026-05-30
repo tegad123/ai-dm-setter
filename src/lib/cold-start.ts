@@ -30,11 +30,18 @@ export interface ColdStartStatus {
 }
 
 /**
- * Check if an account has enough data for analytics features.
+ * Check if an account has enough data for an analytics feature.
+ *
+ * `thresholdOverride` lets callers gate against a feature-specific message
+ * threshold (e.g. MESSAGE_EFFECTIVENESS=30, SEGMENT_ANALYSIS=20) instead of
+ * the default MIN_MESSAGES=50. QD-040 fix (2026-05-30): this parameter used
+ * to be `_thresholdOverride` (silently ignored), so /api/analytics/data-quality
+ * called it once per threshold key and got the same result every time —
+ * surfacing as "Cold Start Thresholds 0/50, 0/30, 0/20".
  */
 export async function checkColdStart(
   accountId: string,
-  _thresholdOverride?: number
+  thresholdOverride?: number
 ): Promise<ColdStartStatus> {
   const [conversationCount, completedCount, messageCount, oldestLead] =
     await Promise.all([
@@ -64,6 +71,11 @@ export async function checkColdStart(
       )
     : 0;
 
+  // The message-count threshold honors the override; conversation thresholds
+  // stay at defaults (the override historically only ever scaled a message-
+  // count cutoff per analytics feature).
+  const messageThreshold = thresholdOverride ?? DATA_THRESHOLDS.MIN_MESSAGES;
+
   const missingRequirements: string[] = [];
   if (conversationCount < DATA_THRESHOLDS.MIN_CONVERSATIONS) {
     missingRequirements.push(
@@ -75,9 +87,9 @@ export async function checkColdStart(
       `Need ${DATA_THRESHOLDS.MIN_COMPLETED_CONVERSATIONS - completedCount} more completed conversations`
     );
   }
-  if (messageCount < DATA_THRESHOLDS.MIN_MESSAGES) {
+  if (messageCount < messageThreshold) {
     missingRequirements.push(
-      `Need ${DATA_THRESHOLDS.MIN_MESSAGES - messageCount} more messages`
+      `Need ${messageThreshold - messageCount} more messages`
     );
   }
 

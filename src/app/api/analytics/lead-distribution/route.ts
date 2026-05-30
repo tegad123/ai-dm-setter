@@ -10,15 +10,19 @@
 
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { EXCLUDE_COLD_PITCH } from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
 
+    // F8 reconciliation: exclude cold-pitch leads from the Lead Distribution
+    // pie so the home-page donut matches Overview + Funnel. Cold-pitch leads
+    // remain visible (and tag-filterable) on the Leads page.
     const grouped = await prisma.lead.groupBy({
       by: ['stage'],
-      where: { accountId: auth.accountId },
+      where: { accountId: auth.accountId, ...EXCLUDE_COLD_PITCH },
       _count: { _all: true }
     });
 

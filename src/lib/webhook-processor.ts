@@ -5008,9 +5008,36 @@ async function sendAIReply(
       );
     } else if (bookingSucceeded && bookingSlotIso) {
       const scheduledCallAt = new Date(bookingSlotIso);
+      // Tega 2026-05-29: "When a call is scheduled the AI should automatically
+      // save all the call details without any manual input from the operator."
+      // Previously only scheduledCallAt was written here — timezone, source,
+      // and confirmed flag were left at defaults / null, which meant a human
+      // had to open the call-details panel to populate them. Write everything
+      // the manual PUT path writes, but mark the source as CALENDAR_INTEGRATION
+      // (matching the typeform / leadconnector webhook paths) so the audit
+      // trail makes clear the AI auto-booked.
       await prisma.conversation
-        .update({ where: { id: conversationId }, data: { scheduledCallAt } })
-        .catch(() => null);
+        .update({
+          where: { id: conversationId },
+          data: {
+            scheduledCallAt,
+            scheduledCallTimezone: result.leadTimezone ?? null,
+            scheduledCallSource: 'CALENDAR_INTEGRATION',
+            scheduledCallConfirmed: true,
+            scheduledCallUpdatedAt: new Date(),
+            scheduledCallUpdatedBy: null, // AI, not a human user
+            // Reset post-call state in case this is a re-book on the same convo
+            callConfirmed: false,
+            callConfirmedAt: null,
+            callOutcome: null
+          }
+        })
+        .catch((err) =>
+          console.error(
+            '[webhook-processor] auto-book call-detail persist failed (non-fatal):',
+            err
+          )
+        );
       await transitionLeadStage(
         lead.id,
         'BOOKED',

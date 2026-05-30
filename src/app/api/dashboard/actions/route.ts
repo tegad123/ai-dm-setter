@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { EXCLUDE_COLD_PITCH } from '@/lib/lead-state-sets';
 import {
   classifyMetaDeliveryError,
   SCHEDULED_REPLY_MAX_ATTEMPTS
@@ -371,8 +372,11 @@ export async function GET(request: NextRequest) {
             lead: {
               is: {
                 accountId,
+                // Pre-call window: explicitly a narrower set than the
+                // canonical "qualified" — we want leads with an upcoming call,
+                // not ones that already showed/closed.
                 stage: { in: ['QUALIFIED', 'CALL_PROPOSED', 'BOOKED'] },
-                tags: { none: { tag: { name: 'cold-pitch' } } }
+                ...EXCLUDE_COLD_PITCH
               }
             },
             scheduledCallAt: {

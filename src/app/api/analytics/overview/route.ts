@@ -1,5 +1,9 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import {
+  BOOKED_LEAD_STAGES_ARR,
+  EXCLUDE_COLD_PITCH
+} from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -9,14 +13,11 @@ export async function GET(request: NextRequest) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Cold-pitch / SPAM exclusion: Omar-style agency pitches that hit
-    // the cold-pitch detector are tagged 'cold-pitch' and outcome=SPAM.
-    // They count as their own bucket — not part of the regular Leads
-    // Today / Total Leads numbers. Filter at the query level so every
-    // KPI built off these counts inherits the exclusion.
-    const excludeColdPitchTag = {
-      tags: { none: { tag: { name: 'cold-pitch' } } }
-    };
+    // Cold-pitch / SPAM exclusion is centralized in lead-state-sets.ts; F8
+    // reconciliation (2026-05-30) applies it to ALL aggregates in this route,
+    // including stageCounts which previously inherited none — that asymmetry
+    // made callsBooked include cold-pitch leads while totalLeads excluded
+    // them.
     const [
       totalLeads,
       leadsToday,
@@ -27,13 +28,13 @@ export async function GET(request: NextRequest) {
       mediaLogsLastHour
     ] = await Promise.all([
       prisma.lead.count({
-        where: { accountId: auth.accountId, ...excludeColdPitchTag }
+        where: { accountId: auth.accountId, ...EXCLUDE_COLD_PITCH }
       }),
       prisma.lead.count({
         where: {
           accountId: auth.accountId,
           createdAt: { gte: todayStart },
-          ...excludeColdPitchTag
+          ...EXCLUDE_COLD_PITCH
         }
       }),
       prisma.lead.count({
@@ -48,9 +49,8 @@ export async function GET(request: NextRequest) {
         _count: { id: true },
         where: {
           accountId: auth.accountId,
-          stage: {
-            in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON']
-          }
+          ...EXCLUDE_COLD_PITCH,
+          stage: { in: BOOKED_LEAD_STAGES_ARR }
         }
       }),
       prisma.lead.aggregate({
@@ -78,9 +78,13 @@ export async function GET(request: NextRequest) {
     const booked = counts['BOOKED'] || 0;
     const showedUp = counts['SHOWED'] || 0;
     const noShow = counts['NO_SHOWED'] || 0;
+    const rescheduled = counts['RESCHEDULED'] || 0;
     const closed = counts['CLOSED_WON'] || 0;
 
-    const callsBooked = booked + showedUp + noShow + closed;
+    // Calls booked = every lead that's been on (or is on) the calendar.
+    // Includes RESCHEDULED so a moved call still counts toward "bookings made"
+    // (matches BOOKED_LEAD_STAGES_ARR).
+    const callsBooked = booked + showedUp + noShow + rescheduled + closed;
     const showDenominator = callsBooked;
     const showRate =
       showDenominator > 0 ? ((showedUp + closed) / showDenominator) * 100 : 0;
