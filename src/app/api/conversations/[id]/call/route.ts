@@ -178,6 +178,16 @@ export async function PUT(
         { status: 400 }
       );
     }
+    // QD-014: reject calls scheduled absurdly far out (typo guard). 6 months
+    // is well beyond any real booking horizon for a DM-sourced call.
+    const sixMonthsOut = new Date();
+    sixMonthsOut.setMonth(sixMonthsOut.getMonth() + 6);
+    if (scheduledDate.getTime() > sixMonthsOut.getTime()) {
+      return NextResponse.json(
+        { error: 'Call date cannot be more than 6 months from now' },
+        { status: 400 }
+      );
+    }
 
     // Timezone fallback chain: explicit body value → conversation.leadTimezone → "UTC"
     const tz =

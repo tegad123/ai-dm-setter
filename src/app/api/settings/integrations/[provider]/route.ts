@@ -15,6 +15,8 @@ const VALID_PROVIDERS = [
   'OPENAI',
   'ANTHROPIC',
   'CALENDLY',
+  'CALCOM',
+  'GOOGLE_CALENDAR',
   'MANYCHAT',
   'TYPEFORM'
 ] as const;

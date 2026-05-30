@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 import { getCredentials } from '@/lib/credential-store';
 import { VOICE_NOTE_LABELING_PROMPT } from '@/lib/voice-note-prompts';
@@ -277,6 +278,8 @@ export async function POST(
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
     }
+    const aiErr = AIServiceError.from(err);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     console.error('POST /api/voice-notes/[id]/process error:', err);
     return NextResponse.json({ error: 'Processing failed' }, { status: 500 });
   }

@@ -1,43 +1,37 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import {
+  QUALIFIED_LEAD_STAGES_ARR,
+  BOOKED_LEAD_STAGES_ARR,
+  SHOWED_LEAD_STAGES_ARR,
+  EXCLUDE_COLD_PITCH
+} from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
 
+    // F8 reconciliation (2026-05-30): every count uses the canonical lead-state
+    // sets + shared cold-pitch exclusion so Funnel matches Overview and the
+    // Conversations tab. Previously this route hardcoded 3 different stage
+    // arrays (qualified included NURTURE; no cold-pitch filter anywhere).
+    const baseWhere = { accountId: auth.accountId, ...EXCLUDE_COLD_PITCH };
+
     const [totalLeads, qualified, booked, showedUp, closed] = await Promise.all(
       [
-        prisma.lead.count({ where: { accountId: auth.accountId } }),
+        prisma.lead.count({ where: baseWhere }),
         prisma.lead.count({
-          where: {
-            accountId: auth.accountId,
-            stage: {
-              in: [
-                'QUALIFIED',
-                'BOOKED',
-                'SHOWED',
-                'NO_SHOWED',
-                'CLOSED_WON',
-                'NURTURE'
-              ]
-            }
-          }
+          where: { ...baseWhere, stage: { in: QUALIFIED_LEAD_STAGES_ARR } }
         }),
         prisma.lead.count({
-          where: {
-            accountId: auth.accountId,
-            stage: { in: ['BOOKED', 'SHOWED', 'NO_SHOWED', 'CLOSED_WON'] }
-          }
+          where: { ...baseWhere, stage: { in: BOOKED_LEAD_STAGES_ARR } }
         }),
         prisma.lead.count({
-          where: {
-            accountId: auth.accountId,
-            stage: { in: ['SHOWED', 'CLOSED_WON'] }
-          }
+          where: { ...baseWhere, stage: { in: SHOWED_LEAD_STAGES_ARR } }
         }),
         prisma.lead.count({
-          where: { accountId: auth.accountId, stage: 'CLOSED_WON' }
+          where: { ...baseWhere, stage: 'CLOSED_WON' }
         })
       ]
     );

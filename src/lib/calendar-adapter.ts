@@ -1,5 +1,10 @@
+import prisma from '@/lib/prisma';
 import { getCredentials } from '@/lib/credential-store';
 import { randomUUID } from 'crypto';
+import {
+  getGoogleCalendarAvailability,
+  bookGoogleCalendarAppointment
+} from '@/lib/google-calendar';
 
 // ---------------------------------------------------------------------------
 // Diagnostic logging — temporary verbose logging for booking diagnosis.
@@ -35,7 +40,7 @@ export interface TimeSlot {
 }
 
 export interface AvailabilityResult {
-  provider: 'leadconnector' | 'calendly' | 'calcom' | 'none';
+  provider: 'leadconnector' | 'calendly' | 'calcom' | 'google' | 'none';
   slots: TimeSlot[];
   timezone?: string;
 }
@@ -54,7 +59,7 @@ export interface BookingParams {
 
 export interface BookingResult {
   success: boolean;
-  provider: 'leadconnector' | 'calendly' | 'calcom' | 'none';
+  provider: 'leadconnector' | 'calendly' | 'calcom' | 'google' | 'none';
   appointmentId?: string;
   contactId?: string;
   confirmationUrl?: string;
@@ -63,6 +68,52 @@ export interface BookingResult {
   bookingId?: string;
   bookingUrl?: string;
   error?: string;
+  // True when the provider cannot confirm a booking server-side and the lead
+  // must self-book via a scheduling link (Calendly). The caller MUST NOT treat
+  // this as a confirmed booking — drop the link, do not mark the lead BOOKED,
+  // and do not send a "you're locked in" message.
+  requiresLeadAction?: boolean;
+}
+
+// IntegrationProvider keys for the four calendar providers, in fallback
+// precedence order (used when no explicit active provider is selected).
+type CalProviderKey =
+  | 'LEADCONNECTOR'
+  | 'CALENDLY'
+  | 'CALCOM'
+  | 'GOOGLE_CALENDAR';
+
+const CALENDAR_PRECEDENCE: CalProviderKey[] = [
+  'LEADCONNECTOR',
+  'CALENDLY',
+  'CALCOM',
+  'GOOGLE_CALENDAR'
+];
+
+/**
+ * Resolve the ordered list of calendar providers to try for an account.
+ *
+ * If the account has explicitly chosen an active provider, return ONLY that
+ * one — an explicit choice should never silently fall through to a different
+ * calendar. If no choice is set, return the full precedence list so existing
+ * accounts keep working (first configured provider wins).
+ */
+async function resolveProviderOrder(
+  accountId: string
+): Promise<CalProviderKey[]> {
+  try {
+    const acct = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { activeCalendarProvider: true }
+    });
+    const active = acct?.activeCalendarProvider as CalProviderKey | null;
+    if (active && CALENDAR_PRECEDENCE.includes(active)) {
+      return [active];
+    }
+  } catch {
+    // fall through to precedence on any read error
+  }
+  return CALENDAR_PRECEDENCE;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,56 +166,90 @@ export async function getUnifiedAvailability(
   const range =
     startDate && endDate ? { start: startDate, end: endDate } : undefined;
 
-  // 1. LeadConnector first
-  const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
-  calLog(
-    'UnifiedAvailability.credsCheck',
-    {
-      hasApiKey: !!lcCreds?.apiKey,
-      hasCalendarId: !!lcCreds?.calendarId,
-      hasLocationId: !!lcCreds?.locationId
-    },
-    reqId
-  );
+  const order = await resolveProviderOrder(accountId);
+  calLog('UnifiedAvailability.order', { order }, reqId);
 
-  if (lcCreds?.apiKey && lcCreds?.calendarId) {
-    try {
-      const slots = await getLeadConnectorAvailability(
-        lcCreds.apiKey as string,
-        lcCreds.calendarId as string,
-        range,
-        timezone,
-        reqId
-      );
+  for (const key of order) {
+    if (key === 'LEADCONNECTOR') {
+      const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
       calLog(
-        'UnifiedAvailability.lcSuccess',
-        { slotCount: slots.length },
+        'UnifiedAvailability.lcCredsCheck',
+        {
+          hasApiKey: !!lcCreds?.apiKey,
+          hasCalendarId: !!lcCreds?.calendarId,
+          hasLocationId: !!lcCreds?.locationId
+        },
         reqId
       );
-      return { provider: 'leadconnector', slots, timezone };
-    } catch (err) {
-      calLog('UnifiedAvailability.lcFailed', { error: String(err) }, reqId);
+      if (lcCreds?.apiKey && lcCreds?.calendarId) {
+        try {
+          const slots = await getLeadConnectorAvailability(
+            lcCreds.apiKey as string,
+            lcCreds.calendarId as string,
+            range,
+            timezone,
+            reqId
+          );
+          calLog(
+            'UnifiedAvailability.lcSuccess',
+            { slotCount: slots.length },
+            reqId
+          );
+          return { provider: 'leadconnector', slots, timezone };
+        } catch (err) {
+          calLog('UnifiedAvailability.lcFailed', { error: String(err) }, reqId);
+        }
+      }
+    } else if (key === 'CALENDLY') {
+      const calendlyCreds = await getCredentials(accountId, 'CALENDLY');
+      if (calendlyCreds?.apiKey) {
+        const slots = await getCalendlyAvailability(
+          calendlyCreds.apiKey as string,
+          range
+        );
+        return { provider: 'calendly', slots };
+      }
+    } else if (key === 'CALCOM') {
+      const calcomCreds = await getCredentials(accountId, 'CALCOM');
+      if (calcomCreds?.apiKey) {
+        const slots = await getCalcomAvailability(
+          calcomCreds.apiKey as string,
+          range,
+          calcomCreds.eventTypeId ? Number(calcomCreds.eventTypeId) : undefined,
+          timezone,
+          reqId
+        );
+        return { provider: 'calcom', slots, timezone };
+      }
+    } else if (key === 'GOOGLE_CALENDAR') {
+      const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
+      if (googleCreds?.refreshToken || googleCreds?.accessToken) {
+        try {
+          const slots = await getGoogleCalendarAvailability(
+            accountId,
+            googleCreds as {
+              accessToken?: string;
+              refreshToken?: string;
+              calendarId?: string;
+            },
+            range,
+            timezone
+          );
+          calLog(
+            'UnifiedAvailability.googleSuccess',
+            { slotCount: slots.length },
+            reqId
+          );
+          return { provider: 'google', slots, timezone };
+        } catch (err) {
+          calLog(
+            'UnifiedAvailability.googleFailed',
+            { error: String(err) },
+            reqId
+          );
+        }
+      }
     }
-  }
-
-  // 2. Calendly
-  const calendlyCreds = await getCredentials(accountId, 'CALENDLY');
-  if (calendlyCreds?.apiKey) {
-    const slots = await getCalendlyAvailability(
-      calendlyCreds.apiKey as string,
-      range
-    );
-    return { provider: 'calendly', slots };
-  }
-
-  // 3. Cal.com
-  const calcomCreds = await getCredentials(accountId, 'CALCOM');
-  if (calcomCreds?.apiKey) {
-    const slots = await getCalcomAvailability(
-      calcomCreds.apiKey as string,
-      range
-    );
-    return { provider: 'calcom', slots };
   }
 
   return { provider: 'none', slots: [] };
@@ -192,70 +277,111 @@ export async function bookUnifiedAppointment(
     reqId
   );
 
-  // 1. LeadConnector first
-  const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
-  calLog(
-    'UnifiedBooking.credsCheck',
-    {
-      hasApiKey: !!lcCreds?.apiKey,
-      hasCalendarId: !!lcCreds?.calendarId,
-      hasLocationId: !!lcCreds?.locationId
-    },
-    reqId
-  );
+  const order = await resolveProviderOrder(accountId);
+  calLog('UnifiedBooking.order', { order }, reqId);
 
-  if (lcCreds?.apiKey && lcCreds?.calendarId && lcCreds?.locationId) {
-    try {
-      const result = await bookLeadConnectorAppointment(
-        {
-          apiKey: lcCreds.apiKey as string,
-          calendarId: lcCreds.calendarId as string,
-          locationId: lcCreds.locationId as string
-        },
-        params,
-        reqId
-      );
+  for (const key of order) {
+    if (key === 'LEADCONNECTOR') {
+      const lcCreds = await getCredentials(accountId, 'LEADCONNECTOR');
       calLog(
-        'UnifiedBooking.lcResult',
+        'UnifiedBooking.lcCredsCheck',
         {
-          success: result.success,
-          appointmentId: result.appointmentId,
-          contactId: result.contactId,
-          error: result.error
+          hasApiKey: !!lcCreds?.apiKey,
+          hasCalendarId: !!lcCreds?.calendarId,
+          hasLocationId: !!lcCreds?.locationId
         },
         reqId
       );
-      return result;
-    } catch (err) {
-      calLog('UnifiedBooking.lcThrew', { error: String(err) }, reqId);
-      return {
-        success: false,
-        provider: 'leadconnector',
-        error: err instanceof Error ? err.message : String(err)
-      };
+      if (lcCreds?.apiKey && lcCreds?.calendarId && lcCreds?.locationId) {
+        try {
+          const result = await bookLeadConnectorAppointment(
+            {
+              apiKey: lcCreds.apiKey as string,
+              calendarId: lcCreds.calendarId as string,
+              locationId: lcCreds.locationId as string
+            },
+            params,
+            reqId
+          );
+          calLog(
+            'UnifiedBooking.lcResult',
+            {
+              success: result.success,
+              appointmentId: result.appointmentId,
+              contactId: result.contactId,
+              error: result.error
+            },
+            reqId
+          );
+          return result;
+        } catch (err) {
+          calLog('UnifiedBooking.lcThrew', { error: String(err) }, reqId);
+          return {
+            success: false,
+            provider: 'leadconnector',
+            error: err instanceof Error ? err.message : String(err)
+          };
+        }
+      }
+    } else if (key === 'CALENDLY') {
+      // Calendly cannot create a confirmed booking server-side. We generate a
+      // real single-use scheduling link and return it with requiresLeadAction
+      // so the caller drops the link and does NOT fake-confirm.
+      const calendlyCreds = await getCredentials(accountId, 'CALENDLY');
+      if (calendlyCreds?.apiKey) {
+        const link = await getCalendlySchedulingLink(
+          accountId,
+          calendlyCreds.apiKey as string,
+          reqId
+        );
+        calLog('UnifiedBooking.calendlyLink', { hasLink: !!link }, reqId);
+        return {
+          success: !!link,
+          provider: 'calendly',
+          confirmationUrl: link || '',
+          bookingUrl: link || '',
+          startTime: params.slotStart,
+          requiresLeadAction: true,
+          error: link
+            ? undefined
+            : 'Could not generate Calendly scheduling link'
+        };
+      }
+    } else if (key === 'CALCOM') {
+      const calcomCreds = await getCredentials(accountId, 'CALCOM');
+      if (calcomCreds?.apiKey) {
+        const result = await bookCalcomAppointment(
+          calcomCreds.apiKey as string,
+          params,
+          calcomCreds.eventTypeId ? Number(calcomCreds.eventTypeId) : undefined,
+          reqId
+        );
+        return { ...result, startTime: params.slotStart };
+      }
+    } else if (key === 'GOOGLE_CALENDAR') {
+      const googleCreds = await getCredentials(accountId, 'GOOGLE_CALENDAR');
+      if (googleCreds?.refreshToken || googleCreds?.accessToken) {
+        const result = await bookGoogleCalendarAppointment(
+          accountId,
+          googleCreds as {
+            accessToken?: string;
+            refreshToken?: string;
+            calendarId?: string;
+          },
+          params
+        );
+        calLog(
+          'UnifiedBooking.googleResult',
+          {
+            success: result.success,
+            appointmentId: result.appointmentId,
+            error: result.error
+          },
+          reqId
+        );
+        return result;
+      }
     }
-  }
-
-  // 2. Calendly (link drop only — Calendly can't book server-side via REST)
-  const calendlyCreds = await getCredentials(accountId, 'CALENDLY');
-  if (calendlyCreds?.apiKey) {
-    return {
-      success: true,
-      provider: 'calendly',
-      confirmationUrl: (calendlyCreds as any).schedulingUrl || '',
-      bookingUrl: (calendlyCreds as any).schedulingUrl || '',
-      startTime: params.slotStart
-    };
-  }
-
-  // 3. Cal.com
-  const calcomCreds = await getCredentials(accountId, 'CALCOM');
-  if (calcomCreds?.apiKey) {
-    const result = await bookCalcomAppointment(
-      calcomCreds.apiKey as string,
-      params
-    );
-    return { ...result, provider: 'calcom', startTime: params.slotStart };
   }
 
   return {
@@ -649,8 +775,119 @@ export async function bookLeadConnectorAppointment(
 }
 
 // ---------------------------------------------------------------------------
-// Calendly — fallback (simplified; Calendly's REST availability is complex)
+// Calendly — link-mode provider (lead self-books via a scheduling link)
 // ---------------------------------------------------------------------------
+
+/**
+ * Generate a real single-use Calendly scheduling link the AI can drop in chat.
+ *
+ * Calendly's public API cannot create a confirmed booking on the host's behalf
+ * — the invitee must pick a time and confirm. So instead of faking a booking,
+ * we mint a single-use scheduling link scoped to the account's event type:
+ *
+ *   POST /scheduling_links { max_event_count: 1, owner, owner_type: "EventType" }
+ *     → resource.booking_url
+ *
+ * The owner (event type URI) is read from the stored integration metadata; if
+ * it isn't there we look it up from the user's first active event type. Falls
+ * back to the plain scheduling URL on the user record if link minting fails.
+ */
+async function getCalendlySchedulingLink(
+  accountId: string,
+  apiKey: string,
+  requestId?: string
+): Promise<string | null> {
+  const reqId = requestId || randomUUID().slice(0, 8);
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  };
+
+  try {
+    // 1. Try the stored event type URI from integration metadata
+    let eventTypeUri: string | undefined;
+    let userSchedulingUrl: string | undefined;
+    try {
+      const row = await prisma.integrationCredential.findUnique({
+        where: {
+          accountId_provider: { accountId, provider: 'CALENDLY' }
+        },
+        select: { metadata: true }
+      });
+      const meta = (row?.metadata as Record<string, unknown>) || {};
+      if (typeof meta.eventTypeUri === 'string')
+        eventTypeUri = meta.eventTypeUri;
+      if (typeof meta.schedulingUrl === 'string')
+        userSchedulingUrl = meta.schedulingUrl;
+    } catch {
+      // metadata read is best-effort
+    }
+
+    // 2. If no event type stored, look one up from the API
+    if (!eventTypeUri) {
+      const meRes = await fetch('https://api.calendly.com/users/me', {
+        headers
+      });
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        const userUri = meData?.resource?.uri as string | undefined;
+        userSchedulingUrl =
+          userSchedulingUrl ||
+          (meData?.resource?.scheduling_url as string | undefined);
+        if (userUri) {
+          const etRes = await fetch(
+            `https://api.calendly.com/event_types?user=${encodeURIComponent(
+              userUri
+            )}&active=true`,
+            { headers }
+          );
+          if (etRes.ok) {
+            const etData = await etRes.json();
+            eventTypeUri = etData?.collection?.[0]?.uri;
+          }
+        }
+      }
+    }
+
+    // 3. Mint a single-use scheduling link for that event type
+    if (eventTypeUri) {
+      const linkRes = await fetch('https://api.calendly.com/scheduling_links', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          max_event_count: 1,
+          owner: eventTypeUri,
+          owner_type: 'EventType'
+        })
+      });
+      if (linkRes.ok) {
+        const linkData = await linkRes.json();
+        const bookingUrl = linkData?.resource?.booking_url as
+          | string
+          | undefined;
+        if (bookingUrl) {
+          calLog('Calendly.schedulingLink.minted', { eventTypeUri }, reqId);
+          return bookingUrl;
+        }
+      } else {
+        calLog(
+          'Calendly.schedulingLink.failed',
+          {
+            status: linkRes.status,
+            body: (await linkRes.text()).slice(0, 500)
+          },
+          reqId
+        );
+      }
+    }
+
+    // 4. Fall back to the user's public scheduling URL
+    return userSchedulingUrl || null;
+  } catch (err) {
+    calLog('Calendly.schedulingLink.threw', { error: String(err) }, reqId);
+    return null;
+  }
+}
 
 async function getCalendlyAvailability(
   apiKey: string,
@@ -674,54 +911,214 @@ async function getCalendlyAvailability(
 }
 
 // ---------------------------------------------------------------------------
-// Cal.com — fallback
+// Cal.com — v2 API (v1 was decommissioned 2026; returns HTTP 410)
+//
+// Auth: Bearer <cal_live_…>. Endpoints are date-versioned via the
+// `cal-api-version` header (different version per endpoint family). Bookings
+// only need a start + eventTypeId; Cal.com computes the end from the event
+// type's configured length.
 // ---------------------------------------------------------------------------
+
+const CALCOM_V2_BASE = 'https://api.cal.com/v2';
+const CALCOM_VER_EVENT_TYPES = '2024-06-14';
+const CALCOM_VER_SLOTS = '2024-09-04';
+const CALCOM_VER_BOOKINGS = '2024-08-13';
+const SLOT_MINUTES = 30; // default slot length when an event type omits it
+const DEFAULT_WINDOW_DAYS = 14; // default availability look-ahead
+
+function calcomHeaders(
+  apiKey: string,
+  version: string
+): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'cal-api-version': version
+  };
+}
+
+/**
+ * Resolve which Cal.com event type to use. Honors a stored preferredId
+ * (from integration metadata); otherwise falls back to the account's first
+ * event type. Returns the id + configured length so availability can compute
+ * slot end times.
+ */
+async function getCalcomEventType(
+  apiKey: string,
+  preferredId?: number,
+  requestId?: string
+): Promise<{ id: number; lengthMinutes: number } | null> {
+  try {
+    const res = await fetch(`${CALCOM_V2_BASE}/event-types`, {
+      headers: calcomHeaders(apiKey, CALCOM_VER_EVENT_TYPES)
+    });
+    if (!res.ok) {
+      calLog(
+        'Calcom.eventTypes.failed',
+        { status: res.status, body: (await res.text()).slice(0, 300) },
+        requestId
+      );
+      return null;
+    }
+    const data = await res.json();
+    const list: any[] = Array.isArray(data?.data) ? data.data : [];
+    if (list.length === 0) return null;
+    const chosen =
+      (preferredId && list.find((e) => e.id === preferredId)) || list[0];
+    return {
+      id: chosen.id,
+      lengthMinutes: chosen.lengthInMinutes ?? chosen.length ?? SLOT_MINUTES
+    };
+  } catch (err) {
+    calLog('Calcom.eventTypes.threw', { error: String(err) }, requestId);
+    return null;
+  }
+}
 
 async function getCalcomAvailability(
   apiKey: string,
-  _dateRange?: { start: string; end: string }
+  dateRange?: { start: string; end: string },
+  eventTypeId?: number,
+  timeZone: string = 'UTC',
+  requestId?: string
 ): Promise<TimeSlot[]> {
   try {
-    const res = await fetch(
-      'https://api.cal.com/v1/availability?apiKey=' + apiKey
-    );
-    if (!res.ok) return [];
+    const et = await getCalcomEventType(apiKey, eventTypeId, requestId);
+    if (!et) return [];
+
+    const now = new Date();
+    const startDay = (dateRange?.start ? new Date(dateRange.start) : now)
+      .toISOString()
+      .slice(0, 10);
+    const endDay = (
+      dateRange?.end
+        ? new Date(dateRange.end)
+        : new Date(now.getTime() + DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    const qs = new URLSearchParams({
+      eventTypeId: String(et.id),
+      start: startDay,
+      end: endDay,
+      timeZone
+    });
+    const res = await fetch(`${CALCOM_V2_BASE}/slots?${qs.toString()}`, {
+      headers: calcomHeaders(apiKey, CALCOM_VER_SLOTS)
+    });
+    if (!res.ok) {
+      calLog(
+        'Calcom.slots.failed',
+        { status: res.status, body: (await res.text()).slice(0, 300) },
+        requestId
+      );
+      return [];
+    }
     const data = await res.json();
-    return (data.slots || []).map((s: any) => ({
-      start: s.start,
-      end: s.end
-    }));
-  } catch {
+    // Shape: { data: { "YYYY-MM-DD": [{ start: ISO }, ...], ... } }
+    const byDay = (data?.data ?? {}) as Record<string, { start: string }[]>;
+    const slots: TimeSlot[] = [];
+    for (const day of Object.values(byDay)) {
+      if (!Array.isArray(day)) continue;
+      for (const s of day) {
+        const start = new Date(s.start);
+        if (isNaN(start.getTime())) continue;
+        slots.push({
+          start: start.toISOString(),
+          end: new Date(
+            start.getTime() + et.lengthMinutes * 60_000
+          ).toISOString()
+        });
+      }
+    }
+    calLog('Calcom.slots.parsed', { count: slots.length }, requestId);
+    return slots;
+  } catch (err) {
+    calLog('Calcom.availability.threw', { error: String(err) }, requestId);
     return [];
   }
 }
 
 async function bookCalcomAppointment(
   apiKey: string,
-  params: BookingParams
+  params: BookingParams,
+  eventTypeId?: number,
+  requestId?: string
 ): Promise<BookingResult> {
   try {
-    const res = await fetch(
-      'https://api.cal.com/v1/bookings?apiKey=' + apiKey,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: params.leadName,
-          email: params.leadEmail || '',
-          start: params.slotStart,
-          notes: params.notes || ''
-        })
-      }
+    const et = await getCalcomEventType(apiKey, eventTypeId, requestId);
+    if (!et) {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: 'No Cal.com event type available to book'
+      };
+    }
+
+    const safeHandle = (params.leadHandle || 'lead').replace(
+      /[^a-zA-Z0-9._-]/g,
+      ''
     );
-    if (!res.ok)
-      return { success: false, provider: 'calcom', error: 'Booking failed' };
-    const data = await res.json();
+    const email =
+      params.leadEmail ||
+      `${safeHandle || 'lead'}+${(
+        params.platform || 'dm'
+      ).toLowerCase()}@dmsetter-leads.com`;
+
+    const body = {
+      start: new Date(params.slotStart).toISOString(),
+      eventTypeId: et.id,
+      attendee: {
+        name: params.leadName || 'Lead',
+        email,
+        timeZone: params.timezone || 'UTC',
+        language: 'en'
+      },
+      ...(params.notes
+        ? { bookingFieldsResponses: { notes: params.notes } }
+        : {})
+    };
+
+    const res = await fetch(`${CALCOM_V2_BASE}/bookings`, {
+      method: 'POST',
+      headers: calcomHeaders(apiKey, CALCOM_VER_BOOKINGS),
+      body: JSON.stringify(body)
+    });
+    const text = await res.text();
+    calLog(
+      'Calcom.booking.response',
+      { status: res.status, body: text.slice(0, 600) },
+      requestId
+    );
+    if (!res.ok) {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: `Cal.com booking ${res.status}: ${text.slice(0, 200)}`
+      };
+    }
+    const data = JSON.parse(text);
+    if (data?.status && data.status !== 'success') {
+      return {
+        success: false,
+        provider: 'calcom',
+        error: `Cal.com booking failed: ${text.slice(0, 200)}`
+      };
+    }
+    const b = data?.data ?? data;
+    const meetingUrl =
+      b?.meetingUrl ||
+      b?.location ||
+      (typeof b?.location === 'object' ? b?.location?.url : '') ||
+      '';
     return {
       success: true,
       provider: 'calcom',
-      bookingId: data.id,
-      bookingUrl: data.url
+      appointmentId: b?.id ? String(b.id) : undefined,
+      bookingId: b?.uid || (b?.id ? String(b.id) : undefined),
+      meetingUrl,
+      startTime: params.slotStart
     };
   } catch (err) {
     return { success: false, provider: 'calcom', error: String(err) };

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import Anthropic from '@anthropic-ai/sdk';
 
 // ---------------------------------------------------------------------------
@@ -170,6 +171,8 @@ export async function POST(request: NextRequest) {
         { status: error.status }
       );
     }
+    const aiErr = AIServiceError.from(error);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     console.error('[persona/analyze] Error:', error);
     return NextResponse.json(
       { error: 'Failed to analyze script' },

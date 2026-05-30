@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { checkColdStart, DATA_THRESHOLDS } from '@/lib/cold-start';
+import { BOOKED_LEAD_STAGES, SHOWED_LEAD_STAGES } from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 interface SegmentMetric {
@@ -65,15 +66,14 @@ function computeMetrics(
   leads: LeadRow[]
 ): SegmentMetric {
   const totalLeads = leads.length;
-  const booked = leads.filter(
-    (l) =>
-      l.stage === 'BOOKED' ||
-      l.stage === 'SHOWED' ||
-      l.stage === 'NO_SHOWED' ||
-      l.stage === 'CLOSED_WON'
+  // F8 reconciliation: use canonical sets. BOOKED_LEAD_STAGES adds
+  // RESCHEDULED (a rescheduled call still counts as "booked once").
+  const booked = leads.filter((l) =>
+    (BOOKED_LEAD_STAGES as readonly string[]).includes(l.stage)
   ).length;
   const showed = leads.filter(
-    (l) => l.showedUp || l.stage === 'SHOWED' || l.stage === 'CLOSED_WON'
+    (l) =>
+      l.showedUp || (SHOWED_LEAD_STAGES as readonly string[]).includes(l.stage)
   ).length;
   const closed = leads.filter(
     (l) => l.stage === 'CLOSED_WON' && l.closedAt !== null

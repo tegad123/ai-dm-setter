@@ -115,6 +115,7 @@ enum IntegrationProvider {
   ANTHROPIC
   CALENDLY
   CALCOM
+  GOOGLE_CALENDAR
   MANYCHAT
   TYPEFORM
 }
@@ -287,6 +288,18 @@ model Account {
   // 'anthropic' (claude-sonnet-4-6). Default 'openai' so no existing
   // account changes provider without an explicit flip.
   aiProvider String @default("openai")
+
+  // ── Active booking calendar ───────────────────────────────────
+  // Which connected calendar provider the AI uses to read availability
+  // and book calls. Stores the IntegrationProvider key: 'GOOGLE_CALENDAR'
+  // | 'LEADCONNECTOR' | 'CALENDLY' | 'CALCOM'. When null, the adapter
+  // falls back to its precedence order (LeadConnector → Calendly →
+  // Cal.com → Google) so existing accounts keep working without an
+  // explicit choice. The selector in Settings → Integrations sets this.
+  // Google Calendar is the recommended default (the only fully-verified
+  // server-side booking provider); Calendly is link-mode (the lead
+  // self-books via a scheduling link, never auto-confirmed).
+  activeCalendarProvider String?
 
   // ── Notification preferences ──────────────────────────────────
   // Three groups:

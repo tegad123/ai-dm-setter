@@ -15,6 +15,16 @@ export async function GET(request: NextRequest) {
     const [
       totalConversations,
       totalMessages,
+      // QD-039 fix (2026-05-30): the meaningful denominator for the
+      // "data quality" ratio is AI-pipeline messages, not every message
+      // ever sent. LEAD messages have no stage by design, and supportive /
+      // handoff / distress messages explicitly set stage=null. Counting
+      // them in the denominator made the ratio approach 0 even on healthy
+      // accounts (QD-039: "With Stage Data: 0" despite 22 conversations).
+      // Switch the denominator to AI messages and the numerator to AI
+      // messages with stage data — that's the real "% of generated
+      // messages we have stage telemetry on" question.
+      aiMessageCount,
       conversationsByOutcome,
       conversationsByDataSource,
       messagesWithStage,
@@ -24,6 +34,9 @@ export async function GET(request: NextRequest) {
     ] = await Promise.all([
       prisma.conversation.count({ where: accountFilter }),
       prisma.message.count({ where: messageAccountFilter }),
+      prisma.message.count({
+        where: { ...messageAccountFilter, sender: 'AI' }
+      }),
 
       // Conversations grouped by outcome
       prisma.conversation.groupBy({
@@ -39,19 +52,31 @@ export async function GET(request: NextRequest) {
         _count: { _all: true }
       }),
 
-      // Messages with stage data
+      // AI messages with stage data (QD-039: was counting ALL messages)
       prisma.message.count({
-        where: { ...messageAccountFilter, stage: { not: null } }
+        where: {
+          ...messageAccountFilter,
+          sender: 'AI',
+          stage: { not: null }
+        }
       }),
 
-      // Messages with sentiment data
+      // AI messages with sentiment data
       prisma.message.count({
-        where: { ...messageAccountFilter, sentimentScore: { not: null } }
+        where: {
+          ...messageAccountFilter,
+          sender: 'AI',
+          sentimentScore: { not: null }
+        }
       }),
 
-      // Messages with response tracking
+      // AI messages with response tracking
       prisma.message.count({
-        where: { ...messageAccountFilter, gotResponse: { not: null } }
+        where: {
+          ...messageAccountFilter,
+          sender: 'AI',
+          gotResponse: { not: null }
+        }
       }),
 
       // Prompt versions count
@@ -101,7 +126,12 @@ export async function GET(request: NextRequest) {
         withStage: messagesWithStage,
         withSentiment: messagesWithSentiment,
         withResponseTracking: messagesWithResponseTracking,
-        total: totalMessages
+        // Denominator changed (QD-039 fix): AI-pipeline messages, not every
+        // message. Surfaced as `trackable` so older UIs reading `total` still
+        // get a number that means "total messages" — and new UIs reading
+        // `trackable` get the meaningful ratio denominator.
+        total: totalMessages,
+        trackable: aiMessageCount
       },
       coldStartStatus,
       promptVersionsCount

@@ -5603,6 +5603,156 @@ export function isSelfRecoveryTrigger(params: {
   return { triggered: false, reason: null };
 }
 
+/**
+ * F5.1 (2026-05-30) — passive capital signal phrases.
+ *
+ * The script's R24 gate only fires when an AI capital question has been asked
+ * AND the lead answers it. But leads often mention their capital unsolicited
+ * — e.g. answering "what does your job pay?" with "9-5 pays 6k and I have
+ * around 5k saved to put toward this." Without a passive scan, that 5k
+ * never becomes `verifiedCapitalUsd`, the resolver blocks at
+ * `cannot_be_qualified_without_capital_verification`, and the lead is stuck.
+ *
+ * These phrases are positive capital signals — "lead is talking about money
+ * they HAVE." `PASSIVE_NEGATIVE_CONTEXT` catches obvious anti-signals
+ * ("lost 5k", "made 5k last month") that `parseLeadCapitalAnswer` would
+ * otherwise pass as kind='amount' since its disqualifier list is narrower.
+ */
+const PASSIVE_CAPITAL_SIGNAL_PHRASES =
+  /\b(i\s+have(\s+(around|about|roughly|currently))?|i'?ve\s+(got|saved)|i\s+saved|saved\s+up|i\s+(can|will|am\s+ready\s+to)\s+(invest|put|commit|spend)|i'?m\s+(putting|investing|working\s+with|ready\s+to\s+(invest|put))|my\s+budget(\s+is)?|i\s+got(\s+about|\s+around)?\s+\S+\s+(saved|to\s+(invest|put|spend|use)))\b/i;
+
+/**
+ * Negative-context guard: phrases that put a number in an anti-capital
+ * frame ("lost 5k", "made 5k last month", "owe 5k"). `parseLeadCapitalAnswer`
+ * doesn't catch all of these as disqualifiers, so this guards against the
+ * passive scan over-qualifying. Conservative on purpose — a false positive
+ * here (we reject a real capital statement) is recoverable on the next turn;
+ * a false negative (we accept a fake capital statement) silently lets an
+ * unqualified lead through to booking.
+ */
+const PASSIVE_NEGATIVE_CONTEXT =
+  /\b(i\s+(lost|made|owe|spent|wasted|blew|burned|earn|earned|make)|lost\s+(in\s+)?(the\s+)?(market|trade|trading)|i'?m\s+(making|earning|losing|paying)|my\s+(salary|income|paycheck|job\s+pays?)|paid?\s+(me|us)\s+\$?\d)/i;
+
+/**
+ * F5.1 passive scan: when the LLM emits a high-intent stage but capital was
+ * never asked-and-answered, walk the recent LEAD history for an unsolicited
+ * capital statement that beats the persona's `minimumCapitalRequired`. On
+ * match, persist `verifiedCapitalUsd` + `capitalThresholdMet` so the existing
+ * resolver naturally returns QUALIFIED on this turn and every turn after.
+ *
+ * Returns null if nothing qualifying is found — the caller falls through to
+ * the existing "cannot_be_qualified" branch in that case.
+ */
+async function scanForPassiveCapitalQualification(
+  conversationId: string
+): Promise<{
+  amount: number;
+  threshold: number;
+  sourceMessageId: string;
+} | null> {
+  let threshold: number | null = null;
+  try {
+    const row = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        lead: {
+          select: {
+            account: {
+              select: {
+                personas: {
+                  take: 1,
+                  select: { minimumCapitalRequired: true }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    threshold =
+      row?.lead?.account?.personas?.[0]?.minimumCapitalRequired ?? null;
+  } catch {
+    return null;
+  }
+  if (!threshold || threshold <= 0) return null;
+
+  let leads: { id: string; content: string }[] = [];
+  try {
+    leads = await prisma.message.findMany({
+      where: { conversationId, sender: 'LEAD' },
+      orderBy: { timestamp: 'desc' },
+      take: 20,
+      select: { id: true, content: true }
+    });
+  } catch {
+    return null;
+  }
+
+  // Dynamic import to avoid the ai-engine ↔ script-state-recovery circular dep.
+  const aiEngine: typeof import('@/lib/ai-engine') = await import(
+    '@/lib/ai-engine'
+  );
+
+  for (const m of leads) {
+    if (!PASSIVE_CAPITAL_SIGNAL_PHRASES.test(m.content)) continue;
+    if (PASSIVE_NEGATIVE_CONTEXT.test(m.content)) continue;
+    const parsed = aiEngine.parseLeadCapitalAnswer(m.content);
+    if (parsed.kind !== 'amount' || parsed.amount === null) continue;
+    const usd = aiEngine.convertCapitalAmountToUsd(
+      parsed.amount,
+      parsed.currency ?? null
+    );
+    if (usd >= threshold) {
+      await persistPassiveCapital(conversationId, usd, m.id);
+      return { amount: usd, threshold, sourceMessageId: m.id };
+    }
+  }
+  return null;
+}
+
+async function persistPassiveCapital(
+  conversationId: string,
+  amountUsd: number,
+  sourceMessageId: string
+): Promise<void> {
+  try {
+    const row = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { capturedDataPoints: true }
+    });
+    const existing = (row?.capturedDataPoints as Record<string, unknown>) ?? {};
+    const now = new Date().toISOString();
+    const pointMeta = {
+      confidence: 'HIGH' as const,
+      extractedAt: now,
+      extractionMethod: 'passive_lead_message_scan',
+      extractedFromMessageId: sourceMessageId
+    };
+    const next = {
+      ...existing,
+      verifiedCapitalUsd: { ...pointMeta, value: amountUsd },
+      capitalThresholdMet: { ...pointMeta, value: true }
+    };
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        capturedDataPoints: next as Prisma.InputJsonValue,
+        capitalVerificationStatus: 'VERIFIED_QUALIFIED',
+        capitalVerifiedAt: new Date(),
+        capitalVerifiedAmount: amountUsd
+      }
+    });
+    console.log(
+      `[script-state-recovery] F5.1 passive capital qualified conversation=${conversationId} amount=$${amountUsd} source=${sourceMessageId}`
+    );
+  } catch (err) {
+    console.error(
+      '[script-state-recovery] persistPassiveCapital failed (non-fatal):',
+      err
+    );
+  }
+}
+
 export async function applyStageOverride(params: {
   conversationId: string;
   llmEmittedStage: string | null | undefined;
@@ -5724,6 +5874,27 @@ export async function applyStageOverride(params: {
     ) &&
     verifiedCapital === null
   ) {
+    // F5.1 (2026-05-30) — passive capital scan. The R24 path only fires when
+    // an AI capital question was asked AND the lead answered. Leads frequently
+    // mention capital unsolicited ("I have around 5k saved up") in response
+    // to unrelated discovery questions; without this scan the conversation is
+    // stuck at QUALIFYING forever while the LLM keeps emitting BOOKING.
+    const passive = await scanForPassiveCapitalQualification(
+      params.conversationId
+    );
+    if (passive) {
+      // Capital persisted by the helper — honor the LLM's high-intent stage
+      // (BOOKING / CALL_PROPOSED / etc.) since the lead is now qualified.
+      const keepBookingStage = /^(BOOKING|CALL_PROPOSED|BOOKED)$/i.test(
+        params.currentStage
+      );
+      return {
+        finalStage: keepBookingStage ? params.currentStage : llmStage,
+        capitalOutcome: 'passed',
+        reason: 'passive_capital_scan_qualified'
+      };
+    }
+
     return {
       finalStage: 'QUALIFYING',
       capitalOutcome:

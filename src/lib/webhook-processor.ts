@@ -4817,6 +4817,95 @@ async function sendAIReply(
     !result.voiceNoteAction?.slot_id &&
     !libraryVN;
 
+  // ── Guarded autonomous booking (Stage 7) ──────────────────────
+  // Tega 2026-05-23: the AI books the call itself. To avoid the phantom-
+  // confirmation that got server-side booking removed before, we book BEFORE
+  // delivering the confirmation and only ship the "locked in" message if the
+  // calendar event was actually created. On failure we replace the reply with
+  // a safe holding line (no fake confirmation) and flag for human follow-up
+  // in the post-delivery block below.
+  let bookingAttempted = false;
+  let bookingSucceeded = false;
+  // Link-mode (Calendly): the provider can't confirm server-side, so we drop a
+  // real scheduling link and let the lead self-book. This is NOT a confirmed
+  // booking — we never mark the lead BOOKED or claim "locked in" off it.
+  let bookingRequiresLeadAction = false;
+  const bookingSlotIso = result.selectedSlotIso ?? null;
+  if (result.subStage === 'BOOKING_CONFIRM' && bookingSlotIso) {
+    bookingAttempted = true;
+    try {
+      const { bookUnifiedAppointment } = await import('@/lib/calendar-adapter');
+      const booking = await bookUnifiedAppointment(accountId, {
+        leadName: lead.name,
+        leadHandle: lead.handle,
+        leadEmail: result.leadEmail ?? undefined,
+        platform: lead.platform,
+        slotStart: bookingSlotIso,
+        timezone: result.leadTimezone ?? undefined
+      });
+
+      if (booking.requiresLeadAction) {
+        // ── Link-mode (Calendly) ──────────────────────────────────
+        // Append the working scheduling link; the lead picks a time and
+        // confirms on the provider. Do not treat as a confirmed booking.
+        bookingRequiresLeadAction = true;
+        const link = booking.bookingUrl || booking.confirmationUrl || null;
+        if (
+          link &&
+          Array.isArray(result.messages) &&
+          result.messages.length > 0 &&
+          !result.messages.some((m) => m.includes(link))
+        ) {
+          const i = result.messages.length - 1;
+          result.messages[i] = `${result.messages[i]}\n${link}`;
+          result.reply = result.messages.join('\n');
+        }
+        console.log(
+          `[webhook-processor] calendly link-mode (success=${booking.success}) for ${conversationId} — dropped scheduling link, awaiting self-book`
+        );
+      } else {
+        bookingSucceeded = booking.success && booking.provider !== 'none';
+        if (bookingSucceeded) {
+          const meetUrl =
+            booking.meetingUrl ||
+            booking.confirmationUrl ||
+            booking.bookingUrl ||
+            null;
+          if (
+            meetUrl &&
+            Array.isArray(result.messages) &&
+            result.messages.length > 0 &&
+            !result.messages.some((m) => m.includes(meetUrl))
+          ) {
+            const i = result.messages.length - 1;
+            result.messages[i] = `${result.messages[i]}\n${meetUrl}`;
+            result.reply = result.messages.join('\n');
+          }
+          console.log(
+            `[webhook-processor] auto-booked via ${booking.provider} (appt=${booking.appointmentId}) for ${conversationId}`
+          );
+        } else {
+          console.warn(
+            `[webhook-processor] auto-book FAILED (provider=${booking.provider} error=${booking.error}) for ${conversationId} — shipping safe holding line, no fake confirmation`
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[webhook-processor] auto-book threw for ${conversationId}:`,
+        err
+      );
+      bookingSucceeded = false;
+    }
+    // Only swap to a holding line on a true booking failure — never when a
+    // scheduling link was dropped (link-mode) or the booking actually succeeded.
+    if (!bookingSucceeded && !bookingRequiresLeadAction) {
+      const holding = 'give me one sec to get that locked in for you 🙏';
+      result.reply = holding;
+      result.messages = [holding];
+    }
+  }
+
   let deliveredReplyText = result.reply;
   let deliveredAt = now;
 
@@ -4899,26 +4988,113 @@ async function sendAIReply(
     });
   }
 
-  // ── Booking is now script-driven, not API-triggered ─────────────
-  // Previously this block called bookUnifiedAppointment() (LeadConnector
-  // / Calendly / Cal.com) whenever the AI reached BOOKING_CONFIRM with
-  // a slot + email. Removed at the user's request: the AI would try to
-  // auto-book, the provider would fail (wrong creds, no LeadConnector
-  // configured, etc.), and the lead saw a phantom "you're locked in"
-  // message with no actual calendar entry.
-  //
-  // New flow: the AI reaches Stage 7, follows the script, and drops the
-  // booking link from the script's `send_link` action. The lead clicks
-  // and books themselves. lead.stage transitions to BOOKED only via a
-  // real calendar webhook or a human manually updating the lead — never
-  // automatically from the LLM's sub_stage.
-  //
-  // We still capture leadTimezone / leadEmail on the conversation row
-  // above (bookingUpdates) so humans have context for follow-up.
-  if (result.subStage === 'BOOKING_CONFIRM') {
-    console.log(
-      `[webhook-processor] BOOKING_CONFIRM reached for ${conversationId} — script-driven flow, no server-side booking triggered`
-    );
+  // ── Autonomous booking outcome (Stage 7) ───────────────────────
+  // The actual booking happened BEFORE delivery (guarded block above), so by
+  // here we know whether the calendar event was created. Server-side booking
+  // was previously removed because providers failed and leads got a phantom
+  // "you're locked in"; the pre-delivery guard fixes that — we only reach the
+  // success branch when bookUnifiedAppointment confirmed an event, and a
+  // failure already shipped a safe holding line (not a fake confirmation).
+  // Re-enabled 2026-05-23 (Tega) now that Google Calendar is a reliable
+  // provider.
+  if (result.subStage === 'BOOKING_CONFIRM' && bookingAttempted) {
+    if (bookingRequiresLeadAction) {
+      // Link-mode (Calendly): a working scheduling link was dropped above. The
+      // lead self-books and the provider confirms — we do NOT mark BOOKED here
+      // (that happens via a provider webhook or a human). Leave the stage as-is
+      // so the lead stays in the active funnel until they pick a time.
+      console.log(
+        `[webhook-processor] BOOKING_CONFIRM link-mode for ${conversationId} — scheduling link sent, stage unchanged pending self-book`
+      );
+    } else if (bookingSucceeded && bookingSlotIso) {
+      const scheduledCallAt = new Date(bookingSlotIso);
+      // Tega 2026-05-29: "When a call is scheduled the AI should automatically
+      // save all the call details without any manual input from the operator."
+      // Previously only scheduledCallAt was written here — timezone, source,
+      // and confirmed flag were left at defaults / null, which meant a human
+      // had to open the call-details panel to populate them. Write everything
+      // the manual PUT path writes, but mark the source as CALENDAR_INTEGRATION
+      // (matching the typeform / leadconnector webhook paths) so the audit
+      // trail makes clear the AI auto-booked.
+      await prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: {
+            scheduledCallAt,
+            scheduledCallTimezone: result.leadTimezone ?? null,
+            scheduledCallSource: 'CALENDAR_INTEGRATION',
+            scheduledCallConfirmed: true,
+            scheduledCallUpdatedAt: new Date(),
+            scheduledCallUpdatedBy: null, // AI, not a human user
+            // Reset post-call state in case this is a re-book on the same convo
+            callConfirmed: false,
+            callConfirmedAt: null,
+            callOutcome: null
+          }
+        })
+        .catch((err) =>
+          console.error(
+            '[webhook-processor] auto-book call-detail persist failed (non-fatal):',
+            err
+          )
+        );
+      await transitionLeadStage(
+        lead.id,
+        'BOOKED',
+        'ai',
+        'ai_auto_booked'
+      ).catch((err) =>
+        console.error(
+          '[webhook-processor] BOOKED transition failed (non-fatal):',
+          err
+        )
+      );
+      try {
+        const { scheduleCallConfirmationSequence } = await import(
+          '@/lib/call-confirmation-sequence'
+        );
+        await scheduleCallConfirmationSequence({
+          conversationId,
+          accountId,
+          scheduledCallAt,
+          leadTimezone: result.leadTimezone ?? null
+        });
+      } catch (err) {
+        console.error(
+          '[webhook-processor] call confirmation sequence failed (non-fatal):',
+          err
+        );
+      }
+      try {
+        const { scheduleCallReminders } = await import('@/lib/call-reminders');
+        await scheduleCallReminders({
+          conversationId,
+          accountId,
+          scheduledCallAt,
+          leadTimezone: result.leadTimezone ?? null
+        });
+      } catch (err) {
+        console.error(
+          '[webhook-processor] call reminders failed (non-fatal):',
+          err
+        );
+      }
+      console.log(
+        `[webhook-processor] BOOKING_CONFIRM booked + confirmation/reminders scheduled for ${conversationId}`
+      );
+    } else {
+      // Booking failed — a safe holding line was already shipped. Pause AI for
+      // human follow-up; NEVER mark BOOKED on a failed booking.
+      await prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: { awaitingHumanReview: true }
+        })
+        .catch(() => null);
+      console.warn(
+        `[webhook-processor] BOOKING_CONFIRM booking failed for ${conversationId} — flagged awaitingHumanReview, not marked BOOKED`
+      );
+    }
   }
 
   // ── Typeform screened-out safety net ──────────────────────────

@@ -30,9 +30,18 @@ type Provider =
   | 'ELEVENLABS'
   | 'LEADCONNECTOR'
   | 'CALENDLY'
+  | 'CALCOM'
+  | 'GOOGLE_CALENDAR'
   | 'MANYCHAT'
   | 'TYPEFORM';
 type AIProvider = 'OPENAI' | 'ANTHROPIC';
+
+// IntegrationProvider keys for the four calendar/booking providers.
+type CalendarProvider =
+  | 'GOOGLE_CALENDAR'
+  | 'LEADCONNECTOR'
+  | 'CALENDLY'
+  | 'CALCOM';
 
 interface IntegrationStatus {
   provider: Provider;
@@ -47,9 +56,45 @@ interface IntegrationsResponse {
   account: {
     id: string;
     manyChatWebhookKey: string;
+    activeCalendarProvider: CalendarProvider | null;
   } | null;
   personaConfig: Record<string, any> | null;
 }
+
+const CALENDAR_OPTIONS: {
+  key: CalendarProvider;
+  label: string;
+  mode: 'auto' | 'link';
+  recommended?: boolean;
+  connectedHint: string;
+}[] = [
+  {
+    key: 'GOOGLE_CALENDAR',
+    label: 'Google Calendar',
+    mode: 'auto',
+    recommended: true,
+    connectedHint: 'Books directly on your calendar with a Google Meet link.'
+  },
+  {
+    key: 'LEADCONNECTOR',
+    label: 'LeadConnector',
+    mode: 'auto',
+    connectedHint: 'Books an appointment in your HighLevel calendar.'
+  },
+  {
+    key: 'CALCOM',
+    label: 'Cal.com',
+    mode: 'auto',
+    connectedHint: 'Books a Cal.com event server-side.'
+  },
+  {
+    key: 'CALENDLY',
+    label: 'Calendly',
+    mode: 'link',
+    connectedHint:
+      'Sends the lead a scheduling link to self-book (no auto-confirm).'
+  }
+];
 
 const TYPEFORM_MAPPING_FIELDS = [
   ['email', 'Email field ID'],
@@ -112,6 +157,8 @@ export default function IntegrationsPage() {
     ELEVENLABS: false,
     LEADCONNECTOR: false,
     CALENDLY: false,
+    CALCOM: false,
+    GOOGLE_CALENDAR: false,
     MANYCHAT: false,
     TYPEFORM: false
   });
@@ -143,6 +190,17 @@ export default function IntegrationsPage() {
   const [calEventTypeUri, setCalEventTypeUri] = useState('');
   const [calSaving, setCalSaving] = useState(false);
   const [calSavedKey, setCalSavedKey] = useState('');
+
+  // Form state -- Cal.com
+  const [ccApiKey, setCcApiKey] = useState('');
+  const [ccSaving, setCcSaving] = useState(false);
+  const [ccSavedKey, setCcSavedKey] = useState('');
+
+  // Active booking calendar (which provider the AI uses to book)
+  const [activeCalendar, setActiveCalendar] = useState<CalendarProvider | null>(
+    null
+  );
+  const [activeCalendarSaving, setActiveCalendarSaving] = useState(false);
 
   // Form state -- ManyChat (outbound new-follower handoff)
   const [mcApiKey, setMcApiKey] = useState('');
@@ -180,6 +238,10 @@ export default function IntegrationsPage() {
   const [igMetadata, setIgMetadata] = useState<Record<string, any> | null>(
     null
   );
+  const [googleMetadata, setGoogleMetadata] = useState<Record<
+    string,
+    any
+  > | null>(null);
 
   // Loading
   const [loading, setLoading] = useState(true);
@@ -196,6 +258,7 @@ export default function IntegrationsPage() {
       if (data.account) {
         setAccountId(data.account.id);
         setManyChatWebhookKey(data.account.manyChatWebhookKey);
+        setActiveCalendar(data.account.activeCalendarProvider ?? null);
       }
       const existingTypeformMapping =
         data.personaConfig?.typeformFieldMapping &&
@@ -220,6 +283,9 @@ export default function IntegrationsPage() {
         }
         if (i.provider === 'INSTAGRAM' && i.metadata) {
           setIgMetadata(i.metadata as any);
+        }
+        if (i.provider === 'GOOGLE_CALENDAR' && i.metadata) {
+          setGoogleMetadata(i.metadata as any);
         }
         // Hydrate LeadConnector config from metadata (non-secret values)
         if (i.provider === 'LEADCONNECTOR' && i.metadata) {
@@ -259,6 +325,7 @@ export default function IntegrationsPage() {
           if (i.provider === 'ELEVENLABS') setElSavedKey(i.maskedKey);
           if (i.provider === 'LEADCONNECTOR') setLcSavedKey(i.maskedKey);
           if (i.provider === 'CALENDLY') setCalSavedKey(i.maskedKey);
+          if (i.provider === 'CALCOM') setCcSavedKey(i.maskedKey);
           if (i.provider === 'MANYCHAT') setMcSavedKey(i.maskedKey);
           if (i.provider === 'TYPEFORM') setTfSavedKey(i.maskedKey);
         }
@@ -295,10 +362,19 @@ export default function IntegrationsPage() {
     } else if (connected === 'instagram') {
       toast.success(`Instagram @${ig || 'account'} connected!`);
       window.history.replaceState({}, '', window.location.pathname);
+    } else if (connected === 'google-calendar') {
+      const email = params.get('email');
+      toast.success(`Google Calendar connected${email ? ` (${email})` : ''}!`);
+      window.history.replaceState({}, '', window.location.pathname);
     } else if (error) {
       const errorMessages: Record<string, string> = {
         meta_denied: 'Facebook login was cancelled',
         instagram_denied: 'Instagram login was cancelled',
+        google_denied: 'Google Calendar authorization was cancelled',
+        google_token_exchange: 'Failed to exchange Google token',
+        google_missing_scopes:
+          'Calendar access was not granted. Please reconnect and tick the calendar permission checkboxes (or "Select all") so the AI can read availability and book calls.',
+        google_unknown: 'Google Calendar connection failed — please try again',
         missing_params: 'OAuth callback missing parameters',
         invalid_state: 'Invalid OAuth state — please try again',
         platform_config: 'Platform not configured — contact support',
@@ -311,7 +387,10 @@ export default function IntegrationsPage() {
         unknown: 'Connection failed — please try again'
       };
       toast.error(errorMessages[error] || `Connection error: ${error}`, {
-        duration: error === 'no_pages' ? 15000 : 5000
+        duration:
+          error === 'no_pages' || error === 'google_missing_scopes'
+            ? 15000
+            : 5000
       });
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -491,6 +570,52 @@ export default function IntegrationsPage() {
     }
   }
 
+  async function saveCalcom() {
+    if (!ccApiKey.trim() && !ccSavedKey) {
+      toast.error('Please enter your Cal.com API key');
+      return;
+    }
+    setCcSaving(true);
+    try {
+      await apiFetch('/api/settings/integrations/CALCOM', {
+        method: 'PUT',
+        body: JSON.stringify({
+          credentials: { apiKey: ccApiKey.trim() }
+        })
+      });
+      toast.success('Cal.com connected successfully');
+      setCcSavedKey(maskKey(ccApiKey));
+      setCcApiKey('');
+      setStatuses((prev) => ({ ...prev, CALCOM: true }));
+    } catch {
+      toast.error('Failed to save Cal.com credentials');
+    } finally {
+      setCcSaving(false);
+    }
+  }
+
+  async function setActiveCalendarProvider(provider: CalendarProvider) {
+    if (!statuses[provider]) {
+      toast.error('Connect this calendar first');
+      return;
+    }
+    const previous = activeCalendar;
+    setActiveCalendar(provider); // optimistic
+    setActiveCalendarSaving(true);
+    try {
+      await apiFetch('/api/settings/calendar-provider', {
+        method: 'PUT',
+        body: JSON.stringify({ provider })
+      });
+      toast.success('Active booking calendar updated');
+    } catch {
+      setActiveCalendar(previous); // revert
+      toast.error('Failed to update active booking calendar');
+    } finally {
+      setActiveCalendarSaving(false);
+    }
+  }
+
   async function saveManyChat() {
     if (!mcApiKey.trim() && !mcSavedKey) {
       toast.error('Please enter your ManyChat API key');
@@ -642,6 +767,10 @@ export default function IntegrationsPage() {
         setLcLocationId('');
       }
       if (provider === 'CALENDLY') setCalSavedKey('');
+      if (provider === 'CALCOM') setCcSavedKey('');
+      // If the disconnected provider was the active booking calendar, clear it
+      // locally — the adapter falls back to precedence until a new one is set.
+      if (provider === activeCalendar) setActiveCalendar(null);
       if (provider === 'MANYCHAT') {
         setMcSavedKey('');
         setMcOpenerMessage('');
@@ -656,6 +785,7 @@ export default function IntegrationsPage() {
       }
       if (provider === 'META') setMetaMetadata(null);
       if (provider === 'INSTAGRAM') setIgMetadata(null);
+      if (provider === 'GOOGLE_CALENDAR') setGoogleMetadata(null);
     } catch {
       toast.error('Failed to disconnect');
     }
@@ -914,6 +1044,70 @@ export default function IntegrationsPage() {
         </Card>
 
         {/* ---------------------------------------------------------------- */}
+        {/* Active booking calendar selector */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Active booking calendar</CardTitle>
+            <CardDescription>
+              Choose which connected calendar the AI uses to check availability
+              and book calls. Google Calendar is recommended — it books directly
+              with a Google Meet link. Calendly is link-mode (the lead
+              self-books from a scheduling link). Set the keys below first, then
+              pick one here.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='space-y-2'>
+            {CALENDAR_OPTIONS.map((opt) => {
+              const connected = statuses[opt.key];
+              const isActive = activeCalendar === opt.key;
+              return (
+                <div
+                  key={opt.key}
+                  className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'
+                >
+                  <div className='space-y-0.5'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <span className='text-sm font-medium'>{opt.label}</span>
+                      {opt.recommended && (
+                        <Badge variant='secondary'>Recommended</Badge>
+                      )}
+                      {opt.mode === 'link' && (
+                        <Badge variant='outline'>Link-mode</Badge>
+                      )}
+                    </div>
+                    <p className='text-muted-foreground text-xs'>
+                      {connected ? opt.connectedHint : 'Not connected'}
+                    </p>
+                  </div>
+                  {isActive ? (
+                    <Badge className='shrink-0 bg-green-600 text-white hover:bg-green-600'>
+                      Active
+                    </Badge>
+                  ) : (
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='shrink-0'
+                      disabled={!connected || activeCalendarSaving}
+                      onClick={() => setActiveCalendarProvider(opt.key)}
+                    >
+                      Set active
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            {!activeCalendar && (
+              <p className='text-muted-foreground pt-1 text-xs'>
+                No active calendar selected — the AI uses the first connected
+                provider automatically.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
         {/* Card 3: LeadConnector */}
         {/* ---------------------------------------------------------------- */}
         <Card>
@@ -1117,6 +1311,183 @@ export default function IntegrationsPage() {
                 onClick={() => disconnectProvider('CALENDLY')}
               >
                 Disconnect
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Card: Cal.com */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div>
+                <CardTitle>Cal.com</CardTitle>
+                <CardDescription>
+                  Connect Cal.com so the AI can book events server-side
+                </CardDescription>
+              </div>
+              <StatusBadge connected={statuses.CALCOM} />
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-4'>
+            {statuses.CALCOM && ccSavedKey ? (
+              <div className='space-y-2'>
+                <Label>API Key</Label>
+                <div className='bg-muted/50 flex items-center gap-2 rounded-md border px-3 py-2'>
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    width='16'
+                    height='16'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='shrink-0 text-green-600'
+                  >
+                    <rect width='18' height='11' x='3' y='11' rx='2' ry='2' />
+                    <path d='M7 11V7a5 5 0 0 1 10 0v4' />
+                  </svg>
+                  <span className='flex-1 font-mono text-sm'>{ccSavedKey}</span>
+                  <span className='text-xs font-medium text-green-600'>
+                    Saved
+                  </span>
+                </div>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground hover:text-foreground h-auto p-0 text-xs'
+                  onClick={() => {
+                    setCcSavedKey('');
+                    setCcApiKey('');
+                  }}
+                >
+                  Change key
+                </Button>
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                <Label htmlFor='cc-api-key'>API Key</Label>
+                <Input
+                  id='cc-api-key'
+                  type='password'
+                  placeholder='cal_...'
+                  value={ccApiKey}
+                  onChange={(e) => setCcApiKey(e.target.value)}
+                />
+                <p className='text-muted-foreground text-xs'>
+                  Get yours at{' '}
+                  <a
+                    href='https://app.cal.com/settings/developer/api-keys'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='underline'
+                  >
+                    Cal.com → Settings → API Keys
+                  </a>
+                </p>
+              </div>
+            )}
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            <Button onClick={saveCalcom} disabled={ccSaving}>
+              {ccSaving ? 'Connecting...' : 'Connect Cal.com'}
+            </Button>
+            {statuses.CALCOM && (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('CALCOM')}
+              >
+                Disconnect
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Card: Google Calendar (OAuth) */}
+        {/* ---------------------------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-3'>
+                <div className='ring-border flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white ring-1'>
+                  <svg viewBox='0 0 24 24' className='h-5 w-5' fill='none'>
+                    <rect
+                      x='3'
+                      y='4.5'
+                      width='18'
+                      height='16'
+                      rx='2'
+                      fill='#4285F4'
+                    />
+                    <rect
+                      x='3'
+                      y='4.5'
+                      width='18'
+                      height='4'
+                      rx='2'
+                      fill='#1A73E8'
+                    />
+                    <rect
+                      x='10'
+                      y='11'
+                      width='4'
+                      height='4'
+                      rx='0.5'
+                      fill='#fff'
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle>Google Calendar</CardTitle>
+                  <CardDescription>
+                    Let the AI check your availability and book calls directly
+                    on your Google Calendar (with a Google Meet link).
+                  </CardDescription>
+                </div>
+              </div>
+              <StatusBadge connected={statuses.GOOGLE_CALENDAR} />
+            </div>
+          </CardHeader>
+          <CardContent>
+            {statuses.GOOGLE_CALENDAR ? (
+              <div className='space-y-1'>
+                {googleMetadata?.email && (
+                  <p className='text-sm font-semibold'>
+                    {googleMetadata.email}
+                  </p>
+                )}
+                <p className='text-muted-foreground text-sm'>
+                  Connected — the AI books qualified leads onto this Google
+                  Calendar automatically.
+                </p>
+              </div>
+            ) : (
+              <p className='text-muted-foreground text-sm'>
+                Connect your Google account so the AI can read your free/busy
+                times and create events when a lead books a call.
+              </p>
+            )}
+          </CardContent>
+          <CardFooter className='flex justify-between'>
+            {statuses.GOOGLE_CALENDAR ? (
+              <Button
+                variant='outline'
+                onClick={() => disconnectProvider('GOOGLE_CALENDAR')}
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  window.location.href = '/api/auth/google-calendar/connect';
+                }}
+              >
+                Connect Google Calendar
               </Button>
             )}
           </CardFooter>

@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
 import type { LeadContext } from '@/lib/ai-prompts';
@@ -6799,19 +6800,21 @@ async function callOpenAI(
   // gpt-4o-mini (the fallback) also accepts `max_completion_tokens`, so
   // we route via it universally to keep one call shape regardless of
   // which OpenAI model ends up here.
-  const response = await client.chat.completions.create({
-    model,
-    temperature: 0.85,
-    max_completion_tokens: 1500,
-    // Force OpenAI to emit a valid JSON object. The system prompt already
-    // demands JSON, but stacked directive blocks sometimes steered the
-    // model into plain text — this guarantees the response parses.
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system' as const, content: systemPrompt },
-      ...messages
-    ] as any
-  });
+  const response = await safeOpenAI(() =>
+    client.chat.completions.create({
+      model,
+      temperature: 0.85,
+      max_completion_tokens: 1500,
+      // Force OpenAI to emit a valid JSON object. The system prompt already
+      // demands JSON, but stacked directive blocks sometimes steered the
+      // model into plain text — this guarantees the response parses.
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system' as const, content: systemPrompt },
+        ...messages
+      ] as any
+    })
+  );
 
   // OpenAI caches long prompts (>1024 tokens) automatically — no
   // request-side cache_control needed. `prompt_tokens_details.cached_tokens`
@@ -6871,19 +6874,21 @@ async function callAnthropic(
   // edits). Marking it with ephemeral cache_control halves input cost
   // on every turn after the first — cache TTL is 5min, which covers
   // any normal multi-turn chat window.
-  const response = await client.messages.create({
-    model,
-    system: [
-      {
-        type: 'text',
-        text: systemPrompt,
-        cache_control: { type: 'ephemeral' }
-      }
-    ],
-    temperature: 0.85,
-    max_tokens: 1500,
-    messages: anthropicPayloadMessages as any
-  });
+  const response = await safeAnthropic(() =>
+    client.messages.create({
+      model,
+      system: [
+        {
+          type: 'text',
+          text: systemPrompt,
+          cache_control: { type: 'ephemeral' }
+        }
+      ],
+      temperature: 0.85,
+      max_tokens: 1500,
+      messages: anthropicPayloadMessages as any
+    })
+  );
 
   const textBlock = response.content.find(
     (block: { type: string }) => block.type === 'text'

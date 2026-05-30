@@ -33,9 +33,20 @@ export async function GET(request: NextRequest) {
 
     const total = conversations.length;
 
-    // Count how many conversations reached each stage
+    // QD-041 fix (2026-05-30): the funnel chart used to count "reached" over
+    // ALL conversations, which meant any account with imported / pre-SOP
+    // conversations saw the chart sit at zero (those rows have all stage*At
+    // null by definition). Restrict the funnel to conversations that have
+    // actually entered the SOP — at least one stage timestamp populated —
+    // and report the excluded count so the UI can label "showing 12 of 22".
+    const inFunnel = conversations.filter((c) =>
+      STAGES.some(({ key }) => c[key] !== null)
+    );
+    const funnelDenominator = inFunnel.length;
+    const excludedPreSop = total - funnelDenominator;
+
     const reachedCounts = STAGES.map(
-      ({ key }) => conversations.filter((c) => c[key] !== null).length
+      ({ key }) => inFunnel.filter((c) => c[key] !== null).length
     );
 
     // Build stages array with dropOff calculated as reached_this - reached_next
@@ -50,13 +61,23 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Count conversations by outcome
+    // Count conversations by outcome (over the full set — outcome is set for
+    // every conversation regardless of whether it walked the new SOP).
     const outcomes: Record<string, number> = {};
     for (const c of conversations) {
       outcomes[c.outcome] = (outcomes[c.outcome] || 0) + 1;
     }
 
-    return NextResponse.json({ stages, outcomes, total });
+    return NextResponse.json({
+      stages,
+      outcomes,
+      total,
+      // The funnel denominator — count of conversations actually in the SOP
+      // funnel — so the UI can show a meaningful "showing N of M" label
+      // instead of a mysteriously zero chart.
+      funnelDenominator,
+      excludedPreSop
+    });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(

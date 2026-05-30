@@ -34,6 +34,14 @@ export const navItems: NavItem[] = [
     items: []
   },
   {
+    title: 'Calendar',
+    url: '/dashboard/calendar',
+    icon: 'calendar',
+    isActive: false,
+    shortcut: ['c', 'l'],
+    items: []
+  },
+  {
     title: 'Voice Notes',
     url: '/dashboard/voice-notes',
     icon: 'voiceNotes',

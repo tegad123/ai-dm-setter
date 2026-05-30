@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError, scopedAccountId } from '@/lib/auth-guard';
+import { QUALIFIED_LEAD_STAGES_ARR } from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -44,11 +45,11 @@ export async function GET(request: NextRequest) {
     // We include CLOSED_WON (revenue already recorded) but NOT CLOSED_LOST,
     // NO_SHOWED, GHOSTED, NURTURE — those are terminal non-revenue states
     // that belong in their own buckets even though the lead was once
-    // qualified. UNQUALIFIED is its own tab.
+    // qualified. UNQUALIFIED is its own tab. This canonical definition lives
+    // in lead-state-sets.ts (F8 reconciliation, 2026-05-30) and is shared by
+    // the analytics Funnel + Overview so the numbers match.
     if (qualification === 'qualified') {
-      leadFilter.stage = {
-        in: ['QUALIFIED', 'CALL_PROPOSED', 'BOOKED', 'SHOWED', 'CLOSED_WON']
-      };
+      leadFilter.stage = { in: QUALIFIED_LEAD_STAGES_ARR };
     } else if (qualification === 'unqualified') {
       leadFilter.stage = 'UNQUALIFIED';
     }

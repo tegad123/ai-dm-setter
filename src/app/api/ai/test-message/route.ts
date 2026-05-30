@@ -2,6 +2,12 @@ import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { buildDynamicSystemPrompt } from '@/lib/ai-prompts';
 import { NextRequest, NextResponse } from 'next/server';
 import { getCredentials } from '@/lib/credential-store';
+import {
+  safeOpenAI,
+  safeAnthropic,
+  aiErrorResponse,
+  isAIServiceError
+} from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 
 // ---------------------------------------------------------------------------
@@ -137,26 +143,30 @@ export async function POST(req: NextRequest) {
     if (provider === 'openai') {
       const { default: OpenAI } = await import('openai');
       const client = new OpenAI({ apiKey });
-      const response = await client.chat.completions.create({
-        model: model || 'gpt-4o',
-        temperature: 0.85,
-        max_completion_tokens: 500,
-        messages: [
-          { role: 'system' as const, content: systemPrompt },
-          ...openAIMessages
-        ] as any
-      });
+      const response = await safeOpenAI(() =>
+        client.chat.completions.create({
+          model: model || 'gpt-4o',
+          temperature: 0.85,
+          max_completion_tokens: 500,
+          messages: [
+            { role: 'system' as const, content: systemPrompt },
+            ...openAIMessages
+          ] as any
+        })
+      );
       rawResponse = response.choices[0]?.message?.content?.trim() || '';
     } else {
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
       const client = new Anthropic({ apiKey });
-      const response = await client.messages.create({
-        model: model || 'claude-sonnet-4-20250514',
-        system: systemPrompt,
-        temperature: 0.85,
-        max_tokens: 500,
-        messages: anthropicMessages as any
-      });
+      const response = await safeAnthropic(() =>
+        client.messages.create({
+          model: model || 'claude-sonnet-4-20250514',
+          system: systemPrompt,
+          temperature: 0.85,
+          max_tokens: 500,
+          messages: anthropicMessages as any
+        })
+      );
       const textBlock = response.content.find((block) => block.type === 'text');
       rawResponse = textBlock?.text?.trim() || '';
     }
@@ -204,16 +214,14 @@ export async function POST(req: NextRequest) {
         { status: error.status }
       );
     }
+    // AI provider failures (quota/rate-limit/auth/etc.) → clean operator message
+    if (isAIServiceError(error)) {
+      console.error('POST /api/ai/test-message AI error:', error.kind);
+      return aiErrorResponse(error);
+    }
     console.error('POST /api/ai/test-message error:', error);
-    // Surface the actual API error message to the user
-    const errMsg =
-      error instanceof Error
-        ? error.message
-        : 'Failed to generate test response';
-    // Extract Anthropic/OpenAI specific error messages
-    const match = errMsg.match(/"message":"([^"]+)"/);
     return NextResponse.json(
-      { error: match ? match[1] : errMsg },
+      { error: 'Failed to generate test response' },
       { status: 500 }
     );
   }
