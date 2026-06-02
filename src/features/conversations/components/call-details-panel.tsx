@@ -24,12 +24,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog';
-import { Calendar } from '@/components/ui/calendar';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger
-} from '@/components/ui/popover';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import '@/features/conversations/components/datepicker-overrides.css';
 import { format } from 'date-fns';
 import { IconCalendarEvent, IconClock, IconCheck } from '@tabler/icons-react';
 
@@ -212,15 +209,15 @@ function StatusLine({
 }
 
 /**
- * Custom date + time picker for scheduling a call. Replaces the native
- * <input type="datetime-local"> which (a) gave no explanation for the
- * 6-month cap so QA read it as "can't pick a future year", and (b) used the
- * browser-native popup that doesn't auto-dismiss on selection.
+ * Unified call date+time picker (react-datepicker). A single field that opens
+ * one popover with an inline calendar AND a scrollable time column (15-min
+ * slots, AM/PM) — replacing the earlier two-control (calendar button + native
+ * time input) version that felt disjointed.
  *
- * Keeps the exact "YYYY-MM-DDTHH:MM" string contract the surrounding timezone
- * conversion (localDateTimeToUtcIso) already depends on, so nothing downstream
- * changes. Date selection closes the popover; the 6-month limit is enforced
- * (Calendar disabled past it) AND shown as helper text.
+ * Keeps the exact "YYYY-MM-DDTHH:MM" string contract that the surrounding
+ * timezone conversion (localDateTimeToUtcIso) depends on, so nothing
+ * downstream changes. The 6-month limit is enforced (maxDate) and shown as
+ * helper text. Styling lives in datepicker-overrides.css to match the app.
  */
 function CallDateTimePicker({
   value,
@@ -231,79 +228,62 @@ function CallDateTimePicker({
   onChange: (next: string) => void;
   maxDate: Date;
 }) {
-  const [open, setOpen] = useState(false);
-
-  // Split the contract string into date + time parts.
+  // Parse the contract string into a Date for react-datepicker.
   const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
-  const datePart = m ? `${m[1]}-${m[2]}-${m[3]}` : '';
-  const hourPart = m ? m[4] : '';
-  const minutePart = m ? m[5] : '';
-  const selectedDate = datePart ? new Date(`${datePart}T00:00:00`) : undefined;
+  const selected = m
+    ? new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5])
+      )
+    : null;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const setDate = (d: Date | undefined) => {
-    if (!d) return;
+  const handleChange = (d: Date | null) => {
+    if (!d) {
+      return;
+    }
+    // Serialize back to the "YYYY-MM-DDTHH:MM" contract.
     const y = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
-    // Default time to 12:00 if none picked yet so the value is complete.
-    const h = hourPart || '12';
-    const mi = minutePart || '00';
+    const h = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
     onChange(`${y}-${mo}-${day}T${h}:${mi}`);
-    setOpen(false); // auto-dismiss on date selection
   };
-
-  // Native <input type="time"> value is "HH:MM". Lets the operator type
-  // digits or use the OS spinner — the Select dropdowns didn't allow typing.
-  const timeValue = hourPart && minutePart ? `${hourPart}:${minutePart}` : '';
-
-  const setTime = (hhmm: string) => {
-    if (!/^\d{2}:\d{2}$/.test(hhmm)) return;
-    // If no date chosen yet, anchor to today so the value is usable.
-    const base = datePart || format(new Date(), 'yyyy-MM-dd');
-    onChange(`${base}T${hhmm}`);
-  };
-
-  const displayLabel = selectedDate
-    ? format(selectedDate, 'EEE, MMM d, yyyy')
-    : 'Pick a date';
 
   return (
     <div className='space-y-2'>
-      <div className='flex gap-2'>
-        {/* Date — Calendar in a popover, closes on select */}
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
+      <div className='convlo-datepicker'>
+        <DatePicker
+          selected={selected}
+          onChange={handleChange}
+          showTimeSelect
+          timeIntervals={15}
+          timeFormat='h:mm aa'
+          dateFormat='EEE, MMM d, yyyy · h:mm aa'
+          minDate={today}
+          maxDate={maxDate}
+          placeholderText='Pick date & time'
+          shouldCloseOnSelect={false}
+          popperPlacement='bottom-start'
+          customInput={
+            <button
               type='button'
-              variant='outline'
-              className='h-8 flex-1 justify-start text-xs font-normal'
+              className='border-input bg-background hover:bg-accent/50 focus-visible:ring-ring flex h-9 w-full items-center gap-2 rounded-md border px-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none'
             >
-              <IconCalendarEvent className='mr-1.5 h-3.5 w-3.5' />
-              {displayLabel}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className='w-auto p-0' align='start'>
-            <Calendar
-              mode='single'
-              selected={selectedDate}
-              onSelect={setDate}
-              disabled={{ before: today, after: maxDate }}
-              defaultMonth={selectedDate}
-              initialFocus
-            />
-          </PopoverContent>
-        </Popover>
-
-        {/* Time — native time input: typeable digits + OS spinner */}
-        <Input
-          type='time'
-          value={timeValue}
-          onChange={(e) => setTime(e.target.value)}
-          className='h-8 w-[110px] text-xs'
-          aria-label='Call time'
+              <IconCalendarEvent className='text-muted-foreground h-4 w-4 shrink-0' />
+              <span className={selected ? '' : 'text-muted-foreground'}>
+                {selected
+                  ? format(selected, 'EEE, MMM d, yyyy · h:mm aa')
+                  : 'Pick date & time'}
+              </span>
+            </button>
+          }
         />
       </div>
       <p className='text-muted-foreground text-[10px]'>
