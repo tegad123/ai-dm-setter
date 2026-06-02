@@ -8,7 +8,16 @@ export async function GET(req: NextRequest) {
     const auth = await requireAuth(req);
 
     const { searchParams } = req.nextUrl;
-    const stage = searchParams.get('stage') as LeadStage | null;
+    // `stage` accepts a single enum (exact match) OR a comma-separated list
+    // (matched with `in`). The comma form lets the Leads list reconcile with
+    // Analytics: e.g. the "Booked" filter sends the full booked SET
+    // (BOOKED,SHOWED,NO_SHOWED,RESCHEDULED,CLOSED_WON) so a lead that
+    // progressed past BOOKED to SHOWED still appears — matching the
+    // "Booked: 2" the Overview counts.
+    const stageRaw = searchParams.get('stage');
+    const stageList = stageRaw
+      ? (stageRaw.split(',').map((s) => s.trim()).filter(Boolean) as LeadStage[])
+      : [];
     const platform = searchParams.get('platform') as Platform | null;
     const search = (
       searchParams.get('search') ?? searchParams.get('q')
@@ -29,8 +38,9 @@ export async function GET(req: NextRequest) {
 
     const where: Prisma.LeadWhereInput = { accountId: auth.accountId };
 
-    if (stage && !search) {
-      where.stage = stage;
+    if (stageList.length > 0 && !search) {
+      where.stage =
+        stageList.length === 1 ? stageList[0] : { in: stageList };
     }
     if (platform) {
       where.platform = platform;
@@ -55,8 +65,17 @@ export async function GET(req: NextRequest) {
       ];
     }
     if (tag) {
+      // Explicit tag filter — show that tag's leads as-is (incl. cold-pitch if
+      // the operator filters by it). This replaces the default exclusion.
       where.tags = {
         some: { tag: { name: tag } }
+      };
+    } else {
+      // Default: exclude cold-pitch so the list total reconciles with the
+      // Dashboard / Analytics totals (which all exclude it). Without this the
+      // list showed 6773 while Analytics showed 6768 (the 5 cold-pitch leads).
+      where.tags = {
+        none: { tag: { name: 'cold-pitch' } }
       };
     }
 

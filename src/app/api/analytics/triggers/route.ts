@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { EXCLUDE_COLD_PITCH } from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -9,7 +10,8 @@ export async function GET(request: NextRequest) {
     const triggerCounts = await prisma.lead.groupBy({
       by: ['triggerType'],
       _count: { id: true },
-      where: { accountId: auth.accountId }
+      // Exclude cold-pitch so trigger breakdown reconciles with the totals.
+      where: { accountId: auth.accountId, ...EXCLUDE_COLD_PITCH }
     });
 
     const data = triggerCounts.map((row) => ({

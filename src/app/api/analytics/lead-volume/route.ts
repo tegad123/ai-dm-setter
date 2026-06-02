@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { EXCLUDE_COLD_PITCH } from '@/lib/lead-state-sets';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -11,7 +12,12 @@ export async function GET(request: NextRequest) {
     thirtyDaysAgo.setHours(0, 0, 0, 0);
 
     const leads = await prisma.lead.findMany({
-      where: { accountId: auth.accountId, createdAt: { gte: thirtyDaysAgo } },
+      // Exclude cold-pitch so the volume chart reconciles with the totals.
+      where: {
+        accountId: auth.accountId,
+        createdAt: { gte: thirtyDaysAgo },
+        ...EXCLUDE_COLD_PITCH
+      },
       select: { createdAt: true },
       orderBy: { createdAt: 'asc' }
     });

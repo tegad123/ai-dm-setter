@@ -30,6 +30,7 @@ import {
   PopoverContent,
   PopoverTrigger
 } from '@/components/ui/popover';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { format } from 'date-fns';
 import { IconCalendarEvent, IconClock, IconCheck } from '@tabler/icons-react';
 
@@ -211,16 +212,30 @@ function StatusLine({
   );
 }
 
+// 15-minute time slots for a full day, as { value: "HH:MM", label: "h:mm aa" }.
+const TIME_SLOTS: { value: string; label: string }[] = Array.from(
+  { length: 24 * 4 },
+  (_, i) => {
+    const h = Math.floor(i / 4);
+    const mi = (i % 4) * 15;
+    const hh = String(h).padStart(2, '0');
+    const mm = String(mi).padStart(2, '0');
+    const ampm = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return { value: `${hh}:${mm}`, label: `${h12}:${mm} ${ampm}` };
+  }
+);
+
 /**
- * Custom date + time picker for scheduling a call. Replaces the native
- * <input type="datetime-local"> which (a) gave no explanation for the
- * 6-month cap so QA read it as "can't pick a future year", and (b) used the
- * browser-native popup that doesn't auto-dismiss on selection.
+ * Call date+time picker built on the app's own Radix Popover + shadcn Calendar
+ * (same primitives used everywhere else), with a scrollable 15-min time list
+ * beside the calendar. Anchored to the field, portaled by Radix (never clipped
+ * by the narrow Call Details sidebar), and collision-aware — not a heavy
+ * centered modal.
  *
- * Keeps the exact "YYYY-MM-DDTHH:MM" string contract the surrounding timezone
- * conversion (localDateTimeToUtcIso) already depends on, so nothing downstream
- * changes. Date selection closes the popover; the 6-month limit is enforced
- * (Calendar disabled past it) AND shown as helper text.
+ * Keeps the exact "YYYY-MM-DDTHH:MM" string contract that the surrounding
+ * timezone conversion (localDateTimeToUtcIso) depends on. 6-month cap enforced
+ * (Calendar disabled past it) + shown as helper text.
  */
 function CallDateTimePicker({
   value,
@@ -233,12 +248,19 @@ function CallDateTimePicker({
 }) {
   const [open, setOpen] = useState(false);
 
-  // Split the contract string into date + time parts.
   const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
   const datePart = m ? `${m[1]}-${m[2]}-${m[3]}` : '';
-  const hourPart = m ? m[4] : '';
-  const minutePart = m ? m[5] : '';
+  const timePart = m ? `${m[4]}:${m[5]}` : '';
   const selectedDate = datePart ? new Date(`${datePart}T00:00:00`) : undefined;
+  const selectedDateTime = m
+    ? new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5])
+      )
+    : null;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -248,44 +270,34 @@ function CallDateTimePicker({
     const y = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
-    // Default time to 12:00 if none picked yet so the value is complete.
-    const h = hourPart || '12';
-    const mi = minutePart || '00';
-    onChange(`${y}-${mo}-${day}T${h}:${mi}`);
-    setOpen(false); // auto-dismiss on date selection
+    // Keep existing time, or default to 12:00 when none chosen yet.
+    onChange(`${y}-${mo}-${day}T${timePart || '12:00'}`);
   };
 
-  const setTime = (h: string, mi: string) => {
-    // If no date chosen yet, anchor to today so the value is usable.
+  const setTime = (hhmm: string) => {
+    // Anchor to today if no date chosen yet so the value is complete.
     const base = datePart || format(new Date(), 'yyyy-MM-dd');
-    onChange(`${base}T${h.padStart(2, '0')}:${mi.padStart(2, '0')}`);
+    onChange(`${base}T${hhmm}`);
   };
-
-  const hours = Array.from({ length: 24 }, (_, i) =>
-    String(i).padStart(2, '0')
-  );
-  const minutes = ['00', '15', '30', '45'];
-
-  const displayLabel = selectedDate
-    ? format(selectedDate, 'EEE, MMM d, yyyy')
-    : 'Pick a date';
 
   return (
     <div className='space-y-2'>
-      <div className='flex gap-2'>
-        {/* Date */}
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              type='button'
-              variant='outline'
-              className='h-8 flex-1 justify-start text-xs font-normal'
-            >
-              <IconCalendarEvent className='mr-1.5 h-3.5 w-3.5' />
-              {displayLabel}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className='w-auto p-0' align='start'>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='border-input bg-background hover:bg-accent/50 focus-visible:ring-ring flex h-9 w-full items-center gap-2 rounded-md border px-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none'
+          >
+            <IconCalendarEvent className='text-muted-foreground h-4 w-4 shrink-0' />
+            <span className={selectedDateTime ? '' : 'text-muted-foreground'}>
+              {selectedDateTime
+                ? format(selectedDateTime, 'EEE, MMM d, yyyy · h:mm aa')
+                : 'Pick date & time'}
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className='w-auto p-0' align='start'>
+          <div className='flex'>
             <Calendar
               mode='single'
               selected={selectedDate}
@@ -294,44 +306,32 @@ function CallDateTimePicker({
               defaultMonth={selectedDate}
               initialFocus
             />
-          </PopoverContent>
-        </Popover>
-
-        {/* Time */}
-        <div className='flex items-center gap-1'>
-          <Select
-            value={hourPart || undefined}
-            onValueChange={(h) => setTime(h, minutePart || '00')}
-          >
-            <SelectTrigger className='h-8 w-[58px] text-xs'>
-              <SelectValue placeholder='HH' />
-            </SelectTrigger>
-            <SelectContent>
-              {hours.map((h) => (
-                <SelectItem key={h} value={h}>
-                  {h}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className='text-muted-foreground text-xs'>:</span>
-          <Select
-            value={minutePart || undefined}
-            onValueChange={(mi) => setTime(hourPart || '12', mi)}
-          >
-            <SelectTrigger className='h-8 w-[58px] text-xs'>
-              <SelectValue placeholder='MM' />
-            </SelectTrigger>
-            <SelectContent>
-              {minutes.map((mi) => (
-                <SelectItem key={mi} value={mi}>
-                  {mi}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+            <div className='flex flex-col border-l'>
+              <div className='text-muted-foreground border-b px-3 py-2 text-center text-xs font-medium'>
+                Time
+              </div>
+              <ScrollArea className='h-[280px] w-[120px]'>
+                <div className='flex flex-col p-1'>
+                  {TIME_SLOTS.map((slot) => (
+                    <button
+                      key={slot.value}
+                      type='button'
+                      onClick={() => setTime(slot.value)}
+                      className={`rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                        timePart === slot.value
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-accent'
+                      }`}
+                    >
+                      {slot.label}
+                    </button>
+                  ))}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
       <p className='text-muted-foreground text-[10px]'>
         Calls can be scheduled up to 6 months out.
       </p>

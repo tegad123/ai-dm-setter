@@ -27,17 +27,42 @@ import { IconSearch } from '@tabler/icons-react';
 import { useLeads, useTags } from '@/hooks/use-api';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
 
+// Grouped stage filters that reconcile with Analytics. Each value is a
+// comma-separated stage list the /api/leads `stage` param matches with `in`.
+// "Booked" returns every lead that has been on the calendar (incl. ones that
+// progressed to Showed / Closed), so this filter's count matches the Overview
+// "Booked" KPI — instead of exact-BOOKED which misses downstream leads.
+const GROUPED_STAGE_FILTERS = [
+  {
+    value: 'QUALIFIED,CALL_PROPOSED,BOOKED,SHOWED,CLOSED_WON',
+    label: 'Qualified (all)'
+  },
+  {
+    value: 'BOOKED,SHOWED,NO_SHOWED,RESCHEDULED,CLOSED_WON',
+    label: 'Booked (incl. showed/closed)'
+  },
+  { value: 'SHOWED,CLOSED_WON', label: 'Showed up' }
+];
+
 export function LeadsTable() {
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [platformFilter, setPlatformFilter] = useState<string>('all');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 100;
 
   const { tags: availableTags } = useTags();
 
-  // Map lowercase stage filter to UPPER_CASE for the API
+  // Map stage filter to the API param. Single exact stages are lowercase
+  // (from allStages) → uppercased; grouped filters are already an uppercase
+  // comma list and pass through unchanged.
   const apiStage =
     stageFilter !== 'all' ? stageFilter.toUpperCase() : undefined;
+
+  // Any filter/search change resets to page 1 so we don't land on an empty
+  // page beyond the new result set.
+  const resetPage = () => setPage(1);
 
   const {
     leads: apiLeads,
@@ -49,8 +74,13 @@ export function LeadsTable() {
     search: search || undefined,
     tag: tagFilter !== 'all' ? tagFilter : undefined,
     platform: platformFilter !== 'all' ? platformFilter : undefined,
-    limit: 100
+    page,
+    limit: PAGE_SIZE
   });
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
   // Map API response fields to match what the UI expects
   const leads = useMemo(() => {
@@ -115,16 +145,31 @@ export function LeadsTable() {
           <Input
             placeholder='Search leads...'
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              resetPage();
+            }}
             className='pl-9'
           />
         </div>
-        <Select value={stageFilter} onValueChange={setStageFilter}>
+        <Select
+          value={stageFilter}
+          onValueChange={(v) => {
+            setStageFilter(v);
+            resetPage();
+          }}
+        >
           <SelectTrigger className='w-[200px]'>
             <SelectValue placeholder='Filter by stage' />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value='all'>All Stages</SelectItem>
+            {GROUPED_STAGE_FILTERS.map((g) => (
+              <SelectItem key={g.value} value={g.value}>
+                {g.label}
+              </SelectItem>
+            ))}
+            <div className='bg-border my-1 h-px' />
             {allStages.map((s) => (
               <SelectItem key={s.value} value={s.value}>
                 {s.label}
@@ -132,7 +177,13 @@ export function LeadsTable() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={tagFilter} onValueChange={setTagFilter}>
+        <Select
+          value={tagFilter}
+          onValueChange={(v) => {
+            setTagFilter(v);
+            resetPage();
+          }}
+        >
           <SelectTrigger className='w-[180px]'>
             <SelectValue placeholder='Filter by tag' />
           </SelectTrigger>
@@ -151,7 +202,13 @@ export function LeadsTable() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={platformFilter} onValueChange={setPlatformFilter}>
+        <Select
+          value={platformFilter}
+          onValueChange={(v) => {
+            setPlatformFilter(v);
+            resetPage();
+          }}
+        >
           <SelectTrigger className='w-[160px]'>
             <SelectValue placeholder='Platform' />
           </SelectTrigger>
@@ -167,8 +224,10 @@ export function LeadsTable() {
       <div className='flex gap-4 text-sm'>
         <span className='text-muted-foreground'>
           Showing{' '}
-          <span className='text-foreground font-medium'>{leads.length}</span> of{' '}
-          {total} leads
+          <span className='text-foreground font-medium'>
+            {rangeStart}–{rangeEnd}
+          </span>{' '}
+          of {total} leads
         </span>
       </div>
 
@@ -276,6 +335,34 @@ export function LeadsTable() {
           </TableBody>
         </Table>
       </div>
+
+      {/* Pagination controls */}
+      {total > PAGE_SIZE && (
+        <div className='flex items-center justify-between pt-2'>
+          <span className='text-muted-foreground text-sm'>
+            Page <span className='text-foreground font-medium'>{page}</span> of{' '}
+            {totalPages}
+          </span>
+          <div className='flex gap-2'>
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </Button>
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
