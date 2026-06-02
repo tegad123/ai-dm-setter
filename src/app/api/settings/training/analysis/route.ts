@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { AIServiceError, aiErrorResponse } from '@/lib/ai-error-handler';
 import prisma from '@/lib/prisma';
 import {
   runTrainingAnalysis,
@@ -84,6 +85,10 @@ export async function POST(req: NextRequest) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
     }
+    // QD-045: an out-of-credit / rate-limit / bad-key provider error must
+    // surface as a clean operator message, not raw provider JSON.
+    const aiErr = AIServiceError.from(err);
+    if (aiErr.kind !== 'unknown') return aiErrorResponse(aiErr);
     console.error('[training/analysis] Error:', err);
     return NextResponse.json(
       {

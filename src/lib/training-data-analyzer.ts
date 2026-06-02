@@ -75,34 +75,73 @@ export interface CostEstimate {
 // ---------------------------------------------------------------------------
 
 const ANALYZER_MODEL = 'claude-haiku-4-5-20251001';
+const ANALYZER_MODEL_OPENAI = 'gpt-4o-mini';
 
-async function resolveProvider(accountId: string): Promise<{
-  provider: 'anthropic';
+/**
+ * Resolve which LLM to run the training analysis on.
+ *
+ * QD-045 (2026-06-02): this used to be hardcoded to Anthropic — so an account
+ * whose CONVERSATIONS run on OpenAI (Account.aiProvider='openai') would get a
+ * "credit balance too low to access the Anthropic API" error here even though
+ * their messaging works fine, because they never funded Anthropic. Now we
+ * honor the account's chosen provider (same field the messaging path uses) and
+ * only fall back to the other provider when the preferred one has no key.
+ *
+ * Preference order:
+ *   1. Account.aiProvider ('openai' | 'anthropic') with a usable key
+ *   2. The other provider, if it has a key (env or per-account)
+ *   3. Throw a clear, provider-aware error
+ */
+// Resolved LLM the analysis runs on — threaded through every analysis helper
+// so the whole run uses one provider/model (QD-045: provider-aware).
+type AnalyzerLLM = {
+  provider: 'anthropic' | 'openai';
   apiKey: string;
   model: string;
-}> {
-  // Prefer env key for analyzer — it's a platform cost, not user's key
-  const envKey = process.env.ANTHROPIC_API_KEY;
-  if (envKey) {
-    return {
-      provider: 'anthropic',
-      apiKey: envKey,
-      model: ANALYZER_MODEL
-    };
+};
+
+async function resolveProvider(accountId: string): Promise<AnalyzerLLM> {
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: { aiProvider: true }
+  });
+  const preferred =
+    account?.aiProvider === 'anthropic' ? 'anthropic' : 'openai';
+
+  // Key resolvers — env key first (platform cost), then per-account creds.
+  const anthropicKey = async (): Promise<string | null> => {
+    if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+    const c = await getCredentials(accountId, 'ANTHROPIC');
+    return (c?.apiKey as string) || null;
+  };
+  const openaiKey = async (): Promise<string | null> => {
+    if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+    const c = await getCredentials(accountId, 'OPENAI');
+    return (c?.apiKey as string) || null;
+  };
+
+  // 1. Try the account's preferred provider.
+  if (preferred === 'openai') {
+    const key = await openaiKey();
+    if (key)
+      return { provider: 'openai', apiKey: key, model: ANALYZER_MODEL_OPENAI };
+  } else {
+    const key = await anthropicKey();
+    if (key)
+      return { provider: 'anthropic', apiKey: key, model: ANALYZER_MODEL };
   }
 
-  // Fallback to per-account Anthropic credentials
-  const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
-  if (anthropicCreds?.apiKey) {
-    return {
-      provider: 'anthropic',
-      apiKey: anthropicCreds.apiKey as string,
-      model: ANALYZER_MODEL
-    };
-  }
+  // 2. Fall back to the other provider if it has a key.
+  const aKey = await anthropicKey();
+  if (aKey)
+    return { provider: 'anthropic', apiKey: aKey, model: ANALYZER_MODEL };
+  const oKey = await openaiKey();
+  if (oKey)
+    return { provider: 'openai', apiKey: oKey, model: ANALYZER_MODEL_OPENAI };
 
+  // 3. Nothing configured.
   throw new Error(
-    'Anthropic API key required for training data analysis. Add it in Settings → Integrations.'
+    'An OpenAI or Anthropic API key is required for training data analysis. Add one in Settings → Integrations.'
   );
 }
 
@@ -111,37 +150,52 @@ async function resolveProvider(accountId: string): Promise<{
 // ---------------------------------------------------------------------------
 
 async function callAnalyzerLLM(
+  provider: 'anthropic' | 'openai',
   apiKey: string,
+  model: string,
   systemPrompt: string,
   userContent: string
 ): Promise<string> {
-  const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
-
+  const jsonInstruction =
+    '\n\nRespond with valid JSON only. No markdown fences, no explanation.';
   const maxRetries = 3;
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const msg = await client.messages.create({
-        model: ANALYZER_MODEL,
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content:
-              userContent +
-              '\n\nRespond with valid JSON only. No markdown fences, no explanation.'
-          }
-        ]
-      });
+      let response: string;
+      let truncated = false;
 
-      const response =
-        msg.content[0].type === 'text' ? msg.content[0].text : '';
+      if (provider === 'openai') {
+        const { default: OpenAI } = await import('openai');
+        const client = new OpenAI({ apiKey });
+        const completion = await client.chat.completions.create({
+          model,
+          max_tokens: 4096,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent + jsonInstruction }
+          ]
+        });
+        response = completion.choices[0]?.message?.content ?? '';
+        truncated = completion.choices[0]?.finish_reason === 'length';
+      } else {
+        const { default: Anthropic } = await import('@anthropic-ai/sdk');
+        const client = new Anthropic({ apiKey });
+        const msg = await client.messages.create({
+          model,
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userContent + jsonInstruction }]
+        });
+        response = msg.content[0].type === 'text' ? msg.content[0].text : '';
+        truncated = msg.stop_reason === 'max_tokens';
+      }
+
       console.log(
-        `[training-analyzer] LLM response length=${response.length}, stop_reason=${msg.stop_reason}, first 500 chars: ${response.slice(0, 500)}`
+        `[training-analyzer] LLM (${provider}/${model}) response length=${response.length}, first 500 chars: ${response.slice(0, 500)}`
       );
-      // Flag potential truncation — if stop_reason is 'max_tokens', the JSON is cut off
-      if (msg.stop_reason === 'max_tokens') {
+      if (truncated) {
         console.warn(
           `[training-analyzer] ⚠ RESPONSE TRUNCATED (hit max_tokens). Last 200 chars: ...${response.slice(-200)}`
         );
@@ -357,7 +411,7 @@ function validatedToGaps(
  * the retry includes the specific error feedback so Haiku can self-correct.
  */
 async function callAnalyzerLLMValidated(
-  apiKey: string,
+  llm: AnalyzerLLM,
   systemPrompt: string,
   userContent: string,
   expectedEnumValues: readonly string[],
@@ -372,7 +426,9 @@ async function callAnalyzerLLMValidated(
     let rawResponse: string;
     try {
       rawResponse = await callAnalyzerLLM(
-        apiKey,
+        llm.provider,
+        llm.apiKey,
+        llm.model,
         systemPrompt,
         augmentedContent
       );
@@ -623,7 +679,7 @@ function analyzeQuantity(conversations: ConversationData[]): CategoryResult {
 
 async function analyzeVoiceStyle(
   conversations: ConversationData[],
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   const allCloserMessages = conversations
     .flatMap((c) => c.messages)
@@ -667,7 +723,9 @@ async function analyzeVoiceStyle(
   });
 
   const response = await callAnalyzerLLM(
-    apiKey,
+    llm.provider,
+    llm.apiKey,
+    llm.model,
     VOICE_STYLE_ANALYSIS_PROMPT,
     userContent
   );
@@ -714,7 +772,7 @@ async function analyzeVoiceStyle(
 async function analyzeLeadTypeCoverage(
   conversations: ConversationData[],
   totalMessages: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   if (conversations.length === 0) {
     return {
@@ -736,7 +794,7 @@ async function analyzeLeadTypeCoverage(
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
     const result = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       LEAD_TYPE_ANALYSIS_PROMPT,
       `Analyze these ${conversations.length} conversations and classify each lead type.\n\n${transcripts}`,
       LEAD_TYPE_ENUM,
@@ -754,7 +812,7 @@ async function analyzeLeadTypeCoverage(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       LEAD_TYPE_ANALYSIS_PROMPT,
       `Analyze these ${chunk.length} conversations and classify each lead type.\n\n${transcripts}`,
       LEAD_TYPE_ENUM,
@@ -769,7 +827,7 @@ async function analyzeLeadTypeCoverage(
   }
 
   const synthResult = await callAnalyzerLLMValidated(
-    apiKey,
+    llm,
     LEAD_TYPE_ANALYSIS_PROMPT,
     `Here is the aggregated lead type distribution across all ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations. Total conversations: ${conversations.length}.`,
     LEAD_TYPE_ENUM,
@@ -789,7 +847,7 @@ async function analyzeLeadTypeCoverage(
 async function analyzeStageCoverage(
   conversations: ConversationData[],
   totalMessages: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   if (conversations.length === 0) {
     return {
@@ -811,7 +869,7 @@ async function analyzeStageCoverage(
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
     const result = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
       `Analyze these ${conversations.length} conversations.\n\n${transcripts}`,
       STAGE_ENUM,
@@ -832,7 +890,7 @@ async function analyzeStageCoverage(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
       `Analyze these ${chunk.length} conversations and classify each message by pipeline stage.\n\n${transcripts}`,
       STAGE_ENUM,
@@ -847,7 +905,7 @@ async function analyzeStageCoverage(
   }
 
   const synthResult = await callAnalyzerLLMValidated(
-    apiKey,
+    llm,
     STAGE_COVERAGE_ANALYSIS_PROMPT,
     `Aggregated stage distribution across ${conversations.length} conversations (${totalMessages} total messages):\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations.`,
     STAGE_ENUM,
@@ -970,7 +1028,7 @@ function analyzeOutcomeCoverage(
 async function analyzeObjectionCoverage(
   conversations: ConversationData[],
   totalMessages: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   if (conversations.length === 0) {
     return {
@@ -992,7 +1050,7 @@ async function analyzeObjectionCoverage(
   if (chunks.length === 1) {
     const transcripts = conversations.map(formatConversation).join('\n\n');
     const result = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
       `Scan these ${conversations.length} conversations for objections.\n\n${transcripts}`,
       OBJECTION_ENUM,
@@ -1010,7 +1068,7 @@ async function analyzeObjectionCoverage(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
       `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type.\n\n${transcripts}`,
       OBJECTION_ENUM,
@@ -1025,7 +1083,7 @@ async function analyzeObjectionCoverage(
   }
 
   const synthResult = await callAnalyzerLLMValidated(
-    apiKey,
+    llm,
     OBJECTION_COVERAGE_ANALYSIS_PROMPT,
     `Aggregated objection distribution across ${conversations.length} conversations:\n${JSON.stringify(aggregatedDistribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations.`,
     OBJECTION_ENUM,
@@ -1062,7 +1120,7 @@ function mergeDistributions(
  * Uses validated LLM call to ensure schema compliance.
  */
 async function rescoreDistribution(
-  apiKey: string,
+  llm: AnalyzerLLM,
   prompt: string,
   distributionKey: string,
   distribution: Record<string, number>,
@@ -1071,7 +1129,7 @@ async function rescoreDistribution(
   categoryName: string
 ): Promise<CategoryResult> {
   const result = await callAnalyzerLLMValidated(
-    apiKey,
+    llm,
     prompt,
     `Here is the ${distributionKey} across ${totalConversations} conversations:\n${JSON.stringify(distribution, null, 2)}\n\nScore this distribution and provide analysis/recommendations. Total conversations: ${totalConversations}.`,
     expectedEnumValues,
@@ -1092,7 +1150,7 @@ async function analyzeLeadTypeCoverageIncremental(
   newMessages: number,
   previousDistribution: Record<string, number>,
   totalConversations: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   const chunks = chunkConversations(newConversations, newMessages);
   const newDistribution: Record<string, number> = {};
@@ -1100,7 +1158,7 @@ async function analyzeLeadTypeCoverageIncremental(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       LEAD_TYPE_ANALYSIS_PROMPT,
       `Analyze these ${chunk.length} conversations and classify each lead type.\n\n${transcripts}`,
       LEAD_TYPE_ENUM,
@@ -1116,7 +1174,7 @@ async function analyzeLeadTypeCoverageIncremental(
   const merged = mergeDistributions(previousDistribution, newDistribution);
 
   return rescoreDistribution(
-    apiKey,
+    llm,
     LEAD_TYPE_ANALYSIS_PROMPT,
     'lead_type_distribution',
     merged,
@@ -1135,7 +1193,7 @@ async function analyzeStageCoverageIncremental(
   previousDistribution: Record<string, number>,
   totalConversations: number,
   totalMessages: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   const chunks = chunkConversations(newConversations, newMessages);
   const newDistribution: Record<string, number> = {};
@@ -1143,7 +1201,7 @@ async function analyzeStageCoverageIncremental(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
       `Analyze these ${chunk.length} conversations and classify each message by pipeline stage.\n\n${transcripts}`,
       STAGE_ENUM,
@@ -1159,7 +1217,7 @@ async function analyzeStageCoverageIncremental(
   const merged = mergeDistributions(previousDistribution, newDistribution);
 
   const result = await rescoreDistribution(
-    apiKey,
+    llm,
     STAGE_COVERAGE_ANALYSIS_PROMPT,
     'stage_distribution',
     merged,
@@ -1180,7 +1238,7 @@ async function analyzeObjectionCoverageIncremental(
   newMessages: number,
   previousDistribution: Record<string, number>,
   totalConversations: number,
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<CategoryResult> {
   const chunks = chunkConversations(newConversations, newMessages);
   const newDistribution: Record<string, number> = {};
@@ -1188,7 +1246,7 @@ async function analyzeObjectionCoverageIncremental(
   for (const chunk of chunks) {
     const transcripts = chunk.map(formatConversation).join('\n\n');
     const chunkResult = await callAnalyzerLLMValidated(
-      apiKey,
+      llm,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
       `Scan these ${chunk.length} conversations for objection patterns. Classify each lead message by objection type.\n\n${transcripts}`,
       OBJECTION_ENUM,
@@ -1204,7 +1262,7 @@ async function analyzeObjectionCoverageIncremental(
   const merged = mergeDistributions(previousDistribution, newDistribution);
 
   return rescoreDistribution(
-    apiKey,
+    llm,
     OBJECTION_COVERAGE_ANALYSIS_PROMPT,
     'objection_distribution',
     merged,
@@ -1302,7 +1360,7 @@ export async function runTrainingAnalysis(
   accountId: string,
   options?: { forceFullRun?: boolean }
 ): Promise<AnalysisResult> {
-  const { apiKey } = await resolveProvider(accountId);
+  const llm = await resolveProvider(accountId);
   const conversations = await fetchTrainingData(accountId);
   const totalMessages = conversations.flatMap((c) => c.messages).length;
   const currentIds = conversations.map((c) => c.id);
@@ -1367,7 +1425,7 @@ export async function runTrainingAnalysis(
   const outcomeResult = analyzeOutcomeCoverage(conversations);
 
   // ── Cat 2: Voice/Style — always re-run (1 LLM call, samples from all data) ──
-  const voiceStyleResult = await analyzeVoiceStyle(conversations, apiKey);
+  const voiceStyleResult = await analyzeVoiceStyle(conversations, llm);
 
   // ── Cat 3, 4, 6: Full-scan LLM categories — incremental if possible ──
   let leadTypeResult: CategoryResult;
@@ -1377,7 +1435,7 @@ export async function runTrainingAnalysis(
   if (isIncremental && !hasNewData) {
     // No new data — reuse previous LLM metrics, just re-score distributions
     leadTypeResult = await rescoreDistribution(
-      apiKey,
+      llm,
       LEAD_TYPE_ANALYSIS_PROMPT,
       'lead_type_distribution',
       (previousMetrics.lead_type_coverage?.lead_type_distribution as Record<
@@ -1389,7 +1447,7 @@ export async function runTrainingAnalysis(
       'lead_type_coverage'
     );
     stageResult = await rescoreDistribution(
-      apiKey,
+      llm,
       STAGE_COVERAGE_ANALYSIS_PROMPT,
       'stage_distribution',
       (previousMetrics.stage_coverage?.stage_distribution as Record<
@@ -1401,7 +1459,7 @@ export async function runTrainingAnalysis(
       'stage_coverage'
     );
     objectionResult = await rescoreDistribution(
-      apiKey,
+      llm,
       OBJECTION_COVERAGE_ANALYSIS_PROMPT,
       'objection_distribution',
       (previousMetrics.objection_coverage?.objection_distribution as Record<
@@ -1424,7 +1482,7 @@ export async function runTrainingAnalysis(
         number
       >) || {},
       conversations.length,
-      apiKey
+      llm
     );
     stageResult = await analyzeStageCoverageIncremental(
       newConversations,
@@ -1435,7 +1493,7 @@ export async function runTrainingAnalysis(
       >) || {},
       conversations.length,
       totalMessages,
-      apiKey
+      llm
     );
     objectionResult = await analyzeObjectionCoverageIncremental(
       newConversations,
@@ -1445,24 +1503,20 @@ export async function runTrainingAnalysis(
         number
       >) || {},
       conversations.length,
-      apiKey
+      llm
     );
   } else {
     // Full analysis (no previous, or deletions detected)
     leadTypeResult = await analyzeLeadTypeCoverage(
       conversations,
       totalMessages,
-      apiKey
+      llm
     );
-    stageResult = await analyzeStageCoverage(
-      conversations,
-      totalMessages,
-      apiKey
-    );
+    stageResult = await analyzeStageCoverage(conversations, totalMessages, llm);
     objectionResult = await analyzeObjectionCoverage(
       conversations,
       totalMessages,
-      apiKey
+      llm
     );
   }
 
@@ -1512,7 +1566,9 @@ export async function runTrainingAnalysis(
   });
 
   const synthesisResponse = await callAnalyzerLLM(
-    apiKey,
+    llm.provider,
+    llm.apiKey,
+    llm.model,
     SYNTHESIS_PROMPT,
     synthesisInput
   );
@@ -1580,7 +1636,7 @@ export async function runTrainingAnalysis(
           : [];
 
     if (conversationsToClassify.length > 0) {
-      await writeBackConversationMetadata(conversationsToClassify, apiKey);
+      await writeBackConversationMetadata(conversationsToClassify, llm);
     }
   } catch (err) {
     console.error(
@@ -1613,7 +1669,7 @@ interface ConversationMetadata {
 
 async function classifyConversationMetadata(
   conversations: ConversationData[],
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<Map<string, ConversationMetadata>> {
   const result = new Map<string, ConversationMetadata>();
   const chunks = chunkConversations(
@@ -1632,7 +1688,9 @@ async function classifyConversationMetadata(
       .join('\n\n');
 
     const response = await callAnalyzerLLM(
-      apiKey,
+      llm.provider,
+      llm.apiKey,
+      llm.model,
       CONVERSATION_METADATA_PROMPT,
       `Classify these ${chunk.length} conversations:\n\n${transcripts}`
     );
@@ -1682,13 +1740,13 @@ async function classifyConversationMetadata(
 
 async function writeBackConversationMetadata(
   conversations: ConversationData[],
-  apiKey: string
+  llm: AnalyzerLLM
 ): Promise<void> {
   console.log(
     `[training-analyzer] Classifying ${conversations.length} conversations for metadata write-back...`
   );
 
-  const metadata = await classifyConversationMetadata(conversations, apiKey);
+  const metadata = await classifyConversationMetadata(conversations, llm);
 
   let updated = 0;
   for (const [convId, meta] of Array.from(metadata.entries())) {
