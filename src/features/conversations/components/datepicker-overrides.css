@@ -9,6 +9,30 @@
   width: 100%;
 }
 
+/* Portal overlay: dim backdrop + center the picker as a small modal so it is
+   never clipped by the narrow Call Details sidebar. */
+.react-datepicker__portal {
+  background-color: rgb(0 0 0 / 0.45);
+  z-index: 60;
+}
+
+/* Keep the popped calendar a sensible size inside the portal. */
+.react-datepicker__portal .react-datepicker {
+  font-size: 0.9rem;
+}
+
+/* Lay calendar + time column out side by side cleanly. */
+.react-datepicker__portal .react-datepicker__time-container,
+.react-datepicker__portal .react-datepicker__time-box {
+  width: 100px;
+}
+.react-datepicker__time-container {
+  width: 100px;
+}
+.react-datepicker__time-box {
+  width: 100px !important;
+}
+
 /* Popover container */
 .react-datepicker {
   font-family: inherit;

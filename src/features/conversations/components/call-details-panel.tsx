@@ -270,7 +270,12 @@ function CallDateTimePicker({
           maxDate={maxDate}
           placeholderText='Pick date & time'
           shouldCloseOnSelect={false}
-          popperPlacement='bottom-start'
+          // Render in a body-level portal so the calendar/time popover is not
+          // clipped or pushed off-edge by the narrow Call Details sidebar
+          // (which has overflow + limited width). The portal escapes that
+          // container and the popper positions against the viewport.
+          withPortal
+          portalId='call-datepicker-portal'
           customInput={
             <button
               type='button'
