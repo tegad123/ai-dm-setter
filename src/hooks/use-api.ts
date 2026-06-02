@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   getLeads,
+  getLeadStageCounts,
   getConversations,
   getConversation as fetchConversation,
   getMessages,
@@ -121,6 +122,35 @@ export function useLeads(params?: {
 
   return {
     leads: data?.leads ?? ([] as Lead[]),
+    total: data?.total ?? 0,
+    loading,
+    error,
+    refetch
+  };
+}
+
+/**
+ * True per-stage lead counts for the account, independent of pagination.
+ * Powers the Pipeline Kanban column headers so they show the real total
+ * even when the board only renders a page of leads per column.
+ */
+export function useLeadStageCounts(params?: {
+  platform?: string;
+  tag?: string;
+}) {
+  const { data, loading, error, refetch } = useApiFetch(() => {
+    const stringParams = params
+      ? Object.fromEntries(
+          Object.entries(params)
+            .filter(([, v]) => v !== undefined)
+            .map(([k, v]) => [k, String(v)])
+        )
+      : undefined;
+    return getLeadStageCounts(stringParams);
+  }, [params?.platform, params?.tag]);
+
+  return {
+    counts: data?.counts ?? ({} as Record<string, number>),
     total: data?.total ?? 0,
     loading,
     error,

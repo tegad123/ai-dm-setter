@@ -188,12 +188,14 @@ async function resolveProvider(accountId: string): Promise<{
 
   // Try per-account Anthropic
   // Force Haiku 4.5 for parsing — faster than Sonnet for structured output.
+  // SCRIPT_PARSER_MODEL env var overrides for large scripts that need a higher
+  // output ceiling (Haiku caps at 8192; Sonnet/Opus support 32K-64K).
   const anthropicCreds = await getCredentials(accountId, 'ANTHROPIC');
   if (anthropicCreds?.apiKey) {
     return {
       provider: 'anthropic',
       apiKey: anthropicCreds.apiKey as string,
-      model: 'claude-haiku-4-5'
+      model: process.env.SCRIPT_PARSER_MODEL || 'claude-haiku-4-5'
     };
   }
 
@@ -262,17 +264,31 @@ async function callParserLLM(
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey });
 
-    const response = await client.messages.create({
+    // Output ceilings (Claude 4 generation):
+    //   Haiku 4.5 → 8192
+    //   Opus 4.x  → 32000
+    //   Sonnet 4.5+ → 64000 (handles a 26-step script in one pass)
+    // Older Sonnet 4 generations capped at 16384.
+    const maxTokens = /opus/i.test(model)
+      ? 32000
+      : /sonnet-4-?[5-9]/i.test(model)
+        ? 64000
+        : /sonnet/i.test(model)
+          ? 16384
+          : 8192;
+
+    // The Anthropic SDK requires streaming for any request that could exceed
+    // 10 minutes — which max_tokens >= ~10000 can trigger. Stream everything
+    // and reassemble the text + final stop_reason.
+    const stream = client.messages.stream({
       model,
       system: PARSER_SYSTEM_PROMPT,
       temperature: 0.1,
-      // Haiku 4.5 supports up to 8192 output tokens; Sonnet 4 supports 16384.
-      // Use the higher ceiling when the model name suggests Sonnet.
-      max_tokens: /sonnet|opus/i.test(model) ? 16384 : 8192,
+      max_tokens: maxTokens,
       messages: [{ role: 'user', content: userMessage }]
     });
+    const response = await stream.finalMessage();
 
-    // Detect truncation on the Anthropic side too.
     if (response.stop_reason === 'max_tokens') {
       throw new Error(
         "The AI response was truncated (hit the output token ceiling). Your script is too large to parse in one pass. Try splitting it into two halves and parsing each separately, or remove branches you're not using."

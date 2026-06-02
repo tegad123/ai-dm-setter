@@ -39,6 +39,22 @@ import {
   useRevenueData
 } from '@/hooks/use-api';
 
+// Shared empty-state for charts so a no-data chart reads as intentional
+// ("no data yet") instead of a blank/broken axis frame. (QA 2026-06-02:
+// Trigger Performance / Revenue Growth looked broken on the daetradez
+// account, but the account genuinely had only DM-trigger leads and $0
+// recorded revenue.)
+function ChartEmpty({ message }: { message: string }) {
+  return (
+    <div className='flex h-[250px] w-full flex-col items-center justify-center gap-1 text-center'>
+      <p className='text-muted-foreground text-sm font-medium'>No data yet</p>
+      <p className='text-muted-foreground/70 max-w-[260px] text-xs'>
+        {message}
+      </p>
+    </div>
+  );
+}
+
 const leadConfig = {
   leads: { label: 'Leads', color: 'var(--primary)' }
 } satisfies ChartConfig;
@@ -254,6 +270,8 @@ export function AnalyticsView() {
           <CardContent>
             {triggerLoading ? (
               <Skeleton className='h-[250px] w-full' />
+            ) : triggerChartData.length === 0 ? (
+              <ChartEmpty message='Lead trigger sources will appear here as leads come in from comments and DMs.' />
             ) : (
               <ChartContainer
                 config={triggerConfig}
@@ -298,6 +316,8 @@ export function AnalyticsView() {
           <CardContent>
             {revenueLoading ? (
               <Skeleton className='h-[250px] w-full' />
+            ) : revenueChartData.length === 0 ? (
+              <ChartEmpty message='Revenue from closed-won deals will appear here once calls convert.' />
             ) : (
               <ChartContainer
                 config={revenueConfig}
