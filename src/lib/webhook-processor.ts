@@ -2624,8 +2624,16 @@ export async function scheduleAIReply(
   log('sched.step2.history');
   let messages = conversation.messages;
 
-  if (messages.length <= 1 && lead.platformUserId) {
+  if (
+    messages.length <= 1 &&
+    lead.platformUserId &&
+    process.env.DISABLE_META_BACKFILL !== 'true'
+  ) {
     // Only 1 message — might be missing history. Try Meta API backfill.
+    // DISABLE_META_BACKFILL=true skips this for local persona testing, where
+    // Meta still holds stale messages from prior test runs that would poison
+    // a freshly-wiped local conversation (the quality gate would flag every
+    // reply as a duplicate of a backfilled message). Production never sets it.
     log('sched.step2.backfillStart');
     try {
       const backfilledMessages = await backfillFromMetaAPI(
