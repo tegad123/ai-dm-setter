@@ -255,16 +255,16 @@ function CallDateTimePicker({
     setOpen(false); // auto-dismiss on date selection
   };
 
-  const setTime = (h: string, mi: string) => {
+  // Native <input type="time"> value is "HH:MM". Lets the operator type
+  // digits or use the OS spinner — the Select dropdowns didn't allow typing.
+  const timeValue = hourPart && minutePart ? `${hourPart}:${minutePart}` : '';
+
+  const setTime = (hhmm: string) => {
+    if (!/^\d{2}:\d{2}$/.test(hhmm)) return;
     // If no date chosen yet, anchor to today so the value is usable.
     const base = datePart || format(new Date(), 'yyyy-MM-dd');
-    onChange(`${base}T${h.padStart(2, '0')}:${mi.padStart(2, '0')}`);
+    onChange(`${base}T${hhmm}`);
   };
-
-  const hours = Array.from({ length: 24 }, (_, i) =>
-    String(i).padStart(2, '0')
-  );
-  const minutes = ['00', '15', '30', '45'];
 
   const displayLabel = selectedDate
     ? format(selectedDate, 'EEE, MMM d, yyyy')
@@ -273,7 +273,7 @@ function CallDateTimePicker({
   return (
     <div className='space-y-2'>
       <div className='flex gap-2'>
-        {/* Date */}
+        {/* Date — Calendar in a popover, closes on select */}
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button
@@ -297,40 +297,14 @@ function CallDateTimePicker({
           </PopoverContent>
         </Popover>
 
-        {/* Time */}
-        <div className='flex items-center gap-1'>
-          <Select
-            value={hourPart || undefined}
-            onValueChange={(h) => setTime(h, minutePart || '00')}
-          >
-            <SelectTrigger className='h-8 w-[58px] text-xs'>
-              <SelectValue placeholder='HH' />
-            </SelectTrigger>
-            <SelectContent>
-              {hours.map((h) => (
-                <SelectItem key={h} value={h}>
-                  {h}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className='text-muted-foreground text-xs'>:</span>
-          <Select
-            value={minutePart || undefined}
-            onValueChange={(mi) => setTime(hourPart || '12', mi)}
-          >
-            <SelectTrigger className='h-8 w-[58px] text-xs'>
-              <SelectValue placeholder='MM' />
-            </SelectTrigger>
-            <SelectContent>
-              {minutes.map((mi) => (
-                <SelectItem key={mi} value={mi}>
-                  {mi}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {/* Time — native time input: typeable digits + OS spinner */}
+        <Input
+          type='time'
+          value={timeValue}
+          onChange={(e) => setTime(e.target.value)}
+          className='h-8 w-[110px] text-xs'
+          aria-label='Call time'
+        />
       </div>
       <p className='text-muted-foreground text-[10px]'>
         Calls can be scheduled up to 6 months out.

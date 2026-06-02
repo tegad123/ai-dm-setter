@@ -131,6 +131,34 @@ export const EXCLUDE_COLD_PITCH = {
   tags: { none: { tag: { name: 'cold-pitch' as const } } }
 } as const;
 
+/**
+ * Canonical base `where` clause for ANY "how many leads" question — totals,
+ * stage counts, funnels, list views. Single source of truth so every surface
+ * counts the same population.
+ *
+ * Policy: cold-pitch leads are excluded everywhere by default (they're inbound
+ * agency spam and shouldn't inflate lead totals). The ONE exception is when the
+ * operator explicitly filters by a tag — then we show that tag's leads as-is
+ * (so filtering BY `cold-pitch` still surfaces them).
+ *
+ *   prisma.lead.count({ where: leadCountWhere(accountId) })            // 6768
+ *   prisma.lead.count({ where: leadCountWhere(accountId, { tag }) })   // tag view
+ */
+export function leadCountWhere(
+  accountId: string,
+  opts?: { tag?: string | null }
+): { accountId: string; tags?: object } {
+  const where: { accountId: string; tags?: object } = { accountId };
+  if (opts?.tag) {
+    // Explicit tag filter — show that tag's leads (incl. cold-pitch if asked).
+    where.tags = { some: { tag: { name: opts.tag } } };
+  } else {
+    // Default: exclude cold-pitch so every total reconciles app-wide.
+    where.tags = { none: { tag: { name: 'cold-pitch' } } };
+  }
+  return where;
+}
+
 // Mutable copies for routes that need to spread into Prisma `in` filters.
 // Prisma's typegen rejects readonly arrays in some positions, so we export
 // both shapes — use the *_ARR variant inside `{ in: ... }`.

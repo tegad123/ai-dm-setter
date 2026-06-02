@@ -26,7 +26,14 @@ export async function GET(req: NextRequest) {
 
     const where: Prisma.LeadWhereInput = { accountId: auth.accountId };
     if (platform) where.platform = platform;
-    if (tag) where.tags = { some: { tag: { name: tag } } };
+    if (tag) {
+      // Explicit tag view — show that tag as-is.
+      where.tags = { some: { tag: { name: tag } } };
+    } else {
+      // Default: exclude cold-pitch so Pipeline column counts reconcile with
+      // the Dashboard / Analytics totals.
+      where.tags = { none: { tag: { name: 'cold-pitch' } } };
+    }
 
     const grouped = await prisma.lead.groupBy({
       by: ['stage'],
