@@ -276,6 +276,13 @@ export async function getLeads(params?: Record<string, string>): Promise<{
   return apiFetch(`/api/leads${qs}`);
 }
 
+export async function getLeadStageCounts(
+  params?: Record<string, string>
+): Promise<{ counts: Record<string, number>; total: number }> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+  return apiFetch(`/api/leads/stage-counts${qs}`);
+}
+
 export async function getConversations(
   params?: Record<string, string>
 ): Promise<{ conversations: Conversation[] }> {

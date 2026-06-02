@@ -16,7 +16,11 @@ export async function GET(req: NextRequest) {
     const handleSearch = search?.replace(/^@+/, '') ?? '';
     const tag = searchParams.get('tag'); // Filter by tag name
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const maxLimit = search ? 50 : 100;
+    // Pipeline Kanban needs a larger ceiling so it can populate every stage
+    // column (otherwise the newest 100 leads — typically all NEW_LEAD — drown
+    // out the smaller qualified/booked columns). Search stays tight at 50.
+    // Stage-filtered board fetches request up to 200 per column.
+    const maxLimit = search ? 50 : 1000;
     const limit = Math.max(
       1,
       Math.min(maxLimit, parseInt(searchParams.get('limit') || '20', 10))

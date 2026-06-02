@@ -24,7 +24,7 @@ import {
   LeadStageBadge,
   type LeadStage
 } from '@/features/shared/lead-stage-badge';
-import { useLeads } from '@/hooks/use-api';
+import { useLeads, useLeadStageCounts } from '@/hooks/use-api';
 import { useRealtime } from '@/hooks/use-realtime';
 import { transitionLeadStage } from '@/lib/api';
 import type { Lead } from '@/lib/api';
@@ -124,14 +124,21 @@ function DroppableColumn({
   stageKey,
   label,
   children,
-  count
+  count,
+  renderedCount
 }: {
   stageKey: string;
   label: string;
   children: React.ReactNode;
+  // True total for this stage across the whole account (shown in the header).
   count: number;
+  // How many cards are actually rendered in this column (the loaded page).
+  // When count > renderedCount, the board is showing a subset.
+  renderedCount?: number;
 }) {
   const { isOver, setNodeRef } = useDroppable({ id: stageKey });
+  const shown = renderedCount ?? count;
+  const hasMore = count > shown;
 
   return (
     <div
@@ -158,7 +165,15 @@ function DroppableColumn({
             <span className='text-muted-foreground text-xs'>No leads</span>
           </div>
         ) : (
-          children
+          <>
+            {children}
+            {hasMore && (
+              <div className='text-muted-foreground px-1 py-2 text-center text-[11px]'>
+                Showing {shown} of {count} — use search or filters to find a
+                specific lead
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -484,9 +499,14 @@ export function PipelineView() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const isSearching = debouncedSearch.trim().length > 0;
   const { leads, loading, error, refetch } = useLeads({
-    limit: isSearching ? 50 : 500,
+    limit: isSearching ? 50 : 1000,
     search: isSearching ? debouncedSearch.trim() : undefined
   });
+  // True per-stage totals (independent of the page the board renders), so a
+  // column with leads beyond the fetched window still shows its real count and
+  // never falsely renders the empty state. Skipped while searching.
+  const { counts: stageCounts, refetch: refetchStageCounts } =
+    useLeadStageCounts();
   const { leads: latestLeads, refetch: refetchLatestLeads } = useLeads({
     limit: 5
   });
@@ -496,6 +516,7 @@ export function PipelineView() {
   useRealtime('lead:updated', () => {
     refetch();
     refetchLatestLeads();
+    refetchStageCounts();
   });
 
   useEffect(() => {
@@ -702,12 +723,19 @@ export function PipelineView() {
             <div className='flex w-max gap-4 pb-4'>
               {PIPELINE_STAGES.map((stage) => {
                 const columnLeads = groupedLeads[stage.key] ?? [];
+                // Header count = true account total for this stage (from
+                // stage-counts). While searching, fall back to the rendered
+                // count since the search result set is intentionally scoped.
+                const trueCount = isSearching
+                  ? columnLeads.length
+                  : (stageCounts[stage.key] ?? columnLeads.length);
                 return (
                   <DroppableColumn
                     key={stage.key}
                     stageKey={stage.key}
                     label={stage.label}
-                    count={columnLeads.length}
+                    count={trueCount}
+                    renderedCount={columnLeads.length}
                   >
                     {columnLeads.map((lead) => (
                       <DraggableCard

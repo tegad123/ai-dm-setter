@@ -24,6 +24,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from '@/components/ui/alert-dialog';
+import { Calendar } from '@/components/ui/calendar';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover';
+import { format } from 'date-fns';
 import { IconCalendarEvent, IconClock, IconCheck } from '@tabler/icons-react';
 
 interface CallDetailsState {
@@ -204,6 +211,134 @@ function StatusLine({
   );
 }
 
+/**
+ * Custom date + time picker for scheduling a call. Replaces the native
+ * <input type="datetime-local"> which (a) gave no explanation for the
+ * 6-month cap so QA read it as "can't pick a future year", and (b) used the
+ * browser-native popup that doesn't auto-dismiss on selection.
+ *
+ * Keeps the exact "YYYY-MM-DDTHH:MM" string contract the surrounding timezone
+ * conversion (localDateTimeToUtcIso) already depends on, so nothing downstream
+ * changes. Date selection closes the popover; the 6-month limit is enforced
+ * (Calendar disabled past it) AND shown as helper text.
+ */
+function CallDateTimePicker({
+  value,
+  onChange,
+  maxDate
+}: {
+  value: string; // "YYYY-MM-DDTHH:MM" or ""
+  onChange: (next: string) => void;
+  maxDate: Date;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // Split the contract string into date + time parts.
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  const datePart = m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+  const hourPart = m ? m[4] : '';
+  const minutePart = m ? m[5] : '';
+  const selectedDate = datePart ? new Date(`${datePart}T00:00:00`) : undefined;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const setDate = (d: Date | undefined) => {
+    if (!d) return;
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    // Default time to 12:00 if none picked yet so the value is complete.
+    const h = hourPart || '12';
+    const mi = minutePart || '00';
+    onChange(`${y}-${mo}-${day}T${h}:${mi}`);
+    setOpen(false); // auto-dismiss on date selection
+  };
+
+  const setTime = (h: string, mi: string) => {
+    // If no date chosen yet, anchor to today so the value is usable.
+    const base = datePart || format(new Date(), 'yyyy-MM-dd');
+    onChange(`${base}T${h.padStart(2, '0')}:${mi.padStart(2, '0')}`);
+  };
+
+  const hours = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, '0')
+  );
+  const minutes = ['00', '15', '30', '45'];
+
+  const displayLabel = selectedDate
+    ? format(selectedDate, 'EEE, MMM d, yyyy')
+    : 'Pick a date';
+
+  return (
+    <div className='space-y-2'>
+      <div className='flex gap-2'>
+        {/* Date */}
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type='button'
+              variant='outline'
+              className='h-8 flex-1 justify-start text-xs font-normal'
+            >
+              <IconCalendarEvent className='mr-1.5 h-3.5 w-3.5' />
+              {displayLabel}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className='w-auto p-0' align='start'>
+            <Calendar
+              mode='single'
+              selected={selectedDate}
+              onSelect={setDate}
+              disabled={{ before: today, after: maxDate }}
+              defaultMonth={selectedDate}
+              initialFocus
+            />
+          </PopoverContent>
+        </Popover>
+
+        {/* Time */}
+        <div className='flex items-center gap-1'>
+          <Select
+            value={hourPart || undefined}
+            onValueChange={(h) => setTime(h, minutePart || '00')}
+          >
+            <SelectTrigger className='h-8 w-[58px] text-xs'>
+              <SelectValue placeholder='HH' />
+            </SelectTrigger>
+            <SelectContent>
+              {hours.map((h) => (
+                <SelectItem key={h} value={h}>
+                  {h}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className='text-muted-foreground text-xs'>:</span>
+          <Select
+            value={minutePart || undefined}
+            onValueChange={(mi) => setTime(hourPart || '12', mi)}
+          >
+            <SelectTrigger className='h-8 w-[58px] text-xs'>
+              <SelectValue placeholder='MM' />
+            </SelectTrigger>
+            <SelectContent>
+              {minutes.map((mi) => (
+                <SelectItem key={mi} value={mi}>
+                  {mi}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <p className='text-muted-foreground text-[10px]'>
+        Calls can be scheduled up to 6 months out.
+      </p>
+    </div>
+  );
+}
+
 interface Props {
   conversationId: string;
 }
@@ -337,10 +472,10 @@ export function CallDetailsPanel({ conversationId }: Props) {
 
   // QD-014: cap the native date picker at 6 months out (mirrors handleSave +
   // the server check). Expressed in the selected timezone for consistency.
-  const maxCallDateTimeLocal = (() => {
+  const maxCallDate = (() => {
     const d = new Date();
     d.setMonth(d.getMonth() + 6);
-    return toLocalDateTimeInput(d.toISOString(), timezone);
+    return d;
   })();
 
   return (
@@ -476,16 +611,11 @@ export function CallDetailsPanel({ conversationId }: Props) {
       {editing && (
         <div className='space-y-2'>
           <div className='space-y-1'>
-            <Label htmlFor='call-dt' className='text-[10px]'>
-              Date &amp; Time
-            </Label>
-            <Input
-              id='call-dt'
-              type='datetime-local'
+            <Label className='text-[10px]'>Date &amp; Time</Label>
+            <CallDateTimePicker
               value={datetimeLocal}
-              max={maxCallDateTimeLocal}
-              onChange={(e) => setDatetimeLocal(e.target.value)}
-              className='h-8 text-xs'
+              onChange={setDatetimeLocal}
+              maxDate={maxCallDate}
             />
           </div>
           <div className='space-y-1'>

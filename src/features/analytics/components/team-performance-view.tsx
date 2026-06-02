@@ -112,11 +112,23 @@ function useDataQuality() {
       .then((res) => {
         if (!cancelled) {
           const mq = res.messageQuality || {};
-          const total = mq.total || 1;
+          // Coverage = stage-tagged AI messages / total AI-pipeline messages.
+          // Use `trackable` (AI messages, added by the F8 data-quality fix)
+          // as the denominator, not `total` (every message incl. lead +
+          // supportive messages that legitimately have no stage). Falling back
+          // to `total` keeps it working against pre-F8 API responses.
+          const denom = mq.trackable || mq.total || 1;
           const withStage = mq.withStage || 0;
           const withSentiment = mq.withSentiment || 0;
-          const coveragePercent = (withStage / total) * 100;
+          const coveragePercent = (withStage / denom) * 100;
           const cs = res.coldStartStatus || {};
+          // coldStartStatus is keyed by DATA_THRESHOLDS names (MIN_MESSAGES,
+          // MESSAGE_EFFECTIVENESS, SEGMENT_ANALYSIS, ...) and each value is a
+          // checkColdStart() result { hasEnoughData, conversationCount,
+          // messageCount, ... }. The previous code read cs.FUNNEL_ANALYSIS
+          // .minimumRequired / .totalResolved — none of which exist — so every
+          // threshold rendered 0/50 0/30 0/20 (QD-040). Map to the real keys
+          // and fields.
           setData({
             totalConversations: res.totalConversations || 0,
             messagesWithStageData: withStage,
@@ -124,18 +136,18 @@ function useDataQuality() {
             coveragePercent,
             coldStartThresholds: {
               minConversations: {
-                required: cs.FUNNEL_ANALYSIS?.minimumRequired || 50,
-                actual: cs.FUNNEL_ANALYSIS?.totalResolved || 0,
-                met: cs.FUNNEL_ANALYSIS?.hasEnoughData || false
+                required: 50,
+                actual: cs.MIN_MESSAGES?.messageCount || 0,
+                met: cs.MIN_MESSAGES?.hasEnoughData || false
               },
               minMessages: {
-                required: cs.MESSAGE_EFFECTIVENESS?.minimumRequired || 30,
-                actual: cs.MESSAGE_EFFECTIVENESS?.totalResolved || 0,
+                required: 30,
+                actual: cs.MESSAGE_EFFECTIVENESS?.messageCount || 0,
                 met: cs.MESSAGE_EFFECTIVENESS?.hasEnoughData || false
               },
               minStageTransitions: {
-                required: cs.SEGMENT_ANALYSIS?.minimumRequired || 20,
-                actual: cs.SEGMENT_ANALYSIS?.totalResolved || 0,
+                required: 20,
+                actual: cs.SEGMENT_ANALYSIS?.messageCount || 0,
                 met: cs.SEGMENT_ANALYSIS?.hasEnoughData || false
               }
             }
@@ -507,9 +519,15 @@ export function TeamPerformanceView() {
                 )}
               </div>
             ) : (
-              <p className='text-muted-foreground text-sm'>
-                No funnel data available yet.
-              </p>
+              <div className='flex h-[200px] flex-col items-center justify-center gap-1 text-center'>
+                <p className='text-muted-foreground text-sm font-medium'>
+                  No funnel data yet
+                </p>
+                <p className='text-muted-foreground/70 max-w-[320px] text-xs'>
+                  Stage progression appears here once the AI walks conversations
+                  through the qualification steps.
+                </p>
+              </div>
             )}
           </CardContent>
         </Card>
