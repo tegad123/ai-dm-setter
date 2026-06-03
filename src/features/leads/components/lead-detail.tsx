@@ -13,6 +13,16 @@ import {
   SelectValue
 } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import {
   IconArrowLeft,
   IconMessageCircle,
@@ -72,6 +82,11 @@ export default function LeadDetail({ leadId }: { leadId: string }) {
   const [loading, setLoading] = useState(true);
   const [transitioning, setTransitioning] = useState(false);
   const [overrideStage, setOverrideStage] = useState('');
+  // Closed-Won deal-value capture. Marking a lead Closed Won opens this dialog
+  // so revenue is recorded (feeds the Revenue analytics metric); without it the
+  // stage moved but revenue stayed null. (QD-038)
+  const [dealDialogOpen, setDealDialogOpen] = useState(false);
+  const [dealValue, setDealValue] = useState('');
   const { transitions, refetch: refetchHistory } = useLeadStageHistory(leadId);
 
   const fetchLead = useCallback(async () => {
@@ -106,6 +121,43 @@ export default function LeadDetail({ leadId }: { leadId: string }) {
     },
     [leadId, transitioning, fetchLead, refetchHistory]
   );
+
+  // Closed Won → record the deal value as revenue via the CRM-outcome endpoint
+  // (sets stage=CLOSED_WON, revenue, closedAt + an audit row). An empty value
+  // is allowed (close with no/unknown amount) so the flow is never blocked.
+  const handleCloseWon = useCallback(async () => {
+    if (transitioning) return;
+    const raw = dealValue.trim().replace(/[$,]/g, '');
+    const parsed = raw === '' ? null : Number(raw);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
+      toast.error('Enter a valid deal value (or leave blank)');
+      return;
+    }
+    setTransitioning(true);
+    try {
+      await apiFetch(`/api/leads/${leadId}/crm-outcome`, {
+        method: 'POST',
+        body: JSON.stringify({
+          showed: true,
+          closed: true,
+          dealValue: parsed
+        })
+      });
+      toast.success(
+        parsed
+          ? `Closed Won — $${parsed.toLocaleString()} recorded`
+          : 'Closed Won'
+      );
+      setDealDialogOpen(false);
+      setDealValue('');
+      await fetchLead();
+      refetchHistory();
+    } catch {
+      toast.error('Failed to mark Closed Won');
+    } finally {
+      setTransitioning(false);
+    }
+  }, [leadId, transitioning, dealValue, fetchLead, refetchHistory]);
 
   if (loading) {
     return (
@@ -173,7 +225,11 @@ export default function LeadDetail({ leadId }: { leadId: string }) {
                   key={action.stage}
                   size='sm'
                   disabled={transitioning}
-                  onClick={() => handleTransition(action.stage)}
+                  onClick={() =>
+                    action.stage === 'CLOSED_WON'
+                      ? setDealDialogOpen(true)
+                      : handleTransition(action.stage)
+                  }
                 >
                   {action.label}
                 </Button>
@@ -360,6 +416,51 @@ export default function LeadDetail({ leadId }: { leadId: string }) {
         <IconMessageCircle className='mr-2 h-4 w-4' />
         Open Conversations
       </Button>
+
+      {/* Closed Won — deal value capture */}
+      <Dialog open={dealDialogOpen} onOpenChange={setDealDialogOpen}>
+        <DialogContent className='sm:max-w-sm'>
+          <DialogHeader>
+            <DialogTitle>Record the deal</DialogTitle>
+            <DialogDescription>
+              Enter the deal value to mark {lead.name} as Closed Won. This is
+              recorded as revenue. Leave blank if the amount isn&apos;t known.
+            </DialogDescription>
+          </DialogHeader>
+          <div className='space-y-2'>
+            <Label htmlFor='deal-value'>Deal value (USD)</Label>
+            <div className='relative'>
+              <span className='text-muted-foreground absolute top-1/2 left-3 -translate-y-1/2 text-sm'>
+                $
+              </span>
+              <Input
+                id='deal-value'
+                inputMode='decimal'
+                autoFocus
+                value={dealValue}
+                onChange={(e) => setDealValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCloseWon();
+                }}
+                placeholder='2500'
+                className='pl-7'
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant='ghost'
+              onClick={() => setDealDialogOpen(false)}
+              disabled={transitioning}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleCloseWon} disabled={transitioning}>
+              {transitioning ? 'Saving…' : 'Mark Closed Won'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
