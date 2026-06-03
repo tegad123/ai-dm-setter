@@ -19,21 +19,33 @@ export async function GET(request: NextRequest) {
       orderBy: { closedAt: 'asc' }
     });
 
-    // Group by month
-    const monthMap: Record<string, number> = {};
+    // Group by month. Key on YYYY-MM so months sort chronologically and the
+    // value is a real parseable date (first of the month) — the chart does
+    // `new Date(point.date)`, so a "Jun 2026" string would render "Invalid
+    // Date". (QD-038 follow-up)
+    const monthMap = new Map<string, number>();
     for (const lead of leads) {
       if (!lead.closedAt || !lead.revenue) continue;
-      const month = lead.closedAt.toLocaleDateString('en-US', {
-        month: 'short',
-        year: 'numeric'
-      });
-      monthMap[month] = (monthMap[month] || 0) + lead.revenue;
+      const y = lead.closedAt.getUTCFullYear();
+      const m = String(lead.closedAt.getUTCMonth() + 1).padStart(2, '0');
+      const key = `${y}-${m}`;
+      monthMap.set(key, (monthMap.get(key) || 0) + lead.revenue);
     }
 
-    const data = Object.entries(monthMap).map(([month, revenue]) => ({
-      month,
-      revenue: Math.round(revenue * 100) / 100
-    }));
+    // Emit { date, revenue, cumulative } (matches the RevenuePoint type and
+    // the Area chart). Running total because the card shows cumulative revenue.
+    let cumulative = 0;
+    const data = Array.from(monthMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, revenue]) => {
+        const monthly = Math.round(revenue * 100) / 100;
+        cumulative = Math.round((cumulative + monthly) * 100) / 100;
+        return {
+          date: `${key}-01T00:00:00.000Z`, // first of the month, ISO
+          revenue: monthly,
+          cumulative
+        };
+      });
 
     return NextResponse.json({ data });
   } catch (error) {

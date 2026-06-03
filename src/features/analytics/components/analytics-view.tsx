@@ -94,7 +94,7 @@ export function AnalyticsView() {
   const revenueChartData = revenueRaw.map((d) => ({
     week: new Date(d.date).toLocaleDateString('en-US', {
       month: 'short',
-      day: 'numeric'
+      year: 'numeric'
     }),
     revenue: d.cumulative
   }));
