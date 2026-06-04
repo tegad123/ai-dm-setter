@@ -1313,7 +1313,11 @@ export async function processIncomingMessage(
         // ai-engine retry loop.
         systemStage: null,
         currentScriptStep: 1,
-        capturedDataPoints: {},
+        // Record a reset watermark so backfillFromMetaAPI does NOT re-import
+        // Meta's pre-reset history right back in (which silently undid the
+        // wipe — "clear conversation doesn't reset anymore"). Stored in the
+        // existing JSON field to avoid a prod schema migration.
+        capturedDataPoints: { __resetAt: new Date().toISOString() },
         awaitingAiResponse: false,
         awaitingHumanReview: false,
         awaitingSince: null,
@@ -6174,6 +6178,22 @@ export async function rescueOrphanAISuggestions(
 // Helper: Back-fill messages from Meta Graph API
 // ---------------------------------------------------------------------------
 
+/**
+ * True for Meta-generated context/template lines that are NOT real DM content
+ * and must never be ingested as conversation messages. The canonical case is
+ * the comment-origin DM context ("You are responding to a user comment to a
+ * post on your Page. View comment. (<reel url>?comment_id=...)").
+ */
+function isMetaContextLine(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  return (
+    /you are responding to a user comment/i.test(t) ||
+    /\bview comment\b/i.test(t) ||
+    /comment_id=/i.test(t)
+  );
+}
+
 async function backfillFromMetaAPI(
   accountId: string,
   conversationId: string,
@@ -6241,6 +6261,16 @@ async function backfillFromMetaAPI(
   const { getMetaPageId } = await import('@/lib/credential-store');
   const pageId = await getMetaPageId(accountId);
 
+  // Reset watermark: if this conversation was reset via "clear conversation",
+  // do NOT re-import Meta history from before the reset (that re-import is what
+  // made the reset appear not to work). Only backfill messages newer than it.
+  const convoForReset = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { capturedDataPoints: true }
+  });
+  const resetAtRaw = (convoForReset?.capturedDataPoints as any)?.__resetAt;
+  const resetAtMs = resetAtRaw ? new Date(resetAtRaw).getTime() : 0;
+
   // Merge API messages with local DB (avoid duplicates)
   const existingMessages = await prisma.message.findMany({
     where: { conversationId },
@@ -6259,6 +6289,15 @@ async function backfillFromMetaAPI(
 
     if (existingSet.has(key)) continue;
     if (!apiMsg.message) continue;
+    // Honor the "clear conversation" reset watermark — skip pre-reset history.
+    if (resetAtMs && timestamp.getTime() < resetAtMs) continue;
+    // Skip Meta-generated context lines. When a DM originates from a comment
+    // on a reel/post, Meta's conversation history includes a system template
+    // ("You are responding to a user comment to a post on your Page. View
+    // comment. (https://facebook.com/reel/.../?comment_id=...)"). It is NOT a
+    // real message — ingesting it (attributed to the page side) made it land
+    // as a `sender: 'AI'` row that leaked into the thread. Drop it.
+    if (isMetaContextLine(apiMsg.message)) continue;
 
     const isOurMessage = apiMsg.from?.id === pageId;
     const sender = isOurMessage ? 'AI' : 'LEAD';
