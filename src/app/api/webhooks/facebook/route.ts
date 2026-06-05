@@ -385,16 +385,47 @@ async function processFacebookEvents(payload: any): Promise<void> {
           const targetConvoId = result.conversationId;
 
           if (delaySeconds <= INLINE_DELAY_THRESHOLD_SECONDS) {
+            // Durable inline path (mirrors the Instagram route). We create a
+            // PENDING ScheduledReply FIRST, then try to deliver it inline via
+            // after(). If the serverless instance is frozen/reclaimed during
+            // the delay sleep — after() never completing — the row stays
+            // PENDING and the cron picks it up. Previously the FB route used a
+            // bare after() with no row, so a dropped after() lost the reply
+            // entirely with no fallback (AI silently stopped responding
+            // mid-conversation — observed on Facebook threads).
+            await prisma.scheduledReply.updateMany({
+              where: { conversationId: targetConvoId, status: 'PENDING' },
+              data: { status: 'CANCELLED' }
+            });
+            const scheduledReply = await prisma.scheduledReply.create({
+              data: {
+                conversationId: targetConvoId,
+                accountId,
+                scheduledFor: new Date(Date.now() + delaySeconds * 1000),
+                status: 'PENDING'
+              }
+            });
             console.log(
               `[facebook-webhook] Inline-deferring reply for ${targetConvoId} ` +
-                `(${delaySeconds}s)`
+                `(${delaySeconds}s, threshold ${INLINE_DELAY_THRESHOLD_SECONDS}s, scheduledReply=${scheduledReply.id})`
             );
             after(async () => {
               try {
-                if (delaySeconds > 0) {
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, delaySeconds * 1000)
+                const waitMs =
+                  scheduledReply.scheduledFor.getTime() - Date.now();
+                if (waitMs > 0) {
+                  await new Promise((resolve) => setTimeout(resolve, waitMs));
+                }
+                // Claim the row so the cron and this after() can't double-send.
+                const claimed = await prisma.scheduledReply.updateMany({
+                  where: { id: scheduledReply.id, status: 'PENDING' },
+                  data: { status: 'PROCESSING' }
+                });
+                if (claimed.count === 0) {
+                  console.log(
+                    `[facebook-webhook] inline reply skipped — scheduledReply ${scheduledReply.id} already claimed`
                   );
+                  return;
                 }
                 const fresh = await prisma.conversation.findUnique({
                   where: { id: targetConvoId },
@@ -404,15 +435,59 @@ async function processFacebookEvents(payload: any): Promise<void> {
                   console.log(
                     `[facebook-webhook] inline reply cancelled — aiActive flipped off for ${targetConvoId}`
                   );
+                  await prisma.scheduledReply.update({
+                    where: { id: scheduledReply.id },
+                    data: {
+                      status: 'CANCELLED',
+                      processedAt: new Date(),
+                      lastError: 'AI inactive at inline delivery time'
+                    }
+                  });
                   return;
                 }
+                const processingStartedAt = new Date();
                 await processScheduledReply(targetConvoId, accountId);
+                const deliveredMessage = await prisma.message.findFirst({
+                  where: {
+                    conversationId: targetConvoId,
+                    sender: 'AI',
+                    timestamp: { gte: processingStartedAt }
+                  },
+                  select: { id: true }
+                });
+                if (!deliveredMessage) {
+                  throw new Error(
+                    'ScheduledReply completed without delivering an AI Message'
+                  );
+                }
+                await prisma.scheduledReply.update({
+                  where: { id: scheduledReply.id },
+                  data: {
+                    status: 'SENT',
+                    processedAt: new Date(),
+                    lastError: null
+                  }
+                });
                 console.log(
                   `[facebook-webhook] inline reply delivered for ${targetConvoId}`
                 );
               } catch (afterErr) {
+                // Reset to PENDING so the cron retries — never leave it stuck
+                // in PROCESSING (that would strand the reply).
+                await prisma.scheduledReply
+                  .update({
+                    where: { id: scheduledReply.id },
+                    data: {
+                      status: 'PENDING',
+                      lastError:
+                        afterErr instanceof Error
+                          ? afterErr.message.slice(0, 500)
+                          : 'inline after() failed'
+                    }
+                  })
+                  .catch(() => {});
                 console.error(
-                  `[facebook-webhook] inline reply failed for ${targetConvoId}:`,
+                  `[facebook-webhook] inline reply failed for ${targetConvoId} (cron will retry):`,
                   afterErr
                 );
               }
