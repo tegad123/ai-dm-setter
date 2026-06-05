@@ -4135,19 +4135,43 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               recovery.eventId,
               `quality_gate_failed:${recoveryQuality.hardFails.join(',') || 'score'}`
             );
-            parsed.escalateToHuman = true;
-            parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
-            console.warn(
-              `[ai-engine] Script-step skip recovery rejected by voice gate for convo ${activeConversationId}: ${recoveryQuality.hardFails.join(', ') || 'score'}`
-            );
+            // 2026-06-05: do NOT hard-pause to a human for a benign ordering
+            // skip. When the skip is a capital/prerequisite gate (real
+            // protection against pitching unqualified leads) we still
+            // escalate; otherwise (plain conversational step drift — the
+            // dominant case, e.g. the AI advanced naturally on a qualified
+            // lead while systemStage lagged) ship the best-effort reply and
+            // keep the AI active. Hard-escalating here was locking
+            // conversations into awaitingHumanReview (AI goes silent) even on
+            // qualified leads with no capital gate configured.
+            if (softPitchValidation.allowed === false) {
+              parsed.escalateToHuman = true;
+              parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
+              console.warn(
+                `[ai-engine] Soft-pitch prereqs missing + recovery rejected — escalating for convo ${activeConversationId}: ${recoveryQuality.hardFails.join(', ') || 'score'}`
+              );
+            } else {
+              parsed.stallType = null;
+              console.warn(
+                `[ai-engine] Script-step skip recovery failed gate — shipping best effort (ordering drift, no prereq gate) for convo ${activeConversationId}: ${recoveryQuality.hardFails.join(', ') || 'score'}`
+              );
+            }
             break;
           }
 
-          parsed.escalateToHuman = true;
-          parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
-          console.warn(
-            `[ai-engine] Script-step skip detected but recovery failed for convo ${activeConversationId}: ${recovery.reason}`
-          );
+          if (softPitchValidation.allowed === false) {
+            parsed.escalateToHuman = true;
+            parsed.stallType = 'SCRIPT_SKIP_RECOVERY_FAILED';
+            console.warn(
+              `[ai-engine] Soft-pitch prereqs missing + recovery failed — escalating for convo ${activeConversationId}: ${recovery.reason}`
+            );
+          } else {
+            // Benign ordering skip with no prerequisite gate — ship best effort.
+            parsed.stallType = null;
+            console.warn(
+              `[ai-engine] Script-step skip recovery failed — shipping best effort (ordering drift, no prereq gate) for convo ${activeConversationId}: ${recovery.reason}`
+            );
+          }
           break;
         } catch (err) {
           console.error(
