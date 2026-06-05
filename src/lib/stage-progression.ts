@@ -148,14 +148,26 @@ export function mapAIStageToLeadStage(
   options: { warnUnknown?: boolean } = {}
 ): LeadStage | null {
   const normalizedStage = normalizeStage(conversationStage);
-  const normalizedSubStage = normalizeStage(subStage);
+  // subStage is retained in the signature for call-site compatibility but is no
+  // longer used for disqualification — see the capitalOutcome note below.
+  void subStage;
 
-  const isDownsellBranch =
-    typeof normalizedSubStage === 'string' &&
-    (normalizedSubStage.startsWith('WATERFALL_') ||
-      normalizedSubStage === 'LOW_TICKET');
-
-  if (isDownsellBranch || capitalOutcome === 'failed') {
+  // A lead is only UNQUALIFIED on an ACTUAL capital failure. Being IN a
+  // WATERFALL_* sub-stage is the financial-qualification process itself (the AI
+  // is ASKING about capital/credit), NOT a disqualification — capitalOutcome is
+  // 'not_evaluated' until the lead actually answers below threshold.
+  //
+  // 2026-06-05 fix: previously `isDownsellBranch` (any WATERFALL_* / LOW_TICKET
+  // sub-stage) forced UNQUALIFIED on entry to the capital question. That marked
+  // qualified leads (e.g. $2k, threshold met) UNQUALIFIED the moment the AI
+  // reached WATERFALL_L1 — which then made the closer/call quality gate block
+  // every reply and silently pause the conversation. Only `capitalOutcome ===
+  // 'failed'` (the lead verifiably below threshold) disqualifies now.
+  //
+  // LOW_TICKET is the genuine downsell branch (lead routed to the course); it
+  // still maps via STAGE_TO_LEAD_STAGE below rather than being force-UNQUALIFIED
+  // here, so a course-routed lead isn't mislabeled as a hard disqualification.
+  if (capitalOutcome === 'failed') {
     return 'UNQUALIFIED';
   }
 
