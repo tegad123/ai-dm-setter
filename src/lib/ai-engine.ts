@@ -5610,7 +5610,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       } else if (
         unnecessarySchedulingQuestionFailed ||
         logisticsBeforeQualificationFailed ||
-        repeatedQuestionFailed
+        repeatedQuestionFailed ||
+        msgVerbatimViolationFailed ||
+        mandatoryAskSkippedFailed ||
+        stepDistanceViolationFailed
       ) {
         // Loosened 2026-04-30 (was hard escalate_to_human). The
         // "AI asked a slightly off follow-up question" class — these
@@ -5622,11 +5625,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // blockReason='gate_exhausted_sent_best_effort' so the
         // dashboard surfaces an amber Action Required item, ship
         // the LLM's last best-effort reply as-is, AI stays active.
+        //
+        // 2026-06-05: added msg_verbatim_violation, mandatory_ask_skipped,
+        // and step_distance_violation here. These are script-ADHERENCE gates
+        // (the reply was contextually correct but didn't match the script's
+        // verbatim [MSG]/[ASK] or jumped steps). When they exhausted retries
+        // they previously fell through to a non-delivery path, so the AI sent
+        // NOTHING — the dominant cause of "AI stops responding" on this
+        // account (msg_verbatim_violation alone was 482/630 quality failures).
+        // A slightly-off-script but relevant reply beats ghosting the lead;
+        // ops audits the amber row.
         const gateType = unnecessarySchedulingQuestionFailed
           ? 'scheduling_q'
           : logisticsBeforeQualificationFailed
             ? 'logistics_before_qualification'
-            : 'repeated_question';
+            : repeatedQuestionFailed
+              ? 'repeated_question'
+              : msgVerbatimViolationFailed
+                ? 'msg_verbatim_violation'
+                : mandatoryAskSkippedFailed
+                  ? 'mandatory_ask_skipped'
+                  : 'step_distance_violation';
         console.warn(
           `[ai-engine] ${gateType} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review on convo ${activeConversationId}`
         );
