@@ -5841,24 +5841,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('fabricated_url_in_reply:') ||
             f.includes('call_pitch_before_capital_verification:') ||
             f.includes('closer_or_call_in_downsell:') ||
-            // Step-progression gates (2026-05-08): when the LLM keeps
-            // emitting future-step content despite 3 regen attempts,
-            // shipping best-effort would deliver a script-violating
-            // reply. Escalate to operator instead so they manually
-            // continue the conversation from the right step.
+            // GENUINELY unshippable step-progression gates: these mean the AI
+            // tried to pitch/route prematurely (real lead-facing / qualification
+            // harm) — keep escalating.
             f.includes('capital_question_premature:') ||
-            f.includes('msg_verbatim_violation:') ||
-            f.includes('mandatory_ask_skipped:') ||
-            f.includes('step_distance_violation:') ||
             f.includes('step_10_deep_why_skipped:') ||
             f.includes('call_proposal_prereqs_missing:') ||
             f.includes('silent_branch_violated_with_question:') ||
             f.includes('missing_required_question_on_ask_step:')
         );
+        // 2026-06-05: msg_verbatim_violation / mandatory_ask_skipped /
+        // step_distance_violation moved OUT of hardUnshippable. They are script
+        // ADHERENCE drift (reply was contextually fine but didn't match the
+        // verbatim [MSG]/[ASK] or advanced a step early) — NOT lead-facing harm
+        // like leaked placeholders or premature call pitches (which remain hard
+        // above). Escalating them to awaitingHumanReview was permanently
+        // silencing the AI mid-conversation (observed on Tega's FB thread:
+        // re-locked on "Yes I'm down" with FAILED_QUALITY_GATE). Ship best
+        // effort instead; the dominant verbatim case still gets deterministic
+        // [MSG] injection (verbatimRecoverable) before reaching here.
         const softUnshippable = quality.hardFails.find(
           (f) =>
             f.includes('markdown_in_single_bubble:') ||
-            f.includes('repeated_capital_question:')
+            f.includes('repeated_capital_question:') ||
+            f.includes('msg_verbatim_violation:') ||
+            f.includes('mandatory_ask_skipped:') ||
+            f.includes('step_distance_violation:')
         );
         // Verbatim-MSG recovery (2026-05-21): when the ONLY blocking issue is
         // that the model paraphrased a required operator-authored [MSG], don't
@@ -5876,8 +5884,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('call_pitch_before_capital_verification:') ||
             f.includes('closer_or_call_in_downsell:') ||
             f.includes('capital_question_premature:') ||
-            f.includes('mandatory_ask_skipped:') ||
-            f.includes('step_distance_violation:') ||
+            // mandatory_ask_skipped / step_distance_violation removed here too
+            // (2026-06-05): now soft drift, so they no longer block the
+            // verbatim deterministic-injection recovery path below.
             f.includes('step_10_deep_why_skipped:') ||
             f.includes('call_proposal_prereqs_missing:') ||
             f.includes('silent_branch_violated_with_question:') ||
