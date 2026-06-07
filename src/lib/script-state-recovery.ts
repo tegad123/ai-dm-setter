@@ -3992,20 +3992,50 @@ export function computeSystemStage(
     maxAdvanceSteps >= 0 &&
     candidate.step.stepNumber > previousCurrentScriptStep + maxAdvanceSteps
   ) {
-    const cappedStepNumber = Math.max(
-      previousCurrentScriptStep + maxAdvanceSteps,
-      durableMinStepNumber ?? Number.NEGATIVE_INFINITY
-    );
-    const cappedStep =
-      steps.find((step) => step.stepNumber === cappedStepNumber) ??
-      steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??
-      candidate.step;
-    if (cappedStep.stepNumber < candidate.step.stepNumber) {
-      return {
-        step: cappedStep,
-        reason: `capped_to_one_step_advance:${candidate.reason}`
-      };
+    // F5.1 1b (2026-06-07): the +1/turn cap is an ANTI-SKIP guard — it stops
+    // the AI jumping ahead of itself (generating late-step content while the
+    // lead is still early). But it ALSO throttled legitimate catch-up: when the
+    // tracker had lagged and the intervening steps are now PROVABLY complete,
+    // capping kept the position stuck a step behind, re-feeding the gate a stale
+    // step. So: only cap when the jump is UNPROVEN. If every intervening step
+    // (prev+1 … candidate-1) has a step_completed event recorded this walk, the
+    // advance is justified by history — allow it. This is strictly stronger than
+    // the old durableMinStepNumber floor (it requires EVERY gap proven, so it
+    // can never advance past an unproven step → no "jump to last step" regression).
+    const allInterveningProven = (() => {
+      for (
+        let s = previousCurrentScriptStep + 1;
+        s < candidate.step.stepNumber;
+        s++
+      ) {
+        // step must exist in the script AND have a step_completed event
+        const stepExists = steps.some((st) => st.stepNumber === s);
+        if (!stepExists) continue; // gaps in numbering aren't blockers
+        const completed = readBranchHistoryEvents(points).some(
+          (e) => e.eventType === 'step_completed' && e.stepNumber === s
+        );
+        if (!completed) return false;
+      }
+      return true;
+    })();
+
+    if (!allInterveningProven) {
+      const cappedStepNumber = Math.max(
+        previousCurrentScriptStep + maxAdvanceSteps,
+        durableMinStepNumber ?? Number.NEGATIVE_INFINITY
+      );
+      const cappedStep =
+        steps.find((step) => step.stepNumber === cappedStepNumber) ??
+        steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??
+        candidate.step;
+      if (cappedStep.stepNumber < candidate.step.stepNumber) {
+        return {
+          step: cappedStep,
+          reason: `capped_to_one_step_advance:${candidate.reason}`
+        };
+      }
     }
+    // else: every intervening step proven complete → advance to true candidate.
   }
 
   return candidate;
@@ -4472,32 +4502,13 @@ export async function prepareScriptState(params: {
       console.error('[script-state] conversation state persist failed:', err)
     );
 
-  if (script && currentStep) {
-    await prisma.leadScriptPosition
-      .upsert({
-        where: {
-          leadId_scriptId: {
-            leadId: conversation.leadId,
-            scriptId: script.id
-          }
-        },
-        create: {
-          leadId: conversation.leadId,
-          scriptId: script.id,
-          currentStepId: currentStep.id,
-          status: 'active'
-        },
-        update: {
-          currentStepId: currentStep.id
-        }
-      })
-      .catch((err) =>
-        console.error(
-          '[script-state] lead script position persist failed:',
-          err
-        )
-      );
-  }
+  // F5.1 1c (2026-06-07): removed the redundant LeadScriptPosition upsert here.
+  // `Conversation.currentScriptStep` (persisted just above) is the single source
+  // of truth for position; LeadScriptPosition has ZERO live readers across the
+  // codebase (verified — only writers in lead-script-tracker.ts [dead fn] +
+  // ai-engine.ts). Writing it created a misleading second source of truth and a
+  // redundant DB write every turn. Model left intact (no migration) to keep
+  // scope tight; only the dead write is dropped.
 
   return {
     conversationId: params.conversationId,

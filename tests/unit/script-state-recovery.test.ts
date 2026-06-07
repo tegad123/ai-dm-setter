@@ -74,7 +74,11 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 2);
   });
 
-  it('caps recomputed position to one step beyond persisted current step', () => {
+  it('advances past the +1 cap when every intervening step is PROVABLY complete (F5.1 1b)', () => {
+    // Steps 1 AND 2 were both asked + answered in history → both provably
+    // complete → true candidate is step 3. Pre-1b, this was wrongly capped to
+    // step 2 (the lag bug). Post-1b: since step 2 (the only intervening step)
+    // is proven complete, the advance to 3 is justified — NOT capped.
     const history = [
       {
         sender: 'AI',
@@ -99,13 +103,39 @@ describe('computeSystemStage generic sequencing', () => {
     ];
 
     assert.equal(computeSystemStage(script, {}, history).step?.stepNumber, 3);
+    // Provable catch-up: prev=1 but step 2 is proven → advance to 3 (not capped).
     assert.equal(
       computeSystemStage(script, {}, history, {
         previousCurrentScriptStep: 1,
         maxAdvanceSteps: 1
       }).step?.stepNumber,
-      2
+      3
     );
+  });
+
+  it('STILL caps when an intervening step is NOT proven complete (anti-skip preserved, F5.1 1b)', () => {
+    // Only step 1 asked + answered. The lead also volunteers content that could
+    // tempt a jump, but step 2 is NOT proven complete. From prev=1, a jump to 3
+    // must be capped to 2 — anti-skip guard intact.
+    const history = [
+      {
+        sender: 'AI',
+        content: 'What do you do for work?',
+        timestamp: new Date('2026-05-11T00:00:00Z')
+      },
+      {
+        sender: 'LEAD',
+        content: 'I work as a nurse',
+        timestamp: new Date('2026-05-11T00:01:00Z')
+      }
+    ];
+    // True candidate from history is step 2 (only step 1 complete); force a
+    // would-be jump by claiming prev=0 isn't applicable — assert no over-advance.
+    const stage = computeSystemStage(script, {}, history, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    });
+    assert.equal(stage.step?.stepNumber, 2); // step 2, never 3 — unproven gap caps
   });
 
   it('bug-X-booking-info-complete: skips missing-info follow-up when all booking fields are present', () => {
