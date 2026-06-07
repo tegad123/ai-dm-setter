@@ -111,6 +111,12 @@ export interface ScriptStateSnapshot {
   capturedDataPoints: CapturedDataPoints;
   persona: PersonaForRecovery | null;
   reason: string;
+  /** True when the position legitimately advanced more than one step this turn
+   *  (the F5.1 1b "provable catch-up" path). The gate uses this to suppress a
+   *  spurious step_distance_violation for the single turn where the tracker
+   *  caught up — a legit multi-step catch-up is not a forward over-skip.
+   *  Optional: treat undefined as false (early-return snapshots omit it). */
+  positionJumpedThisTurn?: boolean;
 }
 
 export interface RecoveryResult {
@@ -4487,6 +4493,13 @@ export async function prepareScriptState(params: {
     };
   }
   const currentScriptStep = currentStep?.stepNumber ?? 1;
+  // F5.1 [4]: did the position advance >1 step this turn (provable catch-up)?
+  const priorStep =
+    typeof conversation.currentScriptStep === 'number'
+      ? conversation.currentScriptStep
+      : 0;
+  const positionJumpedThisTurn =
+    priorStep > 0 && currentScriptStep > priorStep + 1;
   const systemStageName = currentStep?.stateKey || currentStep?.title || null;
 
   await prisma.conversation
@@ -4521,7 +4534,8 @@ export async function prepareScriptState(params: {
     systemStage: systemStageName,
     capturedDataPoints,
     persona,
-    reason: systemStage.reason
+    reason: systemStage.reason,
+    positionJumpedThisTurn
   };
 }
 
