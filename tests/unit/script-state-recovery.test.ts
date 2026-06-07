@@ -2277,3 +2277,86 @@ Otherwise stay on STEP 13 for reinforcement.`
     assert.equal(warning?.skipError, 'conditional_skip_pattern_not_parsed');
   });
 });
+
+describe('computeSystemStage paraphrase-tolerant completion (F5.1 1a)', () => {
+  const script = {
+    id: 'paraphrase_seq',
+    steps: [
+      askStep(1, 'Job', 'What do you do for work?'),
+      askStep(2, 'Tenure', 'How long have you been doing that?'),
+      askStep(3, 'Goal', 'What are you trying to make each month?')
+    ]
+  } as any;
+
+  // Helper: a branch_selected event tying a sent AI bubble to a step.
+  const branchSelected = (
+    stepNumber: number,
+    suggestionId: string,
+    aiMessageId: string,
+    iso: string
+  ) => ({
+    eventType: 'branch_selected',
+    stepNumber,
+    stepTitle: null,
+    selectedBranchLabel: null,
+    suggestionId,
+    aiMessageId,
+    aiMessageIds: [aiMessageId],
+    leadMessageId: null,
+    sentAt: iso,
+    completedAt: null,
+    createdAt: iso
+  });
+
+  it('completes a step whose ASK was PARAPHRASED, via the suggestionId signal', () => {
+    // AI paraphrases step 1's scripted ask — text does NOT match
+    // "What do you do for work?" — but the sent bubble carries the step's
+    // suggestionId and the lead replied. Step 1 must complete; position → 2.
+    const points = {
+      branchHistory: [
+        branchSelected(1, 'sug_1', 'ai_1', '2026-06-07T00:00:00.000Z')
+      ]
+    } as any;
+    const history = [
+      {
+        sender: 'AI',
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        content: 'so what line of work you in these days?', // paraphrase
+        timestamp: new Date('2026-06-07T00:00:00Z')
+      },
+      {
+        sender: 'LEAD',
+        id: 'lead_1',
+        content: 'software engineer',
+        timestamp: new Date('2026-06-07T00:01:00Z')
+      }
+    ];
+    const stage = computeSystemStage(script, points, history);
+    assert.equal(stage.step?.stepNumber, 2);
+    const completed = readBranchHistoryEvents(points).find(
+      (e) => e.eventType === 'step_completed' && e.stepNumber === 1
+    );
+    assert.ok(completed, 'step 1 should be marked complete via suggestionId');
+  });
+
+  it('does NOT complete when the suggestionId bubble has no lead reply yet', () => {
+    const points = {
+      branchHistory: [
+        branchSelected(1, 'sug_1', 'ai_1', '2026-06-07T00:00:00.000Z')
+      ]
+    } as any;
+    const history = [
+      {
+        sender: 'AI',
+        id: 'ai_1',
+        suggestionId: 'sug_1',
+        content: 'so what line of work you in these days?',
+        timestamp: new Date('2026-06-07T00:00:00Z')
+      }
+      // no lead reply
+    ];
+    const stage = computeSystemStage(script, points, history);
+    assert.equal(stage.step?.stepNumber, 1); // stays — not complete
+  });
+});

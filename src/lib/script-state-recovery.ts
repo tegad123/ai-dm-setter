@@ -751,7 +751,12 @@ function branchHistorySelectionForStep(
     readBranchHistoryEvents(points)
       .filter(
         (event) =>
-          event.eventType === 'branch_selected' &&
+          // smart_mode_response is the smart-mode equivalent of branch_selected
+          // (ai-engine.ts:6258-6260) and also carries the step's suggestionId,
+          // so completion detection must recognize both — otherwise smart-mode
+          // conversations get the same paraphrase-driven step-parking bug.
+          (event.eventType === 'branch_selected' ||
+            event.eventType === 'smart_mode_response') &&
           event.stepNumber === stepNumber
       )
       .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
@@ -1559,6 +1564,46 @@ function stepCompletionFromHistory(
       lastReason = sent
         ? 'ask_sent_but_no_lead_reply_after_it'
         : 'ask_message_not_found_in_history_after_cursor';
+    }
+
+    // Paraphrase-tolerant completion for ask steps (F5.1 fix, 2026-06-07).
+    // The text-match loop above fails whenever the LLM PARAPHRASES the scripted
+    // [ASK] (the common case) — the AI's wording won't equal the canonical
+    // question, so `findSetterMessageForContent` returns null and the step
+    // never completes, parking the position. This was the root cause of the
+    // stuck-conversation bug (systemStage frozen while content advanced).
+    //
+    // Reliable, account-AGNOSTIC signal: this step has a recorded
+    // `branch_selected` event with a `suggestionId`, AND the conversation
+    // history contains the AI message carrying that exact suggestionId followed
+    // by a lead reply. The suggestionId ties a sent bubble to the step that
+    // generated it WITHOUT any text matching — so paraphrasing can't defeat it.
+    // Only fires for ask/wait steps (this whole function is gated upstream by
+    // stepHasHistoryCompletionSignal), so it can't over-complete passive steps.
+    if (asks.length > 0 && selectedSuggestionId) {
+      const askBySuggestion =
+        selectedSuggestionMessagesAfter(
+          sorted,
+          selectedSuggestionId,
+          afterTimeMs
+        ).at(0) ?? null;
+      const leadReply = askBySuggestion
+        ? hasLeadReplyAfter(sorted, askBySuggestion)
+        : null;
+      if (askBySuggestion && leadReply) {
+        return {
+          complete: true,
+          completedAt: new Date(leadReply.timestamp).getTime(),
+          aiMessageId: askBySuggestion.id ?? null,
+          aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
+          leadMessageId: leadReply.id ?? null,
+          sentAt: new Date(askBySuggestion.timestamp).toISOString(),
+          reason: 'completed_by_ask_reply_suggestion',
+          selectedBranchLabel,
+          selectedSuggestionId,
+          historyMessagesWithSelectedSuggestionId
+        };
+      }
     }
 
     if (asks.length === 0 && messages.length > 0 && waits.length) {
