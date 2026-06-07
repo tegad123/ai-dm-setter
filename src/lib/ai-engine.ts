@@ -70,6 +70,7 @@ import {
   getStepActionShape,
   hasCapturedDataPoint,
   incomeGoalSatisfiedByExpectedStep,
+  incomeGoalStepNumber,
   isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
 import {
@@ -3144,7 +3145,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     typeof downsellCfgForGate.productName === 'string' &&
     downsellCfgForGate.productName.trim()
       ? downsellCfgForGate.productName.trim()
-      : 'Session Liquidity Model';
+      : // F5.1 3b: generic fallback, never the DAE-specific name, so the gate's
+        // override directives don't inject "Session Liquidity Model" for other
+        // accounts. Real accounts set persona.downsellConfig.productName.
+        'the course';
   const downsellPriceStr = (() => {
     const raw = downsellCfgForGate.price;
     if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
@@ -3468,9 +3472,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
   }
   const capturedDataPointsForGate = scriptStateSnapshot?.capturedDataPoints;
+  // F5.1 3a: derive the income-goal step from THIS account's script (falls back
+  // to the DAE-shaped step 9 only when the script doesn't define one — keeps
+  // existing daetradez behavior byte-identical).
+  const incomeGoalStep =
+    incomeGoalStepNumber(scriptStateSnapshot?.script ?? null) ?? 9;
   const incomeGoalCapturedForStep10 = incomeGoalSatisfiedByExpectedStep(
     capturedDataPointsForGate ?? null,
-    9
+    incomeGoalStep
   );
   const deepWhyCapturedForStep10 =
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deepWhy') ||

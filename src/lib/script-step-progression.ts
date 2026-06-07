@@ -209,6 +209,49 @@ export function incomeGoalSatisfiedByExpectedStep(
   });
 }
 
+// F5.1 3a (2026-06-07): resolve which ScriptStep captures the income goal from
+// the ACCOUNT'S OWN script, instead of assuming the DAE funnel's step 9. A step
+// qualifies if its stateKey or requiredDataPoints references an income-goal key.
+// Returns null when the script doesn't define one (callers keep `?? 9` as the
+// last-resort DAE-shaped fallback so legacy behavior is byte-identical).
+const INCOME_GOAL_STEP_KEYS = [
+  'incomegoal',
+  'income_goal',
+  'desiredincome',
+  'tradingincomegoal'
+];
+export function incomeGoalStepNumber(
+  script:
+    | {
+        steps?: Array<{
+          stepNumber: number;
+          stateKey?: string | null;
+          requiredDataPoints?: unknown;
+        }> | null;
+      }
+    | null
+    | undefined
+): number | null {
+  const steps = script?.steps ?? [];
+  const matches = (raw: unknown): boolean => {
+    if (typeof raw === 'string') {
+      const norm = raw.toLowerCase().replace(/[^a-z]/g, '');
+      return INCOME_GOAL_STEP_KEYS.some((k) =>
+        norm.includes(k.replace(/[^a-z]/g, ''))
+      );
+    }
+    if (Array.isArray(raw)) return raw.some(matches);
+    if (raw && typeof raw === 'object') return Object.values(raw).some(matches);
+    return false;
+  };
+  for (const step of steps) {
+    if (matches(step.stateKey) || matches(step.requiredDataPoints)) {
+      return step.stepNumber;
+    }
+  }
+  return null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

@@ -36,6 +36,7 @@ import {
   getStepActionShape,
   hasCapturedDataPoint,
   incomeGoalSatisfiedByExpectedStep,
+  incomeGoalStepNumber,
   inferCurrentStepNumber,
   inferStepFromReply,
   inferStepLabelFromReply,
@@ -4260,5 +4261,52 @@ describe('bug-29-mandatory-ask-enforcement (acceptance)', () => {
     const reply =
       'how much would you need to be making from trading to replace it?';
     assert.equal(detectMandatoryAskSkipped(reply, history, captured), null);
+  });
+});
+
+describe('incomeGoalStepNumber — de-hardcode income-goal step (F5.1 3a)', () => {
+  it('resolves the income-goal step from a non-DAE script via stateKey', () => {
+    const script = {
+      steps: [
+        { stepNumber: 1, stateKey: 'intro' },
+        { stepNumber: 2, stateKey: 'experience' },
+        { stepNumber: 3, stateKey: 'income_goal' }, // income goal at 3, not 9
+        { stepNumber: 4, stateKey: 'call_proposal' }
+      ]
+    };
+    assert.equal(incomeGoalStepNumber(script), 3);
+  });
+
+  it('resolves via requiredDataPoints when stateKey is absent', () => {
+    const script = {
+      steps: [
+        {
+          stepNumber: 1,
+          stateKey: null,
+          requiredDataPoints: ['workBackground']
+        },
+        {
+          stepNumber: 5,
+          stateKey: null,
+          requiredDataPoints: ['tradingIncomeGoal']
+        }
+      ]
+    };
+    assert.equal(incomeGoalStepNumber(script), 5);
+  });
+
+  it('returns null when the script defines no income-goal step (caller keeps ?? 9)', () => {
+    const script = {
+      steps: [
+        { stepNumber: 1, stateKey: 'intro' },
+        { stepNumber: 2, stateKey: 'capital' }
+      ]
+    };
+    assert.equal(incomeGoalStepNumber(script), null);
+  });
+
+  it('returns null for empty/missing script (DAE byte-identical fallback path)', () => {
+    assert.equal(incomeGoalStepNumber(null), null);
+    assert.equal(incomeGoalStepNumber({ steps: [] }), null);
   });
 });
