@@ -70,6 +70,7 @@ import {
   getStepActionShape,
   hasCapturedDataPoint,
   incomeGoalSatisfiedByExpectedStep,
+  incomeGoalStepNumber,
   isRuntimePlaceholderOnly
 } from '@/lib/script-step-progression';
 import {
@@ -3144,7 +3145,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     typeof downsellCfgForGate.productName === 'string' &&
     downsellCfgForGate.productName.trim()
       ? downsellCfgForGate.productName.trim()
-      : 'Session Liquidity Model';
+      : // F5.1 3b: generic fallback, never the DAE-specific name, so the gate's
+        // override directives don't inject "Session Liquidity Model" for other
+        // accounts. Real accounts set persona.downsellConfig.productName.
+        'the course';
   const downsellPriceStr = (() => {
     const raw = downsellCfgForGate.price;
     if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
@@ -3468,9 +3472,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
   }
   const capturedDataPointsForGate = scriptStateSnapshot?.capturedDataPoints;
+  // F5.1 3a: derive the income-goal step from THIS account's script (falls back
+  // to the DAE-shaped step 9 only when the script doesn't define one — keeps
+  // existing daetradez behavior byte-identical).
+  const incomeGoalStep =
+    incomeGoalStepNumber(scriptStateSnapshot?.script ?? null) ?? 9;
   const incomeGoalCapturedForStep10 = incomeGoalSatisfiedByExpectedStep(
     capturedDataPointsForGate ?? null,
-    9
+    incomeGoalStep
   );
   const deepWhyCapturedForStep10 =
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deepWhy') ||
@@ -3700,6 +3709,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepActiveBranchIsJudgeOnly,
     currentStepActiveBranchLabel,
     currentScriptStepNumber: currentStepNumberForGate ?? undefined,
+    // F5.1 [4]: suppress step_distance_violation on a legit catch-up turn.
+    positionJumpedThisTurn:
+      scriptStateSnapshot?.positionJumpedThisTurn ?? false,
     aiMessageHistoryFull: priorAIMessages.map((m) => ({ content: m.content })),
     skipLegacyPacingGates,
     currentStage: parsed?.stage || null,
@@ -5954,13 +5966,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           qualityGateFailureReason = 'hard_unshippable_after_quality_retries';
           qualityGateHardFails = [...quality.hardFails];
         } else if (softUnshippable) {
-          // Soft-fail best-effort (markdown / repeated capital Q).
-          // Audit row → amber Action Required item; AI stays active.
-          const gateType = softUnshippable.includes(
-            'markdown_in_single_bubble:'
-          )
-            ? 'markdown'
-            : 'repeated_capital_question';
+          // Soft-fail best-effort (script-adherence drift: markdown, repeated
+          // capital Q, verbatim/mandatory-ask/step-distance). Ship the reply,
+          // log an amber audit row, AND guarantee the AI stays active — a
+          // forward-moving reply beats silence for these non-harmful gates.
+          // F5.1 (2026-06-07): explicitly force escalateToHuman=false here so a
+          // soft gate can NEVER silence the conversation, even if an earlier
+          // retry directive left the flag set.
+          parsed.escalateToHuman = false;
+          const gateType = softUnshippable
+            .split(':')[0]
+            .replace(/^\[[^\]]*\]\s*/, '')
+            .trim();
           console.warn(
             `[ai-engine] ${gateType} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review on convo ${activeConversationId}`
           );
@@ -5987,8 +6004,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             }
           }
         } else {
+          // Catch-all best-effort: gate exhausted but no hard-unshippable fail
+          // and output is non-empty. Ship it and guarantee the AI stays active
+          // (F5.1 2026-06-07) — a forward-moving reply beats silence. Only the
+          // enumerated hard gates above (allBubblesEmpty / hardUnshippable) may
+          // escalate; everything that reaches here must not.
+          parsed.escalateToHuman = false;
           console.warn(
-            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort`
+            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate)`
           );
         }
       }

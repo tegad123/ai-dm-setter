@@ -14,6 +14,7 @@ import {
   QUALITY_GATE_FAILURE_LAST_ERROR,
   QUALITY_GATE_FAILURE_REASON
 } from '../../src/lib/quality-gate-escalation';
+import { scoreVoiceQualityGroup } from '../../src/lib/voice-quality-gate';
 
 describe('quality gate escalation helpers', () => {
   it('defines the durable ScheduledReply failure status', () => {
@@ -85,5 +86,41 @@ describe('quality gate escalation helpers', () => {
     assert.deepEqual(error.hardFails, [
       'msg_verbatim_violation: missing required msg'
     ]);
+  });
+});
+
+describe('gate-trusts-position guard (F5.1 [4])', () => {
+  // NOTE: step_distance_violation is a SOFT signal post-2026-06-05 (it ships
+  // best-effort, never silences) — it may live in a soft bucket rather than
+  // hardFails. These tests assert the GUARD: whether the gate generates the
+  // violation at all, by inspecting the full result for the signal string.
+  const callProposalReply = 'wanna hop on a quick call to map it out?';
+  const hasStepDistance = (result: unknown) =>
+    JSON.stringify(result).includes('step_distance_violation');
+
+  it('GENERATES step_distance_violation on a far-ahead reply when no jump', () => {
+    // Call-proposal content (infers a far-ahead step) while gate thinks we're on
+    // step 1 and the position did NOT jump → this IS a forward over-skip.
+    const result = scoreVoiceQualityGroup([callProposalReply], {
+      currentScriptStepNumber: 1,
+      positionJumpedThisTurn: false
+    });
+    assert.ok(
+      hasStepDistance(result),
+      'expected step_distance_violation when far-ahead reply without a jump'
+    );
+  });
+
+  it('SUPPRESSES step_distance_violation when position legitimately jumped', () => {
+    // Same reply, but the position caught up this turn (provable 1b path) →
+    // a catch-up to the true step is not an over-skip → must NOT be flagged.
+    const result = scoreVoiceQualityGroup([callProposalReply], {
+      currentScriptStepNumber: 1,
+      positionJumpedThisTurn: true
+    });
+    assert.ok(
+      !hasStepDistance(result),
+      'step_distance_violation must be suppressed on a legit catch-up turn'
+    );
   });
 });

@@ -111,6 +111,12 @@ export interface ScriptStateSnapshot {
   capturedDataPoints: CapturedDataPoints;
   persona: PersonaForRecovery | null;
   reason: string;
+  /** True when the position legitimately advanced more than one step this turn
+   *  (the F5.1 1b "provable catch-up" path). The gate uses this to suppress a
+   *  spurious step_distance_violation for the single turn where the tracker
+   *  caught up — a legit multi-step catch-up is not a forward over-skip.
+   *  Optional: treat undefined as false (early-return snapshots omit it). */
+  positionJumpedThisTurn?: boolean;
 }
 
 export interface RecoveryResult {
@@ -751,7 +757,12 @@ function branchHistorySelectionForStep(
     readBranchHistoryEvents(points)
       .filter(
         (event) =>
-          event.eventType === 'branch_selected' &&
+          // smart_mode_response is the smart-mode equivalent of branch_selected
+          // (ai-engine.ts:6258-6260) and also carries the step's suggestionId,
+          // so completion detection must recognize both — otherwise smart-mode
+          // conversations get the same paraphrase-driven step-parking bug.
+          (event.eventType === 'branch_selected' ||
+            event.eventType === 'smart_mode_response') &&
           event.stepNumber === stepNumber
       )
       .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
@@ -1559,6 +1570,46 @@ function stepCompletionFromHistory(
       lastReason = sent
         ? 'ask_sent_but_no_lead_reply_after_it'
         : 'ask_message_not_found_in_history_after_cursor';
+    }
+
+    // Paraphrase-tolerant completion for ask steps (F5.1 fix, 2026-06-07).
+    // The text-match loop above fails whenever the LLM PARAPHRASES the scripted
+    // [ASK] (the common case) — the AI's wording won't equal the canonical
+    // question, so `findSetterMessageForContent` returns null and the step
+    // never completes, parking the position. This was the root cause of the
+    // stuck-conversation bug (systemStage frozen while content advanced).
+    //
+    // Reliable, account-AGNOSTIC signal: this step has a recorded
+    // `branch_selected` event with a `suggestionId`, AND the conversation
+    // history contains the AI message carrying that exact suggestionId followed
+    // by a lead reply. The suggestionId ties a sent bubble to the step that
+    // generated it WITHOUT any text matching — so paraphrasing can't defeat it.
+    // Only fires for ask/wait steps (this whole function is gated upstream by
+    // stepHasHistoryCompletionSignal), so it can't over-complete passive steps.
+    if (asks.length > 0 && selectedSuggestionId) {
+      const askBySuggestion =
+        selectedSuggestionMessagesAfter(
+          sorted,
+          selectedSuggestionId,
+          afterTimeMs
+        ).at(0) ?? null;
+      const leadReply = askBySuggestion
+        ? hasLeadReplyAfter(sorted, askBySuggestion)
+        : null;
+      if (askBySuggestion && leadReply) {
+        return {
+          complete: true,
+          completedAt: new Date(leadReply.timestamp).getTime(),
+          aiMessageId: askBySuggestion.id ?? null,
+          aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
+          leadMessageId: leadReply.id ?? null,
+          sentAt: new Date(askBySuggestion.timestamp).toISOString(),
+          reason: 'completed_by_ask_reply_suggestion',
+          selectedBranchLabel,
+          selectedSuggestionId,
+          historyMessagesWithSelectedSuggestionId
+        };
+      }
     }
 
     if (asks.length === 0 && messages.length > 0 && waits.length) {
@@ -3947,20 +3998,50 @@ export function computeSystemStage(
     maxAdvanceSteps >= 0 &&
     candidate.step.stepNumber > previousCurrentScriptStep + maxAdvanceSteps
   ) {
-    const cappedStepNumber = Math.max(
-      previousCurrentScriptStep + maxAdvanceSteps,
-      durableMinStepNumber ?? Number.NEGATIVE_INFINITY
-    );
-    const cappedStep =
-      steps.find((step) => step.stepNumber === cappedStepNumber) ??
-      steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??
-      candidate.step;
-    if (cappedStep.stepNumber < candidate.step.stepNumber) {
-      return {
-        step: cappedStep,
-        reason: `capped_to_one_step_advance:${candidate.reason}`
-      };
+    // F5.1 1b (2026-06-07): the +1/turn cap is an ANTI-SKIP guard — it stops
+    // the AI jumping ahead of itself (generating late-step content while the
+    // lead is still early). But it ALSO throttled legitimate catch-up: when the
+    // tracker had lagged and the intervening steps are now PROVABLY complete,
+    // capping kept the position stuck a step behind, re-feeding the gate a stale
+    // step. So: only cap when the jump is UNPROVEN. If every intervening step
+    // (prev+1 … candidate-1) has a step_completed event recorded this walk, the
+    // advance is justified by history — allow it. This is strictly stronger than
+    // the old durableMinStepNumber floor (it requires EVERY gap proven, so it
+    // can never advance past an unproven step → no "jump to last step" regression).
+    const allInterveningProven = (() => {
+      for (
+        let s = previousCurrentScriptStep + 1;
+        s < candidate.step.stepNumber;
+        s++
+      ) {
+        // step must exist in the script AND have a step_completed event
+        const stepExists = steps.some((st) => st.stepNumber === s);
+        if (!stepExists) continue; // gaps in numbering aren't blockers
+        const completed = readBranchHistoryEvents(points).some(
+          (e) => e.eventType === 'step_completed' && e.stepNumber === s
+        );
+        if (!completed) return false;
+      }
+      return true;
+    })();
+
+    if (!allInterveningProven) {
+      const cappedStepNumber = Math.max(
+        previousCurrentScriptStep + maxAdvanceSteps,
+        durableMinStepNumber ?? Number.NEGATIVE_INFINITY
+      );
+      const cappedStep =
+        steps.find((step) => step.stepNumber === cappedStepNumber) ??
+        steps.find((step) => step.stepNumber > previousCurrentScriptStep) ??
+        candidate.step;
+      if (cappedStep.stepNumber < candidate.step.stepNumber) {
+        return {
+          step: cappedStep,
+          reason: `capped_to_one_step_advance:${candidate.reason}`
+        };
+      }
     }
+    // else: every intervening step proven complete → advance to true candidate.
   }
 
   return candidate;
@@ -4412,6 +4493,13 @@ export async function prepareScriptState(params: {
     };
   }
   const currentScriptStep = currentStep?.stepNumber ?? 1;
+  // F5.1 [4]: did the position advance >1 step this turn (provable catch-up)?
+  const priorStep =
+    typeof conversation.currentScriptStep === 'number'
+      ? conversation.currentScriptStep
+      : 0;
+  const positionJumpedThisTurn =
+    priorStep > 0 && currentScriptStep > priorStep + 1;
   const systemStageName = currentStep?.stateKey || currentStep?.title || null;
 
   await prisma.conversation
@@ -4427,32 +4515,13 @@ export async function prepareScriptState(params: {
       console.error('[script-state] conversation state persist failed:', err)
     );
 
-  if (script && currentStep) {
-    await prisma.leadScriptPosition
-      .upsert({
-        where: {
-          leadId_scriptId: {
-            leadId: conversation.leadId,
-            scriptId: script.id
-          }
-        },
-        create: {
-          leadId: conversation.leadId,
-          scriptId: script.id,
-          currentStepId: currentStep.id,
-          status: 'active'
-        },
-        update: {
-          currentStepId: currentStep.id
-        }
-      })
-      .catch((err) =>
-        console.error(
-          '[script-state] lead script position persist failed:',
-          err
-        )
-      );
-  }
+  // F5.1 1c (2026-06-07): removed the redundant LeadScriptPosition upsert here.
+  // `Conversation.currentScriptStep` (persisted just above) is the single source
+  // of truth for position; LeadScriptPosition has ZERO live readers across the
+  // codebase (verified — only writers in lead-script-tracker.ts [dead fn] +
+  // ai-engine.ts). Writing it created a misleading second source of truth and a
+  // redundant DB write every turn. Model left intact (no migration) to keep
+  // scope tight; only the dead write is dropped.
 
   return {
     conversationId: params.conversationId,
@@ -4465,7 +4534,8 @@ export async function prepareScriptState(params: {
     systemStage: systemStageName,
     capturedDataPoints,
     persona,
-    reason: systemStage.reason
+    reason: systemStage.reason,
+    positionJumpedThisTurn
   };
 }
 

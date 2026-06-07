@@ -1940,18 +1940,31 @@ export async function buildDynamicSystemPrompt(
   // prompt examples adapt automatically.
   const downsellCfg =
     (p.downsellConfig as Record<string, unknown> | null) || {};
+  // F5.1 3b (2026-06-07): de-hardcode the DAE downsell defaults so other
+  // accounts don't leak "Session Liquidity Model" / "$497". Resolve from the
+  // account's own config: downsellConfig → promptConfig.downsell → a GENERIC
+  // fallback (never the DAE-specific product name). Price keeps a neutral
+  // numeric default so the inline "$X course" prompt examples stay grammatical.
+  const promptDownsellCfg =
+    ((config.downsell as Record<string, unknown> | null) ?? null) || {};
   const downsellProductName =
     typeof downsellCfg.productName === 'string' &&
     downsellCfg.productName.trim()
       ? downsellCfg.productName.trim()
-      : 'Session Liquidity Model';
-  const rawDownsellPrice = downsellCfg.price;
+      : typeof promptDownsellCfg.productName === 'string' &&
+          promptDownsellCfg.productName.trim()
+        ? promptDownsellCfg.productName.trim()
+        : 'the course';
+  const resolveDownsellPrice = (raw: unknown): string | null =>
+    typeof raw === 'number' && Number.isFinite(raw)
+      ? String(raw)
+      : typeof raw === 'string' && raw.trim()
+        ? raw.trim().replace(/^\$/, '')
+        : null;
   const downsellPriceStr =
-    typeof rawDownsellPrice === 'number' && Number.isFinite(rawDownsellPrice)
-      ? String(rawDownsellPrice)
-      : typeof rawDownsellPrice === 'string' && rawDownsellPrice.trim()
-        ? rawDownsellPrice.trim().replace(/^\$/, '')
-        : '497';
+    resolveDownsellPrice(downsellCfg.price) ??
+    resolveDownsellPrice(promptDownsellCfg.price) ??
+    '497';
   prompt = prompt.replace(/\{\{downsellProductName\}\}/g, downsellProductName);
   prompt = prompt.replace(/\{\{downsellPrice\}\}/g, downsellPriceStr);
   // ── Call handoff (setter → closer) ────────────────────────────────

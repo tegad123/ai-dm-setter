@@ -803,6 +803,14 @@ export interface VoiceQualityOptions {
    */
   currentScriptStepNumber?: number | null;
   /**
+   * True when the tracked position legitimately advanced more than one step
+   * this turn (the F5.1 provable-catch-up path). When set, the
+   * step_distance_violation check is suppressed for this turn: a catch-up to
+   * the true step is not a forward over-skip, and re-flagging it would log a
+   * spurious violation against a correctly-advancing conversation.
+   */
+  positionJumpedThisTurn?: boolean;
+  /**
    * Full content list of all prior AI messages on this conversation.
    * Used by the mandatory-ask-skipped guard to verify that scripted
    * [ASK] phrasings actually fired in history before the AI is allowed
@@ -1912,7 +1920,10 @@ export function scoreVoiceQuality(
   // Three skips caught individually today (Step 10, Step 12, Step 18)
   // motivated this generic check — enumerating every future-step
   // pattern manually doesn't scale.
-  if (typeof options?.currentScriptStepNumber === 'number') {
+  if (
+    typeof options?.currentScriptStepNumber === 'number' &&
+    !options?.positionJumpedThisTurn
+  ) {
     const violatedStep = detectStepDistanceViolation(
       reply,
       options.currentScriptStepNumber
