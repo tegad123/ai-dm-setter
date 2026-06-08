@@ -200,6 +200,48 @@ const STAGE_FIELD_MAP: Record<string, string> = {
   CAPITAL_QUALIFICATION: 'stageFinancialScreeningAt'
 };
 
+// F5.1 Phase 6B (2026-06-08): map a computed `systemStage` (a script step's
+// stateKey or title, e.g. "Desired Outcome - Deep Why", "Call Proposal",
+// "Capital Routing") to the 7-stage SOP enum, so the Stage Progression panel
+// + lead.stage can be reconciled to the REAL position instead of only the
+// LLM-emitted stage (which lags). Keyword-based so it works across account
+// scripts, not just DAE. Returns null when no confident match (caller then
+// falls back to the LLM stage alone — never regresses the panel).
+export function stepToSopStage(
+  systemStage: string | null | undefined
+): (typeof SOP_STAGE_ORDER)[number] | null {
+  if (!systemStage || typeof systemStage !== 'string') return null;
+  const s = systemStage.toLowerCase();
+  // Order matters: check the latest stages first so a step that mentions both
+  // (e.g. "call proposal response") resolves to the furthest-along stage.
+  if (/(book|calendar|schedul|confirm.*call|timezone|time zone)/.test(s))
+    return 'BOOKING';
+  if (
+    /(capital|financ|budget|afford|invest|credit|payment|price|downsell|application)/.test(
+      s
+    )
+  )
+    return 'FINANCIAL_SCREENING';
+  if (/(call proposal|soft.?pitch|pitch|buy.?in|commit|offer|present)/.test(s))
+    return 'SOFT_PITCH_COMMITMENT';
+  if (/(urgenc|timeline|how soon|ready to|now or)/.test(s)) return 'URGENCY';
+  if (
+    /(goal|why|deep|desired outcome|income goal|revenue|target|replace|obstacle|belief|motivat|pain)/.test(
+      s
+    )
+  )
+    return 'GOAL_EMOTIONAL_WHY';
+  if (
+    /(situation|discover|experience|background|job|income|market|how long|trading)/.test(
+      s
+    )
+  )
+    return 'SITUATION_DISCOVERY';
+  if (/(intro|opening|greet|location|where.*based|start)/.test(s))
+    return 'OPENING';
+  return null;
+}
+
 export async function recordStageTimestamp(
   conversationId: string,
   stage: string
