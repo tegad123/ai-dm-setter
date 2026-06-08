@@ -1283,8 +1283,13 @@ function stepHasHistoryCompletionSignal(
 
   return stepCompletionActionPaths(step, selectedBranchLabel).some(
     (actions) => {
-      if (hasRuntimeJudgmentAfterWait(actions)) return false;
       const { asks, messages, waits } = waitableActionsForPath(actions);
+      // F5.1 Phase 6A: a judgment-after-wait step that HAS an ask is now
+      // eligible for history completion — stepCompletionFromHistory can
+      // complete it via the suggestionId ask-reply signal (the judgment-step
+      // completion path), which stops the deep-why parking/loop. A judgment
+      // path with NO ask (pure routing) stays ineligible (handled elsewhere).
+      if (hasRuntimeJudgmentAfterWait(actions)) return asks.length > 0;
       return asks.length > 0 || (messages.length > 0 && waits.length > 0);
     }
   );
@@ -1562,6 +1567,62 @@ function stepCompletionFromHistory(
       if (callProposalCompletion) {
         return callProposalCompletion;
       }
+
+      // F5.1 Phase 6A (2026-06-08): complete JUDGMENT steps (ask + wait +
+      // runtime_judgment, e.g. the deep-why step 11) that the lead has answered.
+      // These were excluded from history completion entirely, so the position
+      // parked on them and the AI re-asked the same question every turn (the
+      // live deep-why loop). If this step has an ask AND a sent bubble (matched
+      // by ANY of the step's suggestionIds, oldest-first) got a lead reply, the
+      // judgment step is answered → complete it. This keeps a genuine
+      // "probe once if surface" possible (the first ask+reply) but stops the
+      // infinite loop. Same reliable suggestionId signal as the ask-step fix.
+      const { asks: judgmentAsks } = waitableActionsForPath(actions);
+      if (judgmentAsks.length > 0) {
+        const judgmentSuggestionIds = allSuggestionIdsForStep(
+          points,
+          step.stepNumber
+        );
+        if (
+          judgmentSuggestionIds.length === 0 &&
+          typeof selectedSuggestionId === 'string'
+        ) {
+          judgmentSuggestionIds.push(selectedSuggestionId);
+        }
+        // Anti-loop backstop: if the step was branch_selected ≥2 times (each a
+        // re-ask), force-complete on the EARLIEST ask+reply so it can't loop
+        // forever, even if a future judgment step resists the per-ask signal.
+        const reAskCount = judgmentSuggestionIds.length;
+        for (const candidateSid of judgmentSuggestionIds) {
+          const askBySuggestion =
+            selectedSuggestionMessagesAfter(
+              sorted,
+              candidateSid,
+              afterTimeMs
+            ).at(0) ?? null;
+          const leadReply = askBySuggestion
+            ? hasLeadReplyAfter(sorted, askBySuggestion)
+            : null;
+          if (askBySuggestion && leadReply) {
+            return {
+              complete: true,
+              completedAt: new Date(leadReply.timestamp).getTime(),
+              aiMessageId: askBySuggestion.id ?? null,
+              aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
+              leadMessageId: leadReply.id ?? null,
+              sentAt: new Date(askBySuggestion.timestamp).toISOString(),
+              reason:
+                reAskCount >= 2
+                  ? 'completed_by_judgment_ask_reply_antiloop'
+                  : 'completed_by_judgment_ask_reply',
+              selectedBranchLabel,
+              selectedSuggestionId,
+              historyMessagesWithSelectedSuggestionId
+            };
+          }
+        }
+      }
+
       lastReason =
         'wait_followed_by_runtime_judgment_requires_reclassification';
       continue;

@@ -40,10 +40,16 @@ function buildScript(steps: MultiTurnScriptStep[]): any {
       requiredDataPoints: null,
       routingRules: null,
       branches: [],
-      actions: [
-        { actionType: 'ask_question', content: s.question },
-        { actionType: 'wait_for_response', content: null }
-      ]
+      actions: s.runtimeJudgment
+        ? [
+            { actionType: 'ask_question', content: s.question },
+            { actionType: 'wait_for_response', content: null },
+            { actionType: 'runtime_judgment', content: null }
+          ]
+        : [
+            { actionType: 'ask_question', content: s.question },
+            { actionType: 'wait_for_response', content: null }
+          ]
     }))
   };
 }
