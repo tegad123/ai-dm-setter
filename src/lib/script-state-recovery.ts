@@ -770,6 +770,29 @@ function branchHistorySelectionForStep(
   );
 }
 
+// F5.1 (2026-06-07): ALL suggestionIds the AI has used for a given step, oldest
+// first. When the position is stuck, the engine re-emits a branch_selected@step
+// every turn with a NEW suggestionId — so `branchHistorySelectionForStep` (which
+// returns only the latest) points at the CURRENT turn's bubble, which has no lead
+// reply yet, and completion never fires. Completion detection must consider every
+// suggestion the step has used and accept the FIRST one that got a lead reply.
+function allSuggestionIdsForStep(
+  points: CapturedDataPoints,
+  stepNumber: number
+): string[] {
+  return readBranchHistoryEvents(points)
+    .filter(
+      (event) =>
+        (event.eventType === 'branch_selected' ||
+          event.eventType === 'smart_mode_response') &&
+        event.stepNumber === stepNumber &&
+        typeof event.suggestionId === 'string' &&
+        event.suggestionId.length > 0
+    )
+    .sort((a, b) => branchHistoryEventTime(a) - branchHistoryEventTime(b))
+    .map((event) => event.suggestionId as string);
+}
+
 function selectedBranchLabelForStep(
   points: CapturedDataPoints,
   stepNumber: number
@@ -1586,29 +1609,45 @@ function stepCompletionFromHistory(
     // generated it WITHOUT any text matching — so paraphrasing can't defeat it.
     // Only fires for ask/wait steps (this whole function is gated upstream by
     // stepHasHistoryCompletionSignal), so it can't over-complete passive steps.
-    if (asks.length > 0 && selectedSuggestionId) {
-      const askBySuggestion =
-        selectedSuggestionMessagesAfter(
-          sorted,
-          selectedSuggestionId,
-          afterTimeMs
-        ).at(0) ?? null;
-      const leadReply = askBySuggestion
-        ? hasLeadReplyAfter(sorted, askBySuggestion)
-        : null;
-      if (askBySuggestion && leadReply) {
-        return {
-          complete: true,
-          completedAt: new Date(leadReply.timestamp).getTime(),
-          aiMessageId: askBySuggestion.id ?? null,
-          aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
-          leadMessageId: leadReply.id ?? null,
-          sentAt: new Date(askBySuggestion.timestamp).toISOString(),
-          reason: 'completed_by_ask_reply_suggestion',
-          selectedBranchLabel,
-          selectedSuggestionId,
-          historyMessagesWithSelectedSuggestionId
-        };
+    if (asks.length > 0) {
+      // Try EVERY suggestionId this step has used (oldest first), not just the
+      // latest. When the position is stuck the engine re-emits a fresh
+      // branch_selected@step each turn; the latest points at the current turn's
+      // bubble (no reply yet), but an EARLIER one's bubble does have a reply —
+      // that's what completes the step and lets the walker finally advance.
+      const candidateSuggestionIds = allSuggestionIdsForStep(
+        points,
+        step.stepNumber
+      );
+      // Fall back to the selected one if the per-step list is empty (legacy data).
+      if (
+        candidateSuggestionIds.length === 0 &&
+        typeof selectedSuggestionId === 'string'
+      ) {
+        candidateSuggestionIds.push(selectedSuggestionId);
+      }
+      for (const candidateSid of candidateSuggestionIds) {
+        const askBySuggestion =
+          selectedSuggestionMessagesAfter(sorted, candidateSid, afterTimeMs).at(
+            0
+          ) ?? null;
+        const leadReply = askBySuggestion
+          ? hasLeadReplyAfter(sorted, askBySuggestion)
+          : null;
+        if (askBySuggestion && leadReply) {
+          return {
+            complete: true,
+            completedAt: new Date(leadReply.timestamp).getTime(),
+            aiMessageId: askBySuggestion.id ?? null,
+            aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
+            leadMessageId: leadReply.id ?? null,
+            sentAt: new Date(askBySuggestion.timestamp).toISOString(),
+            reason: 'completed_by_ask_reply_suggestion',
+            selectedBranchLabel,
+            selectedSuggestionId,
+            historyMessagesWithSelectedSuggestionId
+          };
+        }
       }
     }
 
