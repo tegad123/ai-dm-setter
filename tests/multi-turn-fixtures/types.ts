@@ -41,6 +41,11 @@ export interface MultiTurnScriptStep {
   question: string;
   stateKey?: string | null;
   suggestionId?: string | null;
+  /** When true, the step's action path is [ask + wait + runtime_judgment] —
+   *  the "judgment" step shape (e.g. the DAE deep-why step). These were
+   *  excluded from history-completion (script-state-recovery.ts:1286) and
+   *  parked the position, causing the deep-why re-ask loop. Phase 6A fixes that. */
+  runtimeJudgment?: boolean;
 }
 
 export interface MultiTurnStatefulChecks {

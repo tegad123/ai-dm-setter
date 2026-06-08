@@ -32,7 +32,10 @@ import {
   broadcastNewMessage,
   broadcastConversationUpdate
 } from '@/lib/realtime';
-import { recordStageTimestamp } from '@/lib/conversation-state-machine';
+import {
+  recordStageTimestamp,
+  stepToSopStage
+} from '@/lib/conversation-state-machine';
 import {
   updateLeadStageFromConversation,
   type CapitalOutcome
@@ -100,6 +103,7 @@ export async function POST(
       select: {
         id: true,
         leadId: true,
+        systemStage: true,
         lead: {
           select: {
             id: true,
@@ -309,6 +313,17 @@ export async function POST(
       await recordStageTimestamp(conversationId, stageForProgression).catch(
         (err) => console.error('[suggestion/send] Stage timestamp error:', err)
       );
+      // F5.1 Phase 6B: also record + floor by the real position (systemStage).
+      const sopFromPosition = stepToSopStage(conversation.systemStage);
+      if (sopFromPosition) {
+        await recordStageTimestamp(conversationId, sopFromPosition).catch(
+          (err) =>
+            console.error(
+              '[suggestion/send] Position-derived stage timestamp error:',
+              err
+            )
+        );
+      }
 
       await updateLeadStageFromConversation(
         lead.id,
@@ -318,7 +333,8 @@ export async function POST(
         capitalOutcome,
         {
           transitionedBy: 'ai',
-          reasonPrefix: `suggestion_approval:${isEdited ? 'edited' : 'approved'}`
+          reasonPrefix: `suggestion_approval:${isEdited ? 'edited' : 'approved'}`,
+          systemStage: conversation.systemStage
         }
       ).catch((err) =>
         console.error('[suggestion/send] Lead stage update failed:', err)

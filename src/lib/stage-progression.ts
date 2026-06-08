@@ -1,5 +1,6 @@
 import type { LeadStage, Platform } from '@prisma/client';
 import { transitionLeadStage } from '@/lib/lead-stage';
+import { stepToSopStage } from '@/lib/conversation-state-machine';
 import prisma from '@/lib/prisma';
 
 export type CapitalOutcome =
@@ -201,14 +202,43 @@ export async function updateLeadStageFromConversation(
     transitionedBy?: string;
     reasonPrefix?: string;
     warnUnknown?: boolean;
+    // F5.1 Phase 6B: the computed `systemStage` (real script position). When the
+    // position is further along than the LLM-emitted stage, use it as a FLOOR so
+    // lead.stage reflects where the conversation actually is (the LLM stage lags).
+    systemStage?: string | null;
   } = {}
 ): Promise<LeadStage | null> {
-  const newStage = mapAIStageToLeadStage(
+  const llmStage = mapAIStageToLeadStage(
     conversationStage,
     subStage,
     capitalOutcome,
-    { warnUnknown: options.warnUnknown ?? true }
+    {
+      warnUnknown: options.warnUnknown ?? true
+    }
   );
+
+  // Position-derived lead stage (via the SOP mapping of systemStage). Never
+  // disqualifies — only used to floor FORWARD. Capital failure still owns
+  // UNQUALIFIED via the llmStage path above.
+  const positionSop = stepToSopStage(options.systemStage);
+  const positionStage = positionSop
+    ? mapAIStageToLeadStage(positionSop, null, 'not_evaluated', {
+        warnUnknown: false
+      })
+    : null;
+
+  // Take whichever is further along (higher priority), but never let the
+  // position floor turn a real UNQUALIFIED into something else.
+  let newStage = llmStage;
+  if (
+    positionStage &&
+    (STAGE_PRIORITY[positionStage] ?? 0) >
+      (STAGE_PRIORITY[newStage as LeadStage] ?? 0) &&
+    (STAGE_PRIORITY[positionStage] ?? 0) < 10 &&
+    capitalOutcome !== 'failed'
+  ) {
+    newStage = positionStage;
+  }
 
   if (!newStage) return null;
 

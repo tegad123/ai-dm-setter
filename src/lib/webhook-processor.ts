@@ -19,7 +19,8 @@ import {
 import {
   updateConversationOutcome,
   recordStageTimestamp,
-  backfillEffectivenessTracking
+  backfillEffectivenessTracking,
+  stepToSopStage
 } from '@/lib/conversation-state-machine';
 import {
   detectMetadataLeak,
@@ -5229,6 +5230,22 @@ async function sendAIReply(
       console.error('[webhook-processor] Stage timestamp error:', err)
     );
   }
+  // F5.1 Phase 6B: also record the SOP stage DERIVED FROM THE REAL POSITION
+  // (systemStage), so the Stage Progression panel reflects where the
+  // conversation actually is — not just the (lagging) LLM-emitted stage.
+  // recordStageTimestamp is idempotent + cumulative, so calling it with the
+  // position-derived stage can only move the panel FORWARD, never back.
+  {
+    const sopFromPosition = stepToSopStage(result.systemStage);
+    if (sopFromPosition) {
+      await recordStageTimestamp(conversationId, sopFromPosition).catch((err) =>
+        console.error(
+          '[webhook-processor] Position-derived stage timestamp error:',
+          err
+        )
+      );
+    }
+  }
 
   // ── Post-AI-reply scoring (record stage progression for velocity) ──
   runPostAIReplyScoring(conversationId, result.stage).catch((err) =>
@@ -5260,7 +5277,10 @@ async function sendAIReply(
     lead.stage,
     result.stage,
     result.subStage ?? null,
-    result.capitalOutcome ?? 'not_evaluated'
+    result.capitalOutcome ?? 'not_evaluated',
+    // F5.1 Phase 6B: floor lead.stage to the real position when it's further
+    // along than the (lagging) LLM-emitted stage.
+    { systemStage: result.systemStage ?? null }
   ).catch((err) =>
     console.error('[webhook-processor] Lead stage update error:', err)
   );
