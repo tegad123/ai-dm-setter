@@ -1505,6 +1505,183 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 3);
   });
 
+  // Phase 7A — a lead VOLUNTEERS a clear trading income goal while answering an
+  // EARLY discovery question, with the income-goal own-ask still several steps
+  // ahead. This must be captured (the prod dead-end was caused by it being
+  // dropped). Distinct from bug-58 (where the income-goal ask is the immediate
+  // next step → must NOT pre-capture) and bug-53 (current-income, no goal cue).
+  it('phase7a-volunteered-income-goal-mid-discovery-is-captured', () => {
+    const script = {
+      id: 'volunteered_income_goal_ahead',
+      steps: [
+        askStep(1, 'Situation', 'how have the markets been treating you?'),
+        askStep(2, 'Problem', 'what is the main thing tripping you up?'),
+        askStep(3, 'Replace vs Supplement', 'replace your job or supplement?'),
+        askStep(4, 'Income Goal', 'how much do you want to make from trading?'),
+        askStep(5, 'Deep Why', 'why does that matter to you?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step2',
+        sender: 'AI',
+        content: 'what is the main thing tripping you up?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_step2',
+        sender: 'LEAD',
+        // volunteers the trading income GOAL (strong goal cue) while on step 2;
+        // income-goal own-ask is step 4 (2 steps ahead — NOT immediate next).
+        content:
+          'honestly i want trading to replace my job — at least 15k a month from trading',
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({ history, script });
+    assert.equal(
+      (points.incomeGoal as any)?.value,
+      15000,
+      'volunteered income goal (own-ask ahead, not immediate-next) must be captured'
+    );
+    assert.equal((points.incomeGoal as any)?.sourceStepNumber, 4);
+  });
+
+  // Phase 7A — the DAE script puts the income-goal ask at step ~10; a lead can
+  // volunteer the goal early (step 2-3), i.e. MANY steps before its own ask.
+  // The volunteered scanner must look far enough ahead to catch it.
+  it('phase7a-volunteered-income-goal-many-steps-before-its-ask-is-captured', () => {
+    const script = {
+      id: 'volunteered_income_goal_long_script',
+      steps: [
+        askStep(1, 'Intro', 'new to trading or been at it?'),
+        askStep(2, 'Situation', 'how have the markets been treating you?'),
+        askStep(3, 'Problem', 'whats tripping you up?'),
+        askStep(4, 'Location', 'where are you based?'),
+        askStep(5, 'Job', 'what do you do for work?'),
+        askStep(6, 'Monthly Income', 'how much does your job bring in?'),
+        askStep(7, 'Replace vs Supplement', 'replace or supplement?'),
+        askStep(8, 'Income Goal', 'how much do you want to make from trading?'),
+        askStep(9, 'Deep Why', 'why does that matter?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_step2',
+        sender: 'AI',
+        content: 'how have the markets been treating you?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_step2',
+        sender: 'LEAD',
+        // income-goal own-ask is step 8 (6 steps ahead).
+        content:
+          'rough man. honestly i need trading to replace my job, like 15k a month from trading',
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({ history, script });
+    assert.equal(
+      (points.incomeGoal as any)?.value,
+      15000,
+      'volunteered goal far before its own ask must still be captured'
+    );
+    assert.equal((points.incomeGoal as any)?.sourceStepNumber, 8);
+  });
+
+  // Phase 7B — volunteered capital captured synchronously (no capital question
+  // needed), with the negative-context guard + threshold handling.
+  it('phase7b-volunteered-capital-captured-without-a-capital-question', () => {
+    const script = {
+      id: 'volunteered_capital',
+      steps: [
+        askStep(1, 'Problem', 'whats tripping you up?'),
+        askStep(2, 'Commitment', 'you serious about fixing this?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'you serious about fixing this?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: "yeah man, i've got about 5k saved up to put toward this",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal((points.verifiedCapitalUsd as any)?.value, 5000);
+    assert.equal((points.capitalThresholdMet as any)?.value, true);
+  });
+
+  it('phase7b-negative-context-capital-is-NOT-captured', () => {
+    const script = {
+      id: 'neg_capital',
+      steps: [askStep(1, 'Problem', 'whats tripping you up?')]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'whats tripping you up?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: 'honestly i lost about 5k trading last month',
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal(
+      (points.verifiedCapitalUsd as any)?.value,
+      undefined,
+      '"i lost 5k trading" must NOT be captured as capital'
+    );
+  });
+
+  it('phase7b-below-threshold-volunteered-capital-marks-thresholdMet-false', () => {
+    const script = {
+      id: 'low_capital',
+      steps: [askStep(1, 'Commitment', 'ready to invest?')]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'ready to invest?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: "i've got about 200 saved up right now",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal((points.verifiedCapitalUsd as any)?.value, 200);
+    assert.equal((points.capitalThresholdMet as any)?.value, false);
+  });
+
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
     const staleDataScript = {
       id: 'stale_volunteered_data_sequence',
