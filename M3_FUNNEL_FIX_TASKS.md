@@ -118,3 +118,14 @@ File: `src/lib/script-state-recovery.ts` → `computeSystemStage()`, `prepareScr
 - [x] **7C** `checkCallProposalPrereqs` clears income_goal + capital from volunteered captures; residual = exactly {belief_break, buy_in} (AI-delivered, kept by design). Commit `bafea6d`.
 - [x] Regression canaries green: **bug-58** (target-income own-ask), **bug-53** (current income), all suites.
 - [ ] **Live verification:** clean fresh lead, volunteer income+capital mid-discovery → query prod confirms captured → AI proceeds to belief-break/buy-in → call proposal (not stuck re-asking).
+
+---
+
+## Phase 8 — script-derived call-proposal gate (the multi-script booking fix) — 2026-06-09
+The deep blocker: `CALL_PROPOSAL_PREREQS` was hardcoded to the DAE 8 steps and the gate ignored `lead.stage`, so a QUALIFIED lead couldn't book and a non-DAE script's leads were blocked forever.
+- [x] **8.0** 7B capital clause-scope fix — bundled "15k goal / 5k capital" now captures capital=5000 (was 15000). Commit `4241120`.
+- [x] **8.1** `deriveCallProposalPrereqs(script)` — prereqs derived from the ACCOUNT'S OWN script's [ASK] steps + structural deep_why/belief/buy_in detection. **Verified against the REAL prod DAE script: derives all 8** (DAE-equivalent); non-DAE/empty scripts derive only their own. `prereqSatisfiedByCapturedState` exported; `checkCallProposalPrereqs` widened (3rd arg, default hardcoded → existing tests byte-identical). Commit `5dea3c2`.
+- [x] **8.2** QUALIFIED / capitalThresholdMet bypass at the gate — capital-verified lead always reaches booking.
+- [x] **8.3** ai-engine threads derived prereqs + capitalThresholdMet into the gate; no import cycle; hardcoded fallback when no script.
+- [x] Full suite green: 18 unit files, 21 fixtures, 4 multi-turn, 10 analytics, 0 src tsc. bug-58/bug-001 canaries green.
+- [ ] **8.4 live:** deploy → fresh lead → discovery → AI proposes call → booking link → `bookUnifiedAppointment` → `scheduledCallAt` + `lead.stage=BOOKED` + confirmation DM. Then existing/backfilled conversation. Then a non-DAE script books via its own steps.
