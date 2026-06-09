@@ -367,11 +367,13 @@ export function CalendarWeekGrid() {
             headerToolbar={false}
             allDaySlot={false}
             nowIndicator
-            slotMinTime='07:00:00'
-            slotMaxTime='22:00:00'
-            scrollTime='09:00:00'
+            // Full 24h so no slot is ever clipped by a business-hours window;
+            // scroll opens at 8am by default (scrollable to any hour).
+            slotMinTime='00:00:00'
+            slotMaxTime='24:00:00'
+            scrollTime='08:00:00'
             expandRows
-            height='60vh'
+            height='70vh'
             dayHeaderFormat={{ weekday: 'short', day: 'numeric' }}
             slotLabelFormat={{
               hour: 'numeric',

@@ -689,13 +689,20 @@
 /* Event colours keyed to the app theme. Open availability = soft primary
    tint; booked call = solid primary; no-show = destructive. */
 .fc .fc-open-slot {
-  background: color-mix(in oklch, var(--primary) 12%, transparent);
-  border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
-  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 22%, var(--card));
+  border: 1px solid color-mix(in oklch, var(--primary) 55%, transparent);
+  color: color-mix(in oklch, var(--primary) 80%, var(--foreground));
+  font-weight: 600;
+}
+.fc .fc-open-slot .fc-event-main {
+  color: inherit;
 }
 .fc .fc-booked-call {
   background: var(--primary);
   border: 1px solid var(--primary);
+  color: var(--primary-foreground);
+}
+.fc .fc-booked-call .fc-event-main {
   color: var(--primary-foreground);
 }
 .fc .fc-booked-noshow {
