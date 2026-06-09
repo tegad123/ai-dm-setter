@@ -34,6 +34,7 @@ interface GroupedDay {
 interface AvailabilityResponse {
   provider: 'leadconnector' | 'calendly' | 'calcom' | 'google' | 'none';
   slots: GroupedDay[];
+  timezone?: string | null;
 }
 
 interface ScheduledCall {
@@ -85,18 +86,85 @@ function isSameDay(a: Date, b: Date): boolean {
   return toDateKey(a) === toDateKey(b);
 }
 
-/** Fractional hour (0–24) of an ISO timestamp in the viewer's local tz. */
-function hourOfDay(iso: string): number {
-  const d = new Date(iso);
-  return d.getHours() + d.getMinutes() / 60;
+// ── Timezone-aware helpers ─────────────────────────────────────────────────
+// The grid must position every slot/call in the CALENDAR'S timezone (e.g. the
+// LeadConnector business tz), NOT the viewer's browser tz. Otherwise a call at
+// 6 PM EDT viewed from PKT computes to 3 AM and falls outside the 7AM–9PM
+// window → invisible (the bug). These derive day-key + fractional hour in an
+// explicit IANA tz via Intl.DateTimeFormat.
+
+/** "YYYY-MM-DD" of a Date/ISO as seen in the given IANA timezone. */
+function dateKeyInTz(value: Date | string, tz: string): string {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  // en-CA yields YYYY-MM-DD directly.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
 }
 
-function formatTime(iso: string): string {
+/** Fractional hour (0–24) of an ISO timestamp as seen in the given tz. */
+function hourOfDayInTz(iso: string, tz: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(new Date(iso));
+  const h = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+  const m = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+  // Intl can emit "24" for midnight in hour12:false — normalise to 0.
+  return (h % 24) + m / 60;
+}
+
+/**
+ * Wall-clock fractional hour read DIRECTLY from an ISO string that carries an
+ * explicit offset (e.g. "2026-06-11T18:00:00-04:00" → 18.0). LeadConnector free
+ * slots are returned in the calendar's own tz with the offset baked in, so this
+ * is the authoritative hour without needing the IANA tz name. Falls back to
+ * tz-aware parsing if no offset is present.
+ */
+function wallClockHour(iso: string, fallbackTz: string): number {
+  const m = iso.match(
+    /T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/
+  );
+  if (m && m[3] && m[3] !== 'Z') {
+    return Number(m[1]) + Number(m[2]) / 60;
+  }
+  return hourOfDayInTz(iso, fallbackTz);
+}
+
+/** "YYYY-MM-DD" read directly from an offset-bearing ISO (calendar-local day). */
+function wallClockDateKey(iso: string, fallbackTz: string): string {
+  const m = iso.match(
+    /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/
+  );
+  if (m && m[2] && m[2] !== 'Z') return m[1];
+  return dateKeyInTz(iso, fallbackTz);
+}
+
+function formatTimeInTz(iso: string, tz: string): string {
   return new Date(iso).toLocaleTimeString('en-US', {
+    timeZone: tz,
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
   });
+}
+
+/** Short tz label like "EDT" for display next to times. */
+function tzAbbrev(tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      timeZoneName: 'short'
+    }).formatToParts(new Date());
+    return parts.find((p) => p.type === 'timeZoneName')?.value ?? tz;
+  } catch {
+    return tz;
+  }
 }
 
 export function CalendarWeekGrid() {
@@ -107,6 +175,19 @@ export function CalendarWeekGrid() {
   const [weekStart, setWeekStart] = useState<Date>(() =>
     startOfWeek(new Date())
   );
+
+  // Display timezone for grid LABELS (the tz badge + call-time fallback). Prefer
+  // the API's calendar tz, then a booked call's stored tz, else browser tz.
+  // NOTE: block POSITIONING uses wallClockHour/wallClockDateKey which read the
+  // offset baked into each slot ISO directly, so positions are correct even
+  // when this IANA label can't be resolved.
+  const displayTz = useMemo(() => {
+    const apiTz = data?.timezone;
+    if (apiTz) return apiTz;
+    const callTz = calls.find((c) => c.timezone)?.timezone;
+    if (callTz) return callTz;
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }, [calls, data]);
 
   const today = useMemo(() => {
     const t = new Date();
@@ -174,17 +255,19 @@ export function CalendarWeekGrid() {
     return map;
   }, [data]);
 
-  // Index booked calls by the local-day key they fall on.
+  // Index booked calls by the calendar-tz day they fall on (a call's own stored
+  // tz wins; else the grid's displayTz). Browser-local keying previously shifted
+  // a 6 PM EDT call to the wrong day for far-offset viewers.
   const callsByDay = useMemo(() => {
     const map = new Map<string, ScheduledCall[]>();
     for (const c of calls) {
-      const key = toDateKey(new Date(c.start));
+      const key = wallClockDateKey(c.start, c.timezone || displayTz);
       const list = map.get(key);
       if (list) list.push(c);
       else map.set(key, [c]);
     }
     return map;
-  }, [calls]);
+  }, [calls, displayTz]);
 
   const totalSlots = useMemo(
     () => (data?.slots ?? []).reduce((s, d) => s + d.times.length, 0),
@@ -255,6 +338,13 @@ export function CalendarWeekGrid() {
                 {totalSlots} open
                 {bookedCount > 0 ? ` · ${bookedCount} booked` : ''}
               </span>
+              <Badge
+                variant='outline'
+                className='hidden md:inline-flex'
+                title={`All times shown in ${displayTz}`}
+              >
+                {tzAbbrev(displayTz)} · {displayTz}
+              </Badge>
             </>
           )}
           <Button
@@ -357,10 +447,12 @@ export function CalendarWeekGrid() {
 
               {/* Day columns */}
               {days.map((d) => {
-                const key = toDateKey(d);
+                // Match the API's calendar-tz day grouping (slotsByDay /
+                // callsByDay are keyed in displayTz), not the browser-local day.
+                const key = dateKeyInTz(d, displayTz);
                 const slots = slotsByDay.get(key) ?? [];
                 const dayCalls = callsByDay.get(key) ?? [];
-                const isToday = isSameDay(d, today);
+                const isToday = key === dateKeyInTz(today, displayTz);
                 return (
                   <div
                     key={key}
@@ -380,9 +472,9 @@ export function CalendarWeekGrid() {
 
                     {/* Open availability blocks */}
                     {slots.map((slot) => {
-                      const startH = hourOfDay(slot.start);
+                      const startH = wallClockHour(slot.start, displayTz);
                       const endH = slot.end
-                        ? hourOfDay(slot.end)
+                        ? wallClockHour(slot.end, displayTz)
                         : startH + 0.5;
                       // Skip slots fully outside the visible window.
                       if (endH <= DAY_START_HOUR || startH >= DAY_END_HOUR) {
@@ -412,7 +504,7 @@ export function CalendarWeekGrid() {
                           title={`${slot.display} · Open`}
                         >
                           <span className='block truncate'>
-                            {formatTime(slot.start)}
+                            {formatTimeInTz(slot.start, displayTz)}
                           </span>
                           {twoLine && (
                             <span className='mt-0.5 block truncate opacity-70'>
@@ -425,7 +517,10 @@ export function CalendarWeekGrid() {
 
                     {/* Booked call blocks (solid, on top of availability) */}
                     {dayCalls.map((call) => {
-                      const startH = hourOfDay(call.start);
+                      const startH = wallClockHour(
+                        call.start,
+                        call.timezone || displayTz
+                      );
                       if (startH < DAY_START_HOUR || startH >= DAY_END_HOUR) {
                         return null;
                       }
@@ -445,7 +540,7 @@ export function CalendarWeekGrid() {
                             twoLine ? 'py-1' : 'py-0'
                           )}
                           style={{ top, height }}
-                          title={`${formatTime(call.start)} · ${call.leadName}${
+                          title={`${formatTimeInTz(call.start, call.timezone || displayTz)} · ${call.leadName}${
                             call.outcome ? ` · ${call.outcome}` : ''
                           }`}
                         >
@@ -454,7 +549,10 @@ export function CalendarWeekGrid() {
                           </span>
                           {twoLine && (
                             <span className='mt-0.5 block truncate opacity-80'>
-                              {formatTime(call.start)}
+                              {formatTimeInTz(
+                                call.start,
+                                call.timezone || displayTz
+                              )}
                             </span>
                           )}
                         </div>
