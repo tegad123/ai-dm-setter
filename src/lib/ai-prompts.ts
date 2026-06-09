@@ -308,7 +308,7 @@ CREDIT-LIMIT BRANCHING (when the lead confirms they have a card):
 GEOGRAPHY GATE: This entire pivot is US/CA only. For leads outside US/CA, route to the funding-partner / free-resources branch instead — credit-card pitches don't apply.
 
 ### Stage 7: BOOKING
-
+{{autoBookOverride}}
 Your behavior here depends on whether a calendar integration is connected. The **AVAILABLE SLOTS** and **Booking link** fields below tell you which mode you are in. Follow the matching CASE exactly.
 
 **NEVER fabricate, invent, or hallucinate ANY time or URL.** You may ONLY propose a time that appears in the AVAILABLE SLOTS list below, and you may ONLY send a URL that appears in the Booking link field or the "Available Links & URLs" script section (R14 + R16 — critical failures). Never emit a bracketed placeholder like "[BOOKING LINK]", "[CALENDAR LINK]", or any "[ALL_CAPS_TOKEN]" — those are literal text, not links.
@@ -2595,6 +2595,11 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     (config.assetLinks as Record<string, unknown> | undefined)?.bookingLink ||
     null;
   const slots = booking.availableSlots || [];
+  // When true (calendar connected + real slots available), the AI must AUTO-BOOK
+  // (propose slots → server books) and must NOT send any script booking/calendar
+  // link — this overrides R22 + the script's send_link step for the booking
+  // moment. Set in the slots-present branch below.
+  let autoBookActive = false;
 
   if (booking.hasCalendarIntegration && !booking.leadTimezone) {
     // STEP 1: must capture timezone before any slot can be labeled correctly.
@@ -2629,6 +2634,7 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
       lines.join('\n') +
         '\n\nUSE THESE SLOTS — propose 2-3 of them in your reply, quoting the EXACT label including the timezone suffix (e.g. "CDT", "EDT"). NEVER invent a time that is not in this list (R14). NEVER strip the timezone suffix when reading a slot back to the lead. NEVER drop a booking link when slots are present — the booking is created automatically once the lead picks a time and provides their email.'
     );
+    autoBookActive = true;
   } else if (booking.hasCalendarIntegration) {
     prompt = prompt.replace(
       /\{\{availableSlotsContext\}\}/g,
@@ -2655,6 +2661,20 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
     );
   } else {
     prompt = prompt.replace(/\{\{bookingLinkContext\}\}/g, '');
+  }
+
+  // Auto-book override — when a calendar is connected AND real slots are
+  // available, the AI MUST propose slots and let the server book. This
+  // explicitly OVERRIDES R22 and any script send_link/booking step for the
+  // booking moment, so the AI never sends a booking/calendar link (e.g. a
+  // YouTube/Typeform URL the script still carries) instead of auto-booking.
+  if (autoBookActive) {
+    prompt = prompt.replace(
+      /\{\{autoBookOverride\}\}/g,
+      '\n⛔ AUTO-BOOK IS ACTIVE (a calendar is connected and real AVAILABLE SLOTS are listed below). For THIS booking moment you MUST propose 2-3 of the AVAILABLE SLOTS and let the server book the call automatically. This OVERRIDES R22 and the script\'s booking step: do NOT send ANY booking/calendar/scheduling link (no Typeform, no Calendly, no YouTube, no "Available Links & URLs" booking entry) — sending a link here is WRONG. The only correct action is to propose the listed slots; once the lead picks one + gives their email, set sub_stage="BOOKING_CONFIRM" + selected_slot_iso and the server creates the appointment. (Non-booking links from the script — e.g. a free-value video for an UNQUALIFIED/soft-exit lead — are unaffected.)\n'
+    );
+  } else {
+    prompt = prompt.replace(/\{\{autoBookOverride\}\}/g, '');
   }
 
   // ── Experience branching keywords ─────────────────────────────────
