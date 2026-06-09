@@ -124,3 +124,77 @@ describe('gate-trusts-position guard (F5.1 [4])', () => {
     );
   });
 });
+
+describe('call-proposal gate — script-derived prereqs + qualified bypass (F5.1 8.2)', () => {
+  const callReply =
+    'wanna hop on a quick call with my coach anthony to map this out?';
+  const hasPrereqFail = (r: unknown) =>
+    JSON.stringify(r).includes('call_proposal_prereqs_missing');
+
+  it('BLOCKS the call proposal when prereqs are missing and lead is not qualified', () => {
+    const r = scoreVoiceQualityGroup([callReply], { capturedDataPoints: {} });
+    assert.ok(hasPrereqFail(r), 'expected prereq gate to block (no bypass)');
+  });
+
+  it('BYPASSES the gate when lead.stage === QUALIFIED', () => {
+    const r = scoreVoiceQualityGroup([callReply], {
+      capturedDataPoints: {},
+      leadStage: 'QUALIFIED'
+    });
+    assert.ok(!hasPrereqFail(r), 'QUALIFIED lead must not be blocked');
+  });
+
+  it('BYPASSES the gate when capitalThresholdMet === true', () => {
+    const r = scoreVoiceQualityGroup([callReply], {
+      capturedDataPoints: {},
+      capitalThresholdMet: true
+    });
+    assert.ok(!hasPrereqFail(r), 'capital-verified lead must not be blocked');
+  });
+
+  it('uses the DERIVED prereqs when provided (a 1-prereq script blocks on just that)', () => {
+    // A non-DAE script that only requires income_goal → missing it blocks, but
+    // none of the DAE-specific fields (work/belief/buy_in) are required.
+    const derived = [
+      {
+        id: 'income_goal',
+        label: 'monthly income goal',
+        stepNumber: 2,
+        acceptableKeys: ['incomeGoal', 'income_goal']
+      }
+    ];
+    const blocked = scoreVoiceQualityGroup([callReply], {
+      capturedDataPoints: {},
+      callProposalPrereqs: derived
+    });
+    assert.ok(
+      hasPrereqFail(blocked) &&
+        JSON.stringify(blocked).includes('income_goal') &&
+        !JSON.stringify(blocked).includes('work_background'),
+      'derived gate blocks only on the script-own prereq, not DAE fields'
+    );
+    // once income_goal is captured (from its own ask step 2), gate clears
+    const cleared = scoreVoiceQualityGroup([callReply], {
+      capturedDataPoints: {
+        incomeGoal: {
+          value: 15000,
+          confidence: 'HIGH',
+          sourceStepNumber: 2,
+          extractionMethod: 'amount_after_step_9_prompt'
+        },
+        branchHistory: [
+          {
+            eventType: 'step_completed',
+            stepNumber: 2,
+            completedAt: '2026-06-09T00:00:00.000Z'
+          }
+        ]
+      },
+      callProposalPrereqs: derived
+    });
+    assert.ok(
+      !hasPrereqFail(cleared),
+      'derived gate clears once the script-own prereq is captured'
+    );
+  });
+});

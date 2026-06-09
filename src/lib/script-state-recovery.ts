@@ -11,6 +11,7 @@ import {
   isBookingInfoRequestText
 } from '@/lib/booking-info-extractor';
 import { removeInvalidScriptVariableResolutionKeys } from '@/lib/script-variable-resolver';
+import type { CallProposalPrereq } from '@/lib/script-step-progression';
 import {
   canonicalCapturedDataPointKey,
   canonicalizeCapturedDataPointRecord,
@@ -3352,6 +3353,153 @@ function nextAskStepNumberAfter(
     if (askActionsForStep(steps[i]).length > 0) return steps[i].stepNumber;
   }
   return null;
+}
+
+// ── F5.1 Phase 8.1: SCRIPT-DERIVED call-proposal prerequisites ──────────────
+// The platform is script-driven, so the "what must be captured before the AI
+// can propose the call" gate must come from the ACCOUNT'S OWN script — not the
+// hardcoded daetradez 8. We walk each ask-bearing step BEFORE the call-proposal
+// step, map its [ASK] to the captured-data key(s) it gathers, and emit a
+// CallProposalPrereq with a stable id that prereqSatisfiedByCapturedState
+// already understands. A non-DAE script (e.g. goal→commit→book) yields only its
+// own asks; a script with no discovery asks yields [] (booking reachable fast).
+
+// Map a discovery data-requirement key → the prereq id + acceptableKeys that
+// prereqSatisfiedByCapturedState keys off. Only keys that represent a genuine
+// pre-booking discovery datapoint are included (booking-info keys like email /
+// dayAndTime are collected AT booking, not prerequisites for proposing it).
+const REQUIREMENT_TO_PREREQ: Record<
+  string,
+  { id: string; label: string; acceptableKeys: string[] }
+> = {
+  workBackground: {
+    id: 'work_background',
+    label: "lead's job / current work situation",
+    acceptableKeys: ['workBackground', 'work_background', 'job']
+  },
+  monthlyIncome: {
+    id: 'monthly_income',
+    label: "lead's monthly income (or explicit skip)",
+    acceptableKeys: [
+      'monthlyIncome',
+      'monthly_income',
+      'incomeMonthly',
+      'monthlyIncomeSkipped',
+      'monthly_income_skipped'
+    ]
+  },
+  replaceOrSupplement: {
+    id: 'replace_or_supplement',
+    label: 'whether trading is meant to replace the job or supplement it',
+    acceptableKeys: ['replaceOrSupplement', 'replace_or_supplement']
+  },
+  incomeGoal: {
+    id: 'income_goal',
+    label: "lead's monthly income goal from trading",
+    acceptableKeys: ['incomeGoal', 'income_goal']
+  },
+  deepWhy: {
+    id: 'desired_outcome_or_deep_why',
+    label: "lead's deeper why / desired outcome",
+    acceptableKeys: ['desiredOutcome', 'desired_outcome', 'deepWhy', 'deep_why']
+  },
+  obstacle: {
+    id: 'obstacle',
+    label: "lead's main obstacle",
+    acceptableKeys: ['obstacle', 'early_obstacle', 'earlyObstacle']
+  }
+};
+
+/**
+ * Derive the call-proposal prerequisites from an account's own script. Returns
+ * a CallProposalPrereq[] (same shape as the hardcoded DAE list) so the gate can
+ * use it interchangeably. Empty array ⇒ the script has no pre-booking discovery
+ * asks ⇒ booking is reachable as soon as the proposal fires.
+ */
+export function deriveCallProposalPrereqs(
+  script:
+    | { steps?: ScriptStepWithRecovery[] | null }
+    | ScriptWithRecovery
+    | null
+    | undefined
+): CallProposalPrereq[] {
+  const steps = script?.steps ?? [];
+  if (steps.length === 0) return [];
+
+  const proposalStep = steps.find((s) => isCallProposalStep(s));
+  const cutoff = proposalStep?.stepNumber ?? Number.POSITIVE_INFINITY;
+
+  const prereqs: CallProposalPrereq[] = [];
+  const seenIds = new Set<string>();
+
+  for (const step of steps) {
+    if (step.stepNumber >= cutoff) continue;
+
+    // (a) ask-derived discovery prereqs (work / income / income_goal / etc.)
+    const asks = askActionsForStep(step);
+    if (asks.length > 0) {
+      const reqs = dedupeDataRequirements(
+        asks.flatMap((a) => dataRequirementsForAskContent(a.content))
+      );
+      for (const req of reqs) {
+        const mapped = REQUIREMENT_TO_PREREQ[req.key];
+        if (!mapped || seenIds.has(mapped.id)) continue;
+        seenIds.add(mapped.id);
+        prereqs.push({
+          id: mapped.id,
+          label: mapped.label,
+          stepNumber: step.stepNumber,
+          acceptableKeys: mapped.acceptableKeys
+        });
+      }
+    }
+
+    // (b) structural prereqs detected by step key/title (their ask text isn't a
+    // data-shaped pattern dataRequirementsForAskContent recognizes). deep_why is
+    // a lead-volunteerable datapoint; belief_break / buy_in are AI-DELIVERED
+    // gates satisfied via branch-history (handled in prereqSatisfiedByCapturedState).
+    const key = normalizedStepKey(step);
+    if (
+      !seenIds.has('desired_outcome_or_deep_why') &&
+      /(DEEP_WHY|DESIRED_OUTCOME)/.test(key)
+    ) {
+      seenIds.add('desired_outcome_or_deep_why');
+      prereqs.push({
+        id: 'desired_outcome_or_deep_why',
+        label: "lead's deeper why / desired outcome",
+        stepNumber: step.stepNumber,
+        acceptableKeys: [
+          'desiredOutcome',
+          'desired_outcome',
+          'deepWhy',
+          'deep_why'
+        ]
+      });
+    }
+    if (
+      !seenIds.has('belief_break_delivered') &&
+      /(BELIEF|REFRAME)/.test(key)
+    ) {
+      seenIds.add('belief_break_delivered');
+      prereqs.push({
+        id: 'belief_break_delivered',
+        label: 'belief-break / reframe message delivered',
+        stepNumber: step.stepNumber,
+        acceptableKeys: ['beliefBreakDelivered', 'belief_break_delivered']
+      });
+    }
+    if (!seenIds.has('buy_in_confirmed') && /(BUY_?IN|BUY\s?IN)/.test(key)) {
+      seenIds.add('buy_in_confirmed');
+      prereqs.push({
+        id: 'buy_in_confirmed',
+        label: 'buy-in confirmed',
+        stepNumber: step.stepNumber,
+        acceptableKeys: ['buyInConfirmed', 'buy_in_confirmed']
+      });
+    }
+  }
+
+  return prereqs.sort((a, b) => a.stepNumber - b.stepNumber);
 }
 
 const AMOUNT_DATA_REQUIREMENT_KEYS = new Set([

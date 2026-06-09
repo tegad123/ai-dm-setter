@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   applyConditionalStepSkip,
   computeSystemStage,
+  deriveCallProposalPrereqs,
   extractCapturedDataPointsForTest,
   parseConditionalStepSkipDirectives,
   readBranchHistoryEvents
@@ -1729,6 +1730,84 @@ describe('computeSystemStage generic sequencing', () => {
       15000,
       'capital must never be the income-goal number'
     );
+  });
+
+  // Phase 8.1 — deriveCallProposalPrereqs derives the gate from the ACCOUNT's
+  // own script (not the hardcoded DAE 8), so booking works for any script.
+  it('phase8-derives-DAE-equivalent-prereqs-from-a-DAE-shaped-script', () => {
+    const dae = {
+      id: 'dae',
+      steps: [
+        askStep(1, 'Intro', 'new or been trading?'),
+        askStep(2, 'Experience', 'how long in the markets?'),
+        askStep(5, 'Obstacle', 'what is the main thing holding you back?'),
+        askStep(6, 'Job', 'what do you do for work?'),
+        askStep(
+          8,
+          'Monthly Income',
+          'how much is your job bringing in on a monthly basis?'
+        ),
+        askStep(9, 'Replace vs Supplement', 'replace your job or supplement?'),
+        askStep(
+          10,
+          'Income Goal',
+          'how much do you want to make from trading?'
+        ),
+        askStep(
+          11,
+          'Desired Outcome - Deep Why',
+          'why is that important to you?'
+        ),
+        askStep(14, 'Belief Break - Reframe', 'does that make sense?'),
+        askStep(15, 'Buy-In Confirmation', 'you down to fix this?'),
+        askStep(17, 'Call Proposal', 'wanna hop on a call?'),
+        askStep(20, 'Booking', 'whats your email?')
+      ]
+    } as any;
+    const ids = deriveCallProposalPrereqs(dae)
+      .map((p) => p.id)
+      .sort();
+    assert.deepEqual(ids, [
+      'belief_break_delivered',
+      'buy_in_confirmed',
+      'desired_outcome_or_deep_why',
+      'income_goal',
+      'monthly_income',
+      'obstacle',
+      'replace_or_supplement',
+      'work_background'
+    ]);
+  });
+
+  it('phase8-derives-only-the-scripts-own-asks-for-a-NON-DAE-script', () => {
+    // A short fitness-coach funnel: goal → commitment → book. No trading/capital
+    // /belief-break steps. Must derive ONLY its own discovery asks, never the
+    // DAE-specific work/income/belief_break fields.
+    const fitness = {
+      id: 'fitness',
+      steps: [
+        askStep(1, 'Niche', 'what kind of clients do you coach?'),
+        askStep(2, 'Income Goal', 'what monthly revenue are you aiming for?'),
+        askStep(3, 'Call Proposal', 'wanna hop on a call to map your plan?')
+      ]
+    } as any;
+    const ids = deriveCallProposalPrereqs(fitness).map((p) => p.id);
+    // "what monthly revenue are you aiming for?" maps to income_goal; niche has
+    // no data-key mapping. No work_background / belief_break / buy_in.
+    assert.ok(!ids.includes('work_background'));
+    assert.ok(!ids.includes('belief_break_delivered'));
+    assert.ok(!ids.includes('buy_in_confirmed'));
+  });
+
+  it('phase8-empty-or-no-discovery-script-derives-no-prereqs', () => {
+    assert.deepEqual(deriveCallProposalPrereqs(null), []);
+    assert.deepEqual(deriveCallProposalPrereqs({ steps: [] }), []);
+    // a script that is ONLY a booking ask → no pre-booking discovery prereqs
+    const bookOnly = {
+      id: 'b',
+      steps: [askStep(1, 'Call Proposal', 'wanna hop on a call?')]
+    } as any;
+    assert.deepEqual(deriveCallProposalPrereqs(bookOnly), []);
   });
 
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
