@@ -6,6 +6,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error';
 }
 
+/** Validate an IANA timezone string via Intl (throws on invalid zones). */
+function isValidIanaTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireAuth(req);
@@ -28,7 +38,8 @@ export async function GET(req: NextRequest) {
         trainingTargetOverrideCount: true,
         trainingOverrideCount: true,
         responseDelayMin: true,
-        responseDelayMax: true
+        responseDelayMax: true,
+        timezone: true
       }
     });
 
@@ -73,7 +84,8 @@ export async function PUT(req: NextRequest) {
       onboardingComplete,
       ghostThresholdDays,
       responseDelayMin,
-      responseDelayMax
+      responseDelayMax,
+      timezone
     } = body;
 
     const RESPONSE_DELAY_MIN_FLOOR = 0;
@@ -88,6 +100,22 @@ export async function PUT(req: NextRequest) {
       data.onboardingComplete = onboardingComplete;
     if (ghostThresholdDays !== undefined)
       data.ghostThresholdDays = ghostThresholdDays;
+
+    if (timezone !== undefined) {
+      if (timezone === null || timezone === '') {
+        data.timezone = null;
+      } else if (
+        typeof timezone !== 'string' ||
+        !isValidIanaTimezone(timezone)
+      ) {
+        return NextResponse.json(
+          { error: `Invalid timezone: ${String(timezone)}` },
+          { status: 400 }
+        );
+      } else {
+        data.timezone = timezone;
+      }
+    }
 
     if (responseDelayMin !== undefined) {
       if (
@@ -181,7 +209,8 @@ export async function PUT(req: NextRequest) {
         trainingTargetOverrideCount: true,
         trainingOverrideCount: true,
         responseDelayMin: true,
-        responseDelayMax: true
+        responseDelayMax: true,
+        timezone: true
       }
     });
 

@@ -190,12 +190,24 @@ export async function getUnifiedAvailability(
             timezone,
             reqId
           );
+          // Resolve the calendar/business tz from the LC location so the
+          // dashboard renders in the right zone (the slots/free-slots response
+          // carries no IANA tz). Prefer an explicitly-requested tz if given.
+          const resolvedTz =
+            timezone ||
+            (lcCreds.locationId
+              ? ((await getLeadConnectorTimezone(
+                  lcCreds.apiKey as string,
+                  lcCreds.locationId as string,
+                  reqId
+                )) ?? undefined)
+              : undefined);
           calLog(
             'UnifiedAvailability.lcSuccess',
-            { slotCount: slots.length },
+            { slotCount: slots.length, resolvedTz },
             reqId
           );
-          return { provider: 'leadconnector', slots, timezone };
+          return { provider: 'leadconnector', slots, timezone: resolvedTz };
         } catch (err) {
           calLog('UnifiedAvailability.lcFailed', { error: String(err) }, reqId);
         }
@@ -394,6 +406,50 @@ export async function bookUnifiedAppointment(
 // ---------------------------------------------------------------------------
 // LeadConnector (HighLevel v2) — primary provider
 // ---------------------------------------------------------------------------
+
+// Cache the resolved location timezone (it's stable) to avoid an extra API call
+// on every availability fetch. Keyed by locationId.
+const lcTimezoneCache = new Map<string, string>();
+
+/**
+ * Resolve a LeadConnector location's IANA timezone (e.g. "America/Chicago").
+ * GHL stores the calendar/business tz on the LOCATION, not the calendar or the
+ * free-slots response — so the dashboard grid has no authoritative tz without
+ * this. Best-effort: returns null on any failure (caller falls back).
+ *
+ * GET /locations/{locationId} → { location: { timezone } }
+ */
+export async function getLeadConnectorTimezone(
+  apiKey: string,
+  locationId: string,
+  requestId?: string
+): Promise<string | null> {
+  if (!locationId) return null;
+  const cached = lcTimezoneCache.get(locationId);
+  if (cached) return cached;
+  const reqId = requestId || randomUUID().slice(0, 8);
+  try {
+    const res = await fetch(
+      `${LC_BASE}/locations/${encodeURIComponent(locationId)}`,
+      { headers: lcHeaders(apiKey) }
+    );
+    if (!res.ok) {
+      calLog('LC.Timezone.failed', { status: res.status }, reqId);
+      return null;
+    }
+    const body = (await res.json()) as {
+      location?: { timezone?: string | null };
+      timezone?: string | null;
+    };
+    const tz = body.location?.timezone ?? body.timezone ?? null;
+    if (tz) lcTimezoneCache.set(locationId, tz);
+    calLog('LC.Timezone.resolved', { tz }, reqId);
+    return tz;
+  } catch (err) {
+    calLog('LC.Timezone.threw', { error: String(err) }, reqId);
+    return null;
+  }
+}
 
 /**
  * Fetch free slots from LeadConnector for a given calendar.

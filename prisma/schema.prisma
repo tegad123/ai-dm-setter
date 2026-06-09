@@ -235,6 +235,13 @@ model Account {
   primaryColor               String?     @default("#2563EB") // Brand color
   onboardingComplete         Boolean     @default(false)
   plan                       AccountPlan @default(FREE)
+  // Account-level IANA timezone (e.g. "America/New_York"). Single source of
+  // truth for displaying + scheduling times across the app: the Calendar grid,
+  // booking slot proposals, call reminders, and analytics. Auto-seeded from the
+  // connected calendar provider's location tz on first connect when unset; an
+  // operator can override it in Settings → Account. Null until resolved (UI +
+  // calendar fall back to the provider/location tz, then the browser tz).
+  timezone                   String?
   // Per-platform AI Auto-Send toggles. These are the MASTER switch that
   // enables AI auto-reply for an entire platform. Required for any
   // auto-send: the webhook-processor requires BOTH this flag AND the

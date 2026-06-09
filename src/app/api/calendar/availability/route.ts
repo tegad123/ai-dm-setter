@@ -1,3 +1,4 @@
+import prisma from '@/lib/prisma';
 import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
@@ -13,7 +14,7 @@ interface GroupedDay {
   times: FormattedSlot[];
 }
 
-function formatTime(isoString: string, tz?: string): string {
+function formatTime(isoString: string, tz?: string | null): string {
   const date = new Date(isoString);
   return date.toLocaleTimeString('en-US', {
     ...(tz ? { timeZone: tz } : {}),
@@ -25,7 +26,7 @@ function formatTime(isoString: string, tz?: string): string {
 
 // Day-key in the CALENDAR's timezone (not UTC). Grouping by UTC previously
 // shifted late-evening slots onto the wrong day for west-of-UTC calendars.
-function formatDate(isoString: string, tz?: string): string {
+function formatDate(isoString: string, tz?: string | null): string {
   const date = new Date(isoString);
   if (tz) {
     return new Intl.DateTimeFormat('en-CA', {
@@ -53,11 +54,45 @@ export async function GET(req: NextRequest) {
     const endDate =
       searchParams.get('endDate') ?? defaultEnd.toISOString().split('T')[0];
 
+    // Account.timezone is the single source of truth. When set, it drives both
+    // the slot fetch (request tz) and the grouping/display. When unset, we let
+    // the provider resolve it and AUTO-SEED Account.timezone so it's persisted
+    // going forward (and shared with the conversation/booking + reminders).
+    const account = await prisma.account.findUnique({
+      where: { id: auth.accountId },
+      select: { timezone: true }
+    });
+    const accountTz = account?.timezone ?? undefined;
+
     const {
       provider,
       slots: rawSlots,
-      timezone
-    } = await getUnifiedAvailability(auth.accountId, startDate, endDate);
+      timezone: providerTz
+    } = await getUnifiedAvailability(
+      auth.accountId,
+      startDate,
+      endDate,
+      accountTz
+    );
+
+    // Effective display tz: account setting wins, else provider-resolved tz.
+    const timezone = accountTz ?? providerTz ?? null;
+
+    // Auto-seed Account.timezone from the provider's location tz when unset, so
+    // the whole app converges on one source of truth without manual config.
+    if (!accountTz && providerTz) {
+      await prisma.account
+        .update({
+          where: { id: auth.accountId },
+          data: { timezone: providerTz }
+        })
+        .catch((err) =>
+          console.error(
+            '[api/calendar/availability] auto-seed account tz failed (non-fatal):',
+            err
+          )
+        );
+    }
 
     // Group slots by date and format for display — in the CALENDAR's tz so the
     // grid columns/labels line up with the provider's actual business hours.
