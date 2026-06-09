@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { NotesPanel } from '@/features/team-notes/components/notes-panel';
 import { SummaryTab } from './summary-tab';
 import { ScoreTab } from './score-tab';
 import { apiFetch } from '@/lib/api';
+import { useRealtime } from '@/hooks/use-realtime';
 import {
   IconFileText,
   IconFlame,
@@ -63,23 +64,33 @@ export function ConversationSidebar({
   const [activeTab, setActiveTab] = useState<SidebarTab>('summary');
   const [detail, setDetail] = useState<any>(null);
 
-  // Fetch enriched conversation detail for summary/score tabs
-  useEffect(() => {
+  // Fetch enriched conversation detail for summary/score tabs (stage*At
+  // timestamps drive STAGE PROGRESSION). Extracted so the realtime listener
+  // below can re-pull it when a booking/stage change is broadcast.
+  const refetchDetail = useCallback(() => {
     if (!conversationId) return;
-    let cancelled = false;
     apiFetch(`/api/conversations/${conversationId}`)
       .then((data: any) => {
-        if (!cancelled) {
-          setDetail(data?.conversation ?? data ?? null);
-        }
+        setDetail(data?.conversation ?? data ?? null);
       })
       .catch(() => {
         // Non-critical — tabs still work with basic data
       });
-    return () => {
-      cancelled = true;
-    };
   }, [conversationId]);
+
+  useEffect(() => {
+    refetchDetail();
+  }, [refetchDetail]);
+
+  // Live update: a server-side stage advance or booking emits
+  // 'conversation:updated' (data.id = conversation id). Re-pull the detail so
+  // STAGE PROGRESSION reflects the new stage*At without a manual page refresh.
+  useRealtime('conversation:updated', (data) => {
+    const payload = data as { id?: string } | null;
+    if (payload?.id && payload.id === conversationId) {
+      refetchDetail();
+    }
+  });
 
   return (
     <div className='flex h-full flex-col'>

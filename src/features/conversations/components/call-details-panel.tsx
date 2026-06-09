@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '@/lib/api';
+import { useRealtime } from '@/hooks/use-realtime';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -370,6 +371,16 @@ export function CallDetailsPanel({ conversationId }: Props) {
   useEffect(() => {
     fetchState();
   }, [fetchState]);
+
+  // Live update: a server-side booking (webhook auto-book or the /call route)
+  // emits 'conversation:updated' (data.id = conversation id). Re-pull the call
+  // details so CALL DETAILS + reminders appear without a manual page refresh.
+  useRealtime('conversation:updated', (data) => {
+    const payload = data as { id?: string } | null;
+    if (payload?.id && payload.id === conversationId) {
+      fetchState();
+    }
+  });
 
   const startEdit = () => {
     if (state?.scheduledCallAt) {

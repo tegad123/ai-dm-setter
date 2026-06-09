@@ -3,6 +3,7 @@ import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { cancelCallReminders } from '@/lib/call-reminders';
 import { scheduleCallConfirmationSequence } from '@/lib/call-confirmation-sequence';
 import { transitionLeadStage } from '@/lib/lead-stage';
+import { broadcastConversationUpdate } from '@/lib/realtime';
 import type { LeadStage } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -240,6 +241,18 @@ export async function PUT(
       `[api/call] Call set for ${id} at ${scheduledDate.toISOString()} (${tz}) by user ${auth.userId} — sequence: homework=${remindersCreated.homeworkId} confirmation=${remindersCreated.confirmationId} reminder=${remindersCreated.reminderId}`
     );
 
+    // Live update: push the new call details to any open dashboard tab(s) so
+    // CALL DETAILS refreshes without a manual reload. Best-effort.
+    try {
+      broadcastConversationUpdate(conversation.lead.accountId, {
+        id,
+        leadId: conversation.lead.id,
+        unreadCount: 0
+      });
+    } catch (err) {
+      console.error('[api/call] PUT broadcast failed (non-fatal):', err);
+    }
+
     // Wout Lngrs follow-up 2026-05-02: operator-driven updates
     // are SILENT. Was previously firing
     // sendImmediateCallConfirmation here whenever the operator set
@@ -390,6 +403,16 @@ export async function PATCH(
         'user',
         `operator marked call outcome ${callOutcome}`
       );
+    }
+
+    try {
+      broadcastConversationUpdate(conversation.lead.accountId, {
+        id,
+        leadId: conversation.lead.id,
+        unreadCount: 0
+      });
+    } catch (err) {
+      console.error('[api/call] PATCH broadcast failed (non-fatal):', err);
     }
 
     return NextResponse.json({
