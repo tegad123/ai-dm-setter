@@ -347,6 +347,56 @@ describe('checkCallProposalPrereqs', () => {
     assert.deepEqual(checkCallProposalPrereqs(points), []);
   });
 
+  // Phase 7C — once 7A/7B capture VOLUNTEERED income goal (stamped at its own
+  // step 9) + capital, the income_goal prereq clears. The ONLY remaining gates
+  // are the AI-DELIVERED ones (belief_break, buy_in) — by design, the lead can't
+  // volunteer those, so the AI must still earn the call. This documents the kept
+  // integrity gate: extraction fixes unblock progress without letting an
+  // under-qualified lead skip the pitch to booking.
+  it('phase7c-volunteered-income-and-capital-leave-only-AI-delivered-gates', () => {
+    const points = {
+      workBackground: 'software engineer',
+      monthlyIncome: '7000',
+      replaceOrSupplement: 'replace',
+      // volunteered income goal, stamped at the income-goal own-ask step (9)
+      incomeGoal: {
+        value: 15000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_volunteered',
+        extractionMethod: 'volunteered_incomeGoal_for_upcoming_ask',
+        extractedAt: '2026-06-09T00:00:00.000Z',
+        sourceFieldName: 'incomeGoal',
+        sourceStepNumber: 9
+      },
+      // volunteered capital (7B)
+      verifiedCapitalUsd: {
+        value: 5000,
+        confidence: 'HIGH',
+        extractedFromMessageId: 'lead_volunteered',
+        extractionMethod: 'volunteered_capital_passive_sync',
+        extractedAt: '2026-06-09T00:00:00.000Z'
+      },
+      capitalThresholdMet: { value: true, confidence: 'HIGH' },
+      deepWhy: 'be there for my kids, escape the 9-5',
+      obstacle: 'no system, i wing it and revenge trade',
+      // belief_break + buy_in deliberately NOT present (AI must deliver them)
+      branchHistory: [
+        {
+          eventType: 'step_completed',
+          stepNumber: 9,
+          stepTitle: 'Income Goal',
+          selectedBranchLabel: 'Wants to replace',
+          completedAt: '2026-06-09T00:00:00.000Z'
+        }
+      ]
+    };
+    // income_goal prereq must be cleared by the volunteered capture
+    assert.equal(incomeGoalSatisfiedByExpectedStep(points, 9), true);
+    const missing = checkCallProposalPrereqs(points).map((p) => p.id);
+    // ONLY the AI-delivered gates remain — extraction no longer blocks the close
+    assert.deepEqual(missing, ['belief_break_delivered', 'buy_in_confirmed']);
+  });
+
   it('bug-001-call-prereqs-accept-camelcase-captures-with-durable-step-history', () => {
     const points = {
       workBackground: 'retail',
