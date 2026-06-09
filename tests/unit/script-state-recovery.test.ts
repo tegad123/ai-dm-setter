@@ -1682,6 +1682,55 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal((points.capitalThresholdMet as any)?.value, false);
   });
 
+  // Phase 8.0 — BUNDLED income-goal + capital in one message (caught live in
+  // prod 2026-06-09): the lead states the trading income GOAL (15k) AND the
+  // CAPITAL (5k) together. The capital extractor must read the amount in the
+  // CAPITAL CLAUSE (5k), not the first amount in the string (15k income goal).
+  it('phase8-bundled-income-and-capital-captures-the-capital-amount-not-the-goal', () => {
+    const script = {
+      id: 'bundled_income_capital',
+      steps: [
+        askStep(1, 'Location', 'where are you based?'),
+        askStep(2, 'Income Goal', 'how much do you want from trading?'),
+        askStep(3, 'Capital', 'capital ready?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'where are you based?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content:
+          "i'm in the US. honestly i want trading to replace my job — at least 15k a month, and i've got about 5k saved up to invest in fixing this",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    // capital must be the 5k (capital clause), NOT 15k (income goal)
+    assert.equal(
+      (points.verifiedCapitalUsd as any)?.value,
+      5000,
+      'capital must read the capital clause (5k), not the income-goal figure (15k)'
+    );
+    assert.equal((points.capitalThresholdMet as any)?.value, true);
+    // income goal captured separately as 15k (own-ask is step 2, 1 ahead — but
+    // verify it's NOT mistaken for capital; incomeGoal capture itself is 7A's job)
+    assert.notEqual(
+      (points.verifiedCapitalUsd as any)?.value,
+      15000,
+      'capital must never be the income-goal number'
+    );
+  });
+
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
     const staleDataScript = {
       id: 'stale_volunteered_data_sequence',

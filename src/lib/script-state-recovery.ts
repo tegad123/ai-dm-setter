@@ -2158,9 +2158,18 @@ function extractVolunteeredCapital(params: {
   for (const msg of messages) {
     if (msg.sender !== 'LEAD') continue;
     const content = msg.content ?? '';
-    if (!PASSIVE_CAPITAL_SIGNAL_PHRASES.test(content)) continue;
+    const signalMatch = content.match(PASSIVE_CAPITAL_SIGNAL_PHRASES);
+    if (!signalMatch) continue;
     if (PASSIVE_NEGATIVE_CONTEXT.test(content)) continue;
-    const amount = extractAmountUSD(content);
+    // Bundled-message guard (live prod 2026-06-09): a lead may state BOTH a
+    // trading income goal and capital in one message ("want 15k a month, and
+    // i've got 5k saved"). extractAmountUSD over the whole string grabs the
+    // FIRST amount (the 15k goal) and mis-attributes it as capital. Scope the
+    // amount to the CAPITAL CLAUSE — the text from the capital signal phrase
+    // onward — so "5k saved" is read, not the earlier income-goal figure.
+    const signalIdx = signalMatch.index ?? 0;
+    const capitalClause = content.slice(signalIdx);
+    const amount = extractAmountUSD(capitalClause) ?? extractAmountUSD(content);
     if (typeof amount !== 'number' || amount <= 0) continue;
     const ts = new Date(msg.timestamp).getTime();
     if (!best || ts >= best.ts) {
