@@ -60,32 +60,6 @@ const DAY_START_HOUR = 7; // 7 AM
 const DAY_END_HOUR = 21; // 9 PM
 const HOUR_ROW_PX = 56; // height of one hour row
 
-function startOfWeek(d: Date): Date {
-  // Week starts Monday.
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  const day = (x.getDay() + 6) % 7; // 0 = Monday
-  x.setDate(x.getDate() - day);
-  return x;
-}
-
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
-function toDateKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return toDateKey(a) === toDateKey(b);
-}
-
 // ── Timezone-aware helpers ─────────────────────────────────────────────────
 // The grid must position every slot/call in the CALENDAR'S timezone (e.g. the
 // LeadConnector business tz), NOT the viewer's browser tz. Otherwise a call at
@@ -136,15 +110,6 @@ function wallClockHour(iso: string, fallbackTz: string): number {
   return hourOfDayInTz(iso, fallbackTz);
 }
 
-/** "YYYY-MM-DD" read directly from an offset-bearing ISO (calendar-local day). */
-function wallClockDateKey(iso: string, fallbackTz: string): string {
-  const m = iso.match(
-    /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/
-  );
-  if (m && m[2] && m[2] !== 'Z') return m[1];
-  return dateKeyInTz(iso, fallbackTz);
-}
-
 function formatTimeInTz(iso: string, tz: string): string {
   return new Date(iso).toLocaleTimeString('en-US', {
     timeZone: tz,
@@ -167,36 +132,103 @@ function tzAbbrev(tz: string): string {
   }
 }
 
+// ── Date-string week model ─────────────────────────────────────────────────
+// The entire grid operates on calendar-tz "YYYY-MM-DD" strings (not Date
+// objects) so there is ONE coordinate system and no browser-tz drift. A
+// browser-local Date converted to the calendar tz can cross a day boundary
+// (Karachi midnight = previous-day 19:00 EDT) which previously shifted columns
+// by a day. String arithmetic via a NOON-UTC anchor avoids that entirely.
+
+/** "YYYY-MM-DD" of *now* as seen in the given IANA timezone. */
+function todayInTz(tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+}
+
+/** Parse "YYYY-MM-DD" into a noon-UTC Date (noon never crosses a tz boundary). */
+function dateStringToUtcNoon(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}
+
+/** Add/subtract whole days to a "YYYY-MM-DD" via UTC arithmetic. */
+function addDaysToDateString(s: string, n: number): string {
+  const dt = dateStringToUtcNoon(s);
+  dt.setUTCDate(dt.getUTCDate() + n);
+  const y = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
+/** Monday (week start) of the week containing the given "YYYY-MM-DD". */
+function mondayOfWeekString(s: string): string {
+  const dt = dateStringToUtcNoon(s);
+  const day = (dt.getUTCDay() + 6) % 7; // 0 = Monday
+  return addDaysToDateString(s, -day);
+}
+
+/** Weekday short label + day-number for a "YYYY-MM-DD", tz-drift-free. */
+function dateStringToLabelParts(s: string): { weekday: string; day: number } {
+  const dt = dateStringToUtcNoon(s);
+  return {
+    weekday: dt.toLocaleDateString('en-US', {
+      weekday: 'short',
+      timeZone: 'UTC'
+    }),
+    day: dt.getUTCDate()
+  };
+}
+
 export function CalendarWeekGrid() {
   const [data, setData] = useState<AvailabilityResponse | null>(null);
   const [calls, setCalls] = useState<ScheduledCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [weekStart, setWeekStart] = useState<Date>(() =>
-    startOfWeek(new Date())
+
+  const browserTz = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    []
   );
 
-  // Display timezone for grid LABELS (the tz badge + call-time fallback). Prefer
-  // the API's calendar tz, then a booked call's stored tz, else browser tz.
-  // NOTE: block POSITIONING uses wallClockHour/wallClockDateKey which read the
-  // offset baked into each slot ISO directly, so positions are correct even
-  // when this IANA label can't be resolved.
-  const displayTz = useMemo(() => {
-    const apiTz = data?.timezone;
-    if (apiTz) return apiTz;
-    const callTz = calls.find((c) => c.timezone)?.timezone;
-    if (callTz) return callTz;
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  }, [calls, data]);
+  // The calendar's own timezone, resolved ONCE and kept stable across week
+  // navigation (upgrade-only — an empty week can never flip the grid back to
+  // the browser tz). Set from the first availability/call response that knows
+  // it (see load()).
+  const [calendarTz, setCalendarTz] = useState<string | null>(null);
 
-  const today = useMemo(() => {
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    return t;
-  }, []);
+  // Stable display tz: calendarTz wins once known; data.timezone covers the
+  // synchronous render before calendarTz commits; browser tz is the bootstrap.
+  const displayTz = calendarTz ?? data?.timezone ?? browserTz;
 
+  // Week is modeled as calendar-tz "YYYY-MM-DD" strings (no Date/tz drift).
+  // Seeded from browser today, then re-anchored to calendar-tz today once the
+  // calendar tz resolves (only if the user hasn't navigated yet).
+  const [weekStart, setWeekStart] = useState<string>(() =>
+    mondayOfWeekString(
+      todayInTz(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    )
+  );
+  const [tzAnchored, setTzAnchored] = useState(false);
+
+  // "Today" in the calendar tz, as a date-string. Drives the highlight.
+  const todayKey = useMemo(() => todayInTz(displayTz), [displayTz]);
+
+  useEffect(() => {
+    if (calendarTz && !tzAnchored) {
+      setTzAnchored(true);
+      setWeekStart(mondayOfWeekString(todayInTz(calendarTz)));
+    }
+  }, [calendarTz, tzAnchored]);
+
+  // The 7 calendar-tz date strings for the visible week.
   const days = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
+    () =>
+      Array.from({ length: 7 }, (_, i) => addDaysToDateString(weekStart, i)),
     [weekStart]
   );
 
@@ -209,12 +241,12 @@ export function CalendarWeekGrid() {
     []
   );
 
-  async function load(start: Date) {
+  async function load(start: string) {
     setLoading(true);
     setError(null);
     try {
-      const startDate = toDateKey(start);
-      const endDate = toDateKey(addDays(start, 6));
+      const startDate = start;
+      const endDate = addDaysToDateString(start, 6);
       const range = `startDate=${startDate}&endDate=${endDate}`;
 
       // Availability and booked calls in parallel. Availability drives the
@@ -228,14 +260,24 @@ export function CalendarWeekGrid() {
         const body = await availRes.json().catch(() => ({}));
         throw new Error(body.error || `Request failed (${availRes.status})`);
       }
-      setData(await availRes.json());
+      const avail: AvailabilityResponse = await availRes.json();
+      setData(avail);
 
+      let nextCalls: ScheduledCall[] = [];
       if (callsRes && callsRes.ok) {
         const body = await callsRes.json().catch(() => ({ calls: [] }));
-        setCalls(Array.isArray(body.calls) ? body.calls : []);
-      } else {
-        setCalls([]);
+        nextCalls = Array.isArray(body.calls) ? body.calls : [];
       }
+      setCalls(nextCalls);
+
+      // Seed the calendar tz ONCE from the first source that knows it, then
+      // keep it. Never overwrite a known tz with null, never use browser tz.
+      setCalendarTz((prev) => {
+        if (prev) return prev;
+        return (
+          avail.timezone || nextCalls.find((c) => c.timezone)?.timezone || null
+        );
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load availability');
     } finally {
@@ -261,7 +303,9 @@ export function CalendarWeekGrid() {
   const callsByDay = useMemo(() => {
     const map = new Map<string, ScheduledCall[]>();
     for (const c of calls) {
-      const key = wallClockDateKey(c.start, c.timezone || displayTz);
+      // call.start is UTC ("…Z") → resolve the day via the IANA tz (the call's
+      // own stored tz wins), NOT the offset-reading wallClockDateKey.
+      const key = dateKeyInTz(c.start, c.timezone || displayTz);
       const list = map.get(key);
       if (list) list.push(c);
       else map.set(key, [c]);
@@ -275,21 +319,25 @@ export function CalendarWeekGrid() {
   );
 
   const weekLabel = useMemo(() => {
-    const end = addDays(weekStart, 6);
-    const sameMonth = weekStart.getMonth() === end.getMonth();
-    const startStr = weekStart.toLocaleDateString('en-US', {
+    const endStr = addDaysToDateString(weekStart, 6);
+    const start = dateStringToUtcNoon(weekStart);
+    const end = dateStringToUtcNoon(endStr);
+    const sameMonth = start.getUTCMonth() === end.getUTCMonth();
+    const startFmt = start.toLocaleDateString('en-US', {
+      timeZone: 'UTC',
       month: 'short',
       day: 'numeric'
     });
-    const endStr = end.toLocaleDateString('en-US', {
+    const endFmt = end.toLocaleDateString('en-US', {
+      timeZone: 'UTC',
       month: sameMonth ? undefined : 'short',
       day: 'numeric',
       year: 'numeric'
     });
-    return `${startStr} – ${endStr}`;
+    return `${startFmt} – ${endFmt}`;
   }, [weekStart]);
 
-  const isCurrentWeek = isSameDay(weekStart, startOfWeek(today));
+  const isCurrentWeek = weekStart === mondayOfWeekString(todayKey);
   const bookedCount = calls.length;
 
   return (
@@ -302,7 +350,7 @@ export function CalendarWeekGrid() {
             size='icon'
             className='size-8'
             aria-label='Previous week'
-            onClick={() => setWeekStart((w) => addDays(w, -7))}
+            onClick={() => setWeekStart((w) => addDaysToDateString(w, -7))}
           >
             <IconChevronLeft className='size-4' />
           </Button>
@@ -311,7 +359,9 @@ export function CalendarWeekGrid() {
             size='sm'
             className='h-8'
             disabled={isCurrentWeek}
-            onClick={() => setWeekStart(startOfWeek(new Date()))}
+            onClick={() =>
+              setWeekStart(mondayOfWeekString(todayInTz(displayTz)))
+            }
           >
             Today
           </Button>
@@ -320,7 +370,7 @@ export function CalendarWeekGrid() {
             size='icon'
             className='size-8'
             aria-label='Next week'
-            onClick={() => setWeekStart((w) => addDays(w, 7))}
+            onClick={() => setWeekStart((w) => addDaysToDateString(w, 7))}
           >
             <IconChevronRight className='size-4' />
           </Button>
@@ -401,18 +451,19 @@ export function CalendarWeekGrid() {
           {/* Day headers */}
           <div className='grid grid-cols-[4.5rem_repeat(7,1fr)] border-b'>
             <div className='border-r' />
-            {days.map((d) => {
-              const isToday = isSameDay(d, today);
+            {days.map((dateKey) => {
+              const isToday = dateKey === todayKey;
+              const { weekday, day } = dateStringToLabelParts(dateKey);
               return (
                 <div
-                  key={toDateKey(d)}
+                  key={dateKey}
                   className={cn(
                     'flex flex-col items-center gap-0.5 border-r py-2 last:border-r-0',
                     isToday && 'bg-primary/5'
                   )}
                 >
                   <span className='text-muted-foreground text-[11px] font-medium tracking-wide uppercase'>
-                    {d.toLocaleDateString('en-US', { weekday: 'short' })}
+                    {weekday}
                   </span>
                   <span
                     className={cn(
@@ -420,7 +471,7 @@ export function CalendarWeekGrid() {
                       isToday && 'bg-primary text-primary-foreground'
                     )}
                   >
-                    {d.getDate()}
+                    {day}
                   </span>
                 </div>
               );
@@ -446,13 +497,13 @@ export function CalendarWeekGrid() {
               </div>
 
               {/* Day columns */}
-              {days.map((d) => {
-                // Match the API's calendar-tz day grouping (slotsByDay /
-                // callsByDay are keyed in displayTz), not the browser-local day.
-                const key = dateKeyInTz(d, displayTz);
+              {days.map((key) => {
+                // `key` is already the column's calendar-tz date string, which
+                // matches slotsByDay (from the API) and callsByDay directly —
+                // no Date→tz conversion (that caused the off-by-one).
                 const slots = slotsByDay.get(key) ?? [];
                 const dayCalls = callsByDay.get(key) ?? [];
-                const isToday = key === dateKeyInTz(today, displayTz);
+                const isToday = key === todayKey;
                 return (
                   <div
                     key={key}
@@ -517,7 +568,9 @@ export function CalendarWeekGrid() {
 
                     {/* Booked call blocks (solid, on top of availability) */}
                     {dayCalls.map((call) => {
-                      const startH = wallClockHour(
+                      // call.start is UTC ("…Z"), no offset to read → resolve
+                      // the hour via the IANA tz (call's own tz wins).
+                      const startH = hourOfDayInTz(
                         call.start,
                         call.timezone || displayTz
                       );
