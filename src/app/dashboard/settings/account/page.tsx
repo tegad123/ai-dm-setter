@@ -27,6 +27,7 @@ interface AccountData {
   onboardingComplete: boolean;
   responseDelayMin: number;
   responseDelayMax: number;
+  timezone: string | null;
 }
 
 interface TrainingPhaseData {
@@ -37,12 +38,41 @@ interface TrainingPhaseData {
   trainingOverrideCount: number;
 }
 
+// Full IANA zone list where supported (all modern browsers), with a sensible
+// fallback so the picker always has options.
+const TIMEZONE_OPTIONS: string[] = (() => {
+  try {
+    const fn = (
+      Intl as unknown as { supportedValuesOf?: (k: string) => string[] }
+    ).supportedValuesOf;
+    if (typeof fn === 'function') return fn('timeZone');
+  } catch {
+    /* fall through */
+  }
+  return [
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Toronto',
+    'Europe/London',
+    'Europe/Berlin',
+    'Asia/Dubai',
+    'Asia/Karachi',
+    'Asia/Kolkata',
+    'Asia/Singapore',
+    'Australia/Sydney',
+    'UTC'
+  ];
+})();
+
 export default function AccountSettingsPage() {
   const [account, setAccount] = useState<AccountData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   const [brandName, setBrandName] = useState('');
+  const [timezone, setTimezone] = useState('');
   const [training, setTraining] = useState<TrainingPhaseData | null>(null);
   const [trainingAction, setTrainingAction] = useState(false);
   const [delayMinSec, setDelayMinSec] = useState<number>(300);
@@ -55,6 +85,7 @@ export default function AccountSettingsPage() {
         setAccount(account);
         setName(account.name || '');
         setBrandName(account.brandName || '');
+        setTimezone(account.timezone || '');
         setDelayMinSec(account.responseDelayMin ?? 300);
         setDelayMaxSec(account.responseDelayMax ?? 600);
       })
@@ -110,7 +141,7 @@ export default function AccountSettingsPage() {
         '/settings/account',
         {
           method: 'PUT',
-          body: JSON.stringify({ name, brandName })
+          body: JSON.stringify({ name, brandName, timezone: timezone || null })
         }
       );
       setAccount(updated.account);
@@ -207,6 +238,26 @@ export default function AccountSettingsPage() {
               <p className='text-muted-foreground text-xs'>
                 This is the name the AI uses when referring to your business in
                 conversations.
+              </p>
+            </div>
+            <div className='space-y-2'>
+              <Label htmlFor='account-timezone'>Timezone</Label>
+              <select
+                id='account-timezone'
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                className='border-input bg-background ring-offset-background focus-visible:ring-ring flex h-9 w-full rounded-md border px-3 py-1 text-sm focus-visible:ring-2 focus-visible:outline-none'
+              >
+                <option value=''>Auto (from connected calendar)</option>
+                {TIMEZONE_OPTIONS.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+              <p className='text-muted-foreground text-xs'>
+                Used across the Calendar, booking, and call reminders. Leave on
+                Auto to inherit your connected calendar&apos;s timezone.
               </p>
             </div>
             <Button onClick={handleSave} disabled={saving}>
