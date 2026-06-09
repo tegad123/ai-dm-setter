@@ -36,6 +36,7 @@ import {
   appendBranchHistoryEvent,
   attemptSelfRecovery,
   attemptStepSkipRecovery,
+  deriveCallProposalPrereqs,
   detectAttemptedStepSkip,
   isSelfRecoveryTrigger,
   markSelfRecoveryEventFailed,
@@ -3690,6 +3691,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
     capturedDataPoints: scriptStateSnapshot?.capturedDataPoints ?? {},
+    // F5.1 Phase 8: script-derived call-proposal prereqs (any-script booking) +
+    // capital-verified bypass. deriveCallProposalPrereqs returns the prereqs from
+    // THIS account's script; null when no script (gate falls back to hardcoded).
+    callProposalPrereqs: scriptStateSnapshot?.script
+      ? deriveCallProposalPrereqs(scriptStateSnapshot.script)
+      : null,
+    capitalThresholdMet:
+      (
+        scriptStateSnapshot?.capturedDataPoints as
+          | Record<string, { value?: unknown } | undefined>
+          | undefined
+      )?.capitalThresholdMet?.value === true,
     currentStepHasSilentBranch,
     currentStepSilentBranchLabels,
     currentStepScriptedQuestions: currentStepScriptedQuestionsForGate,

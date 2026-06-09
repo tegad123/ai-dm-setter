@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   applyConditionalStepSkip,
   computeSystemStage,
+  deriveCallProposalPrereqs,
   extractCapturedDataPointsForTest,
   parseConditionalStepSkipDirectives,
   readBranchHistoryEvents
@@ -1680,6 +1681,133 @@ describe('computeSystemStage generic sequencing', () => {
     });
     assert.equal((points.verifiedCapitalUsd as any)?.value, 200);
     assert.equal((points.capitalThresholdMet as any)?.value, false);
+  });
+
+  // Phase 8.0 — BUNDLED income-goal + capital in one message (caught live in
+  // prod 2026-06-09): the lead states the trading income GOAL (15k) AND the
+  // CAPITAL (5k) together. The capital extractor must read the amount in the
+  // CAPITAL CLAUSE (5k), not the first amount in the string (15k income goal).
+  it('phase8-bundled-income-and-capital-captures-the-capital-amount-not-the-goal', () => {
+    const script = {
+      id: 'bundled_income_capital',
+      steps: [
+        askStep(1, 'Location', 'where are you based?'),
+        askStep(2, 'Income Goal', 'how much do you want from trading?'),
+        askStep(3, 'Capital', 'capital ready?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'where are you based?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content:
+          "i'm in the US. honestly i want trading to replace my job — at least 15k a month, and i've got about 5k saved up to invest in fixing this",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    // capital must be the 5k (capital clause), NOT 15k (income goal)
+    assert.equal(
+      (points.verifiedCapitalUsd as any)?.value,
+      5000,
+      'capital must read the capital clause (5k), not the income-goal figure (15k)'
+    );
+    assert.equal((points.capitalThresholdMet as any)?.value, true);
+    // income goal captured separately as 15k (own-ask is step 2, 1 ahead — but
+    // verify it's NOT mistaken for capital; incomeGoal capture itself is 7A's job)
+    assert.notEqual(
+      (points.verifiedCapitalUsd as any)?.value,
+      15000,
+      'capital must never be the income-goal number'
+    );
+  });
+
+  // Phase 8.1 — deriveCallProposalPrereqs derives the gate from the ACCOUNT's
+  // own script (not the hardcoded DAE 8), so booking works for any script.
+  it('phase8-derives-DAE-equivalent-prereqs-from-a-DAE-shaped-script', () => {
+    const dae = {
+      id: 'dae',
+      steps: [
+        askStep(1, 'Intro', 'new or been trading?'),
+        askStep(2, 'Experience', 'how long in the markets?'),
+        askStep(5, 'Obstacle', 'what is the main thing holding you back?'),
+        askStep(6, 'Job', 'what do you do for work?'),
+        askStep(
+          8,
+          'Monthly Income',
+          'how much is your job bringing in on a monthly basis?'
+        ),
+        askStep(9, 'Replace vs Supplement', 'replace your job or supplement?'),
+        askStep(
+          10,
+          'Income Goal',
+          'how much do you want to make from trading?'
+        ),
+        askStep(
+          11,
+          'Desired Outcome - Deep Why',
+          'why is that important to you?'
+        ),
+        askStep(14, 'Belief Break - Reframe', 'does that make sense?'),
+        askStep(15, 'Buy-In Confirmation', 'you down to fix this?'),
+        askStep(17, 'Call Proposal', 'wanna hop on a call?'),
+        askStep(20, 'Booking', 'whats your email?')
+      ]
+    } as any;
+    const ids = deriveCallProposalPrereqs(dae)
+      .map((p) => p.id)
+      .sort();
+    assert.deepEqual(ids, [
+      'belief_break_delivered',
+      'buy_in_confirmed',
+      'desired_outcome_or_deep_why',
+      'income_goal',
+      'monthly_income',
+      'obstacle',
+      'replace_or_supplement',
+      'work_background'
+    ]);
+  });
+
+  it('phase8-derives-only-the-scripts-own-asks-for-a-NON-DAE-script', () => {
+    // A short fitness-coach funnel: goal → commitment → book. No trading/capital
+    // /belief-break steps. Must derive ONLY its own discovery asks, never the
+    // DAE-specific work/income/belief_break fields.
+    const fitness = {
+      id: 'fitness',
+      steps: [
+        askStep(1, 'Niche', 'what kind of clients do you coach?'),
+        askStep(2, 'Income Goal', 'what monthly revenue are you aiming for?'),
+        askStep(3, 'Call Proposal', 'wanna hop on a call to map your plan?')
+      ]
+    } as any;
+    const ids = deriveCallProposalPrereqs(fitness).map((p) => p.id);
+    // "what monthly revenue are you aiming for?" maps to income_goal; niche has
+    // no data-key mapping. No work_background / belief_break / buy_in.
+    assert.ok(!ids.includes('work_background'));
+    assert.ok(!ids.includes('belief_break_delivered'));
+    assert.ok(!ids.includes('buy_in_confirmed'));
+  });
+
+  it('phase8-empty-or-no-discovery-script-derives-no-prereqs', () => {
+    assert.deepEqual(deriveCallProposalPrereqs(null), []);
+    assert.deepEqual(deriveCallProposalPrereqs({ steps: [] }), []);
+    // a script that is ONLY a booking ask → no pre-booking discovery prereqs
+    const bookOnly = {
+      id: 'b',
+      steps: [askStep(1, 'Call Proposal', 'wanna hop on a call?')]
+    } as any;
+    assert.deepEqual(deriveCallProposalPrereqs(bookOnly), []);
   });
 
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {

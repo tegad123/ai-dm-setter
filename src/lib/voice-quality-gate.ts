@@ -17,7 +17,8 @@ import {
   detectStepDistanceViolation,
   inferStepLabelFromReply,
   isRuntimePlaceholderOnly,
-  maxQuestionSimilarityToScript
+  maxQuestionSimilarityToScript,
+  type CallProposalPrereq
 } from '@/lib/script-step-progression';
 import { equivalentCapturedDataPointKeys } from '@/lib/captured-data-keys';
 import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
@@ -666,6 +667,19 @@ export interface VoiceQualityOptions {
    * not a premature one.
    */
   leadStage?: string;
+  /**
+   * F5.1 Phase 8: call-proposal prerequisites DERIVED from the account's own
+   * script (deriveCallProposalPrereqs). When provided, the call-proposal gate
+   * uses these instead of the hardcoded DAE 8 — so any script reaches its own
+   * booking. Null/omitted → gate falls back to the hardcoded DAE list.
+   */
+  callProposalPrereqs?: CallProposalPrereq[] | null;
+  /**
+   * F5.1 Phase 8: true when capital is verified ≥ threshold this turn. A
+   * capital-verified (QUALIFIED) lead bypasses the call-proposal prereq gate —
+   * they can always be routed to booking.
+   */
+  capitalThresholdMet?: boolean;
   /**
    * Current-turn R24 capital-verification outcome when available. Used
    * as a second safety net against firing premature_soft_exit on leads
@@ -1722,19 +1736,30 @@ export function scoreVoiceQuality(
   // 2026-05-08). The regen directive in ai-engine references the
   // first missing prereq so the model resumes from the right step.
   if (detectCallProposalAttempt(reply)) {
-    const missing = checkCallProposalPrereqs(options?.capturedDataPoints, {
-      incomeGoalAsked: options?.incomeGoalAsked === true
-    });
-    if (missing.length > 0) {
-      const firstMissing = missing[0];
-      const summary = missing
-        .map((p) => `step ${p.stepNumber} (${p.id})`)
-        .join(', ');
-      hardFails.push(
-        `call_proposal_prereqs_missing: missing=${summary}. ` +
-          `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
-          `Do NOT propose a call until every prerequisite is captured.`
+    // F5.1 Phase 8.2: a QUALIFIED / capital-verified lead can always be routed
+    // to booking — never block their call proposal on remaining discovery boxes.
+    const qualifiedBypass =
+      options?.leadStage === 'QUALIFIED' ||
+      options?.capitalThresholdMet === true;
+    if (!qualifiedBypass) {
+      // Phase 8.1: prefer prereqs DERIVED from the account's own script; fall
+      // back to the hardcoded DAE list only when none were provided.
+      const missing = checkCallProposalPrereqs(
+        options?.capturedDataPoints,
+        { incomeGoalAsked: options?.incomeGoalAsked === true },
+        options?.callProposalPrereqs ?? undefined
       );
+      if (missing.length > 0) {
+        const firstMissing = missing[0];
+        const summary = missing
+          .map((p) => `step ${p.stepNumber} (${p.id})`)
+          .join(', ');
+        hardFails.push(
+          `call_proposal_prereqs_missing: missing=${summary}. ` +
+            `Resume the script from step ${firstMissing.stepNumber} — ${firstMissing.label}. ` +
+            `Do NOT propose a call until every prerequisite is captured.`
+        );
+      }
     }
   }
 

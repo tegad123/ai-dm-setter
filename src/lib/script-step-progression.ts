@@ -377,7 +377,11 @@ function buyInConfirmedByBranchHistory(
   });
 }
 
-function prereqSatisfiedByCapturedState(
+// Exported (F5.1 Phase 8.1) so the script-DERIVED prereq path in
+// script-state-recovery.ts can reuse the proven satisfaction logic (income-goal
+// source-step match, deep_why / belief_break / buy_in branch-history) instead of
+// duplicating it. Signature unchanged.
+export function prereqSatisfiedByCapturedState(
   points: Record<string, unknown> | null | undefined,
   prereq: Pick<CallProposalPrereq, 'id' | 'stepNumber' | 'acceptableKeys'>,
   evidence?: { incomeGoalAsked?: boolean }
@@ -512,9 +516,17 @@ export const CALL_PROPOSAL_PREREQS: CallProposalPrereq[] = [
  */
 export function checkCallProposalPrereqs(
   points: Record<string, unknown> | null | undefined,
-  evidence?: { incomeGoalAsked?: boolean }
+  evidence?: { incomeGoalAsked?: boolean },
+  // F5.1 Phase 8.1: when provided, use the prereqs DERIVED from the account's
+  // own script (deriveCallProposalPrereqs) instead of the hardcoded DAE 8. When
+  // omitted (existing 2-arg callers + unit tests), behavior is byte-identical to
+  // before — defaults to the hardcoded list, so DAE protection never regresses.
+  derivedPrereqs?: CallProposalPrereq[] | null
 ): CallProposalPrereq[] {
-  return CALL_PROPOSAL_PREREQS.filter(
+  // A provided array (even empty — a script with no discovery asks) is
+  // authoritative; only fall back to the hardcoded DAE list when none passed.
+  const prereqs = derivedPrereqs ?? CALL_PROPOSAL_PREREQS;
+  return prereqs.filter(
     (prereq) => !prereqSatisfiedByCapturedState(points, prereq, evidence)
   );
 }
