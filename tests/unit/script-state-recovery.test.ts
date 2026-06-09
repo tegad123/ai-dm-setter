@@ -1590,6 +1590,98 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal((points.incomeGoal as any)?.sourceStepNumber, 8);
   });
 
+  // Phase 7B — volunteered capital captured synchronously (no capital question
+  // needed), with the negative-context guard + threshold handling.
+  it('phase7b-volunteered-capital-captured-without-a-capital-question', () => {
+    const script = {
+      id: 'volunteered_capital',
+      steps: [
+        askStep(1, 'Problem', 'whats tripping you up?'),
+        askStep(2, 'Commitment', 'you serious about fixing this?')
+      ]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'you serious about fixing this?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: "yeah man, i've got about 5k saved up to put toward this",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal((points.verifiedCapitalUsd as any)?.value, 5000);
+    assert.equal((points.capitalThresholdMet as any)?.value, true);
+  });
+
+  it('phase7b-negative-context-capital-is-NOT-captured', () => {
+    const script = {
+      id: 'neg_capital',
+      steps: [askStep(1, 'Problem', 'whats tripping you up?')]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'whats tripping you up?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: 'honestly i lost about 5k trading last month',
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal(
+      (points.verifiedCapitalUsd as any)?.value,
+      undefined,
+      '"i lost 5k trading" must NOT be captured as capital'
+    );
+  });
+
+  it('phase7b-below-threshold-volunteered-capital-marks-thresholdMet-false', () => {
+    const script = {
+      id: 'low_capital',
+      steps: [askStep(1, 'Commitment', 'ready to invest?')]
+    } as any;
+    const history = [
+      {
+        id: 'ai_1',
+        sender: 'AI',
+        content: 'ready to invest?',
+        timestamp: new Date('2026-06-09T00:00:00Z')
+      },
+      {
+        id: 'lead_1',
+        sender: 'LEAD',
+        content: "i've got about 200 saved up right now",
+        timestamp: new Date('2026-06-09T00:01:00Z')
+      }
+    ];
+    const points = extractCapturedDataPointsForTest({
+      history,
+      script,
+      minimumCapitalRequired: 1000
+    });
+    assert.equal((points.verifiedCapitalUsd as any)?.value, 200);
+    assert.equal((points.capitalThresholdMet as any)?.value, false);
+  });
+
   it('bug-51-volunteered-data-does-not-skip-when-captured-before-the-cursor', () => {
     const staleDataScript = {
       id: 'stale_volunteered_data_sequence',

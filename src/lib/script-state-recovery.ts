@@ -2133,6 +2133,70 @@ function extractCapitalDataPoints(params: {
   }
 }
 
+// Phase 7B (2026-06-09): synchronous volunteered-capital capture. Unlike
+// extractCapitalDataPoints (which needs an AI capital question to anchor the
+// answer), this scans EVERY lead message for an unsolicited capital statement
+// ("i've got about 5k to put toward this") and persists verifiedCapitalUsd +
+// capitalThresholdMet on the same turn. Guards (load-bearing — a false positive
+// silently qualifies an unfunded lead):
+//   • PASSIVE_CAPITAL_SIGNAL_PHRASES must match (positive capital frame)
+//   • PASSIVE_NEGATIVE_CONTEXT must NOT match ("i lost 5k", "job pays", "made 5k")
+//   • a numeric amount must parse
+// Idempotent: skips if verifiedCapitalUsd is already set (the question-anchored
+// path + durable state win). Uses the latest qualifying lead message.
+function extractVolunteeredCapital(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+  threshold: number | null;
+}) {
+  const { points, history, threshold } = params;
+  // Don't override an existing capital capture (question-anchored / durable).
+  if (points.verifiedCapitalUsd !== undefined) return;
+
+  const messages = sortedHistory(history);
+  let best: { amount: number; id: string | null; ts: number } | null = null;
+  for (const msg of messages) {
+    if (msg.sender !== 'LEAD') continue;
+    const content = msg.content ?? '';
+    if (!PASSIVE_CAPITAL_SIGNAL_PHRASES.test(content)) continue;
+    if (PASSIVE_NEGATIVE_CONTEXT.test(content)) continue;
+    const amount = extractAmountUSD(content);
+    if (typeof amount !== 'number' || amount <= 0) continue;
+    const ts = new Date(msg.timestamp).getTime();
+    if (!best || ts >= best.ts) {
+      best = { amount, id: msg.id ?? null, ts };
+    }
+  }
+  if (!best) return;
+
+  const thresholdMet =
+    typeof threshold === 'number' ? best.amount >= threshold : best.amount > 0;
+  setPoint(
+    points,
+    'verifiedCapitalUsd',
+    best.amount,
+    'HIGH',
+    best.id,
+    'volunteered_capital_passive_sync'
+  );
+  setPoint(
+    points,
+    'capitalThresholdMet',
+    thresholdMet,
+    'HIGH',
+    best.id,
+    'volunteered_capital_passive_sync'
+  );
+  setPoint(
+    points,
+    'capitalAnswerType',
+    'volunteered_capital_passive_sync',
+    'HIGH',
+    best.id,
+    'volunteered_capital_passive_sync'
+  );
+}
+
 function extractAffirmationAfterPrompt(params: {
   points: CapturedDataPoints;
   history: ScriptHistoryMessage[];
@@ -2691,6 +2755,15 @@ function extractDataPoints(params: {
     durableStatus: params.durableStatus,
     durableAmount: params.durableAmount
   });
+
+  // Phase 7B (2026-06-09): capture VOLUNTEERED capital EVERY turn. The
+  // question-anchored extractCapitalDataPoints above only fires when an AI
+  // capital question preceded the answer. Leads frequently state capital
+  // unsolicited mid-discovery ("i've got about 5k to put toward this"); without
+  // this, verifiedCapitalUsd stays null until the LLM emits a high-intent stage
+  // (the old async passive scan) — a chicken-and-egg that dead-ended the funnel.
+  // Runs synchronously here so it's captured on the SAME turn the lead says it.
+  extractVolunteeredCapital({ points, history: params.history, threshold });
 
   extractAffirmationAfterPrompt({
     points,
