@@ -3215,7 +3215,14 @@ function immediateLeadReplyAfterPrompt(
 function upcomingRequirementsAfterStep(
   steps: ScriptStepWithRecovery[],
   stepNumber: number,
-  lookahead = 3
+  // Phase 7A: widened from 3 → 10 so a lead who volunteers a qualifying value
+  // (income goal / capital) many steps before its own ask is still captured —
+  // the prod dead-end happened partly because the goal ask sits ~step 10 in the
+  // DAE script, well outside a 3-step window. Safe to widen: the per-requirement
+  // cue guard (hasRequirementSpecificVolunteeredCue), the different-amount-field
+  // guard, and the income-goal immediate-next distance-gate prevent false
+  // positives regardless of window size.
+  lookahead = 10
 ): CapturedDataRequirement[] {
   const currentIndex = steps.findIndex(
     (step) => step.stepNumber === stepNumber
@@ -3231,6 +3238,38 @@ function upcomingRequirementsAfterStep(
         )
       )
   );
+}
+
+// Phase 7A helpers: locate the step that OWNS the income-goal ask, and the next
+// ask-bearing step after a given step — used by the distance-gate that decides
+// whether a volunteered income goal may be pre-captured (only when its own ask
+// is NOT the immediate next step).
+function stepAsksForRequirement(
+  step: ScriptStepWithRecovery,
+  key: string
+): boolean {
+  return askActionsForStep(step).some((action) =>
+    dataRequirementsForAskContent(action.content).some((r) => r.key === key)
+  );
+}
+
+function incomeGoalAskStepNumber(
+  steps: ScriptStepWithRecovery[]
+): number | null {
+  const step = steps.find((s) => stepAsksForRequirement(s, 'incomeGoal'));
+  return step?.stepNumber ?? null;
+}
+
+function nextAskStepNumberAfter(
+  steps: ScriptStepWithRecovery[],
+  stepNumber: number
+): number | null {
+  const currentIndex = steps.findIndex((s) => s.stepNumber === stepNumber);
+  if (currentIndex < 0) return null;
+  for (let i = currentIndex + 1; i < steps.length; i += 1) {
+    if (askActionsForStep(steps[i]).length > 0) return steps[i].stepNumber;
+  }
+  return null;
 }
 
 const AMOUNT_DATA_REQUIREMENT_KEYS = new Set([
@@ -3294,6 +3333,7 @@ function shouldExtractVolunteeredRequirement(params: {
   requirement: CapturedDataRequirement;
   currentRequirements: CapturedDataRequirement[];
   leadReplyContent: string;
+  incomeGoalIsImmediateNext?: boolean;
 }): boolean {
   if (
     requirementListContainsKey(
@@ -3304,13 +3344,35 @@ function shouldExtractVolunteeredRequirement(params: {
     return true;
   }
 
-  // Target-income fields are semantically tied to their own script
-  // question. A current-income or replace/supplement answer may contain
-  // money-shaped language, but it must not satisfy the downstream target
-  // income ask unless the operator's current prompt was actually asking
-  // for that target.
+  // Target-income field is semantically tied to its own script question.
+  // Phase 7A distance-gate: if the income-goal ask is the IMMEDIATE next step,
+  // a money answer here is almost certainly the current/replace answer (or the
+  // lead pre-empting the very next ask) — keep it blocked so the dedicated ask
+  // fires and owns the capture (protects bug-58 / bug-53). But if the income-goal
+  // ask is SEVERAL steps ahead, a clearly-cued volunteered goal ("15k a month
+  // FROM TRADING", "want trading to replace…") should be captured rather than
+  // dropped — otherwise the funnel dead-ends (the prod incident). Fall through to
+  // the same cue + different-amount-field guards the other amount fields use.
   if (params.requirement.key === 'incomeGoal') {
-    return false;
+    // Immediate-next (or unknown distance) → conservative: don't pre-capture,
+    // let the dedicated income-goal ask fire (bug-58/bug-53 stay green).
+    if (params.incomeGoalIsImmediateNext !== false) {
+      return false;
+    }
+    // Income-goal ask is several steps ahead → capture a clearly-cued goal,
+    // but never let a different amount field's answer satisfy it.
+    if (
+      currentPromptAsksForDifferentAmountField({
+        currentRequirements: params.currentRequirements,
+        requirementKey: params.requirement.key
+      })
+    ) {
+      return false;
+    }
+    return hasRequirementSpecificVolunteeredCue(
+      params.requirement.key,
+      params.leadReplyContent
+    );
   }
 
   if (!AMOUNT_DATA_REQUIREMENT_KEYS.has(params.requirement.key)) {
@@ -3447,13 +3509,24 @@ function extractVolunteeredDataForUpcomingAsks(params: {
 
     const currentRequirements = dataRequirementsForAskContent(prompt.content);
     const requirements = upcomingRequirementsAfterStep(steps, stepNumber);
+    // Phase 7A: the script step that OWNS the income-goal ask, and whether it is
+    // the IMMEDIATE next step after the current prompt. bug-58 requires that a
+    // money answer given when the income-goal ask is the very next step must NOT
+    // pre-capture incomeGoal (the dedicated ask should fire). But when that ask
+    // is several steps ahead (the prod dead-end), a clearly-cued volunteered
+    // goal SHOULD be captured so the funnel isn't blocked.
+    const incomeGoalOwnStep = incomeGoalAskStepNumber(steps);
+    const incomeGoalIsImmediateNext =
+      typeof incomeGoalOwnStep === 'number' &&
+      incomeGoalOwnStep === nextAskStepNumberAfter(steps, stepNumber);
     for (const requirement of requirements) {
       if (pointIsPresentForRequirement(params.points, requirement)) continue;
       if (
         !shouldExtractVolunteeredRequirement({
           requirement,
           currentRequirements,
-          leadReplyContent: leadReply.content
+          leadReplyContent: leadReply.content,
+          incomeGoalIsImmediateNext
         })
       ) {
         continue;
@@ -3465,6 +3538,14 @@ function extractVolunteeredDataForUpcomingAsks(params: {
       );
       if (value === null || value === undefined || value === '') continue;
 
+      // Phase 7A: stamp incomeGoal with its OWN-ask step so checkCallProposalPrereqs
+      // (which matches incomeGoal by its source step) recognizes the volunteered
+      // capture. Other requirements keep the prompt's step as source.
+      const sourceStep =
+        requirement.key === 'incomeGoal' &&
+        typeof incomeGoalOwnStep === 'number'
+          ? incomeGoalOwnStep
+          : stepNumber;
       setPoint(
         params.points,
         requirement.key,
@@ -3474,7 +3555,7 @@ function extractVolunteeredDataForUpcomingAsks(params: {
         `volunteered_${requirement.key}_for_upcoming_ask`,
         {
           sourceFieldName: requirement.key,
-          sourceStepNumber: stepNumber,
+          sourceStepNumber: sourceStep,
           sourceQuestion: prompt.content
         }
       );
