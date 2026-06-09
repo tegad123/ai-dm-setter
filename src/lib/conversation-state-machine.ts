@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { broadcastConversationUpdate } from '@/lib/realtime';
 import type { ConversationOutcome } from '@prisma/client';
 
 function capturedPointValue(points: unknown, key: string): unknown {
@@ -290,6 +291,28 @@ export async function recordStageTimestamp(
   console.log(
     `[state-machine] Conversation ${conversationId} reached stage ${stage}; backfilled fields: ${Object.keys(updates).join(', ')}`
   );
+
+  // Live update: tell the dashboard a stage timestamp changed so the open
+  // conversation's STAGE PROGRESSION panel refetches without a manual refresh.
+  // Best-effort — never let a broadcast failure break stage recording.
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: convo.leadId },
+      select: { accountId: true }
+    });
+    if (lead?.accountId) {
+      broadcastConversationUpdate(lead.accountId, {
+        id: conversationId,
+        leadId: convo.leadId,
+        unreadCount: 0
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[state-machine] stage broadcast failed for ${conversationId} (non-fatal):`,
+      err
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

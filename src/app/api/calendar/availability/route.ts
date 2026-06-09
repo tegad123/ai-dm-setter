@@ -13,18 +13,29 @@ interface GroupedDay {
   times: FormattedSlot[];
 }
 
-function formatTime(isoString: string): string {
+function formatTime(isoString: string, tz?: string): string {
   const date = new Date(isoString);
   return date.toLocaleTimeString('en-US', {
+    ...(tz ? { timeZone: tz } : {}),
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
   });
 }
 
-function formatDate(isoString: string): string {
+// Day-key in the CALENDAR's timezone (not UTC). Grouping by UTC previously
+// shifted late-evening slots onto the wrong day for west-of-UTC calendars.
+function formatDate(isoString: string, tz?: string): string {
   const date = new Date(isoString);
-  return date.toISOString().split('T')[0]; // YYYY-MM-DD
+  if (tz) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(date);
+  }
+  return date.toISOString().split('T')[0]; // YYYY-MM-DD (UTC fallback)
 }
 
 export async function GET(req: NextRequest) {
@@ -42,23 +53,24 @@ export async function GET(req: NextRequest) {
     const endDate =
       searchParams.get('endDate') ?? defaultEnd.toISOString().split('T')[0];
 
-    const { provider, slots: rawSlots } = await getUnifiedAvailability(
-      auth.accountId,
-      startDate,
-      endDate
-    );
+    const {
+      provider,
+      slots: rawSlots,
+      timezone
+    } = await getUnifiedAvailability(auth.accountId, startDate, endDate);
 
-    // Group slots by date and format for display
+    // Group slots by date and format for display — in the CALENDAR's tz so the
+    // grid columns/labels line up with the provider's actual business hours.
     const dayMap = new Map<string, FormattedSlot[]>();
 
     for (const slot of rawSlots) {
-      const dateKey = formatDate(slot.start);
+      const dateKey = formatDate(slot.start, timezone);
       const formatted: FormattedSlot = {
         start: slot.start,
         end: slot.end,
         display: slot.end
-          ? `${formatTime(slot.start)} - ${formatTime(slot.end)}`
-          : formatTime(slot.start)
+          ? `${formatTime(slot.start, timezone)} - ${formatTime(slot.end, timezone)}`
+          : formatTime(slot.start, timezone)
       };
 
       if (!dayMap.has(dateKey)) {
@@ -75,7 +87,7 @@ export async function GET(req: NextRequest) {
         times: times.sort((a, b) => a.start.localeCompare(b.start))
       }));
 
-    return NextResponse.json({ provider, slots });
+    return NextResponse.json({ provider, slots, timezone: timezone ?? null });
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json(

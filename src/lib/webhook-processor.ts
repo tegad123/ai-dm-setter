@@ -5095,6 +5095,21 @@ async function sendAIReply(
       console.log(
         `[webhook-processor] BOOKING_CONFIRM booked + confirmation/reminders scheduled for ${conversationId}`
       );
+      // Live update: push the new call details + BOOKED stage to the open
+      // dashboard tab so CALL DETAILS / STAGE PROGRESSION refresh without a
+      // manual page reload. Best-effort.
+      try {
+        broadcastConversationUpdate(accountId, {
+          id: conversationId,
+          leadId: lead.id,
+          unreadCount: 0
+        });
+      } catch (err) {
+        console.error(
+          '[webhook-processor] auto-book broadcast failed (non-fatal):',
+          err
+        );
+      }
     } else {
       // Booking failed — a safe holding line was already shipped. Pause AI for
       // human follow-up; NEVER mark BOOKED on a failed booking.
