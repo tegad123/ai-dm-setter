@@ -104,3 +104,17 @@ File: `src/lib/script-state-recovery.ts` → `computeSystemStage()`, `prepareScr
 ## Progress log
 - 2026-06-07 — Plan approved; tracker created.
 - 2026-06-07 — **Critical discovery:** all 21 single-turn fixtures pass while prod was broken → added multi-turn + prod-replay + live-E2E layers; reproduction-test-first (red→green) is now the success criterion. Starting Phase 0.
+- 2026-06-07 — Phases 0-4 implemented + committed (5 commits, m3-funnel-fix). Deterministic suites all green.
+- 2026-06-07 — **Live-LLM bypass-send test (drive-engine-local.ts):** funnel drove all 16 turns to BOOKING, **zero stalls, zero escalations** — never-silent + content-flow PROVEN with real model. BUT first run showed `systemStage` parked at step 1 because the harness persisted AI messages WITHOUT suggestionId (the real delivery path DOES persist it — webhook-processor.ts:3668). Fixed harness to persist `result.suggestionId`; re-running to confirm position advances. **Lesson reinforced: the position-advance fix depends on Message.suggestionId being present, which only the real delivery path guarantees.**
+- 2026-06-08 — **Phase 6 shipped (PR #28):** 6A judgment-step completion (deep-why loop) + 6B Stage Progression panel reconciliation (`stepToSopStage`). Stage progression panel = DONE (reads real position). Clean live prod FB test (backfill disabled via `DISABLE_META_BACKFILL=true`) ran the funnel: never silent, position advanced 1→8, qualified — but revealed the TRUE remaining bug.
+- 2026-06-08 — **REAL ROOT CAUSE caught in clean prod test:** volunteered/bundled qualifying answers (income goal + capital) were NOT captured → call-proposal prereqs never filled → AI looped in discovery, never proposed the call. (incomeGoal/verifiedCapital `undefined` despite lead clearly stating "15k a month" + "5k saved".)
+- 2026-06-09 — **Phase 7 implemented + committed (3 commits):** 7A volunteered incomeGoal capture (distance-gate, bug-58/53 kept green); 7B synchronous volunteered-capital capture every turn (negative-context guarded, idempotent); 7C verified prereqs clear leaving only AI-delivered gates. All suites green: 18 unit files, 21 fixtures, 4 multi-turn, 10 analytics, 0 src tsc errors. **Awaiting clean live DM (volunteer income+capital) to confirm the AI now advances to pitch/call instead of looping discovery.**
+
+---
+
+## Phase 7 — extraction fix status (the FINAL structural blocker)
+- [x] **7A** volunteered incomeGoal captured via distance-gate + cue guard (own-ask not immediate-next → capture; stamp source step); lookahead widened 3→10. Commit `da5d99b`.
+- [x] **7B** `extractVolunteeredCapital` runs every turn in `extractDataPoints` — captures unsolicited capital with PASSIVE_CAPITAL_SIGNAL + PASSIVE_NEGATIVE_CONTEXT guards, idempotent. Commit `84187c1`.
+- [x] **7C** `checkCallProposalPrereqs` clears income_goal + capital from volunteered captures; residual = exactly {belief_break, buy_in} (AI-delivered, kept by design). Commit `bafea6d`.
+- [x] Regression canaries green: **bug-58** (target-income own-ask), **bug-53** (current income), all suites.
+- [ ] **Live verification:** clean fresh lead, volunteer income+capital mid-discovery → query prod confirms captured → AI proceeds to belief-break/buy-in → call proposal (not stuck re-asking).
