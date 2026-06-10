@@ -2180,6 +2180,22 @@ function extractVolunteeredCapital(params: {
     const signalMatch = content.match(PASSIVE_CAPITAL_SIGNAL_PHRASES);
     if (!signalMatch) continue;
     if (PASSIVE_NEGATIVE_CONTEXT.test(content)) continue;
+    // Deployed (non-liquid) capital is NOT volunteered investable capital.
+    // "i've got 3000 in my forex account" reads as a positive capital signal
+    // but the money is already deployed in a trading vehicle — skip it so the
+    // lead is held for the liquid-vs-deployed clarifier instead of being
+    // silently passive-qualified. Mirror ai-engine's DEPLOYED_CAPITAL_PATTERN.
+    if (
+      /\b(in|inside|sitting\s+in|tied\s+up\s+in|already\s+in|parked\s+in)\s+(?:my\s+|the\s+|a\s+|an\s+)?(forex|trading|broker(?:age)?|mt[45]|prop|funded|challenge|account|wallet|portfolio)\b/i.test(
+        content
+      ) &&
+      !/\b(pull\s+(it|that)\s+out|withdraw|cash\s+(it\s+)?out|can\s+access|liquid|set\s+aside|saved\s+up)\b/i.test(
+        content
+      ) &&
+      !/\b(plus|on\s+top\s+of|aside\s+from|separate\s+from)\b/i.test(content)
+    ) {
+      continue;
+    }
     // Bundled-message guard (live prod 2026-06-09): a lead may state BOTH a
     // trading income goal and capital in one message ("want 15k a month, and
     // i've got 5k saved"). extractAmountUSD over the whole string grabs the
