@@ -1926,6 +1926,24 @@ function classifyCapitalReply(
     ) {
       return null;
     }
+    // Tega 2026-06-10: money framed as sitting IN a trading / forex / prop /
+    // brokerage account is DEPLOYED, not liquid capital set aside to invest.
+    // Mirror ai-engine's DEPLOYED_CAPITAL_PATTERN so the structured cache never
+    // records capitalThresholdMet=true for "3000 in my forex account" — return
+    // null (not captured) so the booking gate holds the lead in QUALIFYING and
+    // the AI asks the liquid-vs-deployed clarifier. The withdrawable/set-aside
+    // escape hatch ("pull it out", "set aside", "saved up") keeps legit answers.
+    if (
+      /\b(in|inside|sitting\s+in|tied\s+up\s+in|already\s+in|parked\s+in)\s+(?:my\s+|the\s+|a\s+|an\s+)?(forex|trading|broker(?:age)?|mt[45]|prop|funded|challenge|account|wallet|portfolio)\b/i.test(
+        text
+      ) &&
+      !/\b(pull\s+(it|that)\s+out|withdraw|cash\s+(it\s+)?out|can\s+access|liquid|set\s+aside|saved\s+up)\b/i.test(
+        text
+      ) &&
+      !/\b(plus|on\s+top\s+of|aside\s+from|separate\s+from)\b/i.test(text)
+    ) {
+      return null;
+    }
     // Require explicit currency. Without "$X" / "X usd" / "X dollars",
     // a bare number in a free-form reply is too ambiguous to drive a
     // disqualification — let the AI keep asking. The caller can still

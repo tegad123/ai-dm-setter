@@ -114,3 +114,82 @@ describe('parseLeadCapitalAnswer — disqualifier precedence preserved', () => {
     assert.equal(result.kind, 'disqualifier');
   });
 });
+
+// Tega 2026-06-10: deployed (non-liquid) capital must NOT auto-qualify, and
+// vague non-answers must clarify. Liquid framing ("saved up", "in savings")
+// must still pass — that's the regression guard.
+describe('parseLeadCapitalAnswer — liquid vs deployed capital (Tega 2026-06-10)', () => {
+  it('Tega exact case: "3000 USD in the forex account with a prop firm" → ambiguous, no amount', () => {
+    const result = parseLeadCapitalAnswer(
+      'I have 3000 USD in the forex account with a prop firm'
+    );
+    assert.equal(result.kind, 'ambiguous');
+    assert.equal(result.amount, null);
+    assert.equal(
+      result.reason,
+      'prop_firm_mentioned_no_personal_capital_stated'
+    );
+  });
+
+  it('"3000 in my forex account" (no prop-firm word) → ambiguous', () => {
+    const result = parseLeadCapitalAnswer('I have 3000 in my forex account');
+    assert.equal(result.kind, 'ambiguous');
+    assert.equal(result.amount, null);
+  });
+
+  it('"5k in my trading account" → ambiguous (deployed)', () => {
+    const result = parseLeadCapitalAnswer("i've got 5k in my trading account");
+    assert.equal(result.kind, 'ambiguous');
+  });
+
+  it('ESCAPE HATCH: "5k in my trading account but I can pull it out" → amount 5000', () => {
+    const result = parseLeadCapitalAnswer(
+      'I have $5k in my trading account but I can pull it out'
+    );
+    assert.equal(result.kind, 'amount');
+    assert.equal(result.amount, 5000);
+  });
+
+  it('LIQUID: "I have $5000 saved up" → amount 5000 (qualifies)', () => {
+    const result = parseLeadCapitalAnswer('I have $5000 saved up');
+    assert.equal(result.kind, 'amount');
+    assert.equal(result.amount, 5000);
+  });
+
+  it('LIQUID: "$5000 in savings" keeps the amount (savings is liquid, NOT a deployed-account block)', () => {
+    // Savings hits the pre-existing total-savings comfort clarifier (asks how
+    // much of savings they'll invest) — that's fine. The key assertion for THIS
+    // fix is that it is NOT treated as deployed/non-liquid (amount preserved,
+    // not nulled to the prop-firm/forex-account reason).
+    const result = parseLeadCapitalAnswer('got $5000 in savings');
+    assert.equal(result.amount, 5000);
+    assert.notEqual(
+      result.reason,
+      'prop_firm_mentioned_no_personal_capital_stated'
+    );
+  });
+
+  it('LIQUID: "$5000 in the bank" → amount 5000', () => {
+    const result = parseLeadCapitalAnswer('I have $5000 in the bank');
+    assert.equal(result.kind, 'amount');
+    assert.equal(result.amount, 5000);
+  });
+
+  it('PLUS_PHRASE preserved: "I got 4k plus my prop firm" → amount 4000', () => {
+    const result = parseLeadCapitalAnswer('I got $4k plus my prop firm');
+    assert.equal(result.kind, 'amount');
+    assert.equal(result.amount, 4000);
+  });
+
+  it('VAGUE: "just a small just enough" → ambiguous / vague_no_number', () => {
+    const result = parseLeadCapitalAnswer('just a small just enough');
+    assert.equal(result.kind, 'ambiguous');
+    assert.equal(result.reason, 'vague_no_number');
+  });
+
+  it('VAGUE: "just enough i think" → ambiguous / vague_no_number', () => {
+    const result = parseLeadCapitalAnswer('just enough i think');
+    assert.equal(result.kind, 'ambiguous');
+    assert.equal(result.reason, 'vague_no_number');
+  });
+});

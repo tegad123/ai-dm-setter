@@ -1,6 +1,7 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError, scopedAccountId } from '@/lib/auth-guard';
 import { QUALIFIED_LEAD_STAGES_ARR } from '@/lib/lead-state-sets';
+import { leadDisplayName } from '@/lib/lead-name';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -156,8 +157,10 @@ export async function GET(request: NextRequest) {
       return {
         id: c.id,
         leadId: c.lead.id,
-        leadName:
-          c.lead.name || c.lead.handle || c.lead.platformUserId || 'Unknown',
+        // Defensive: never surface a name that looks like a message body
+        // (a corrupted Lead.name) as the conversation title — fall back to the
+        // handle. See src/lib/lead-name.ts.
+        leadName: leadDisplayName(c.lead),
         leadHandle: c.lead.handle || c.lead.platformUserId || '',
         platform: c.lead.platform.toLowerCase(),
         stage: c.lead.stage,

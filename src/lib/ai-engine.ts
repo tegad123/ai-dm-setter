@@ -8173,7 +8173,11 @@ const VAGUE_CAPITAL_PATTERNS: RegExp[] = [
   // disqualifier set ("not much"), but kept in vague rather than
   // disqualifier so the lead gets ONE chance to name a number before
   // we route them to downsell.
-  /\b(very\s+little|barely\s+anything|hardly\s+anything|next\s+to\s+nothing|barely\s+any|tiny\s+bit|not\s+much\s+tbh|not\s+a\s+lot\s+tbh)\b/i
+  /\b(very\s+little|barely\s+anything|hardly\s+anything|next\s+to\s+nothing|barely\s+any|tiny\s+bit|not\s+much\s+tbh|not\s+a\s+lot\s+tbh)\b/i,
+  // Tega 2026-06-10: "just a small just enough" / "just enough" — a non-number
+  // pseudo-answer that slipped past the gate to booking. Probe for a real
+  // ballpark before qualifying.
+  /\b(just\s+enough|enough\s+i\s+think|i\s+think\s+enough|should\s+be\s+enough|probably\s+enough|enough\s+to\s+get\s+(started|going)|enough\s+for\s+now|small\s+just\s+enough)\b/i
 ];
 
 function looksLikeVagueCapitalAnswer(text: string): boolean {
@@ -8240,6 +8244,24 @@ const PERSONAL_CAPITAL_INDICATOR =
   /\b(i\s+(have|got|saved|put|set)|i'?ve\s+(got|saved|put|set)|my\s+(savings|personal|own|capital|money|side))\b/i;
 const PLUS_PHRASE =
   /\b(plus|also|on\s+top\s+of|besides|separate\s+from|aside\s+from|in\s+addition\s+to|as\s+well\s+as)\b/i;
+
+// Deployed / non-liquid capital (Tega 2026-06-10). A number framed as money
+// ALREADY SITTING IN a trading / forex / brokerage / prop / funded account is
+// NOT liquid capital the lead has set aside to invest in the program — it's
+// money already at work in the markets. "I have 3000 in my forex account" must
+// trigger a clarifying question, not auto-qualify. Distinct from
+// PROP_FIRM_PATTERN (firm-funded challenge accounts); this catches the lead's
+// OWN money parked in any trading vehicle. IMPORTANT: the noun list excludes
+// cash / savings / bank on purpose — "5k in savings" / "5k in the bank" is
+// liquid and must still pass.
+const DEPLOYED_CAPITAL_PATTERN =
+  /\b(in|inside|sitting\s+in|tied\s+up\s+in|already\s+in|parked\s+in|deposited\s+(in|into)|loaded\s+(in|into))\s+(?:my\s+|the\s+|a\s+|an\s+)?(forex|trading|broker(?:age)?|mt[45]|metatrader|demo|live|prop|funded|challenge|exchange|crypto|binance|coinbase|account|wallet|portfolio|position|trade|trades)\b/i;
+
+// Escape hatch: the lead acknowledges the money is in an account but states
+// it's accessible / withdrawable / genuinely set aside. After the clarifying
+// turn (or volunteered up front) this should qualify.
+const DEPLOYED_BUT_LIQUID_PATTERN =
+  /\b(pull\s+(it|that|the\s+money)\s+out|withdraw|take\s+(it|that)\s+out|cash\s+(it\s+)?out|move\s+(it|that)\s+(out|over)|can\s+access\s+(it|that)|free\s+to\s+(use|move|invest)|liquid|set\s+aside|saved\s+up|available\s+to\s+(withdraw|move|pull|invest))\b/i;
 
 // Below-threshold hedge prefix (SMOKE 12, 2026-05-04). Lead says
 // "less than $1000" / "under $500" / "below $200" — they are stating
@@ -8443,8 +8465,17 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
   //     "plus X" phrase is present alongside the prop-firm mention
   //     (e.g. "I got 4k plus my prop firm" → 4k IS personal).
   if (PROP_FIRM_PATTERN.test(text)) {
+    // Tega 2026-06-10: a bare "i have" must NOT rescue a number that is
+    // framed as deployed (sitting IN the account). "I have 3000 in my forex
+    // account with a prop firm" is the firm's / already-deployed money, not
+    // personal liquid capital — only a genuine "plus X" / withdrawable signal
+    // counts as personal.
+    const deployedFrame =
+      DEPLOYED_CAPITAL_PATTERN.test(text) &&
+      !DEPLOYED_BUT_LIQUID_PATTERN.test(text);
     const hasPersonalIndicator =
-      PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text);
+      !deployedFrame &&
+      (PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text));
     if (!hasPersonalIndicator) {
       return {
         kind: 'ambiguous',
@@ -8454,6 +8485,25 @@ export function parseLeadCapitalAnswer(raw: string): ParsedLeadAnswer {
     }
     // else: personal-capital language is present → fall through to
     // amount parse; the number is (likely) personal not firm-tied.
+  }
+
+  // 1c. DEPLOYED-CAPITAL GUARD (Tega 2026-06-10). A number framed as money
+  //     already sitting IN a trading / forex / brokerage account (no prop-firm
+  //     word, so the guard above didn't catch it) is deployed capital, not
+  //     liquid capital set aside to invest. Unless the lead also signals it's
+  //     withdrawable / set aside, ask ONE clarifying question instead of
+  //     qualifying. Reuse the prop-firm reason so the existing R24 block +
+  //     clarifier copy ("what you personally have set aside") handles it.
+  if (
+    DEPLOYED_CAPITAL_PATTERN.test(text) &&
+    !DEPLOYED_BUT_LIQUID_PATTERN.test(text) &&
+    !PLUS_PHRASE.test(text)
+  ) {
+    return {
+      kind: 'ambiguous',
+      amount: null,
+      reason: 'prop_firm_mentioned_no_personal_capital_stated'
+    };
   }
 
   // 2. Amount (numeric parse). Even if the lead also says "kinda" or
@@ -8544,11 +8594,21 @@ function applySemanticCapitalAmountToParsedAnswer(
     };
   }
 
+  const deployedFrame =
+    DEPLOYED_CAPITAL_PATTERN.test(text) &&
+    !DEPLOYED_BUT_LIQUID_PATTERN.test(text);
+
   if (PROP_FIRM_PATTERN.test(text)) {
     const hasPersonalIndicator =
-      PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text);
+      !deployedFrame &&
+      (PERSONAL_CAPITAL_INDICATOR.test(text) || PLUS_PHRASE.test(text));
     if (!hasPersonalIndicator) return parsed;
   }
+
+  // Tega 2026-06-10: don't let the semantic amount re-promote deployed money
+  // (e.g. "3000 in my forex account") into a qualifying amount — keep the
+  // parsed (ambiguous) classification so R24 asks the clarifier.
+  if (deployedFrame && !PLUS_PHRASE.test(text)) return parsed;
 
   return {
     kind: 'amount',
