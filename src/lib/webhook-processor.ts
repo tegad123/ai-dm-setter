@@ -49,6 +49,7 @@ import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { transitionLeadStage } from '@/lib/lead-stage';
+import { looksLikeMessageBody } from '@/lib/lead-name';
 import {
   buildQualityGateGeneratedResult,
   isTerminalQualityGateResult,
@@ -1172,10 +1173,20 @@ export async function processIncomingMessage(
     );
     const newConversationPersonaId =
       await resolveActivePersonaIdForCreate(accountId);
+    // Defensive: never persist a name that looks like a message body. If the
+    // resolved name reads like a sentence, fall back to the handle and log it
+    // so we can trace the upstream writer (the message-body-as-name bug).
+    let nameToStore = resolvedName;
+    if (looksLikeMessageBody(resolvedName)) {
+      console.error(
+        `[webhook-processor] BLOCKED message-body lead name on create: "${resolvedName}" — falling back to handle "${resolvedHandle}" (platform=${platform} puid=${platformUserId})`
+      );
+      nameToStore = resolvedHandle;
+    }
     lead = await prisma.lead.create({
       data: {
         accountId,
-        name: resolvedName,
+        name: nameToStore,
         handle: resolvedHandle,
         platform,
         platformUserId,
@@ -1232,7 +1243,8 @@ export async function processIncomingMessage(
   if (
     !isNewLead &&
     senderName !== lead.platformUserId &&
-    /^\d+$/.test(lead.name)
+    /^\d+$/.test(lead.name) &&
+    !looksLikeMessageBody(resolvedName)
   ) {
     await prisma.lead.update({
       where: { id: lead.id },
@@ -1240,6 +1252,14 @@ export async function processIncomingMessage(
     });
     console.log(
       `[webhook-processor] Updated lead name: ${lead.name} → ${resolvedName} (@${resolvedHandle})`
+    );
+  } else if (
+    !isNewLead &&
+    /^\d+$/.test(lead.name) &&
+    looksLikeMessageBody(resolvedName)
+  ) {
+    console.error(
+      `[webhook-processor] BLOCKED message-body lead name on update: "${resolvedName}" (lead ${lead.id}, platform=${platform})`
     );
   }
 
@@ -4843,6 +4863,11 @@ async function sendAIReply(
   // real scheduling link and let the lead self-book. This is NOT a confirmed
   // booking — we never mark the lead BOOKED or claim "locked in" off it.
   let bookingRequiresLeadAction = false;
+  // Captured from a successful bookUnifiedAppointment so the success branch
+  // below can persist them (provider appointment id + meeting link) — needed
+  // for later cancel/reschedule and for the call-details panel.
+  let bookingAppointmentId: string | null = null;
+  let bookingMeetingUrl: string | null = null;
   const bookingSlotIso = result.selectedSlotIso ?? null;
   if (result.subStage === 'BOOKING_CONFIRM' && bookingSlotIso) {
     bookingAttempted = true;
@@ -4884,6 +4909,8 @@ async function sendAIReply(
             booking.confirmationUrl ||
             booking.bookingUrl ||
             null;
+          bookingAppointmentId = booking.appointmentId ?? null;
+          bookingMeetingUrl = meetUrl;
           if (
             meetUrl &&
             Array.isArray(result.messages) &&
@@ -5039,6 +5066,13 @@ async function sendAIReply(
             scheduledCallConfirmed: true,
             scheduledCallUpdatedAt: new Date(),
             scheduledCallUpdatedBy: null, // AI, not a human user
+            // Persist the provider appointment + chosen slot so the booking can
+            // later be cancelled/rescheduled by id and the call-details panel
+            // shows the meeting link (previously left null — only scheduledCallAt
+            // was written, so the LC appointment id was lost).
+            selectedSlot: bookingSlotIso,
+            bookingId: bookingAppointmentId,
+            bookingUrl: bookingMeetingUrl,
             // Reset post-call state in case this is a re-book on the same convo
             callConfirmed: false,
             callConfirmedAt: null,
@@ -5062,6 +5096,17 @@ async function sendAIReply(
           err
         )
       );
+      // Stamp bookedAt — transitionLeadStage only sets stage/stageEnteredAt, so
+      // without this the funnel timing + "booked" analytics miss the event.
+      // Matches the typeform-webhook booking path which also sets bookedAt.
+      await prisma.lead
+        .update({ where: { id: lead.id }, data: { bookedAt: new Date() } })
+        .catch((err) =>
+          console.error(
+            '[webhook-processor] bookedAt stamp failed (non-fatal):',
+            err
+          )
+        );
       try {
         const { scheduleCallConfirmationSequence } = await import(
           '@/lib/call-confirmation-sequence'
