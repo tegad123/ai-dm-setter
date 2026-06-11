@@ -37,12 +37,27 @@ export function verifyWebhookSignature(
 // ---------------------------------------------------------------------------
 
 /**
+ * Options for outbound sends. By default a message goes out as
+ * messaging_type=RESPONSE, which Meta only permits inside the 24-hour
+ * standard messaging window. For follow-ups that legitimately land OUTSIDE
+ * that window, pass tag:'HUMAN_AGENT' — Meta's Human Agent tag opens a 7-day
+ * window for human/agent follow-up. Requires the Human Agent feature to be
+ * approved on the Meta app; without it Meta rejects the tagged send (same
+ * outcome as today's untagged out-of-window send, so this is safe to ship
+ * before the permission is granted).
+ */
+export interface MetaSendOptions {
+  tag?: 'HUMAN_AGENT';
+}
+
+/**
  * Send a message to a Facebook Messenger user via the Graph API.
  */
 export async function sendMessage(
   accountId: string,
   recipientId: string,
-  messageText: string
+  messageText: string,
+  opts?: MetaSendOptions
 ): Promise<{ messageId: string }> {
   const accessToken = await getMetaAccessToken(accountId);
   if (!accessToken) {
@@ -68,11 +83,20 @@ export async function sendMessage(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`
         },
-        body: JSON.stringify({
-          recipient: { id: recipientId },
-          message: { text: messageText },
-          messaging_type: 'RESPONSE'
-        })
+        body: JSON.stringify(
+          opts?.tag === 'HUMAN_AGENT'
+            ? {
+                recipient: { id: recipientId },
+                message: { text: messageText },
+                messaging_type: 'MESSAGE_TAG',
+                tag: 'HUMAN_AGENT'
+              }
+            : {
+                recipient: { id: recipientId },
+                message: { text: messageText },
+                messaging_type: 'RESPONSE'
+              }
+        )
       });
 
       if (!response.ok) {

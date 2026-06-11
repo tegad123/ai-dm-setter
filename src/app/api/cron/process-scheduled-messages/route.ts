@@ -404,14 +404,33 @@ async function fireScheduledMessage(
     throw new Error('no platformUserId on lead');
   }
 
+  // Follow-up rows can fire past the 24h Meta messaging window (FOLLOW_UP_2 at
+  // ~24h, FOLLOW_UP_3 at ~36h). Send those with the HUMAN_AGENT tag so they're
+  // policy-compliant (7-day window) instead of an out-of-window RESPONSE that
+  // Meta rejects. Requires the Human Agent feature on the Meta app; if it's not
+  // granted Meta rejects the tagged send — same outcome as before, no regression.
+  const isFollowUp =
+    row.messageType === 'FOLLOW_UP_1' ||
+    row.messageType === 'FOLLOW_UP_2' ||
+    row.messageType === 'FOLLOW_UP_3' ||
+    row.messageType === 'FOLLOW_UP_SOFT_EXIT' ||
+    row.messageType === 'BOOKING_LINK_FOLLOWUP';
+  const sendOpts = isFollowUp ? ({ tag: 'HUMAN_AGENT' } as const) : undefined;
+
   try {
     if (lead.platform === 'INSTAGRAM') {
-      await sendInstagramDM(lead.accountId, lead.platformUserId, messageBody);
+      await sendInstagramDM(
+        lead.accountId,
+        lead.platformUserId,
+        messageBody,
+        sendOpts
+      );
     } else if (lead.platform === 'FACEBOOK') {
       await sendFacebookMessage(
         lead.accountId,
         lead.platformUserId,
-        messageBody
+        messageBody,
+        sendOpts
       );
     } else {
       throw new Error(`unsupported platform: ${lead.platform}`);

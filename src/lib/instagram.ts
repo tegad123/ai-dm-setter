@@ -59,7 +59,8 @@ export function verifyWebhookSignature(
 export async function sendDM(
   accountId: string,
   recipientId: string,
-  messageText: string
+  messageText: string,
+  opts?: { tag?: 'HUMAN_AGENT' }
 ): Promise<{ messageId: string }> {
   // For Instagram DMs, prefer the Instagram token (IGAA...) over the Facebook Page token
   const { getCredentials } = await import('@/lib/credential-store');
@@ -127,9 +128,16 @@ export async function sendDM(
         body: JSON.stringify({
           recipient: { id: recipientId },
           message: { text: messageText },
-          ...(isIGToken
-            ? { access_token: accessToken }
-            : { messaging_type: 'RESPONSE' })
+          // HUMAN_AGENT tag opens a 7-day follow-up window (vs the 24h
+          // RESPONSE window). Works on both IG and Messenger; requires the
+          // Human Agent feature approved on the Meta app, else Meta rejects
+          // the send (same as today's untagged out-of-window send).
+          ...(opts?.tag === 'HUMAN_AGENT'
+            ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' }
+            : isIGToken
+              ? {}
+              : { messaging_type: 'RESPONSE' }),
+          ...(isIGToken ? { access_token: accessToken } : {})
         })
       });
 
