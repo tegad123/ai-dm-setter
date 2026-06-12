@@ -7,15 +7,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/hooks/use-auth';
+import { useUser } from '@clerk/nextjs';
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 
 export default function ProfileViewPage() {
   const { user } = useAuth();
+  const { user: clerkUser } = useUser();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [updatingPassword, setUpdatingPassword] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -23,6 +27,43 @@ export default function ProfileViewPage() {
       setEmail(user.email || '');
     }
   }, [user]);
+
+  const handleUpdatePassword = async () => {
+    if (!newPassword || !confirmPassword) {
+      toast.error('Enter and confirm your new password.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('New password and confirmation do not match.');
+      return;
+    }
+    if (!clerkUser) {
+      toast.error('Not signed in.');
+      return;
+    }
+    setUpdatingPassword(true);
+    try {
+      // Clerk client-side password update. currentPassword is required when
+      // the user already has a password set; signOutOfOtherSessions is a safe
+      // default after a password change.
+      await clerkUser.updatePassword({
+        currentPassword: currentPassword || undefined,
+        newPassword,
+        signOutOfOtherSessions: true
+      });
+      toast.success('Password updated.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: unknown) {
+      const msg =
+        (err as { errors?: { message?: string }[] })?.errors?.[0]?.message ||
+        (err instanceof Error ? err.message : 'Could not update password.');
+      toast.error(msg);
+    } finally {
+      setUpdatingPassword(false);
+    }
+  };
 
   return (
     <div className='flex w-full flex-col gap-6 p-4'>
@@ -110,7 +151,12 @@ export default function ProfileViewPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />
             </div>
-            <Button>Update Password</Button>
+            <Button
+              onClick={handleUpdatePassword}
+              disabled={updatingPassword || !newPassword || !confirmPassword}
+            >
+              {updatingPassword ? 'Updating…' : 'Update Password'}
+            </Button>
           </CardContent>
         </Card>
       </div>

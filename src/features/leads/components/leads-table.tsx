@@ -23,6 +23,7 @@ import { LeadStageBadge, allStages } from '@/features/shared/lead-stage-badge';
 import { PlatformIcon } from '@/features/shared/platform-icon';
 import { TagBadge } from '@/features/tags/components/tag-badge';
 import { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { IconSearch } from '@tabler/icons-react';
 import { useLeads, useTags } from '@/hooks/use-api';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
@@ -45,6 +46,7 @@ const GROUPED_STAGE_FILTERS = [
 ];
 
 export function LeadsTable() {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('all');
@@ -259,7 +261,11 @@ export function LeadsTable() {
               </TableRow>
             ) : (
               leads.map((lead) => (
-                <TableRow key={lead.id}>
+                <TableRow
+                  key={lead.id}
+                  onClick={() => router.push(`/dashboard/leads/${lead.id}`)}
+                  className='hover:bg-muted/50 cursor-pointer'
+                >
                   <TableCell>
                     <div>
                       <p className='font-medium'>{lead.fullName}</p>

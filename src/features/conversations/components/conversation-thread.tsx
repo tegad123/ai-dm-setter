@@ -792,9 +792,6 @@ export function ConversationThread({
               onKeyDown={handleKeyDown}
               disabled={sending}
             />
-            <Button size='icon' variant='ghost'>
-              <IconMicrophone className='h-5 w-5' />
-            </Button>
             <Button
               size='icon'
               onClick={handleSend}

@@ -83,24 +83,14 @@ const CAMPAIGN_PLACEHOLDERS = [
 ];
 
 // ── Docs hint link ────────────────────────────────────────────────
-// Small "Not sure what to put here? See examples in the docs." line
-// placed below each editor section. Links to /docs/persona-editor
-// with a section-specific hash anchor. The docs page is a stub for
-// now — when it ships these anchors will already be wired up.
-function DocsHint({ section }: { section: string }) {
-  return (
-    <p className='text-muted-foreground text-[11px]'>
-      Not sure what to put here?{' '}
-      <a
-        href={`/docs/persona-editor#${section}`}
-        target='_blank'
-        rel='noopener noreferrer'
-        className='hover:text-foreground underline'
-      >
-        See examples in the docs.
-      </a>
-    </p>
-  );
+// Small "Not sure what to put here? See examples in the docs." hint placed
+// below each editor section. The /docs/persona-editor route does NOT exist
+// yet, so the link 404s (QD-021: a dead doc link / back-nav landing on a
+// missing page). Render nothing until the docs page ships — the call sites
+// stay in place and `section` is kept in the signature so re-enabling is a
+// one-line change here, no edits at the 7 usages.
+function DocsHint(_props: { section: string }) {
+  return null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
