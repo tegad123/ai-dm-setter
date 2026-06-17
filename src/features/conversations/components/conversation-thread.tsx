@@ -749,7 +749,7 @@ export function ConversationThread({
                             <p className='text-sm'>[Image]</p>
                           )}
                           {displayContent && (
-                            <p className='text-sm whitespace-pre-wrap'>
+                            <p className='text-sm wrap-break-word whitespace-pre-wrap'>
                               {displayContent}
                             </p>
                           )}

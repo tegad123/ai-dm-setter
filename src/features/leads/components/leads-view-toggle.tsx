@@ -69,13 +69,16 @@ function DevCreateLead({ onCreated }: { onCreated: () => void }) {
 }
 
 export function LeadsViewToggle() {
-  const [view, setView] = useState<'list' | 'pipeline'>('list');
+  const [view, setView] = useState<'list' | 'pipeline'>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved === 'list' || saved === 'pipeline') return saved;
+    } catch {
+      // localStorage unavailable (SSR guard, private browsing)
+    }
+    return 'list';
+  });
   const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === 'list' || saved === 'pipeline') setView(saved);
-  }, []);
 
   const toggle = (v: 'list' | 'pipeline') => {
     setView(v);
