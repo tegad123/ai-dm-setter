@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,7 @@ export default function VoiceNoteCard({
   onClick
 }: VoiceNoteCardProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   const status = statusConfig(item.status);
   const StatusIcon = status.icon;
 
@@ -108,9 +109,20 @@ export default function VoiceNoteCard({
           onClick={handlePlayToggle}
           disabled={item.status === 'PROCESSING'}
         >
-          <Play className='h-4 w-4' />
+          {isPlaying ? (
+            <Pause className='h-4 w-4' />
+          ) : (
+            <Play className='h-4 w-4' />
+          )}
         </Button>
-        <audio ref={audioRef} src={item.audioFileUrl} preload='none' />
+        <audio
+          ref={audioRef}
+          src={item.audioFileUrl}
+          preload='none'
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+        />
 
         {/* Content */}
         <div className='min-w-0 flex-1'>

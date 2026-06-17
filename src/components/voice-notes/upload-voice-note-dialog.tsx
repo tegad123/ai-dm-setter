@@ -171,7 +171,11 @@ export default function UploadVoiceNoteDialog({
                 <div>
                   <p className='text-sm font-medium'>{file.name}</p>
                   <p className='text-muted-foreground text-xs'>
-                    ~{Math.round(estimatedDuration)}s estimated duration
+                    ~
+                    {estimatedDuration < 1
+                      ? '< 1s'
+                      : `${Math.round(estimatedDuration)}s`}{' '}
+                    estimated duration
                   </p>
                 </div>
               </div>

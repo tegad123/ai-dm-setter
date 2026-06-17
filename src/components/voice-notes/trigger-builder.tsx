@@ -239,8 +239,11 @@ function ConversationalMoveCard({
   onChange: (t: ConversationalMoveTrigger) => void;
   onRemove: () => void;
 }) {
-  // Convert suggested_moments between string[] and textarea text
-  const momentsText = trigger.suggested_moments.join('\n');
+  // Raw edit buffer so mid-line spaces/blank lines aren't stripped on every keystroke.
+  // Parsed into string[] only on blur.
+  const [momentsText, setMomentsText] = useState(
+    trigger.suggested_moments.join('\n')
+  );
 
   const stageSuggestions = STAGE_OPTIONS.map((s) => s.value);
 
@@ -268,10 +271,11 @@ function ConversationalMoveCard({
           <Label className='text-xs'>Suggested Moments</Label>
           <Textarea
             value={momentsText}
-            onChange={(e) =>
+            onChange={(e) => setMomentsText(e.target.value)}
+            onBlur={() =>
               onChange({
                 ...trigger,
-                suggested_moments: e.target.value
+                suggested_moments: momentsText
                   .split('\n')
                   .map((l) => l.trim())
                   .filter(Boolean)
@@ -308,7 +312,7 @@ function ConversationalMoveCard({
         {/* Cooldown */}
         <div className='space-y-1.5'>
           <Label className='text-xs'>Cooldown</Label>
-          <div className='flex items-center gap-2'>
+          <div className='flex flex-wrap items-center gap-2'>
             <Select
               value={trigger.cooldown.type}
               onValueChange={(v) =>
@@ -321,7 +325,7 @@ function ConversationalMoveCard({
                 })
               }
             >
-              <SelectTrigger className='h-8 w-[160px] text-xs'>
+              <SelectTrigger className='h-8 min-w-[140px] text-xs'>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -333,17 +337,21 @@ function ConversationalMoveCard({
             <Input
               type='number'
               min={1}
+              step={1}
               value={trigger.cooldown.value}
               onChange={(e) =>
                 onChange({
                   ...trigger,
                   cooldown: {
                     ...trigger.cooldown,
-                    value: Math.max(1, parseInt(e.target.value) || 1)
+                    value: Math.max(
+                      1,
+                      Math.round(parseFloat(e.target.value)) || 1
+                    )
                   }
                 })
               }
-              className='h-8 w-20 text-xs'
+              className='h-8 w-24 text-xs'
             />
           </div>
           <p className='text-muted-foreground text-[10px]'>
@@ -401,7 +409,6 @@ export default function TriggerBuilder({
         break;
     }
     onChange([...triggers, newTrigger]);
-    setMenuOpen(false);
   }
 
   function updateTrigger(index: number, updated: VoiceNoteTrigger) {
