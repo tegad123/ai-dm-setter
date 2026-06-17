@@ -300,6 +300,10 @@ interface ConversationThreadProps {
   onSuggestionActioned?: () => void;
 }
 
+function draftKey(conversationId: string) {
+  return `draft:${conversationId}`;
+}
+
 export function ConversationThread({
   conversation,
   loading,
@@ -309,7 +313,13 @@ export function ConversationThread({
   manualReply,
   onSuggestionActioned
 }: ConversationThreadProps) {
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(() => {
+    try {
+      return localStorage.getItem(draftKey(conversation.id)) ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [sending, setSending] = useState(false);
   // Tracks which messages have an unsend in flight so we can disable the
   // button + show a toast without lifting state up.
@@ -368,6 +378,28 @@ export function ConversationThread({
     }
   };
 
+  // Restore draft when switching conversations
+  useEffect(() => {
+    try {
+      setMessage(localStorage.getItem(draftKey(conversation.id)) ?? '');
+    } catch {
+      setMessage('');
+    }
+  }, [conversation.id]);
+
+  // Persist draft on every keystroke
+  useEffect(() => {
+    try {
+      if (message) {
+        localStorage.setItem(draftKey(conversation.id), message);
+      } else {
+        localStorage.removeItem(draftKey(conversation.id));
+      }
+    } catch {
+      // localStorage unavailable (private browsing quota) — silently skip
+    }
+  }, [conversation.id, message]);
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     if (messagesContainerRef.current) {
@@ -391,6 +423,11 @@ export function ConversationThread({
     try {
       await onSendMessage(message.trim());
       setMessage('');
+      try {
+        localStorage.removeItem(draftKey(conversation.id));
+      } catch {
+        // ignore
+      }
     } finally {
       setSending(false);
     }
