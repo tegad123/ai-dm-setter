@@ -6757,3 +6757,41 @@ export async function computeReplyDelaySeconds(
   if (maxDelay <= 0) return 0;
   return Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 }
+
+/**
+ * Inline-path staleness guard (BUG-05 hardening, 2026-06-18).
+ *
+ * The inline `after()` path in the webhook routes claims a ScheduledReply
+ * (PENDING → PROCESSING) and then generates. If a NEWER lead message arrived
+ * while this row was sleeping, its webhook ran Step 0b (cancel PENDING) +
+ * created a fresh PENDING row. But if THIS row had already flipped to
+ * PROCESSING, the cancel `updateMany where status:PENDING` missed it — so two
+ * generations can run for the same conversation, each blind to the other's
+ * messages (the Paris-class "back-to-back" symptom, under load).
+ *
+ * After claiming, call this: it returns true when a strictly-newer reply row
+ * exists for the conversation (any non-terminal/active status created after
+ * this one), meaning this claim is stale and the caller should yield so only
+ * the newest reply generates on the full message batch.
+ *
+ * Note: prod (cron) already batches correctly via the debounce in
+ * scheduleAIReply; this guard closes the inline/fast-path race specifically.
+ */
+export async function isScheduledReplySuperseded(
+  conversationId: string,
+  claimedReplyId: string,
+  claimedCreatedAt: Date
+): Promise<boolean> {
+  const newer = await prisma.scheduledReply.findFirst({
+    where: {
+      conversationId,
+      id: { not: claimedReplyId },
+      createdAt: { gt: claimedCreatedAt },
+      // A fresher reply that is still live (queued or being processed by a
+      // concurrent path). CANCELLED/SENT/FAILED rows are not contenders.
+      status: { in: ['PENDING', 'PROCESSING'] }
+    },
+    select: { id: true }
+  });
+  return newer !== null;
+}

@@ -5,7 +5,8 @@ import {
   processIncomingMessage,
   scheduleAIReply,
   processScheduledReply,
-  computeReplyDelaySeconds
+  computeReplyDelaySeconds,
+  isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
 import {
   FAILED_QUALITY_GATE_STATUS,
@@ -507,6 +508,32 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   console.log(
                     `[instagram-webhook] inline reply skipped — scheduledReply ${scheduledReply.id} already claimed`
                   );
+                  return;
+                }
+                // BUG-05 hardening: if a newer lead message arrived during the
+                // delay sleep, its webhook created a fresher reply row. This
+                // claim is stale — yield so only the newest reply generates on
+                // the full batch (avoids two replies blind to each other).
+                if (
+                  await isScheduledReplySuperseded(
+                    targetConvoId,
+                    scheduledReply.id,
+                    scheduledReply.createdAt
+                  )
+                ) {
+                  console.log(
+                    `[instagram-webhook] inline reply superseded by a newer message for ${targetConvoId} — yielding`
+                  );
+                  await prisma.scheduledReply
+                    .update({
+                      where: { id: scheduledReply.id },
+                      data: {
+                        status: 'CANCELLED',
+                        processedAt: new Date(),
+                        lastError: 'Superseded by newer lead message (inline)'
+                      }
+                    })
+                    .catch(() => null);
                   return;
                 }
                 // Re-check aiActive at delivery time — the user may have
