@@ -297,7 +297,13 @@ export function ConversationsView() {
       {/* Right Sidebar — Summary / Score / Notes */}
       {activeApiConvo && (
         <div className='hidden min-h-0 w-80 overflow-hidden border-l lg:flex lg:flex-col'>
+          {/* BUG-15 (Bevan-shows-Paris-stats 2026-06-17): key by conversation
+              id so the sidebar fully remounts on switch — clears any stale
+              internal detail state. messages are blanked while the new
+              conversation's fetch is in flight so the Summary stats never
+              compute from the previously-selected conversation's messages. */}
           <ConversationSidebar
+            key={activeApiConvo.id}
             conversationId={activeApiConvo.id}
             leadId={activeApiConvo.leadId}
             leadName={activeApiConvo.leadName}
@@ -308,10 +314,14 @@ export function ConversationsView() {
             qualityScore={activeApiConvo.qualityScore ?? 0}
             priorityScore={activeApiConvo.priorityScore ?? 0}
             tags={activeApiConvo.tags}
-            messages={apiMessages.map((m) => ({
-              ...m,
-              timestamp: m.sentAt || m.timestamp || ''
-            }))}
+            messages={
+              msgLoading
+                ? []
+                : apiMessages.map((m) => ({
+                    ...m,
+                    timestamp: m.sentAt || m.timestamp || ''
+                  }))
+            }
             createdAt={activeApiConvo.createdAt}
           />
         </div>

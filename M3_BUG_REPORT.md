@@ -272,3 +272,20 @@ Hard-fail `broken_fragment_opener` in `scoreVoiceQuality`: a reply that opens wi
 
 ### Verification
 3 unit tests pass (the exact "Could? brother" line + other fragments blocked; proper questions not flagged). 55 gate-related tests pass. `tsc` clean.
+
+---
+
+## BUG-15 — Stale / cross-conversation summary panel ✅ VERIFIED REAL + FIXED (MEDIUM)
+
+### What the client reported
+> Opening Bevan van Niekerk, the Summary panel showed 195 Messages / 1d 8h / Lead 81 / AI 114 / Positive 52% — **identical to Paris Mokoena's numbers**. Verify whether the panel actually updates on conversation switch.
+
+### Verification — it's real
+Traced the render path in `conversations-view.tsx`: on conversation switch `activeId` changes and `useMessages(activeId)` starts a new fetch, but `apiMessages` **holds the previous conversation's messages until that fetch resolves**. `<ConversationSidebar>` had **no `key`**, so the same instance persisted across switches and `SummaryTab` computed stats from the stale `messages` prop (and the sidebar's own `detail` state lingered). That's exactly the "Bevan shows Paris's numbers" symptom — a genuine data-integrity bug, not a capture artifact.
+
+### The fix
+- `key={activeApiConvo.id}` on `<ConversationSidebar>` → full remount on switch, clearing stale internal `detail` state instantly.
+- Blank the `messages` prop while the new conversation's fetch is in flight (`msgLoading ? [] : …`) so stats never compute from the prior conversation. `useMessages`' `loading` is only true on the keyed conversationId change (refetch on new messages is silent), so this never flashes on inbound messages.
+
+### Verification
+`tsc` clean; the main message thread is unaffected (it uses its own `localMessages` + `loading` state). Confirm visually post-deploy: open two conversations back-to-back; the Summary stats now update immediately and never show the prior lead's numbers.
