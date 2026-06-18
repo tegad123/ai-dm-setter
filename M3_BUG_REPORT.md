@@ -316,3 +316,23 @@ There's a soft prompt block ("links already sent") but it's a prompt rule the mo
 
 ### Resolution
 The doc itself notes this is "tied to BUG-01" — the repeated canned line anchored the conversation in Discovery. The **verbatim_repeat guard (BUG-01)** now hard-fails that repeated line and forces the AI to respond to what the lead actually said / advance, removing the anchor. Confirmed in the prod "after" run: the conversation progressed cleanly Discovery → Goal → Soft Pitch → Booking with no Discovery loop. No separate fix required; covered by `c30db6c`.
+
+---
+
+## BUG-11 — Qualification status contradicts the conversation ✅ FIXED (MEDIUM)
+
+### What the client reported
+> Paris is marked UNQUALIFIED / Soft Exit — but a call was booked. Status labels don't agree with each other or with what happened.
+
+### What the prod data shows (confirmed)
+```
+Paris:  Lead.stage=UNQUALIFIED  outcome=SOFT_EXIT  systemStage="Soft Exit (Under $500)"
+        BUT scheduledCallAt=SET, bookingId=8xEukmCe…, bookedAt=YES
+```
+A lead with a **confirmed booked call** was marked UNQUALIFIED/Soft-Exit. Root cause: `Lead.stage` and the booking state are written by independent paths with no reconciliation — a separate qualification path (the old "under $500" capital downgrade) marked him UNQUALIFIED *after* the booking existed.
+
+### The fix (code-level invariant)
+A guard in `transitionLeadStage` (`lead-stage.ts`): an **AI/automated** transition to `UNQUALIFIED` is refused when the conversation has a real booking (`scheduledCallAt || bookingId`) — the booking is the stronger signal, so the contradictory downgrade is blocked. Scoped to `transitionedBy !== 'user'` so a human operator can still explicitly disqualify a booked lead (e.g. after a no-show) via the dashboard override. Confirmed: AI paths pass `'ai'`, operator override passes `'user'`.
+
+### Verification
+`tsc` clean; lead/stale-review regression tests pass. Existing leads already in the contradictory state would need a one-off repair if the client wants the historical rows cleaned (not done — flagging it).

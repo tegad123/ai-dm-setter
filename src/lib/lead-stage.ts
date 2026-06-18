@@ -127,6 +127,30 @@ export async function transitionLeadStage(
     return lead;
   }
 
+  // 2b. Booking invariant (BUG-11, Paris Mokoena 2026-06-17). Paris had a
+  //     confirmed call (scheduledCallAt + bookingId, bookedAt set) yet was
+  //     marked UNQUALIFIED / Soft Exit by a separate qualification path —
+  //     status contradicting the conversation. A lead with a real booked call
+  //     must NOT be downgraded to UNQUALIFIED; the booking is the stronger
+  //     signal. Block the contradictory transition (operator override via the
+  //     dashboard still works — those go through a different explicit path and
+  //     would cancel the booking first). Other transitions are unaffected.
+  //     Scoped to AI/automated transitions (transitionedBy !== 'user') so a
+  //     human operator can still explicitly disqualify a booked lead (e.g.
+  //     after a no-show) via the dashboard override.
+  if (toStage === 'UNQUALIFIED' && transitionedBy !== 'user') {
+    const convo = await prisma.conversation.findFirst({
+      where: { leadId },
+      select: { scheduledCallAt: true, bookingId: true }
+    });
+    if (convo?.scheduledCallAt || convo?.bookingId) {
+      console.warn(
+        `[lead-stage] BUG-11 invariant: refusing AI transition of lead ${leadId} to UNQUALIFIED — a call is already booked (scheduledCallAt/bookingId set). Keeping stage=${lead.stage}.`
+      );
+      return lead;
+    }
+  }
+
   const fromStage = lead.stage;
   const now = new Date();
 
