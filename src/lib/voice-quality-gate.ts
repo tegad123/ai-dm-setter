@@ -2554,6 +2554,43 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9h-iii. Generic verbatim-repeat guard (BUG-01, Paris Mokoena 2026-06-17).
+  // The looping line "I mean bro... the main struggle you're facing is
+  // greediness and lack of patience..." was generated VERBATIM 4 times across
+  // the conversation at the Call-Proposal stage. It's not an opener, a capital
+  // question, or a pitch — so none of the specific repeat detectors caught it.
+  // This is the catch-all: if the new reply (whole message) is near-identical
+  // to ANY recent AI turn, hard-fail and force a fresh generation. Also kills
+  // BUG-13 (duplicate pitch/link sent verbatim twice).
+  //
+  // Thresholds: only meaningful messages (>= 8 content tokens) are compared so
+  // short acks ("gotchu bro") — already handled by repeated_opener — don't
+  // false-positive here. Jaccard >= 0.85 = near-verbatim repeat.
+  {
+    const recentForRepeat =
+      options?.recentAIMessages && options.recentAIMessages.length > 0
+        ? options.recentAIMessages
+        : options?.previousAIMessage
+          ? [options.previousAIMessage]
+          : [];
+    const replyTokens = tokenSetForVerbatimCompare(reply);
+    if (replyTokens.size >= 8) {
+      let worst: { sim: number; snippet: string } | null = null;
+      for (const past of recentForRepeat.slice(-5)) {
+        if (!past || tokenSetForVerbatimCompare(past).size < 8) continue;
+        const sim = jaccardSimilarity(reply, past);
+        if (sim >= 0.85 && (!worst || sim > worst.sim)) {
+          worst = { sim, snippet: past.slice(0, 60).replace(/\n/g, ' ') };
+        }
+      }
+      if (worst) {
+        hardFails.push(
+          `verbatim_repeat: this reply is ${Math.round(worst.sim * 100)}% identical to a recent AI message ("${worst.snippet}…"). You already said this. Do NOT repeat it — respond to what the lead actually said in their latest message, or advance the conversation with a different point.`
+        );
+      }
+    }
+  }
+
   // 9i. Repeated capital question (Rodrigo Moran 2026-04-26). When the
   // AI history already has 1+ capital-verification questions AND this
   // reply contains another, hard-fail. Rodrigo's bot asked at 3:47

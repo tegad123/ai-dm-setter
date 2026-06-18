@@ -13,7 +13,8 @@
 | # | Bug | Sev | Est | Status |
 |---|-----|-----|-----|--------|
 | 05 | Back-to-back messages each get a reply | HIGH | 4–6h | ✅ |
-| 01+10 | Looping line / dead-end "one sec" stall | CRIT+HIGH | 4–6h | ⏳ |
+| 01 | Looping line (verbatim repeat) | CRIT | 4–6h | ✅ |
+| 10 | Dead-end "one sec" stall | HIGH | — | 🔧 (folded into 07/09 — it's a symptom of re-booking) |
 | 02 | Mid-sentence truncation | CRIT | 2–4h | ⏳ |
 | 03 | Internal template/placeholder leak | CRIT | 2–3h | ⏳ |
 | 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ⏳ |
@@ -61,3 +62,36 @@ Added `isScheduledReplySuperseded()` (`src/lib/webhook-processor.ts`) — after 
 
 ### Note for the client
 This is a **correctness fix to existing infrastructure**, not a new feature — the debounce Daniel asked for already shipped. The visible "ignored my messages" feeling in the Paris log is resolved by the **BUG-06 / BUG-01 / BUG-10** fixes (next in the queue), which stop the AI from answering a batch with a canned non-answer.
+
+---
+
+## BUG-01 — Looping broken/repeated line ✅ FIXED & VERIFIED
+
+### What the client reported
+> The AI repeated this identical line at least 4 times: *"I mean bro, based off what it seems, the main struggle you're facing is greediness and lack of patience, but like I said your commitment is truly"* — and it cuts off mid-sentence.
+
+### What the prod data shows (root cause corrected)
+Pulled from the Paris conversation — the line fired **4 times verbatim**, all at **stage = "Call Proposal" (subStage COMMITMENT_CONFIRM/PATH_A)**:
+
+```
+12:07:40  (multi-bubble)  after lead: "Yes bro" / "Today"
+12:47:21  (single-send)   after lead: "Waiting for cleaner confirmation"
+13:13:49  (single-send)   after lead: "600usd"            ← lead just gave capital
+13:21:44  (single-send)   after lead: "…are you selling it or not / Yeah it is / ??"
+```
+
+Two corrections to the original hypothesis:
+1. **It is NOT a stored truncated string.** It's the **model regenerating the same observation verbatim** whenever it's stuck at the Call-Proposal stage and the lead's message doesn't cleanly advance it. (The "cut off mid-sentence" is BUG-02, a separate truncation issue.)
+2. None of the existing repeat-detectors caught it — it isn't an opener, a capital question, or a call pitch, so it slipped through every *specific* guard.
+
+### The fix (code-level guard, not a prompt rule)
+Added a **generic `verbatim_repeat` hard-fail** to the quality gate (`src/lib/voice-quality-gate.ts`): if a generated reply is **≥85% identical** (Jaccard, content words) to **any of the last 8 AI messages**, it hard-fails and forces a fresh regeneration with an explicit "you already said this — respond to what the lead actually said" directive. Short acks (< 8 content words) are excluded (those are handled by the existing `repeated_opener` guard), so no false positives.
+
+This is a catch-all: it kills **any** verbatim loop, including **BUG-13** (duplicate pitch/link sent twice).
+
+### Verification
+- **Before:** prod evidence above — same line 4×, verbatim, at Call-Proposal stage.
+- **After:** 4 unit tests pass (identical repeat → caught; near-verbatim 5 turns back → caught; genuinely different reply → not flagged; short ack → not flagged). All 47 existing quality-gate / intelligence / placeholder unit tests still pass. `tsc` clean.
+
+### Related finding → BUG-10 re-scoped
+BUG-10's *"give me one sec to get that locked in 🙏"* stall (fired 5×, the last one a literal dead-end with no follow-up) is **a symptom of BUG-09**: the conversation already had a confirmed booking (`scheduledCallAt`, `bookingId` both set), but the AI kept re-entering BOOKING_CONFIRM and re-attempting to book the already-booked call → the booking call fails → it ships the holding line. Fixing BUG-09's booking-state circuit-breaker removes the stall at its source, so BUG-10 is folded into the BUG-07/09 work rather than band-aided separately. (The same data also confirms BUG-09's date mismatch: `scheduledCallAt` = Sat Jun 20 while the chat agreed Monday.)

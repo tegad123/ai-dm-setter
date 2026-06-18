@@ -3686,7 +3686,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         ? ('failed' as const)
         : undefined),
     previousAIMessage: lastAiTurn?.content ?? lastAiMsg?.content ?? null,
-    recentAIMessages: priorAITurns.slice(-3).map((turn) => turn.content),
+    // Widened from -3 to -8: the repeated_opener guard internally slices to
+    // -3, but the verbatim_repeat guard (BUG-01) needs a wider window because
+    // the Paris loop line recurred many turns apart, not just back-to-back.
+    recentAIMessages: priorAITurns.slice(-8).map((turn) => turn.content),
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
