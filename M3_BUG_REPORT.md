@@ -219,3 +219,20 @@ Drove a fresh cold-start conversation on the live daetradez prod (Shazim FB, aft
 - **Timezone mapping bug (new):** lead said "GMT+2, South Africa" but it stored `Europe/London` (should be `Africa/Johannesburg`) and labelled the slot "GMT+1". The booked instant is internally consistent, but the tz *label* is wrong. Feeds BUG-09's display. → fix queued.
 - **BUG-14 reproduced:** a short question ("do you guys trade prop firms?") produced a reply opening "Could? brother…". → MEDIUM, queued.
 - **BUG-06:** AI cycled discovery questions and dodged the prop-firm question before closing. → MEDIUM, queued.
+
+---
+
+## TZ mapping fix (new finding from the prod run) ✅ FIXED
+
+### What surfaced
+In the prod "after" run the lead said "GMT+2, South Africa" but it was stored as `Europe/London` (GMT+0/+1) — so the booked slot was labelled "GMT+1" instead of the lead's actual GMT+2. (Paris had the same `Europe/London` mis-map.) The booked instant is internally consistent, but the timezone *label* shown to the lead is wrong — the display half of BUG-09.
+
+### Root cause
+The AI emits `lead_timezone` as an IANA string, and the prompt schema only showed `America/New_York` / `Europe/London` as examples — so for a GMT+2 / South-Africa lead the model picked the nearest European-looking example.
+
+### The fix
+- **Code normalizer** `normalizeLeadTimezone()` (`ai-engine.ts`), applied at parse time so every downstream use gets the corrected value: maps region/offset phrases (South Africa/SAST/GMT+2 → `Africa/Johannesburg`, plus Nigeria/Kenya/Ghana/UAE/India/Australia and bare GMT±N offsets) to the right IANA zone, validates real IANA zones, and leaves correct ones untouched.
+- **Prompt hint** widened so the model emits the right zone in the first place (esp. `Africa/Johannesburg` for SA / GMT+2).
+
+### Verification
+5 unit tests pass (SA/SAST/GMT+2 → Africa/Johannesburg; other regions; valid zones untouched; null handling). `tsc` clean.

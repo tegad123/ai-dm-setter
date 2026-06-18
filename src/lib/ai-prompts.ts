@@ -203,7 +203,7 @@ You MUST respond with valid JSON only. No markdown, no code fences, no extra tex
   "follow_up_number": null | 1 | 2 | 3,
   "soft_exit": false,
   "escalate_to_human": false,
-  "lead_timezone": null | "America/New_York" | "Europe/London" | "...",
+  "lead_timezone": null | "<correct IANA zone for the lead's location/offset, e.g. America/New_York, Europe/London, Africa/Johannesburg for South Africa / GMT+2, Africa/Lagos for Nigeria, Asia/Dubai>",
   "selected_slot_iso": null | "2026-04-09T14:00:00.000Z",
   "lead_email": null | "lead@example.com",
   "suggested_tag": "HIGH_INTENT" | "RESISTANT" | "UNQUALIFIED" | "NEUTRAL" | "",
