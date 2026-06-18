@@ -8,23 +8,39 @@
 
 ---
 
-## ETA summary (per client request)
+## Status summary — ALL 15 FIXED
 
-| # | Bug | Sev | Est | Status |
-|---|-----|-----|-----|--------|
-| 05 | Back-to-back messages each get a reply | HIGH | 4–6h | ✅ |
-| 01 | Looping line (verbatim repeat) | CRIT | 4–6h | ✅ |
-| 10 | Dead-end "one sec" stall | HIGH | — | ✅ (fixed with 07/09 — circuit-breaker + operator escalation) |
-| 02 | Mid-sentence truncation | CRIT | 2–4h | ✅ |
-| 03 | Internal template/placeholder leak | CRIT | 2–3h | ✅ |
-| 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ✅ (prod "after" run pending) |
-| 08 | Image hallucination | HIGH | 3–5h | ✅ |
+Every fix was confirmed against the **real Paris/Bevan production data** first, is a **code-level guard** (not a prompt-only rule), and ships with unit tests. **515 unit tests pass; tsc clean.** The CRITICAL+HIGH set was **verified live on daetradez** (a fresh 0→booking run, post-deploy — see the PROD VERIFICATION section).
 
-**CRITICAL + HIGH total ≈ 3–5 working days** incl. before/after verification. MEDIUM bugs (11–15) ≈ +1.5–2 days, do not gate M3.
+| # | Bug | Sev | Status | Commit |
+|---|-----|-----|--------|--------|
+| 01 | Looping broken/repeated line | CRIT | ✅ deployed + prod-verified | c30db6c |
+| 02 | Mid-sentence truncation | CRIT | ✅ deployed + prod-verified | ec7d84f |
+| 03 | Internal template/placeholder leak | CRIT | ✅ deployed + prod-verified | 925779e |
+| 04 | "Robotic / am I talking to AI" | CRIT | ✅ resolved (composite of 01/05/06/10) | — |
+| 05 | Back-to-back messages | HIGH | ✅ deployed + prod-verified | 48c7fee |
+| 06 | Dodges direct questions | MED | ✅ pushed | 85087de |
+| 07 | Re-asks info already given | HIGH | ✅ deployed + prod-verified | 7b0c04c |
+| 08 | Image hallucination | HIGH | ✅ deployed + prod-verified | d253c81 |
+| 09 | Re-books / date mismatch | HIGH | ✅ deployed + prod-verified | 7b0c04c |
+| 10 | Dead-end "one sec" stall | HIGH | ✅ deployed + prod-verified | 7b0c04c |
+| 11 | Status contradicts conversation | MED | ✅ pushed | bed55b1 |
+| 12 | Stuck in Discovery | MED | ✅ resolved via 01 | 62c804f |
+| 13 | Duplicate pitch / link | MED | ✅ pushed | 62c804f |
+| 14 | Garbled "Could?" opener | MED | ✅ pushed | 3a341e7 |
+| 15 | Stale summary panel | MED | ✅ verified real + pushed | e5fb663 |
+| + | Timezone mapping (caught during prod testing) | — | ✅ pushed | 773e04a |
 
-**Bigger-than-it-looks flags (raising now, not at the deadline):**
-- **BUG-07/09** — booking-state isn't fed back to the AI, plus a calendar UTC-vs-timezone date mismatch that may grow once traced live.
-- **BUG-05** — touches the reply-scheduling core; needed careful regression testing (done).
+**Deploy state:** CRITICAL+HIGH (01–10) are merged + deployed + prod-verified. The MEDIUM batch + timezone fix (`773e04a`..`bed55b1`) are pushed and ready to deploy.
+
+**Diagnosis corrections worth knowing** (the prod data changed 3 of the original assumptions):
+- **BUG-01** — the looping line is the *model repeating itself*, not a stored truncated string; fixed with a generic verbatim-repeat guard.
+- **BUG-05** — the message batching Daniel asked for already existed and worked in prod; the real bug was a narrower fast-path race (fixed).
+- **BUG-08** — vision/OCR was usually working; the AI was *over-interpreting* a neutral description into "solid result" — guarded accordingly.
+
+**Optional follow-ups (non-blocking, flagged for a decision):**
+- The timezone fix corrects when the lead names a region/offset; a bare wrong IANA from the model isn't auto-detectable.
+- BUG-11: existing leads already in the contradictory state would need a one-off repair script if you want historical rows cleaned (not done — no data touched).
 
 ---
 
