@@ -196,3 +196,143 @@ The real failure is **over-interpretation**: the 18:09 screenshot's auto-descrip
 ### Verification
 - **Before:** prod evidence — "solid result fr" on a neutral balance screenshot.
 - **After:** 4 new unit tests (the exact "solid result" line blocked; "nice win" blocked; no preceding image → allowed; neutral "what's it showing?" → allowed). 59 gate-related tests pass. `tsc` clean.
+
+---
+
+## ✅ PROD "AFTER" VERIFICATION — Shazim FB chat, 0 → booking (post-deploy)
+
+Drove a fresh cold-start conversation on the live daetradez prod (Shazim FB, after deploying all fixes). Result: **clean 0→booking pass with every gating bug fixed.**
+
+| Check | Result |
+|---|---|
+| 0 → booking completed | ✅ booked Wed Jun 24 7pm, `bookingId=lC0fsE7iSYKvxSE5GRIg`, Zoom link delivered |
+| BUG-07 capital re-ask | ✅ "5k saved up" captured (HIGH confidence), **never re-asked** |
+| BUG-07 email re-ask | ✅ email captured once, **never re-asked** |
+| BUG-09 date match | ✅ `selectedSlot` = the **Wednesday** agreed in chat (Paris had Sat-vs-Mon mismatch) |
+| BUG-09 re-booking | ✅ two post-booking messages → AI **confirmed the existing call** ("still on for wednesday 7pm"), did **not** re-propose times or restart booking |
+| BUG-10 dead-end stall | ✅ **no "give me one sec to get that locked in" stall** (Paris fired it 5× at this exact point) |
+| BUG-01 verbatim loop | ✅ replies varied throughout; no repeated line |
+| BUG-02 truncation | ✅ all bubbles delivered complete (incl. the link bubble) |
+| BUG-03 template leak | ✅ no scaffolding/placeholder text leaked |
+
+**Still-open items observed during the run (MEDIUM / non-gating):**
+- **Timezone mapping bug (new):** lead said "GMT+2, South Africa" but it stored `Europe/London` (should be `Africa/Johannesburg`) and labelled the slot "GMT+1". The booked instant is internally consistent, but the tz *label* is wrong. Feeds BUG-09's display. → fix queued.
+- **BUG-14 reproduced:** a short question ("do you guys trade prop firms?") produced a reply opening "Could? brother…". → MEDIUM, queued.
+- **BUG-06:** AI cycled discovery questions and dodged the prop-firm question before closing. → MEDIUM, queued.
+
+---
+
+## TZ mapping fix (new finding from the prod run) ✅ FIXED
+
+### What surfaced
+In the prod "after" run the lead said "GMT+2, South Africa" but it was stored as `Europe/London` (GMT+0/+1) — so the booked slot was labelled "GMT+1" instead of the lead's actual GMT+2. (Paris had the same `Europe/London` mis-map.) The booked instant is internally consistent, but the timezone *label* shown to the lead is wrong — the display half of BUG-09.
+
+### Root cause
+The AI emits `lead_timezone` as an IANA string, and the prompt schema only showed `America/New_York` / `Europe/London` as examples — so for a GMT+2 / South-Africa lead the model picked the nearest European-looking example.
+
+### The fix
+- **Code normalizer** `normalizeLeadTimezone()` (`ai-engine.ts`), applied at parse time so every downstream use gets the corrected value: maps region/offset phrases (South Africa/SAST/GMT+2 → `Africa/Johannesburg`, plus Nigeria/Kenya/Ghana/UAE/India/Australia and bare GMT±N offsets) to the right IANA zone, validates real IANA zones, and leaves correct ones untouched.
+- **Prompt hint** widened so the model emits the right zone in the first place (esp. `Africa/Johannesburg` for SA / GMT+2).
+
+### Verification
+5 unit tests pass (SA/SAST/GMT+2 → Africa/Johannesburg; other regions; valid zones untouched; null handling). `tsc` clean.
+
+---
+
+## BUG-06 — AI dodges direct questions ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The lead asked concrete questions repeatedly and the AI deflected every time, looping back to qualification: pricing asked ~4× and never answered ("do you teach courses", "what strategy", "are you selling it or not", "how much do you sell it"), "do you have a WhatsApp group" → deflected. Dodging the same question 4× reads as evasive — a top disengagement cause.
+
+### Root cause
+The gate had an `ignored_personal_question` detector ("hbu", "what do you trade") but **no detector for pricing/logistics questions** ("how much", "are you selling it", "do you have a whatsapp group", "how does it work"). Those aren't "personal", so they slipped every existing guard and the AI was free to deflect to the script.
+
+### The fix
+- New `detectDirectQuestion()` (`conversation-detail-extractor.ts`) with pricing + product/logistics patterns.
+- New `ignored_direct_question` soft signal (−0.5) in `scoreVoiceQuality`: when the lead's last message was a direct question and the reply neither answers it (price/number/product term) nor explicitly defers it to the call, it penalizes — combined with any other miss it forces a regen that answers first. Matches the existing `ignored_personal_question` weighting.
+
+### Verification
+13 unit tests pass (7 question shapes detected; non-questions ignored; dodge penalized; answer/defer not penalized; no-question not fired). 46 gate-related tests pass. `tsc` clean.
+
+### Note
+This is a quality nudge, not a hard block (legit "let's cover that on the call" deferrals are valid). It pushes the AI to acknowledge the question before advancing, rather than ignoring it outright.
+
+---
+
+## BUG-14 — Garbled "Could? brother" opener ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The AI twice opened a reply with *"Could? brother I'm genuinely trying to help you out…"* — apparently parsing a fragment as the literal word "Could." Reads as broken.
+
+### What the prod data shows
+Reproduced live in the prod "after" run: a short lead question ("do you guys trade prop firms?") produced *"Could? brother I'm genuinely trying to help you out and point you in the best direction possible."* It's not a stored template — the model emits a stray modal + "?" as a mangled sentence start (a truncated "Could you…" / misparse on short input).
+
+### The fix
+Hard-fail `broken_fragment_opener` in `scoreVoiceQuality`: a reply that opens with a lone modal/aux verb immediately followed by "?" ("Could?", "Would?", "Should?", "Do?", …) is forced to regenerate a clean opener. Carefully scoped to the *opener fragment* only — legitimate questions ("could you tell me what timezone…", "do you have 5k set aside?") are not affected.
+
+### Verification
+3 unit tests pass (the exact "Could? brother" line + other fragments blocked; proper questions not flagged). 55 gate-related tests pass. `tsc` clean.
+
+---
+
+## BUG-15 — Stale / cross-conversation summary panel ✅ VERIFIED REAL + FIXED (MEDIUM)
+
+### What the client reported
+> Opening Bevan van Niekerk, the Summary panel showed 195 Messages / 1d 8h / Lead 81 / AI 114 / Positive 52% — **identical to Paris Mokoena's numbers**. Verify whether the panel actually updates on conversation switch.
+
+### Verification — it's real
+Traced the render path in `conversations-view.tsx`: on conversation switch `activeId` changes and `useMessages(activeId)` starts a new fetch, but `apiMessages` **holds the previous conversation's messages until that fetch resolves**. `<ConversationSidebar>` had **no `key`**, so the same instance persisted across switches and `SummaryTab` computed stats from the stale `messages` prop (and the sidebar's own `detail` state lingered). That's exactly the "Bevan shows Paris's numbers" symptom — a genuine data-integrity bug, not a capture artifact.
+
+### The fix
+- `key={activeApiConvo.id}` on `<ConversationSidebar>` → full remount on switch, clearing stale internal `detail` state instantly.
+- Blank the `messages` prop while the new conversation's fetch is in flight (`msgLoading ? [] : …`) so stats never compute from the prior conversation. `useMessages`' `loading` is only true on the keyed conversationId change (refetch on new messages is silent), so this never flashes on inbound messages.
+
+### Verification
+`tsc` clean; the main message thread is unaffected (it uses its own `localMessages` + `loading` state). Confirm visually post-deploy: open two conversations back-to-back; the Summary stats now update immediately and never show the prior lead's numbers.
+
+---
+
+## BUG-13 — Duplicate pitch / link sent verbatim ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The "check out my YouTube" redirect (youtube.com/@DAETRADEZ) was sent nearly word-for-word twice — 10:41 AM and again 12:18 PM.
+
+### Root cause
+There's a soft prompt block ("links already sent") but it's a prompt rule the model can ignore, and the two sends were ~97 min / many turns apart — beyond the BUG-01 verbatim guard's recent-window. So neither caught it.
+
+### The fix (code-level guard)
+- ai-engine computes `alreadySentUrls` from the **full** conversation history and passes it to the gate.
+- New `duplicate_link` hard-fail in `scoreVoiceQuality`: if a reply contains a URL already sent anywhere earlier in the conversation, it regenerates without re-dropping the link (case-insensitive, trailing-punctuation tolerant). Distance-independent, so it catches the 97-min-apart case.
+
+### Verification
+4 unit tests pass (duplicate blocked; case/punct tolerant; different link allowed; first send allowed). Full suite **515 tests pass**. `tsc` clean.
+
+---
+
+## BUG-12 — Stuck looping inside Discovery ✅ RESOLVED (via BUG-01)
+
+### What the client reported
+> Across 195 messages the AI kept returning to the same "greed / lack of patience" discovery point instead of progressing.
+
+### Resolution
+The doc itself notes this is "tied to BUG-01" — the repeated canned line anchored the conversation in Discovery. The **verbatim_repeat guard (BUG-01)** now hard-fails that repeated line and forces the AI to respond to what the lead actually said / advance, removing the anchor. Confirmed in the prod "after" run: the conversation progressed cleanly Discovery → Goal → Soft Pitch → Booking with no Discovery loop. No separate fix required; covered by `c30db6c`.
+
+---
+
+## BUG-11 — Qualification status contradicts the conversation ✅ FIXED (MEDIUM)
+
+### What the client reported
+> Paris is marked UNQUALIFIED / Soft Exit — but a call was booked. Status labels don't agree with each other or with what happened.
+
+### What the prod data shows (confirmed)
+```
+Paris:  Lead.stage=UNQUALIFIED  outcome=SOFT_EXIT  systemStage="Soft Exit (Under $500)"
+        BUT scheduledCallAt=SET, bookingId=8xEukmCe…, bookedAt=YES
+```
+A lead with a **confirmed booked call** was marked UNQUALIFIED/Soft-Exit. Root cause: `Lead.stage` and the booking state are written by independent paths with no reconciliation — a separate qualification path (the old "under $500" capital downgrade) marked him UNQUALIFIED *after* the booking existed.
+
+### The fix (code-level invariant)
+A guard in `transitionLeadStage` (`lead-stage.ts`): an **AI/automated** transition to `UNQUALIFIED` is refused when the conversation has a real booking (`scheduledCallAt || bookingId`) — the booking is the stronger signal, so the contradictory downgrade is blocked. Scoped to `transitionedBy !== 'user'` so a human operator can still explicitly disqualify a booked lead (e.g. after a no-show) via the dashboard override. Confirmed: AI paths pass `'ai'`, operator override passes `'user'`.
+
+### Verification
+`tsc` clean; lead/stale-review regression tests pass. Existing leads already in the contradictory state would need a one-off repair if the client wants the historical rows cleaned (not done — flagging it).

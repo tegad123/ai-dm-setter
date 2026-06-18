@@ -730,6 +730,13 @@ export interface VoiceQualityOptions {
    */
   recentAIMessages?: string[];
   /**
+   * URLs already sent earlier in this conversation (normalized, lowercased).
+   * BUG-13: the AI re-sent the same YouTube link ~97 min apart — beyond the
+   * recentAIMessages verbatim window. When the reply contains one of these,
+   * hard-fail so it doesn't resend an asset the lead already has.
+   */
+  alreadySentUrls?: string[];
+  /**
    * Structure classifications for recent AI turns. The group gate uses
    * this to block the third identical shape in a row, e.g. short ack
    * bubble + question bubble every single turn.
@@ -2005,6 +2012,19 @@ export function scoreVoiceQuality(
     }
   }
 
+  // Broken fragment opener (BUG-14, Paris Mokoena 2026-06-17). The AI opened
+  // a reply with a stray one-word modal + "?" — "Could? brother I'm genuinely
+  // trying to help you out…" — a mangled sentence start (likely a truncated
+  // "Could you…" or a misparsed short lead message). It reads as broken/bot.
+  // Hard-fail so it regenerates a clean opener.
+  const BROKEN_FRAGMENT_OPENER_RE =
+    /^\s*(could|would|should|can|will|do|does|did|is|are|was|were|have|has|had)\s*\?/i;
+  if (BROKEN_FRAGMENT_OPENER_RE.test(reply)) {
+    hardFails.push(
+      `broken_fragment_opener: reply starts with a stray "${reply.trim().slice(0, 12)}" — a mangled sentence fragment. Rewrite with a clean, complete opening sentence.`
+    );
+  }
+
   // R34. Metadata leak guard — internal JSON fields, confidence scores,
   // placeholders, debug annotations, or structured fragments must never
   // reach lead-facing copy.
@@ -2618,6 +2638,28 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9h-iv. Duplicate link guard (BUG-13, Paris Mokoena 2026-06-17). The AI
+  // re-sent the same youtube.com/@DAETRADEZ link ~97 min apart — too far apart
+  // for the verbatim window above. If the reply contains a URL already sent
+  // earlier in the conversation, hard-fail so we don't resend an asset the
+  // lead already has. (The prompt has a soft "links already sent" block; this
+  // is the code-level backstop the client asked for.)
+  if (
+    Array.isArray(options?.alreadySentUrls) &&
+    options.alreadySentUrls.length
+  ) {
+    const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[^\s<>"')\]]+/gi;
+    const replyUrls = (reply.match(URL_RE) ?? []).map((u) =>
+      u.replace(/[.,;:!?]+$/, '').toLowerCase()
+    );
+    const dup = replyUrls.find((u) => options.alreadySentUrls!.includes(u));
+    if (dup) {
+      hardFails.push(
+        `duplicate_link: "${dup}" was already sent earlier in this conversation. Do NOT resend the same link — if the lead asked for it again, acknowledge you already shared it; otherwise advance without re-dropping it.`
+      );
+    }
+  }
+
   // 9i. Repeated capital question (Rodrigo Moran 2026-04-26). When the
   // AI history already has 1+ capital-verification questions AND this
   // reply contains another, hard-fail. Rodrigo's bot asked at 3:47
@@ -3179,6 +3221,34 @@ export function scoreVoiceQuality(
       const isPersonal = det.detectPersonalQuestion(prev).detected;
       if (isPersonal && !det.replyContainsFirstPerson(reply)) {
         softSignals.ignored_personal_question = -0.5;
+      }
+
+      // ── IGNORED DIRECT QUESTION (BUG-06, Paris Mokoena 2026-06-17) ──
+      // The lead asked a concrete pricing/logistics question ("how much",
+      // "are you selling it", "do you have a whatsapp group", "how does it
+      // work") and the AI deflected to the script. Detector: prev LEAD msg
+      // is a direct question AND the reply neither echoes a relevant
+      // term nor states it'll be covered on the call. Soft -0.5 (matches
+      // ignored_personal_question) — combined with any other miss it forces
+      // a regen that answers first.
+      const directQ = det.detectDirectQuestion(prev);
+      if (directQ.detected) {
+        const replyLower = reply.toLowerCase();
+        // Counts as "addressed" if the reply gives a price/number, names the
+        // product/logistics topic, or explicitly defers it to the call.
+        const addressesIt =
+          /\$\s*\d|\b\d{2,4}\s*(usd|dollars|bucks|a\s+month|\/mo)\b/i.test(
+            reply
+          ) ||
+          /\b(course|program|mentorship|signals?|community|group|free|paid|invest|price|cost)\b/i.test(
+            replyLower
+          ) ||
+          /\b(on the call|on our call|anthony('?ll| will)|go over (it|that|pricing)|cover (that|it|pricing)|break (it|that) down on)\b/i.test(
+            replyLower
+          );
+        if (!addressesIt) {
+          softSignals.ignored_direct_question = -0.5;
+        }
       }
     }
   }

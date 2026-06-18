@@ -2657,6 +2657,19 @@ export async function generateReply(
   const priorAIMessages = conversationHistory
     .filter((m) => m.sender === 'AI')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  // BUG-13: URLs already sent by the AI anywhere in this conversation, so the
+  // gate can hard-fail a reply that re-sends one (the duplicate-link guard).
+  const alreadySentUrls = (() => {
+    const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[^\s<>"')\]]+/gi;
+    const set = new Set<string>();
+    for (const m of priorAIMessages) {
+      if (typeof m.content !== 'string') continue;
+      for (const raw of m.content.match(URL_RE) ?? []) {
+        set.add(raw.replace(/[.,;:!?]+$/, '').toLowerCase());
+      }
+    }
+    return Array.from(set);
+  })();
   const priorAITurns = groupAIMessagesIntoTurns(conversationHistory);
   const lastAiTurn =
     priorAITurns.length > 0 ? priorAITurns[priorAITurns.length - 1] : null;
@@ -3690,6 +3703,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // -3, but the verbatim_repeat guard (BUG-01) needs a wider window because
     // the Paris loop line recurred many turns apart, not just back-to-back.
     recentAIMessages: priorAITurns.slice(-8).map((turn) => turn.content),
+    alreadySentUrls,
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
@@ -7307,6 +7321,71 @@ function splitConcatenatedAckQuestion(s: string): string[] | null {
   return [ack, question];
 }
 
+/**
+ * Normalize the AI-emitted lead_timezone to a correct IANA zone (BUG-09 tz,
+ * Paris Mokoena 2026-06-17). The prompt only shows America/New_York and
+ * Europe/London as examples, so for "GMT+2 / South Africa" the model emits
+ * Europe/London (wrong — that's GMT+0/+1). That mislabels every booking slot.
+ *
+ * This is a deterministic backstop: it (a) maps common region/offset phrases
+ * the model gets wrong to the right IANA zone, and (b) validates the value is
+ * a real IANA zone, returning it untouched if already valid and not a known
+ * mis-map. Falls back to the original string if we can't improve it (a wrong
+ * IANA zone still beats null for slot labelling).
+ */
+export function normalizeLeadTimezone(raw: string | null): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  const lower = s.toLowerCase();
+
+  // Known mis-maps + common phrasings → correct IANA zone. Keyed on substrings
+  // the model tends to emit or that a lead would say.
+  const CORRECTIONS: Array<{ match: RegExp; iana: string }> = [
+    // South Africa / SAST / GMT+2 — the Paris + Shazim case.
+    {
+      match: /south africa|johannesburg|\bsast\b|cape town|pretoria|durban/,
+      iana: 'Africa/Johannesburg'
+    },
+    { match: /\bnigeria|lagos|\bwat\b/, iana: 'Africa/Lagos' },
+    { match: /\bkenya|nairobi|\beat\b/, iana: 'Africa/Nairobi' },
+    { match: /\bghana|accra/, iana: 'Africa/Accra' },
+    { match: /\begypt|cairo/, iana: 'Africa/Cairo' },
+    { match: /\buae|dubai|abu dhabi/, iana: 'Asia/Dubai' },
+    { match: /\bindia|mumbai|delhi|\bist\b/, iana: 'Asia/Kolkata' },
+    { match: /\baustralia|sydney|melbourne|\baest\b/, iana: 'Australia/Sydney' }
+  ];
+  for (const c of CORRECTIONS) {
+    if (c.match.test(lower)) return c.iana;
+  }
+
+  // Bare "GMT+2 / UTC+2 / GMT +2" with no region — pick the most common
+  // populous zone for that offset rather than defaulting to a European zone.
+  const offsetMatch = lower.match(/(?:gmt|utc)\s*([+-]\s*\d{1,2})/);
+  if (offsetMatch) {
+    const off = parseInt(offsetMatch[1].replace(/\s/g, ''), 10);
+    const OFFSET_DEFAULTS: Record<number, string> = {
+      2: 'Africa/Johannesburg',
+      1: 'Africa/Lagos',
+      0: 'Europe/London',
+      [-5]: 'America/New_York',
+      [-6]: 'America/Chicago',
+      [-7]: 'America/Denver',
+      [-8]: 'America/Los_Angeles'
+    };
+    if (OFFSET_DEFAULTS[off]) return OFFSET_DEFAULTS[off];
+  }
+
+  // Already a valid IANA zone (and not a known mis-map) — keep as-is.
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: s });
+    return s;
+  } catch {
+    // Not a valid IANA string and we couldn't map it — return original so
+    // downstream still has something; better a labelled guess than null.
+    return s;
+  }
+}
+
 function parseAIResponse(raw: string): ParsedAIResponse {
   const defaults: ParsedAIResponse = {
     format: 'text',
@@ -7464,7 +7543,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
       escalateToHuman: obj.escalate_to_human === true,
       leadTimezone:
         typeof obj.lead_timezone === 'string' && obj.lead_timezone.trim()
-          ? obj.lead_timezone.trim()
+          ? normalizeLeadTimezone(obj.lead_timezone.trim())
           : null,
       selectedSlotIso:
         typeof obj.selected_slot_iso === 'string' &&

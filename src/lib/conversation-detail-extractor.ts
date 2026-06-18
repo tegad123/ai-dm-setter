@@ -108,6 +108,53 @@ export function replyContainsFirstPerson(reply: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Direct logistics/pricing question detection (BUG-06)
+// ---------------------------------------------------------------------------
+// Paris Mokoena 2026-06-17: the lead asked concrete logistics/price questions
+// repeatedly ("are you selling it or not", "how much do you sell it", "do you
+// have a whatsapp group", "do you teach courses") and the AI deflected every
+// time, looping back to qualification. These are NOT "personal" questions (the
+// PERSONAL_QUESTION_PATTERNS set), so they slipped the existing gate. Dodging
+// "how much is it" four times reads as evasive and is a top disengagement cause.
+export const DIRECT_QUESTION_PATTERNS: RegExp[] = [
+  // Pricing
+  /\bhow\s+much\b.*\b(cost|is\s+it|sell|selling|charge|pay|for\s+this|it\s+cost)\b/i,
+  /\b(price|pricing|cost|how\s+much)\b.*\?/i,
+  /\bwhat('?s| is)\s+the\s+(price|cost|fee|investment|damage)\b/i,
+  /\b(are|r)\s+you\s+selling\b/i,
+  /\bselling\s+it\s+or\s+not\b/i,
+  /\bis\s+it\s+(free|paid|expensive)\b/i,
+  // Product / logistics
+  /\bdo\s+you\s+(teach|sell|offer|have)\s+(courses?|a\s+course|programs?|classes?|signals?|mentorship)\b/i,
+  /\bdo\s+you\s+have\s+a\s+(whatsapp|telegram|discord|group|community|channel)\b/i,
+  /\bwhat('?s| is)\s+(the\s+)?(agenda|process|next\s+step|the\s+deal|included)\b/i,
+  /\bhow\s+(does|do)\s+(it|the\s+system|this)\s+work\b/i,
+  /\bwhat\s+do\s+(i|we)\s+get\b/i
+];
+
+export interface DirectQuestionResult {
+  detected: boolean;
+  match: string | null;
+}
+
+/**
+ * Stateless: does this message ask a concrete pricing/logistics question the
+ * AI must answer (vs deflecting to the script)? Caller gates on "this was the
+ * LEAD's previous turn".
+ */
+export function detectDirectQuestion(text: string): DirectQuestionResult {
+  if (typeof text !== 'string' || text.trim().length === 0) {
+    return { detected: false, match: null };
+  }
+  const trimmed = text.trim();
+  for (const pat of DIRECT_QUESTION_PATTERNS) {
+    const m = trimmed.match(pat);
+    if (m) return { detected: true, match: m[0] };
+  }
+  return { detected: false, match: null };
+}
+
+// ---------------------------------------------------------------------------
 // Specific-detail extraction (lead-side)
 // ---------------------------------------------------------------------------
 // What the AI must reference to pass the scripted_question_sequence
