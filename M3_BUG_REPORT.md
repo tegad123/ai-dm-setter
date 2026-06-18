@@ -236,3 +236,23 @@ The AI emits `lead_timezone` as an IANA string, and the prompt schema only showe
 
 ### Verification
 5 unit tests pass (SA/SAST/GMT+2 → Africa/Johannesburg; other regions; valid zones untouched; null handling). `tsc` clean.
+
+---
+
+## BUG-06 — AI dodges direct questions ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The lead asked concrete questions repeatedly and the AI deflected every time, looping back to qualification: pricing asked ~4× and never answered ("do you teach courses", "what strategy", "are you selling it or not", "how much do you sell it"), "do you have a WhatsApp group" → deflected. Dodging the same question 4× reads as evasive — a top disengagement cause.
+
+### Root cause
+The gate had an `ignored_personal_question` detector ("hbu", "what do you trade") but **no detector for pricing/logistics questions** ("how much", "are you selling it", "do you have a whatsapp group", "how does it work"). Those aren't "personal", so they slipped every existing guard and the AI was free to deflect to the script.
+
+### The fix
+- New `detectDirectQuestion()` (`conversation-detail-extractor.ts`) with pricing + product/logistics patterns.
+- New `ignored_direct_question` soft signal (−0.5) in `scoreVoiceQuality`: when the lead's last message was a direct question and the reply neither answers it (price/number/product term) nor explicitly defers it to the call, it penalizes — combined with any other miss it forces a regen that answers first. Matches the existing `ignored_personal_question` weighting.
+
+### Verification
+13 unit tests pass (7 question shapes detected; non-questions ignored; dodge penalized; answer/defer not penalized; no-question not fired). 46 gate-related tests pass. `tsc` clean.
+
+### Note
+This is a quality nudge, not a hard block (legit "let's cover that on the call" deferrals are valid). It pushes the AI to acknowledge the question before advancing, rather than ignoring it outright.

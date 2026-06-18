@@ -3180,6 +3180,34 @@ export function scoreVoiceQuality(
       if (isPersonal && !det.replyContainsFirstPerson(reply)) {
         softSignals.ignored_personal_question = -0.5;
       }
+
+      // ── IGNORED DIRECT QUESTION (BUG-06, Paris Mokoena 2026-06-17) ──
+      // The lead asked a concrete pricing/logistics question ("how much",
+      // "are you selling it", "do you have a whatsapp group", "how does it
+      // work") and the AI deflected to the script. Detector: prev LEAD msg
+      // is a direct question AND the reply neither echoes a relevant
+      // term nor states it'll be covered on the call. Soft -0.5 (matches
+      // ignored_personal_question) — combined with any other miss it forces
+      // a regen that answers first.
+      const directQ = det.detectDirectQuestion(prev);
+      if (directQ.detected) {
+        const replyLower = reply.toLowerCase();
+        // Counts as "addressed" if the reply gives a price/number, names the
+        // product/logistics topic, or explicitly defers it to the call.
+        const addressesIt =
+          /\$\s*\d|\b\d{2,4}\s*(usd|dollars|bucks|a\s+month|\/mo)\b/i.test(
+            reply
+          ) ||
+          /\b(course|program|mentorship|signals?|community|group|free|paid|invest|price|cost)\b/i.test(
+            replyLower
+          ) ||
+          /\b(on the call|on our call|anthony('?ll| will)|go over (it|that|pricing)|cover (that|it|pricing)|break (it|that) down on)\b/i.test(
+            replyLower
+          );
+        if (!addressesIt) {
+          softSignals.ignored_direct_question = -0.5;
+        }
+      }
     }
   }
 
