@@ -3221,12 +3221,41 @@ export async function scheduleAIReply(
       );
     }
 
+    // BUG-07/09: feed back the booking state the AI is otherwise blind to, so
+    // it stops re-asking captured info and re-booking an already-booked call.
+    const selectedSlotIso =
+      conversation.selectedSlot &&
+      typeof conversation.selectedSlot === 'object' &&
+      'start' in (conversation.selectedSlot as Record<string, unknown>)
+        ? String((conversation.selectedSlot as Record<string, unknown>).start)
+        : typeof conversation.selectedSlot === 'string'
+          ? conversation.selectedSlot
+          : conversation.scheduledCallAt
+            ? conversation.scheduledCallAt.toISOString()
+            : null;
+    // Capital already stated, from the structured capture (script-state).
+    const cdp = (conversation.capturedDataPoints ?? {}) as Record<string, any>;
+    const capitalRaw =
+      cdp.verifiedCapitalUsd ?? cdp.capital?.value ?? cdp.capitalStated ?? null;
+    const capitalStated =
+      capitalRaw != null
+        ? typeof capitalRaw === 'number'
+          ? `$${capitalRaw.toLocaleString()}`
+          : String(capitalRaw)
+        : null;
+
     leadContext.booking = {
       leadTimezone: conversation.leadTimezone,
       leadEmail: conversation.leadEmail ?? lead.email,
       leadPhone: conversation.leadPhone,
       availableSlots,
-      hasCalendarIntegration
+      hasCalendarIntegration,
+      scheduledCallAt: conversation.scheduledCallAt
+        ? conversation.scheduledCallAt.toISOString()
+        : null,
+      bookingId: conversation.bookingId ?? null,
+      selectedSlotIso,
+      capitalStated
     };
 
     // Persist the proposed slots so we can verify what the lead picks
@@ -4869,7 +4898,79 @@ async function sendAIReply(
   let bookingAppointmentId: string | null = null;
   let bookingMeetingUrl: string | null = null;
   const bookingSlotIso = result.selectedSlotIso ?? null;
+
+  // BUG-09 date mismatch (Paris Mokoena 2026-06-17): the AI agreed to "Monday"
+  // in text but booked a Saturday (Jun 20) slot — the slot it emitted was not
+  // a day it had actually offered/agreed. Validate that selectedSlotIso is one
+  // of the proposedSlots we showed the AI; if it invented a slot that was never
+  // offered, do not book it (R14 — never book a time the lead didn't pick from
+  // the real list). On mismatch we fall through to awaitingHumanReview rather
+  // than booking the wrong day.
+  let slotWasOffered = true;
   if (result.subStage === 'BOOKING_CONFIRM' && bookingSlotIso) {
+    const convSlots = await prisma.conversation
+      .findUnique({
+        where: { id: conversationId },
+        select: { proposedSlots: true }
+      })
+      .catch(() => null);
+    const proposed = Array.isArray(convSlots?.proposedSlots)
+      ? (convSlots!.proposedSlots as Array<{ start?: string }>)
+      : [];
+    if (proposed.length) {
+      const want = new Date(bookingSlotIso).getTime();
+      // 2-minute tolerance for ISO formatting differences.
+      slotWasOffered = proposed.some((s) => {
+        const t = s?.start ? new Date(s.start).getTime() : NaN;
+        return Number.isFinite(t) && Math.abs(t - want) < 120_000;
+      });
+      if (!slotWasOffered) {
+        console.warn(
+          `[webhook-processor] BUG-09 slot guard: selectedSlotIso=${bookingSlotIso} was NOT in proposedSlots for ${conversationId} — refusing to book a time that was never offered.`
+        );
+      }
+    }
+  }
+
+  // BUG-09 circuit-breaker (Paris Mokoena 2026-06-17): a confirmed booking
+  // already exists, yet the AI keeps re-entering BOOKING_CONFIRM and trying to
+  // re-book — each attempt fails (already booked) and ships the dead-end "one
+  // sec" stall (BUG-10). Hard guard: if a real booking exists AND the lead is
+  // NOT explicitly rescheduling, do NOT re-attempt booking. The prompt already
+  // tells the AI this; this is the code-level backstop.
+  let skipReBooking = false;
+  if (result.subStage === 'BOOKING_CONFIRM' && bookingSlotIso) {
+    const existing = await prisma.conversation
+      .findUnique({
+        where: { id: conversationId },
+        select: { scheduledCallAt: true, bookingId: true }
+      })
+      .catch(() => null);
+    const hasRealBooking = !!(existing?.scheduledCallAt || existing?.bookingId);
+    if (hasRealBooking) {
+      const latestLead = await prisma.message
+        .findFirst({
+          where: { conversationId, sender: 'LEAD', deletedAt: null },
+          orderBy: { timestamp: 'desc' },
+          select: { content: true }
+        })
+        .catch(() => null);
+      const wantsReschedule = isRescheduleSignal(latestLead?.content);
+      if (!wantsReschedule) {
+        skipReBooking = true;
+        console.warn(
+          `[webhook-processor] BUG-09 circuit-breaker: call already booked for ${conversationId} and lead is not rescheduling — skipping re-book attempt (no stall line).`
+        );
+      }
+    }
+  }
+
+  if (
+    result.subStage === 'BOOKING_CONFIRM' &&
+    bookingSlotIso &&
+    !skipReBooking &&
+    slotWasOffered
+  ) {
     bookingAttempted = true;
     try {
       const { bookUnifiedAppointment } = await import('@/lib/calendar-adapter');
@@ -5167,6 +5268,35 @@ async function sendAIReply(
       console.warn(
         `[webhook-processor] BOOKING_CONFIRM booking failed for ${conversationId} — flagged awaitingHumanReview, not marked BOOKED`
       );
+      // BUG-10 (Paris Mokoena 2026-06-17): the "give me one sec to get that
+      // locked in 🙏" holding line set awaitingHumanReview but created NO
+      // operator notification — so nobody was told and the lead sat in a
+      // dead-end (the stall fired 5x, the last with no follow-up at all).
+      // Escalate so a human actually finishes the booking.
+      try {
+        const { escalate } = await import('@/lib/escalation-dispatch');
+        const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+        const link = origin
+          ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${conversationId}`
+          : undefined;
+        await escalate({
+          type: 'ai_stuck',
+          accountId: lead.accountId,
+          leadId: lead.id,
+          conversationId,
+          leadName: lead.name,
+          leadHandle: lead.handle,
+          title: 'Auto-booking failed — finish the booking manually',
+          body: `${lead.name} (@${lead.handle}): the lead picked a time but the calendar booking failed, so the AI sent a holding message ("give me one sec to get that locked in") and paused. Please book the call manually and follow up — the lead is waiting.`,
+          details: `BOOKING_CONFIRM auto-book failed; slot=${bookingSlotIso}`,
+          link
+        });
+      } catch (escErr) {
+        console.error(
+          '[webhook-processor] BUG-10 booking-failure escalation failed (non-fatal):',
+          escErr
+        );
+      }
     }
   }
 

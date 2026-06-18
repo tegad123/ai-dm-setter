@@ -14,10 +14,10 @@
 |---|-----|-----|-----|--------|
 | 05 | Back-to-back messages each get a reply | HIGH | 4–6h | ✅ |
 | 01 | Looping line (verbatim repeat) | CRIT | 4–6h | ✅ |
-| 10 | Dead-end "one sec" stall | HIGH | — | 🔧 (folded into 07/09 — it's a symptom of re-booking) |
+| 10 | Dead-end "one sec" stall | HIGH | — | ✅ (fixed with 07/09 — circuit-breaker + operator escalation) |
 | 02 | Mid-sentence truncation | CRIT | 2–4h | ✅ |
 | 03 | Internal template/placeholder leak | CRIT | 2–3h | ✅ |
-| 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ⏳ |
+| 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ✅ (prod "after" run pending) |
 | 08 | Image hallucination | HIGH | 3–5h | ⏳ |
 
 **CRITICAL + HIGH total ≈ 3–5 working days** incl. before/after verification. MEDIUM bugs (11–15) ≈ +1.5–2 days, do not gate M3.
@@ -148,3 +148,31 @@ Because both the **regen guard** and the **fail-closed ship-time guard** call `d
 ### Verification
 - **Before:** exact leak in prod (above); not matched by any existing pattern.
 - **After:** 8 new unit tests (4 leak variants caught, 4 natural slot-asks like "what's your email?" / "what timezone are you in?" correctly allowed — no false positives). 48 related unit tests pass. `tsc` clean.
+
+---
+
+## BUG-07 + BUG-09 + BUG-10 — Slot memory, re-booking, date mismatch, dead-end stall ✅ FIXED (prod "after" pending)
+
+### What the client reported
+- **BUG-07:** AI re-asked budget after the lead said "600usd", re-asked an email it already had, re-asked timezone.
+- **BUG-09:** AI tried to re-book a call that was already booked + link delivered; Call Details showed **Sat Jun 20** while the chat negotiated **Monday**.
+- **BUG-10:** "give me one sec to get that locked in 🙏" fired 6× with nothing ever following.
+
+### What the prod data shows (root cause confirmed)
+From the Paris conversation:
+- Lead said **"600usd" at 13:12** → AI asked "what've you got set aside" **7 times** (4 of them *after* 13:12). `capturedDataPoints` held `incomeGoal` and `deep_why` but **never the capital figure** → re-asked.
+- Email given 14:59 → re-asked 16:25 (**after** a booking already existed).
+- A real booking exists: `bookingId=8xEukmCe…`, `scheduledCallAt`, Zoom `bookingUrl`, `selectedSlot="2026-06-20T12:00:00Z"`. Yet the AI kept re-entering `BOOKING_CONFIRM` → re-booking → failing → firing the stall (the 5× "one sec", last one a literal dead-end).
+- `selectedSlot` = **Sat Jun 20**, but `proposedSlots` offered Jun 20 / 21 / 23 (no Monday) while the AI said "monday works" → it booked a day it never actually offered.
+
+**Root cause:** `bookingId / scheduledCallAt / selectedSlot / proposedSlots` and the captured capital were stored in the DB but **never fed into the AI's prompt context** (`conversationCallState` selected `scheduledCallAt` but never merged it into `leadContext.booking`). So the AI was blind to its own booking and re-asked / re-booked. The stall (BUG-10) had no operator notification, so a failed booking stranded the lead.
+
+### The fix
+1. **Feed booking state into the prompt** (`ai-prompts.ts` + `webhook-processor.ts`): `leadContext.booking` now carries `scheduledCallAt`, `bookingId`, `selectedSlotIso`, and `capitalStated`. The prompt's booking block now leads with **"✅ A CALL IS ALREADY BOOKED for <time> — do NOT propose times, re-ask email, or restart booking"** when a booking exists, and surfaces the already-stated capital so it's never re-asked.
+2. **Code-level booking circuit-breaker** (`webhook-processor.ts`): before any auto-book attempt, if a real booking exists AND the lead is not explicitly rescheduling, **skip the re-book entirely** — no failed attempt, no stall line. (Backstop to the prompt rule.)
+3. **Date-mismatch slot guard:** before booking, validate `selectedSlotIso` is actually one of the `proposedSlots` shown to the AI (2-min tolerance). It refuses to book a time that was never offered (R14).
+4. **BUG-10 stall follow-through:** when a booking genuinely fails, the holding line now also **escalates to a human operator** (in-app + the standard escalation dispatch) so the lead is never left in a dead-end.
+
+### Verification
+- **Before:** prod evidence above (7× budget re-ask, email re-ask post-booking, Sat-vs-Monday slot, 5× dead-end stall).
+- **After:** `tsc` clean; **all 486 unit tests pass** (incl. booking, script-progression, quality-gate suites — additive change, no regression). Definitive confirmation on the prod "after" run: drive Shazim 0→booking and confirm the happy path still books, no re-asking, no re-book loop, and the booked day matches what was agreed.
