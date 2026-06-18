@@ -79,7 +79,19 @@ export const METADATA_LEAK_PATTERNS: RegExp[] = [
   /```[\s\S]*?(stage_confidence|quality_score|priority_score|current_stage|script_step|next_action)[\s\S]*?```/i,
 
   // Trailing machine fields appended after otherwise normal copy.
-  /[.!?]\s+[a-z_]+[:=][\w.]+/i
+  /[.!?]\s+[a-z_]+[:=][\w.]+/i,
+
+  // Prompt-scaffolding field-list leak (BUG-03, Paris Mokoena 2026-06-17).
+  // The booking-info prompt's example slot list reached the lead verbatim:
+  //   "just missing your specific missing info e.g. "email" / "timezone" /
+  //    "phone number"."
+  // Two signatures: (a) the "missing ... info" scaffolding phrasing, and
+  // (b) an "e.g." followed by a slash-separated list of quoted slot names.
+  // The quoted-field-list pattern requires >=2 quoted tokens joined by "/"
+  // so ordinary quoted words ("he said "no"") don't trip it.
+  /\bmissing\s+(your\s+)?(specific\s+)?missing\s+info\b/i,
+  /\be\.?g\.?\s*["'][a-z _]+["']\s*\/\s*["'][a-z _]+["']/i,
+  /["'](?:email|timezone|time zone|phone number|full name|first name|last name|day and time)["']\s*\/\s*["'](?:email|timezone|time zone|phone number|full name|first name|last name|day and time)["']/i
 ];
 
 const METADATA_LEAK_FALSE_POSITIVE_GUARDS: RegExp[] = [

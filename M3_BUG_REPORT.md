@@ -16,7 +16,7 @@
 | 01 | Looping line (verbatim repeat) | CRIT | 4–6h | ✅ |
 | 10 | Dead-end "one sec" stall | HIGH | — | 🔧 (folded into 07/09 — it's a symptom of re-booking) |
 | 02 | Mid-sentence truncation | CRIT | 2–4h | ✅ |
-| 03 | Internal template/placeholder leak | CRIT | 2–3h | ⏳ |
+| 03 | Internal template/placeholder leak | CRIT | 2–3h | ✅ |
 | 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ⏳ |
 | 08 | Image hallucination | HIGH | 3–5h | ⏳ |
 
@@ -120,3 +120,31 @@ Key evidence: it's **bubble 1 of a 2-bubble group**, only **126 chars** (far und
 ### Verification
 - **Before:** prod evidence above — pitch bubble cut at "...vid", `stop_reason` never inspected.
 - **After:** SDK field names confirmed (`stop_reason='max_tokens'`, `finish_reason='length'`); guard wired into the retry loop; `tsc` clean; 32 unit tests pass. Final confirmation on the live prod "after" run — drive to the offer pitch and confirm it delivers complete.
+
+---
+
+## BUG-03 — Internal template/placeholder leak ✅ FIXED & VERIFIED
+
+### What the client reported
+> At 9:55 the AI exposed raw internal instruction text: *"Appreciate that bro, just missing your specific missing info e.g. "email" / "timezone" / "phone number"."* — reads as a glitchy form error, instant "this is a bot" signal.
+
+### What the prod data shows (confirmed verbatim)
+Found the exact leak in the Paris conversation (14:54:58):
+
+```
+"Appreciate that bro, just missing your specific missing info e.g. "email" / "timezone" / "phone number"."
+```
+
+The system already has a fail-closed ship-time guard (`detectMetadataLeak` → block send + escalate, `webhook-processor.ts:4499`) and a regen guard in the quality gate. But its `METADATA_LEAK_PATTERNS` only matched `field:value` signatures, brackets, `{{}}`, and JSON — **not** a quoted-field *list* (`e.g. "email" / "timezone" / …`). So this particular scaffolding shape slipped past both.
+
+### The fix (code-level hard guard, per client)
+Added three patterns to `METADATA_LEAK_PATTERNS` (`src/lib/voice-quality-gate.ts`):
+1. the `missing … missing info` scaffolding phrase,
+2. `e.g. "x" / "y"` quoted lists,
+3. slash-joined quoted slot-name pairs (email/timezone/phone number/full name/…).
+
+Because both the **regen guard** and the **fail-closed ship-time guard** call `detectMetadataLeak`, this leak now (a) forces a regeneration, and (b) if it somehow survives, is **blocked before delivery** and escalated to a human — it can never reach the lead. This is a guard, not a prompt rule, so it catches the leak regardless of which prompt produced it.
+
+### Verification
+- **Before:** exact leak in prod (above); not matched by any existing pattern.
+- **After:** 8 new unit tests (4 leak variants caught, 4 natural slot-asks like "what's your email?" / "what timezone are you in?" correctly allowed — no false positives). 48 related unit tests pass. `tsc` clean.
