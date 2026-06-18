@@ -667,7 +667,7 @@ export function PipelineView() {
   }
 
   return (
-    <div className='overflow-hidden rounded-lg border'>
+    <div className='rounded-lg border'>
       <PipelineSearchBar
         value={searchInput}
         onChange={setSearchInput}

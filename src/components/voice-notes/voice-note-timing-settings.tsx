@@ -26,21 +26,30 @@ const DEFAULTS: VoiceNoteTimingSettings = {
 
 export default function VoiceNoteTimingSettingsPanel() {
   const [settings, setSettings] = useState<VoiceNoteTimingSettings>(DEFAULTS);
+  // Raw string state allows the user to clear the field without it snapping back.
+  const [minRaw, setMinRaw] = useState('');
+  const [maxRaw, setMaxRaw] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getVoiceNoteTimingSettings()
-      .then(setSettings)
+      .then((s) => {
+        setSettings(s);
+        setMinRaw(String(s.minDelay));
+        setMaxRaw(String(s.maxDelay));
+      })
       .catch(() => toast.error('Failed to load timing settings'))
       .finally(() => setLoading(false));
   }, []);
 
   const handleChange = useCallback(
-    (field: keyof VoiceNoteTimingSettings, value: string) => {
+    (field: 'minDelay' | 'maxDelay', value: string) => {
+      if (field === 'minDelay') setMinRaw(value);
+      else setMaxRaw(value);
       const num = parseFloat(value);
       if (!isNaN(num)) {
-        setSettings((prev) => ({ ...prev, [field]: num }));
+        setSettings((prev) => ({ ...prev, [field]: Math.round(num) }));
       }
     },
     []
@@ -51,6 +60,8 @@ export default function VoiceNoteTimingSettingsPanel() {
     try {
       const updated = await updateVoiceNoteTimingSettings(settings);
       setSettings(updated);
+      setMinRaw(String(updated.minDelay));
+      setMaxRaw(String(updated.maxDelay));
       toast.success('Timing settings saved');
     } catch (err) {
       toast.error(
@@ -94,7 +105,7 @@ export default function VoiceNoteTimingSettingsPanel() {
               step={1}
               min={0}
               max={600}
-              value={settings.minDelay}
+              value={minRaw}
               onChange={(e) => handleChange('minDelay', e.target.value)}
             />
           </div>
@@ -108,7 +119,7 @@ export default function VoiceNoteTimingSettingsPanel() {
               step={1}
               min={0}
               max={600}
-              value={settings.maxDelay}
+              value={maxRaw}
               onChange={(e) => handleChange('maxDelay', e.target.value)}
             />
           </div>

@@ -131,18 +131,23 @@ export default function AppSidebar() {
               const Icon = item.icon ? Icons[item.icon] : Icons.logo;
               const isConversations = item.title === 'Conversations';
               const isDashboard = item.title === 'Dashboard';
+              // A group is "active" when the current route is inside one of its children.
+              const isGroupActive =
+                item.items && item.items.length > 0
+                  ? item.items.some((sub) => pathname.startsWith(sub.url))
+                  : pathname === item.url;
               return item?.items && item?.items?.length > 0 ? (
                 <Collapsible
                   key={item.title}
                   asChild
-                  defaultOpen={item.isActive}
+                  defaultOpen={isGroupActive || item.isActive}
                   className='group/collapsible'
                 >
                   <SidebarMenuItem>
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton
                         tooltip={item.title}
-                        isActive={pathname === item.url}
+                        isActive={isGroupActive}
                       >
                         {item.icon && <Icon />}
                         <span>{item.title}</span>

@@ -195,7 +195,7 @@ export function ConversationList({
       </div>
       <ScrollArea className='min-h-0 flex-1 overflow-hidden'>
         {filtered.length === 0 ? (
-          <div className='text-muted-foreground p-6 text-center text-sm'>
+          <div className='text-muted-foreground flex h-full items-center justify-center p-6 text-center text-sm'>
             {activeTab === 'priority'
               ? 'No high-priority conversations'
               : activeTab === 'unread'

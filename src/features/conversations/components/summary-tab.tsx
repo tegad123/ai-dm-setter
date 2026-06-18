@@ -349,7 +349,10 @@ export function SummaryTab({
                     {stage.label}
                   </span>
                   {i < STAGES.length - 1 && (
-                    <IconArrowRight className='text-muted-foreground/40 ml-auto h-3 w-3' />
+                    <IconArrowRight
+                      aria-hidden='true'
+                      className='text-muted-foreground/40 ml-auto h-3 w-3'
+                    />
                   )}
                 </div>
               );

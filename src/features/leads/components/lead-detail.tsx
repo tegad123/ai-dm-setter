@@ -26,7 +26,8 @@ import {
 import {
   IconArrowLeft,
   IconMessageCircle,
-  IconArrowRight
+  IconArrowRight,
+  IconClipboardText
 } from '@tabler/icons-react';
 import { toast } from 'sonner';
 import { LeadStageBadge, allStages } from '@/features/shared/lead-stage-badge';
@@ -201,13 +202,35 @@ export default function LeadDetail({ leadId }: { leadId: string }) {
           </div>
           <p className='text-muted-foreground text-sm'>@{lead.handle}</p>
         </div>
-        <div className='flex flex-col items-end gap-1'>
-          <LeadStageBadge stage={stageKey} />
-          {lead.stageEnteredAt && (
-            <span className='text-muted-foreground text-xs'>
-              {timeAgo(lead.stageEnteredAt)} in this stage
-            </span>
-          )}
+        <div className='flex flex-col items-end gap-2'>
+          <div className='flex items-center gap-2'>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => router.push(`/dashboard/leads/${leadId}/takeover`)}
+            >
+              <IconClipboardText className='mr-1.5 h-4 w-4' />
+              Import DM Thread
+            </Button>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() =>
+                router.push(`/dashboard/conversations?conversationId=${leadId}`)
+              }
+            >
+              <IconMessageCircle className='mr-1.5 h-4 w-4' />
+              Open Chat
+            </Button>
+          </div>
+          <div className='flex items-center gap-2'>
+            <LeadStageBadge stage={stageKey} />
+            {lead.stageEnteredAt && (
+              <span className='text-muted-foreground text-xs'>
+                {timeAgo(lead.stageEnteredAt)} in this stage
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
