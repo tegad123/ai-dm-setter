@@ -2005,6 +2005,19 @@ export function scoreVoiceQuality(
     }
   }
 
+  // Broken fragment opener (BUG-14, Paris Mokoena 2026-06-17). The AI opened
+  // a reply with a stray one-word modal + "?" — "Could? brother I'm genuinely
+  // trying to help you out…" — a mangled sentence start (likely a truncated
+  // "Could you…" or a misparsed short lead message). It reads as broken/bot.
+  // Hard-fail so it regenerates a clean opener.
+  const BROKEN_FRAGMENT_OPENER_RE =
+    /^\s*(could|would|should|can|will|do|does|did|is|are|was|were|have|has|had)\s*\?/i;
+  if (BROKEN_FRAGMENT_OPENER_RE.test(reply)) {
+    hardFails.push(
+      `broken_fragment_opener: reply starts with a stray "${reply.trim().slice(0, 12)}" — a mangled sentence fragment. Rewrite with a clean, complete opening sentence.`
+    );
+  }
+
   // R34. Metadata leak guard — internal JSON fields, confidence scores,
   // placeholders, debug annotations, or structured fragments must never
   // reach lead-facing copy.

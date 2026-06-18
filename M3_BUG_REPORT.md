@@ -256,3 +256,19 @@ The gate had an `ignored_personal_question` detector ("hbu", "what do you trade"
 
 ### Note
 This is a quality nudge, not a hard block (legit "let's cover that on the call" deferrals are valid). It pushes the AI to acknowledge the question before advancing, rather than ignoring it outright.
+
+---
+
+## BUG-14 — Garbled "Could? brother" opener ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The AI twice opened a reply with *"Could? brother I'm genuinely trying to help you out…"* — apparently parsing a fragment as the literal word "Could." Reads as broken.
+
+### What the prod data shows
+Reproduced live in the prod "after" run: a short lead question ("do you guys trade prop firms?") produced *"Could? brother I'm genuinely trying to help you out and point you in the best direction possible."* It's not a stored template — the model emits a stray modal + "?" as a mangled sentence start (a truncated "Could you…" / misparse on short input).
+
+### The fix
+Hard-fail `broken_fragment_opener` in `scoreVoiceQuality`: a reply that opens with a lone modal/aux verb immediately followed by "?" ("Could?", "Would?", "Should?", "Do?", …) is forced to regenerate a clean opener. Carefully scoped to the *opener fragment* only — legitimate questions ("could you tell me what timezone…", "do you have 5k set aside?") are not affected.
+
+### Verification
+3 unit tests pass (the exact "Could? brother" line + other fragments blocked; proper questions not flagged). 55 gate-related tests pass. `tsc` clean.
