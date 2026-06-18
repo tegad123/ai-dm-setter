@@ -730,6 +730,13 @@ export interface VoiceQualityOptions {
    */
   recentAIMessages?: string[];
   /**
+   * URLs already sent earlier in this conversation (normalized, lowercased).
+   * BUG-13: the AI re-sent the same YouTube link ~97 min apart — beyond the
+   * recentAIMessages verbatim window. When the reply contains one of these,
+   * hard-fail so it doesn't resend an asset the lead already has.
+   */
+  alreadySentUrls?: string[];
+  /**
    * Structure classifications for recent AI turns. The group gate uses
    * this to block the third identical shape in a row, e.g. short ack
    * bubble + question bubble every single turn.
@@ -2628,6 +2635,28 @@ export function scoreVoiceQuality(
           `verbatim_repeat: this reply is ${Math.round(worst.sim * 100)}% identical to a recent AI message ("${worst.snippet}…"). You already said this. Do NOT repeat it — respond to what the lead actually said in their latest message, or advance the conversation with a different point.`
         );
       }
+    }
+  }
+
+  // 9h-iv. Duplicate link guard (BUG-13, Paris Mokoena 2026-06-17). The AI
+  // re-sent the same youtube.com/@DAETRADEZ link ~97 min apart — too far apart
+  // for the verbatim window above. If the reply contains a URL already sent
+  // earlier in the conversation, hard-fail so we don't resend an asset the
+  // lead already has. (The prompt has a soft "links already sent" block; this
+  // is the code-level backstop the client asked for.)
+  if (
+    Array.isArray(options?.alreadySentUrls) &&
+    options.alreadySentUrls.length
+  ) {
+    const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[^\s<>"')\]]+/gi;
+    const replyUrls = (reply.match(URL_RE) ?? []).map((u) =>
+      u.replace(/[.,;:!?]+$/, '').toLowerCase()
+    );
+    const dup = replyUrls.find((u) => options.alreadySentUrls!.includes(u));
+    if (dup) {
+      hardFails.push(
+        `duplicate_link: "${dup}" was already sent earlier in this conversation. Do NOT resend the same link — if the lead asked for it again, acknowledge you already shared it; otherwise advance without re-dropping it.`
+      );
     }
   }
 

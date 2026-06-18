@@ -2657,6 +2657,19 @@ export async function generateReply(
   const priorAIMessages = conversationHistory
     .filter((m) => m.sender === 'AI')
     .map((m) => ({ content: m.content, timestamp: m.timestamp }));
+  // BUG-13: URLs already sent by the AI anywhere in this conversation, so the
+  // gate can hard-fail a reply that re-sends one (the duplicate-link guard).
+  const alreadySentUrls = (() => {
+    const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\bwww\.[^\s<>"')\]]+/gi;
+    const set = new Set<string>();
+    for (const m of priorAIMessages) {
+      if (typeof m.content !== 'string') continue;
+      for (const raw of m.content.match(URL_RE) ?? []) {
+        set.add(raw.replace(/[.,;:!?]+$/, '').toLowerCase());
+      }
+    }
+    return Array.from(set);
+  })();
   const priorAITurns = groupAIMessagesIntoTurns(conversationHistory);
   const lastAiTurn =
     priorAITurns.length > 0 ? priorAITurns[priorAITurns.length - 1] : null;
@@ -3690,6 +3703,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // -3, but the verbatim_repeat guard (BUG-01) needs a wider window because
     // the Paris loop line recurred many turns apart, not just back-to-back.
     recentAIMessages: priorAITurns.slice(-8).map((turn) => turn.content),
+    alreadySentUrls,
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,

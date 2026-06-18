@@ -289,3 +289,30 @@ Traced the render path in `conversations-view.tsx`: on conversation switch `acti
 
 ### Verification
 `tsc` clean; the main message thread is unaffected (it uses its own `localMessages` + `loading` state). Confirm visually post-deploy: open two conversations back-to-back; the Summary stats now update immediately and never show the prior lead's numbers.
+
+---
+
+## BUG-13 — Duplicate pitch / link sent verbatim ✅ FIXED (MEDIUM)
+
+### What the client reported
+> The "check out my YouTube" redirect (youtube.com/@DAETRADEZ) was sent nearly word-for-word twice — 10:41 AM and again 12:18 PM.
+
+### Root cause
+There's a soft prompt block ("links already sent") but it's a prompt rule the model can ignore, and the two sends were ~97 min / many turns apart — beyond the BUG-01 verbatim guard's recent-window. So neither caught it.
+
+### The fix (code-level guard)
+- ai-engine computes `alreadySentUrls` from the **full** conversation history and passes it to the gate.
+- New `duplicate_link` hard-fail in `scoreVoiceQuality`: if a reply contains a URL already sent anywhere earlier in the conversation, it regenerates without re-dropping the link (case-insensitive, trailing-punctuation tolerant). Distance-independent, so it catches the 97-min-apart case.
+
+### Verification
+4 unit tests pass (duplicate blocked; case/punct tolerant; different link allowed; first send allowed). Full suite **515 tests pass**. `tsc` clean.
+
+---
+
+## BUG-12 — Stuck looping inside Discovery ✅ RESOLVED (via BUG-01)
+
+### What the client reported
+> Across 195 messages the AI kept returning to the same "greed / lack of patience" discovery point instead of progressing.
+
+### Resolution
+The doc itself notes this is "tied to BUG-01" — the repeated canned line anchored the conversation in Discovery. The **verbatim_repeat guard (BUG-01)** now hard-fails that repeated line and forces the AI to respond to what the lead actually said / advance, removing the anchor. Confirmed in the prod "after" run: the conversation progressed cleanly Discovery → Goal → Soft Pitch → Booking with no Discovery loop. No separate fix required; covered by `c30db6c`.
