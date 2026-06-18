@@ -18,7 +18,7 @@
 | 02 | Mid-sentence truncation | CRIT | 2–4h | ✅ |
 | 03 | Internal template/placeholder leak | CRIT | 2–3h | ✅ |
 | 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ✅ (prod "after" run pending) |
-| 08 | Image hallucination | HIGH | 3–5h | ⏳ |
+| 08 | Image hallucination | HIGH | 3–5h | ✅ |
 
 **CRITICAL + HIGH total ≈ 3–5 working days** incl. before/after verification. MEDIUM bugs (11–15) ≈ +1.5–2 days, do not gate M3.
 
@@ -176,3 +176,23 @@ From the Paris conversation:
 ### Verification
 - **Before:** prod evidence above (7× budget re-ask, email re-ask post-booking, Sat-vs-Monday slot, 5× dead-end stall).
 - **After:** `tsc` clean; **all 486 unit tests pass** (incl. booking, script-progression, quality-gate suites — additive change, no regression). Definitive confirmation on the prod "after" run: drive Shazim 0→booking and confirm the happy path still books, no re-asking, no re-book loop, and the booked day matches what was agreed.
+
+---
+
+## BUG-08 — Image hallucination ✅ FIXED & VERIFIED
+
+### What the client reported
+> The AI sometimes invents what's in screenshots it can't process — e.g. *"damn bro that's a solid result fr"* on an FOMC screenshot it never read. Confidently describing trading it can't see is the most dangerous hallucination here.
+
+### What the prod data shows (root cause corrected)
+Checked every lead image in the Paris conversation. Important correction to the original hypothesis: **vision/OCR actually succeeded on almost every image** — each had `imageMetadata` populated with a description + extracted text. So Claude *did* receive a text description; it wasn't "empty OCR → hallucinate."
+
+The real failure is **over-interpretation**: the 18:09 screenshot's auto-description was *"account balance, equity, and open positions"* — neutral — and the AI turned that into *"damn bro that's a solid result fr"*, asserting a **win/profit it cannot actually verify**. (The one honest "image isn't pulling through" was, ironically, on an image where OCR *did* work.)
+
+### The fix (code-level guards, per client)
+1. **At the render point** (`buildImageContextText`, `media-processing.ts`): the image context now carries an explicit guard — *"this is an auto-generated description, not the real image — do NOT claim it shows a win/loss/profit/result unless the extracted Text says so."* And when vision genuinely produced nothing usable, it emits a hard *"could NOT be read — do not describe or guess; ask the lead what it shows."*
+2. **Outbound hard guard** (`scoreVoiceQuality`, `voice-quality-gate.ts`): when the lead's previous message was an image, a new `fabricated_image_result` hard-fail blocks unqualified result-claims ("solid/nice/big result/win/profit", "that's a W", "killing it", etc.) → forces a regeneration toward a neutral acknowledgment + "what's it showing?". This complements the existing `r_image_chart_advice` (no entries/targets) and `fabricated_image_observation` (no "I saw the chart") guards.
+
+### Verification
+- **Before:** prod evidence — "solid result fr" on a neutral balance screenshot.
+- **After:** 4 new unit tests (the exact "solid result" line blocked; "nice win" blocked; no preceding image → allowed; neutral "what's it showing?" → allowed). 59 gate-related tests pass. `tsc` clean.

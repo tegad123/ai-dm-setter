@@ -2429,6 +2429,21 @@ export function scoreVoiceQuality(
       );
       softSignals.fabricated_image_observation = -0.5;
     }
+
+    // 9e-v-b. Image performance-claim fabrication (BUG-08, Paris Mokoena
+    // 2026-06-17). The lead sent a trading screenshot and the AI replied
+    // "damn bro that's a solid result fr" — asserting a WIN/PROFIT it can't
+    // actually verify from a vague auto-description ("shows balance and open
+    // positions"). This is the most dangerous image hallucination: inventing
+    // facts about the lead's trading. Block unqualified result-judgments after
+    // an image — the AI should ask what it shows, not declare a win/loss.
+    const IMAGE_RESULT_CLAIM_RE =
+      /\b(solid|clean|nice|great|strong|massive|huge|good|insane|crazy)\s+(result|profit|gain|win|trade|setup|entry|run)\b|\bthat'?s?\s+(a\s+)?(solid|clean|nice|great|big|huge|massive|w|win|banger)\b|\b(killing it|cooking|profitable|in profit|nice win|good win|big win|well played|w fr)\b/i;
+    if (IMAGE_RESULT_CLAIM_RE.test(reply)) {
+      hardFails.push(
+        `fabricated_image_result: matched "${IMAGE_RESULT_CLAIM_RE.source}" — the lead sent an image and you asserted a specific positive result you cannot verify from the auto-description. Do NOT claim it shows a win/profit/good trade. Acknowledge neutrally and ask what it shows.`
+      );
+    }
   }
 
   // 9e-vi. Markdown-formatted single message — the LLM emitted a

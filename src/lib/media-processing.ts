@@ -138,7 +138,18 @@ export function buildImageContextText(
   metadata: ImageMetadata | Prisma.JsonValue | null | undefined
 ): string {
   const normalized = normalizeImageMetadata(metadata);
-  if (!normalized) return '[Image]';
+
+  // BUG-08 (Paris Mokoena 2026-06-17): when vision produced no usable
+  // description/text, the model must NOT invent contents. Emit an explicit
+  // "could not read" marker so the AI says so instead of guessing.
+  const hasDescription =
+    !!normalized &&
+    normalized.description.trim().length > 0 &&
+    normalized.description.trim() !== 'image sent by lead';
+  const hasText = !!normalized && normalized.extractedText.trim().length > 0;
+  if (!normalized || (!hasDescription && !hasText)) {
+    return '[Image the lead sent — could NOT be read on our end. Do NOT describe or guess its contents; ask the lead what it shows.]';
+  }
 
   const parts = [`Image: ${normalized.description || 'image sent by lead'}`];
   if (normalized.extractedText.trim()) {
@@ -147,6 +158,15 @@ export function buildImageContextText(
   if (normalized.contextualNote.trim()) {
     parts.push(`Note: ${normalized.contextualNote.trim()}`);
   }
+
+  // BUG-08: this is an automated text description, NOT the actual image. The
+  // model was over-interpreting it — e.g. calling a screenshot that merely
+  // "shows account balance and open positions" a "solid result fr". Anchor a
+  // guard right next to the data so it doesn't assert wins/losses/profit the
+  // description doesn't actually state.
+  parts.push(
+    'NOTE: this is an auto-generated description, not the real image — do NOT claim it shows a win, loss, profit, or any specific result unless the Text above explicitly says so; if unsure, ask the lead what it shows'
+  );
 
   return `[${parts.join(' | ')}]`;
 }
