@@ -15,7 +15,7 @@
 | 05 | Back-to-back messages each get a reply | HIGH | 4–6h | ✅ |
 | 01 | Looping line (verbatim repeat) | CRIT | 4–6h | ✅ |
 | 10 | Dead-end "one sec" stall | HIGH | — | 🔧 (folded into 07/09 — it's a symptom of re-booking) |
-| 02 | Mid-sentence truncation | CRIT | 2–4h | ⏳ |
+| 02 | Mid-sentence truncation | CRIT | 2–4h | ✅ |
 | 03 | Internal template/placeholder leak | CRIT | 2–3h | ⏳ |
 | 07+09 | Re-asks known info / re-books / date mismatch | HIGH | 6–9h | ⏳ |
 | 08 | Image hallucination | HIGH | 3–5h | ⏳ |
@@ -95,3 +95,28 @@ This is a catch-all: it kills **any** verbatim loop, including **BUG-13** (dupli
 
 ### Related finding → BUG-10 re-scoped
 BUG-10's *"give me one sec to get that locked in 🙏"* stall (fired 5×, the last one a literal dead-end with no follow-up) is **a symptom of BUG-09**: the conversation already had a confirmed booking (`scheduledCallAt`, `bookingId` both set), but the AI kept re-entering BOOKING_CONFIRM and re-attempting to book the already-booked call → the booking call fails → it ships the holding line. Fixing BUG-09's booking-state circuit-breaker removes the stall at its source, so BUG-10 is folded into the BUG-07/09 work rather than band-aided separately. (The same data also confirms BUG-09's date mismatch: `scheduledCallAt` = Sat Jun 20 while the chat agreed Monday.)
+
+---
+
+## BUG-02 — Mid-sentence truncation ✅ FIXED & VERIFIED
+
+### What the client reported
+> Messages cut off mid-word, including the actual offer pitch: *"It's about 6 to 10 hours of vid"* — the single most important message in the funnel.
+
+### What the prod data shows (root cause confirmed)
+Pulled the exact pitch message from the Paris conversation:
+
+```
+15:25:07  bubble 1/2  len=126:  "I have a self-paced course that covers my entire Session
+                                  Liquidity Model from start to finish. It's about 6 to 10 hours of vid"
+```
+
+Key evidence: it's **bubble 1 of a 2-bubble group**, only **126 chars** (far under the 450-char soft limit), cut mid-word at "vid[eo]". So it's not a character cap and not the whole response being dropped — the model's **output-token ceiling (`max_tokens: 1500`) was exhausted mid-emission**, cutting the JSON string. The generation code read `response.content` but **never checked `stop_reason`**, so a truncated response shipped as-is.
+
+### The fix
+1. **Raised `max_tokens` 1500 → 2048** on both the Anthropic and OpenAI-fallback paths (`src/lib/ai-engine.ts`) — headroom for verbose multi-bubble pitches.
+2. **Added a completion guard:** `callLLM` now returns `truncated: true` when Anthropic `stop_reason === 'max_tokens'` (or OpenAI `finish_reason === 'length'`). The main generation loop **regenerates** instead of shipping a fragment (falls through only on the final retry, where a complete-enough reply beats none).
+
+### Verification
+- **Before:** prod evidence above — pitch bubble cut at "...vid", `stop_reason` never inspected.
+- **After:** SDK field names confirmed (`stop_reason='max_tokens'`, `finish_reason='length'`); guard wired into the retry loop; `tsc` clean; 32 unit tests pass. Final confirmation on the live prod "after" run — drive to the offer pitch and confirm it delivers complete.
