@@ -196,3 +196,26 @@ The real failure is **over-interpretation**: the 18:09 screenshot's auto-descrip
 ### Verification
 - **Before:** prod evidence — "solid result fr" on a neutral balance screenshot.
 - **After:** 4 new unit tests (the exact "solid result" line blocked; "nice win" blocked; no preceding image → allowed; neutral "what's it showing?" → allowed). 59 gate-related tests pass. `tsc` clean.
+
+---
+
+## ✅ PROD "AFTER" VERIFICATION — Shazim FB chat, 0 → booking (post-deploy)
+
+Drove a fresh cold-start conversation on the live daetradez prod (Shazim FB, after deploying all fixes). Result: **clean 0→booking pass with every gating bug fixed.**
+
+| Check | Result |
+|---|---|
+| 0 → booking completed | ✅ booked Wed Jun 24 7pm, `bookingId=lC0fsE7iSYKvxSE5GRIg`, Zoom link delivered |
+| BUG-07 capital re-ask | ✅ "5k saved up" captured (HIGH confidence), **never re-asked** |
+| BUG-07 email re-ask | ✅ email captured once, **never re-asked** |
+| BUG-09 date match | ✅ `selectedSlot` = the **Wednesday** agreed in chat (Paris had Sat-vs-Mon mismatch) |
+| BUG-09 re-booking | ✅ two post-booking messages → AI **confirmed the existing call** ("still on for wednesday 7pm"), did **not** re-propose times or restart booking |
+| BUG-10 dead-end stall | ✅ **no "give me one sec to get that locked in" stall** (Paris fired it 5× at this exact point) |
+| BUG-01 verbatim loop | ✅ replies varied throughout; no repeated line |
+| BUG-02 truncation | ✅ all bubbles delivered complete (incl. the link bubble) |
+| BUG-03 template leak | ✅ no scaffolding/placeholder text leaked |
+
+**Still-open items observed during the run (MEDIUM / non-gating):**
+- **Timezone mapping bug (new):** lead said "GMT+2, South Africa" but it stored `Europe/London` (should be `Africa/Johannesburg`) and labelled the slot "GMT+1". The booked instant is internally consistent, but the tz *label* is wrong. Feeds BUG-09's display. → fix queued.
+- **BUG-14 reproduced:** a short question ("do you guys trade prop firms?") produced a reply opening "Could? brother…". → MEDIUM, queued.
+- **BUG-06:** AI cycled discovery questions and dodged the prop-firm question before closing. → MEDIUM, queued.
