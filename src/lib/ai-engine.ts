@@ -3686,7 +3686,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         ? ('failed' as const)
         : undefined),
     previousAIMessage: lastAiTurn?.content ?? lastAiMsg?.content ?? null,
-    recentAIMessages: priorAITurns.slice(-3).map((turn) => turn.content),
+    // Widened from -3 to -8: the repeated_opener guard internally slices to
+    // -3, but the verbatim_repeat guard (BUG-01) needs a wider window because
+    // the Paris loop line recurred many turns apart, not just back-to-back.
+    recentAIMessages: priorAITurns.slice(-8).map((turn) => turn.content),
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
     conversationSource: conversationCallState?.source ?? null,
@@ -3903,6 +3906,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
       throw err;
     }
+
+    // BUG-02: the generation hit the output-token ceiling — the text was cut
+    // mid-stream (e.g. the course pitch "...6 to 10 hours of vid"). Even when
+    // the truncated JSON still parses, the last bubble is a fragment. Regenerate
+    // rather than ship it. max_tokens was already raised to 2048, so this is the
+    // rare safety net; on the final attempt we fall through (a complete-enough
+    // reply beats none).
+    if (callResult.truncated && attempt < MAX_RETRIES) {
+      console.warn(
+        `[ai-engine] response truncated at max_tokens on attempt ${attempt + 1}/${MAX_RETRIES + 1} — forcing regen (convo ${activeConversationId})`
+      );
+      continue;
+    }
+
     const futureStepMismatch = detectFutureStepContentMismatch({
       snapshot: scriptStateSnapshot ?? null,
       currentStepNumber: currentStepNumberForGate,
@@ -6826,6 +6843,13 @@ export interface LLMCallResult {
   /** Final model that produced the text. On fallback, the fallback model. */
   modelUsed: string;
   usage: LLMUsage;
+  /**
+   * True when generation hit the output-token ceiling (Anthropic
+   * stop_reason='max_tokens' / OpenAI finish_reason='length'). The text is cut
+   * mid-stream — shipping it produces a mid-sentence truncation (BUG-02). The
+   * caller must regenerate instead of delivering a fragment.
+   */
+  truncated?: boolean;
 }
 
 const EMPTY_USAGE: LLMUsage = {
@@ -6892,7 +6916,7 @@ async function callOpenAI(
     client.chat.completions.create({
       model,
       temperature: 0.85,
-      max_completion_tokens: 1500,
+      max_completion_tokens: 2048, // BUG-02: headroom for multi-bubble replies
       // Force OpenAI to emit a valid JSON object. The system prompt already
       // demands JSON, but stacked directive blocks sometimes steered the
       // model into plain text — this guarantees the response parses.
@@ -6914,9 +6938,19 @@ async function callOpenAI(
   };
   const cached = details?.prompt_tokens_details?.cached_tokens ?? 0;
 
+  // BUG-02: finish_reason='length' is OpenAI's max-tokens cutoff (mirror of
+  // Anthropic stop_reason='max_tokens') — the text is truncated.
+  const truncated = response.choices[0]?.finish_reason === 'length';
+  if (truncated) {
+    console.warn(
+      `[ai-engine] OpenAI generation hit max tokens (finish_reason=length) — model=${model}, will regenerate`
+    );
+  }
+
   return {
     text: response.choices[0]?.message?.content?.trim() || '',
     modelUsed: model,
+    truncated,
     usage: {
       inputTokens: response.usage?.prompt_tokens ?? 0,
       outputTokens: response.usage?.completion_tokens ?? 0,
@@ -6973,7 +7007,12 @@ async function callAnthropic(
         }
       ],
       temperature: 0.85,
-      max_tokens: 1500,
+      // Raised 1500 → 2048 (BUG-02). A verbose multi-bubble reply (e.g. the
+      // self-paced-course pitch) could exhaust 1500 tokens mid-string, cutting
+      // the JSON and shipping a bubble truncated mid-word ("...6 to 10 hours of
+      // vid"). 2048 gives headroom; the stop_reason guard below catches the
+      // rare case it still runs out.
+      max_tokens: 2048,
       messages: anthropicPayloadMessages as any
     })
   );
@@ -6985,6 +7024,16 @@ async function callAnthropic(
     textBlock && 'text' in textBlock ? (textBlock.text as string) : ''
   ).trim();
 
+  // BUG-02: stop_reason='max_tokens' means the model was cut mid-emission —
+  // the text (and its JSON) is incomplete. Flag it so the caller regenerates
+  // rather than shipping a mid-sentence fragment.
+  const truncated = response.stop_reason === 'max_tokens';
+  if (truncated) {
+    console.warn(
+      `[ai-engine] generation hit max_tokens (output truncated) — model=${model}, will regenerate`
+    );
+  }
+
   // Usage shape varies slightly across SDK versions — defensive reads.
   const u = response.usage as {
     input_tokens?: number;
@@ -6995,6 +7044,7 @@ async function callAnthropic(
   return {
     text,
     modelUsed: model,
+    truncated,
     usage: {
       inputTokens: u?.input_tokens ?? 0,
       outputTokens: u?.output_tokens ?? 0,

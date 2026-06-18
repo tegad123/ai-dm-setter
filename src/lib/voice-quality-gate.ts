@@ -79,7 +79,19 @@ export const METADATA_LEAK_PATTERNS: RegExp[] = [
   /```[\s\S]*?(stage_confidence|quality_score|priority_score|current_stage|script_step|next_action)[\s\S]*?```/i,
 
   // Trailing machine fields appended after otherwise normal copy.
-  /[.!?]\s+[a-z_]+[:=][\w.]+/i
+  /[.!?]\s+[a-z_]+[:=][\w.]+/i,
+
+  // Prompt-scaffolding field-list leak (BUG-03, Paris Mokoena 2026-06-17).
+  // The booking-info prompt's example slot list reached the lead verbatim:
+  //   "just missing your specific missing info e.g. "email" / "timezone" /
+  //    "phone number"."
+  // Two signatures: (a) the "missing ... info" scaffolding phrasing, and
+  // (b) an "e.g." followed by a slash-separated list of quoted slot names.
+  // The quoted-field-list pattern requires >=2 quoted tokens joined by "/"
+  // so ordinary quoted words ("he said "no"") don't trip it.
+  /\bmissing\s+(your\s+)?(specific\s+)?missing\s+info\b/i,
+  /\be\.?g\.?\s*["'][a-z _]+["']\s*\/\s*["'][a-z _]+["']/i,
+  /["'](?:email|timezone|time zone|phone number|full name|first name|last name|day and time)["']\s*\/\s*["'](?:email|timezone|time zone|phone number|full name|first name|last name|day and time)["']/i
 ];
 
 const METADATA_LEAK_FALSE_POSITIVE_GUARDS: RegExp[] = [
@@ -2417,6 +2429,21 @@ export function scoreVoiceQuality(
       );
       softSignals.fabricated_image_observation = -0.5;
     }
+
+    // 9e-v-b. Image performance-claim fabrication (BUG-08, Paris Mokoena
+    // 2026-06-17). The lead sent a trading screenshot and the AI replied
+    // "damn bro that's a solid result fr" — asserting a WIN/PROFIT it can't
+    // actually verify from a vague auto-description ("shows balance and open
+    // positions"). This is the most dangerous image hallucination: inventing
+    // facts about the lead's trading. Block unqualified result-judgments after
+    // an image — the AI should ask what it shows, not declare a win/loss.
+    const IMAGE_RESULT_CLAIM_RE =
+      /\b(solid|clean|nice|great|strong|massive|huge|good|insane|crazy)\s+(result|profit|gain|win|trade|setup|entry|run)\b|\bthat'?s?\s+(a\s+)?(solid|clean|nice|great|big|huge|massive|w|win|banger)\b|\b(killing it|cooking|profitable|in profit|nice win|good win|big win|well played|w fr)\b/i;
+    if (IMAGE_RESULT_CLAIM_RE.test(reply)) {
+      hardFails.push(
+        `fabricated_image_result: matched "${IMAGE_RESULT_CLAIM_RE.source}" — the lead sent an image and you asserted a specific positive result you cannot verify from the auto-description. Do NOT claim it shows a win/profit/good trade. Acknowledge neutrally and ask what it shows.`
+      );
+    }
   }
 
   // 9e-vi. Markdown-formatted single message — the LLM emitted a
@@ -2551,6 +2578,43 @@ export function scoreVoiceQuality(
       hardFails.push(
         `repeated_opener: current reply starts with "${currentOpener.match}" and a recent AI turn started with "${repeatedFrom.match}". Your last message started with the same opener. Vary your response — skip the acknowledgment entirely or use a completely different opening. Options: react directly to what they said, start with the question, use a different expression.`
       );
+    }
+  }
+
+  // 9h-iii. Generic verbatim-repeat guard (BUG-01, Paris Mokoena 2026-06-17).
+  // The looping line "I mean bro... the main struggle you're facing is
+  // greediness and lack of patience..." was generated VERBATIM 4 times across
+  // the conversation at the Call-Proposal stage. It's not an opener, a capital
+  // question, or a pitch — so none of the specific repeat detectors caught it.
+  // This is the catch-all: if the new reply (whole message) is near-identical
+  // to ANY recent AI turn, hard-fail and force a fresh generation. Also kills
+  // BUG-13 (duplicate pitch/link sent verbatim twice).
+  //
+  // Thresholds: only meaningful messages (>= 8 content tokens) are compared so
+  // short acks ("gotchu bro") — already handled by repeated_opener — don't
+  // false-positive here. Jaccard >= 0.85 = near-verbatim repeat.
+  {
+    const recentForRepeat =
+      options?.recentAIMessages && options.recentAIMessages.length > 0
+        ? options.recentAIMessages
+        : options?.previousAIMessage
+          ? [options.previousAIMessage]
+          : [];
+    const replyTokens = tokenSetForVerbatimCompare(reply);
+    if (replyTokens.size >= 8) {
+      let worst: { sim: number; snippet: string } | null = null;
+      for (const past of recentForRepeat.slice(-5)) {
+        if (!past || tokenSetForVerbatimCompare(past).size < 8) continue;
+        const sim = jaccardSimilarity(reply, past);
+        if (sim >= 0.85 && (!worst || sim > worst.sim)) {
+          worst = { sim, snippet: past.slice(0, 60).replace(/\n/g, ' ') };
+        }
+      }
+      if (worst) {
+        hardFails.push(
+          `verbatim_repeat: this reply is ${Math.round(worst.sim * 100)}% identical to a recent AI message ("${worst.snippet}…"). You already said this. Do NOT repeat it — respond to what the lead actually said in their latest message, or advance the conversation with a different point.`
+        );
+      }
     }
   }
 

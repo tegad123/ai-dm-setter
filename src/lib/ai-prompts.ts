@@ -58,6 +58,17 @@ export interface BookingState {
   leadPhone?: string | null;
   availableSlots?: BookingSlot[];
   hasCalendarIntegration?: boolean;
+  // BUG-07/09 (2026-06-17): booking state fed back so the AI knows a call
+  // already exists and what it already collected — stops re-asking captured
+  // info and re-entering the booking flow on an already-booked conversation.
+  /** A confirmed call is already scheduled (ISO). When set, the AI must not re-book. */
+  scheduledCallAt?: string | null;
+  /** Provider appointment id — presence means a real booking exists. */
+  bookingId?: string | null;
+  /** The slot the lead confirmed (ISO). Used to read the agreed time back consistently. */
+  selectedSlotIso?: string | null;
+  /** Capital/budget already stated by the lead, e.g. "600 USD". Stops re-asking. */
+  capitalStated?: string | null;
 }
 
 export interface PreQualifiedContext {
@@ -2566,6 +2577,43 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
   // ── Booking state (what the lead has already disclosed) ──────────
   const booking = leadContext.booking || {};
   const bookingStateLines: string[] = [];
+
+  // BUG-09: a call is ALREADY booked. The AI must stop treating booking as an
+  // open goal — no re-proposing times, no re-asking email, no restarting the
+  // flow. This is the single most important line when it applies. (Paris
+  // Mokoena 2026-06-17: AI re-booked an already-booked call all afternoon.)
+  const alreadyBooked = !!(booking.scheduledCallAt || booking.bookingId);
+  if (alreadyBooked) {
+    const tz = booking.leadTimezone || undefined;
+    let when = '';
+    const iso = booking.selectedSlotIso || booking.scheduledCallAt;
+    if (iso) {
+      try {
+        when = new Date(iso).toLocaleString('en-US', {
+          weekday: 'long',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+          timeZoneName: 'short',
+          ...(tz ? { timeZone: tz } : {})
+        });
+      } catch {
+        when = iso;
+      }
+    }
+    bookingStateLines.push(
+      `- ✅ A CALL IS ALREADY BOOKED${when ? ` for ${when}` : ''} and the link was already sent.`
+    );
+    bookingStateLines.push(
+      '- Do NOT propose new times, do NOT re-ask for their email, do NOT restart the booking flow. The booking is DONE.'
+    );
+    bookingStateLines.push(
+      '- Your only job now: confirm/reassure, answer any questions, and keep them warm until the call. If they explicitly want to RESCHEDULE, then (and only then) help them pick a new time.'
+    );
+  }
+
   if (booking.leadTimezone)
     bookingStateLines.push(`- Lead timezone: ${booking.leadTimezone}`);
   if (booking.leadEmail) {
@@ -2576,6 +2624,13 @@ Do NOT send the same link twice. If the lead asks for more content and you only 
   }
   if (booking.leadPhone)
     bookingStateLines.push(`- Lead phone: ${booking.leadPhone}`);
+  // BUG-07: capital already stated — reference it, never re-ask. (Paris: lead
+  // said "600usd" then got asked "what've you got set aside" 4 more times.)
+  if (booking.capitalStated) {
+    bookingStateLines.push(
+      `- Capital already stated by the lead: ${booking.capitalStated}. Do NOT ask what they have set aside again — reference this figure.`
+    );
+  }
   prompt = prompt.replace(
     /\{\{bookingStateContext\}\}/g,
     bookingStateLines.length
