@@ -2025,6 +2025,25 @@ export function scoreVoiceQuality(
     );
   }
 
+  // Dangling-template tail (BUG-01b, Ali QA 2026-06-22). The model reproduces
+  // a Step-10 "deep why" example from the account's training data but stops
+  // mid-clause — "...the main struggle you're facing is X, but like I said your
+  // commitment is truly" — with no completion. It's NOT a max_tokens cut
+  // (BUG-02's stop_reason guard misses it) and NOT an AI self-repeat within the
+  // verbatim window — the model generates it incomplete on its own. Confirmed
+  // organic 3× post-deploy (Jun 18–19). Hard-fail any reply whose LAST bubble
+  // ends on a dangling connective/copula so it regenerates a complete thought.
+  const lastBubbleForTail = reply.trim().split(/\n+/).pop()?.trim() ?? '';
+  // Strip a trailing closing quote the model sometimes appends to the fragment.
+  const tailNormalized = lastBubbleForTail.replace(/["'’]+$/, '').trim();
+  const DANGLING_TAIL_RE =
+    /\b(your commitment is truly|but like i said|is truly|because|so that|which is why|the main thing is|what i mean is|the reason is|even though|as long as|and that's why|so what i)\s*$/i;
+  if (tailNormalized.length > 15 && DANGLING_TAIL_RE.test(tailNormalized)) {
+    hardFails.push(
+      `dangling_template_tail: the reply ends mid-thought on "${tailNormalized.slice(-40)}" with no completion (a learned-from-training fragment). Finish the thought — complete the sentence and ask your next question naturally; do NOT stop on a dangling connective.`
+    );
+  }
+
   // R34. Metadata leak guard — internal JSON fields, confidence scores,
   // placeholders, debug annotations, or structured fragments must never
   // reach lead-facing copy.
