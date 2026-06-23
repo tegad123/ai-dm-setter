@@ -3699,10 +3699,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         ? ('failed' as const)
         : undefined),
     previousAIMessage: lastAiTurn?.content ?? lastAiMsg?.content ?? null,
-    // Widened from -3 to -8: the repeated_opener guard internally slices to
-    // -3, but the verbatim_repeat guard (BUG-01) needs a wider window because
-    // the Paris loop line recurred many turns apart, not just back-to-back.
-    recentAIMessages: priorAITurns.slice(-8).map((turn) => turn.content),
+    // Widened from -3 → -8 → -20: Ali Raza's 235-message conversation had the
+    // "appreciate transparency" line fire 5× at gaps of 5–8 AI turns, slipping
+    // through the -8 window. -20 covers a realistic long sales conversation
+    // without risking false positives (Jaccard threshold is still 85%).
+    recentAIMessages: priorAITurns.slice(-20).map((turn) => turn.content),
     alreadySentUrls,
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
