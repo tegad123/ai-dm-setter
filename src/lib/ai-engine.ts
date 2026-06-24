@@ -3699,11 +3699,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         ? ('failed' as const)
         : undefined),
     previousAIMessage: lastAiTurn?.content ?? lastAiMsg?.content ?? null,
-    // Widened from -3 → -8 → -20: Ali Raza's 235-message conversation had the
-    // "appreciate transparency" line fire 5× at gaps of 5–8 AI turns, slipping
-    // through the -8 window. -20 covers a realistic long sales conversation
-    // without risking false positives (Jaccard threshold is still 85%).
-    recentAIMessages: priorAITurns.slice(-20).map((turn) => turn.content),
+    // Full conversation history — no window cap. priorAITurns is already the
+    // complete set of AI turns loaded from DB for this conversation, so passing
+    // all of them gives the Jaccard guard a persistent phrase-level block that
+    // covers 200+ message conversations without any schema change.
+    recentAIMessages: priorAITurns.map((turn) => turn.content),
     alreadySentUrls,
     priorMessageStructures: priorMessageStructures.slice(-4),
     aiMessageCount: priorAIMessagesForPacing.length + candidateMessageCount,
