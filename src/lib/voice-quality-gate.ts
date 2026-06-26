@@ -2642,7 +2642,7 @@ export function scoreVoiceQuality(
     const replyTokens = tokenSetForVerbatimCompare(reply);
     if (replyTokens.size >= 8) {
       let worst: { sim: number; snippet: string } | null = null;
-      for (const past of recentForRepeat.slice(-5)) {
+      for (const past of recentForRepeat) {
         if (!past || tokenSetForVerbatimCompare(past).size < 8) continue;
         const sim = jaccardSimilarity(reply, past);
         if (sim >= 0.85 && (!worst || sim > worst.sim)) {
@@ -2675,6 +2675,50 @@ export function scoreVoiceQuality(
     if (dup) {
       hardFails.push(
         `duplicate_link: "${dup}" was already sent earlier in this conversation. Do NOT resend the same link — if the lead asked for it again, acknowledge you already shared it; otherwise advance without re-dropping it.`
+      );
+    }
+  }
+
+  // 9h-v. Scam objection parroting (Ahmad Ali / L UC KY 2026-06-24).
+  // When a lead says "this is scam" or "this looks like a scam" and the
+  // AI replies with a ≤5-token message that just echoes the word back
+  // ("scam?" / "feels like a scam?"), it reads as dismissive and
+  // antagonistic. The AI must engage the objection with empathy, not
+  // parrot it. Triggered when: (a) previousLeadMessage contains "scam"
+  // AND (b) the reply is short (≤8 tokens) AND contains "scam".
+  if (
+    options?.previousLeadMessage &&
+    /\bscam\b/i.test(options.previousLeadMessage)
+  ) {
+    const replyTokens9hv = reply
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+    if (replyTokens9hv.length <= 8 && /\bscam\b/i.test(reply)) {
+      hardFails.push(
+        'scam_objection_parrot: the lead said this is a scam and your reply echoes the word back without addressing the concern. Do NOT say "scam?" or "feels like a scam?" — acknowledge their skepticism directly, share why others had the same doubt and what changed for them, and invite them to ask the specific thing they are unsure about.'
+      );
+    }
+  }
+
+  // 9h-vi. Post-booking email-delivery hallucination (Ahmad Ali 2026-06-24).
+  // After a call is booked (scheduledCallAt is set), the AI should NOT
+  // pivot to email-delivery instructions ("check your spam or promotions
+  // folder", "check your inbox"). That template language belongs to the
+  // booking-confirmation flow and firing it in response to an unrelated
+  // question (e.g. "how much do you profit?") signals complete state loss.
+  // Hard-fail any reply that contains email-delivery phrases once a booking
+  // is confirmed.
+  if (
+    options &&
+    Object.prototype.hasOwnProperty.call(options, 'scheduledCallAt') &&
+    hasConfirmedScheduledCall(options.scheduledCallAt)
+  ) {
+    const EMAIL_DELIVERY_RE =
+      /\b(spam\s+or\s+promotions?\s+folder|check\s+your\s+(spam|inbox|promotions?)\b|promotions?\s+folder|junk\s+folder|check\s+your\s+email\s+for\s+the\s+(link|details|confirmation|zoom))\b/i;
+    if (EMAIL_DELIVERY_RE.test(reply)) {
+      hardFails.push(
+        'post_booking_email_hallucination: a call is already booked. Do NOT send email-delivery instructions ("check your spam/promotions folder", "check your inbox") in response to an unrelated message — the lead is not asking about their email. Respond to what they actually said and confirm/nurture the existing booking instead.'
       );
     }
   }
