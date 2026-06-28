@@ -5458,7 +5458,46 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     if (attempt === MAX_RETRIES) {
-      if (r24Blocked) {
+      // Priority overrides — checked before ALL other exhaustion handlers.
+      // These three guards fire reliably on attempt 0 and the model reproduces
+      // the same bad fragment through all retries. Every handler below either
+      // ships best-effort or escalates; none of them produce a safe reply for
+      // these cases. Handle them first so no downstream else-if branch can
+      // accidentally ship the bad output.
+      const scamParrotExhausted = quality.hardFails.some((f) =>
+        f.includes('scam_objection_parrot:')
+      );
+      const danglingTailExhausted = quality.hardFails.some((f) =>
+        f.includes('dangling_template_tail:')
+      );
+      const postBookingEmailExhausted = quality.hardFails.some((f) =>
+        f.includes('post_booking_email_hallucination:')
+      );
+      if (scamParrotExhausted) {
+        parsed.message =
+          "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
+        parsed.messages = [parsed.message];
+        parsed.escalateToHuman = false;
+        console.warn(
+          `[ai-engine] scam_objection_parrot exhausted — injecting deterministic skepticism-address reply (conv ${activeConversationId})`
+        );
+      } else if (danglingTailExhausted) {
+        parsed.message =
+          "so where are you at right now bro, what's the main thing you're trying to fix?";
+        parsed.messages = [parsed.message];
+        parsed.escalateToHuman = false;
+        console.warn(
+          `[ai-engine] dangling_template_tail exhausted — injecting deterministic bridging question (conv ${activeConversationId})`
+        );
+      } else if (postBookingEmailExhausted) {
+        parsed.message =
+          "you're all locked in bro, anthony will be ready for you at that time";
+        parsed.messages = [parsed.message];
+        parsed.escalateToHuman = false;
+        console.warn(
+          `[ai-engine] post_booking_email_hallucination exhausted — injecting deterministic booking-confirmed reply (conv ${activeConversationId})`
+        );
+      } else if (r24Blocked) {
         console.error(
           `[ai-engine] R24 gate EXHAUSTED ${MAX_RETRIES + 1} attempts — replacing unsafe final reply with deterministic R24-safe fallback on convo ${activeConversationId}`
         );
