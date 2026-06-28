@@ -5969,6 +5969,20 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           !nonVerbatimHardUnshippable &&
           literalInjectMsgs.length > 0;
 
+        // These three guards are checked FIRST (before softUnshippable/hardUnshippable)
+        // because the model reproduces the bad fragment through all retries AND the
+        // 1-token output also triggers softUnshippable gates — without priority,
+        // softUnshippable fires first and ships the bad reply as best-effort.
+        const danglingTail = quality.hardFails.some((f) =>
+          f.includes('dangling_template_tail:')
+        );
+        const scamParrot = quality.hardFails.some((f) =>
+          f.includes('scam_objection_parrot:')
+        );
+        const postBookingEmailHallucination = quality.hardFails.some((f) =>
+          f.includes('post_booking_email_hallucination:')
+        );
+
         if (allBubblesEmpty) {
           console.error(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts AND final output is empty — forcing escalate_to_human on convo ${activeConversationId}`
@@ -5977,6 +5991,33 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           qualityGateTerminalFailure = true;
           qualityGateFailureReason = 'empty_output_after_quality_retries';
           qualityGateHardFails = [...quality.hardFails];
+        } else if (danglingTail) {
+          const fallback =
+            "so where are you at right now bro, what's the main thing you're trying to fix?";
+          parsed.message = fallback;
+          parsed.messages = [fallback];
+          parsed.escalateToHuman = false;
+          console.warn(
+            `[ai-engine] dangling_template_tail — injecting deterministic bridging question (conv ${activeConversationId})`
+          );
+        } else if (scamParrot) {
+          const fallback =
+            "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
+          parsed.message = fallback;
+          parsed.messages = [fallback];
+          parsed.escalateToHuman = false;
+          console.warn(
+            `[ai-engine] scam_objection_parrot — injecting deterministic skepticism-address reply (conv ${activeConversationId})`
+          );
+        } else if (postBookingEmailHallucination) {
+          const fallback =
+            "you're all locked in bro, anthony will be ready for you at that time";
+          parsed.message = fallback;
+          parsed.messages = [fallback];
+          parsed.escalateToHuman = false;
+          console.warn(
+            `[ai-engine] post_booking_email_hallucination — injecting deterministic booking-confirmed reply (conv ${activeConversationId})`
+          );
         } else if (verbatimRecoverable) {
           parsed.message = literalInjectMsgs[0];
           parsed.messages = literalInjectMsgs;
@@ -6049,59 +6090,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             }
           }
         } else {
-          // Deterministic fallback for specific model-conditioned hard-fails.
-          // These guards fire reliably on the first generation and the model
-          // keeps reproducing the same fragment through all 3 retries. Rather
-          // than shipping the bad reply (catch-all) or escalating to human, we
-          // inject a safe pre-written reply that moves the conversation forward.
-          const danglingTail = quality.hardFails.some((f) =>
-            f.includes('dangling_template_tail:')
+          // Catch-all best-effort: gate exhausted but no hard-unshippable fail
+          // and output is non-empty. Ship it and guarantee the AI stays active
+          // (F5.1 2026-06-07) — a forward-moving reply beats silence. Only the
+          // enumerated hard gates above (allBubblesEmpty / hardUnshippable) may
+          // escalate; everything that reaches here must not.
+          parsed.escalateToHuman = false;
+          console.warn(
+            `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate)`
           );
-          const scamParrot = quality.hardFails.some((f) =>
-            f.includes('scam_objection_parrot:')
-          );
-          const postBookingEmailHallucination = quality.hardFails.some((f) =>
-            f.includes('post_booking_email_hallucination:')
-          );
-
-          if (danglingTail) {
-            const fallback =
-              "so where are you at right now bro, what's the main thing you're trying to fix?";
-            parsed.message = fallback;
-            parsed.messages = [fallback];
-            parsed.escalateToHuman = false;
-            console.warn(
-              `[ai-engine] dangling_template_tail — injecting deterministic bridging question (conv ${activeConversationId})`
-            );
-          } else if (scamParrot) {
-            const fallback =
-              "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
-            parsed.message = fallback;
-            parsed.messages = [fallback];
-            parsed.escalateToHuman = false;
-            console.warn(
-              `[ai-engine] scam_objection_parrot — injecting deterministic skepticism-address reply (conv ${activeConversationId})`
-            );
-          } else if (postBookingEmailHallucination) {
-            const fallback =
-              "you're all locked in bro, anthony will be ready for you at that time";
-            parsed.message = fallback;
-            parsed.messages = [fallback];
-            parsed.escalateToHuman = false;
-            console.warn(
-              `[ai-engine] post_booking_email_hallucination — injecting deterministic booking-confirmed reply (conv ${activeConversationId})`
-            );
-          } else {
-            // Catch-all best-effort: gate exhausted but no hard-unshippable fail
-            // and output is non-empty. Ship it and guarantee the AI stays active
-            // (F5.1 2026-06-07) — a forward-moving reply beats silence. Only the
-            // enumerated hard gates above (allBubblesEmpty / hardUnshippable) may
-            // escalate; everything that reaches here must not.
-            parsed.escalateToHuman = false;
-            console.warn(
-              `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate)`
-            );
-          }
         }
       }
 
