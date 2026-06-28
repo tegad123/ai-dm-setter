@@ -497,6 +497,35 @@ async function processInstagramEvents(payload: any): Promise<void> {
                 if (waitMs > 0) {
                   await new Promise((resolve) => setTimeout(resolve, waitMs));
                 }
+                // BUG-05 fix: check superseded BEFORE claiming. The old order
+                // (claim → check) had a race window where two after() callbacks
+                // woke simultaneously, both passed the superseded check (neither
+                // had claimed yet), and both proceeded to generation. Moving the
+                // check before the claim closes the common case. A second check
+                // after claiming handles the rare nanosecond-exact collision.
+                if (
+                  await isScheduledReplySuperseded(
+                    targetConvoId,
+                    scheduledReply.id,
+                    scheduledReply.createdAt
+                  )
+                ) {
+                  console.log(
+                    `[instagram-webhook] inline reply superseded (pre-claim) for ${targetConvoId} — yielding`
+                  );
+                  await prisma.scheduledReply
+                    .update({
+                      where: { id: scheduledReply.id },
+                      data: {
+                        status: 'CANCELLED',
+                        processedAt: new Date(),
+                        lastError:
+                          'Superseded by newer lead message (pre-claim)'
+                      }
+                    })
+                    .catch(() => null);
+                  return;
+                }
                 const claimed = await prisma.scheduledReply.updateMany({
                   where: {
                     id: scheduledReply.id,
@@ -510,10 +539,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   );
                   return;
                 }
-                // BUG-05 hardening: if a newer lead message arrived during the
-                // delay sleep, its webhook created a fresher reply row. This
-                // claim is stale — yield so only the newest reply generates on
-                // the full batch (avoids two replies blind to each other).
+                // Double-check after claiming — handles nanosecond-exact
+                // simultaneous wakes where both passed the pre-claim check.
                 if (
                   await isScheduledReplySuperseded(
                     targetConvoId,
@@ -522,7 +549,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   )
                 ) {
                   console.log(
-                    `[instagram-webhook] inline reply superseded by a newer message for ${targetConvoId} — yielding`
+                    `[instagram-webhook] inline reply superseded (post-claim) for ${targetConvoId} — yielding`
                   );
                   await prisma.scheduledReply
                     .update({
@@ -530,7 +557,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
                       data: {
                         status: 'CANCELLED',
                         processedAt: new Date(),
-                        lastError: 'Superseded by newer lead message (inline)'
+                        lastError:
+                          'Superseded by newer lead message (post-claim)'
                       }
                     })
                     .catch(() => null);
