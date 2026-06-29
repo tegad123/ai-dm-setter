@@ -3576,7 +3576,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     lastLeadMsg?.content
   );
   const continuationDirective = isLeadContinuationAck
-    ? `\n\n===== LEAD CONTINUATION SIGNAL =====\nThe lead just sent a brief continuation phrase ("${(lastLeadMsg?.content ?? '').trim()}"). This is an invitation to keep talking — it is NOT doubt, skepticism, or an objection. Do NOT open with trust-recovery language ("I'm genuinely trying to help", "I'm not here to sell", etc.). Continue exactly where you left off in the previous turn — pick up the thread and keep the conversation moving forward naturally.\n=====`
+    ? `\n\n===== LEAD CONTINUATION SIGNAL =====\nThe lead just sent a brief continuation phrase ("${(lastLeadMsg?.content ?? '').trim()}"). This is an invitation to keep talking — it is NOT doubt, skepticism, or an objection.\n\nYour previous message was:\n"${(lastAiMsg?.content ?? '').trim()}"\n\nContinue DIRECTLY from that point. Do NOT ask the lead what they want to hear more about — they already told you to continue. Do NOT open with trust-recovery language ("I'm genuinely trying to help", "I'm not here to sell", etc.). Pick up the thread from your last message and keep moving forward.\n=====`
     : '';
 
   const baseSystemPrompt =
