@@ -5125,6 +5125,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      const brokenFragmentFailed = quality.hardFails.some((f) =>
+        f.includes('broken_fragment_opener:')
+      );
+      if (brokenFragmentFailed && attempt < MAX_RETRIES) {
+        const directive = `\n\n===== BROKEN FRAGMENT OPENER BANNED =====\nYour previous reply opened with a mangled sentence fragment ("Could?", "Would?", "Should?" etc.) — a stray modal verb followed immediately by a question mark with no subject. This is a bot tell and must not appear.\n\nOn this retry, open with a COMPLETE sentence. Do NOT start with a bare modal + question mark. Examples of banned openers: "Could? brother", "Would? bro", "Should? man".\nExamples of clean openers: "bro what if i told you", "yo real talk", "so the main thing", "nah fr tho", "yeah so the thing is".\n=====`;
+        systemPromptForLLM = baseSystemPrompt + directive;
+        console.warn(
+          `[ai-engine] broken_fragment_opener detected — forcing regen with clean opener directive (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
       const repeatedStructureFailed = quality.hardFails.some((f) =>
         f.includes('repeated_message_structure:')
       );
@@ -5528,7 +5539,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       const postBookingEmailExhausted = quality.hardFails.some((f) =>
         f.includes('post_booking_email_hallucination:')
       );
-      if (scamParrotExhausted) {
+      const brokenFragmentExhausted = quality.hardFails.some((f) =>
+        f.includes('broken_fragment_opener:')
+      );
+      if (brokenFragmentExhausted) {
+        // BUG-14 exhaustion-path gap (2026-06-29). The broken-fragment-opener
+        // guard fires on every attempt but no exhaustion handler existed, so
+        // the garbled reply shipped on attempt 3. Inject a safe bridging
+        // fallback so the lead never sees "Could? brother…".
+        const safeFragment = isLeadContinuationAck
+          ? "yeah so the real thing most traders miss isn't the strategy — it's that they're optimising for the wrong problem. what's been your biggest issue, the entries themselves or reading when NOT to trade?"
+          : "so the real thing most traders miss isn't the strategy itself — it's that they're working on the wrong problem. what's been the main issue for you, the entries or knowing when to stay out?";
+        parsed.message = safeFragment;
+        parsed.messages = [safeFragment];
+        parsed.escalateToHuman = false;
+        console.warn(
+          `[ai-engine] broken_fragment_opener exhausted — injecting deterministic safe opener (conv ${activeConversationId}, continuationAck=${isLeadContinuationAck})`
+        );
+      } else if (scamParrotExhausted) {
         parsed.message =
           "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
         parsed.messages = [parsed.message];
