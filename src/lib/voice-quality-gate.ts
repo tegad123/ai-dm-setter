@@ -608,7 +608,13 @@ const CALL_LOGISTICS_PATTERNS = [
 
 const ACK_ONLY_PATTERNS = [
   /^(sounds?\s+good|ok(ay)?|got it|cool|bet|word|aight|alright|sure|yes( that works)?|yep|yeah|nice|perfect)(\s+(bro|g|man|fam))?[\s.!?]*$/i,
-  /^(👍|🤝|💪|💪🏿|🤝🏿)[\s.!?]*$/i
+  /^(👍|🤝|💪|💪🏿|🤝🏿)[\s.!?]*$/i,
+  // Continuation/encouragement phrases — lead is prompting the AI to
+  // keep talking, not expressing doubt. Without this, "go on then" or
+  // "aight go ahead" gets no ACK_ONLY flag and the LLM interprets it
+  // as skepticism, firing a trust-recovery response (Tega M3 re-open,
+  // 2026-06-28, msg 41 of sign-off log).
+  /^(go\s+(on|ahead|for\s+it)|tell\s+me(\s+more)?|i'?m\s+listening|keep\s+going|continue|explain(\s+more)?|fair\s+enough|aight[,\s]*(go\s+)?ahead|sure[,\s]*go\s+(on|ahead)|ok[,\s]*go\s+on|go\s+on\s+then|i'?m\s+all\s+ears)(\s+(bro|g|man|fam))?[\s.!?]*$/i
 ];
 
 const SETTER_SENDERS = new Set(['AI', 'HUMAN', 'AI_SETTER', 'HUMAN_SETTER']);

@@ -65,6 +65,7 @@ import {
   type ScriptVariableResolutionMap
 } from '@/lib/script-variable-resolver';
 import {
+  checkCallProposalPrereqs,
   countConversationTurns,
   detectBeliefBreakDeliveryStage,
   detectBeliefBreakInMessage,
@@ -3500,6 +3501,43 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'deep_why') ||
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'desiredOutcome') ||
     hasCapturedDataPoint(capturedDataPointsForGate ?? null, 'desired_outcome');
+
+  // Qualification-complete directive — fires when all call-proposal
+  // prerequisites are satisfied but the AI hasn't transitioned to the
+  // soft pitch yet. Without this, the LLM continues asking discovery
+  // questions even after every required data point is captured, forcing
+  // the lead to prompt the transition themselves (Tega M3 re-open,
+  // 2026-06-28, msgs 62-63 of sign-off log).
+  //
+  // Uses checkCallProposalPrereqs (per-account script-aware) so the
+  // required criteria set is never hardcoded — each account's active
+  // Script drives what must be present before the close.
+  const preBroadcastStages = new Set([
+    'NEW_LEAD',
+    'ENGAGED',
+    'QUALIFYING',
+    'DISQUALIFIED'
+  ]);
+  const leadNotYetPitched = preBroadcastStages.has(
+    (leadContext.status as string | undefined) ?? 'NEW_LEAD'
+  );
+  const derivedPrereqsForCompleteCheck = scriptStateSnapshot?.script
+    ? deriveCallProposalPrereqs(scriptStateSnapshot.script)
+    : null;
+  const missingPrereqs = checkCallProposalPrereqs(
+    capturedDataPointsForGate as Record<string, unknown> | null | undefined,
+    { incomeGoalAsked: incomeGoalCapturedForStep10 },
+    derivedPrereqsForCompleteCheck
+  );
+  const allPrereqsMet =
+    missingPrereqs.length === 0 &&
+    incomeGoalCapturedForStep10 &&
+    deepWhyCapturedForStep10;
+  const qualificationCompleteDirective =
+    allPrereqsMet && leadNotYetPitched && capitalVerificationSatisfied
+      ? `\n\n===== QUALIFICATION COMPLETE — TRANSITION TO SOFT PITCH NOW =====\nAll required qualification data has been captured for this lead:\n• Income goal: captured\n• Deep why / emotional reason: captured\n• Capital: confirmed available\n\nThe lead is READY. You MUST transition to the soft pitch on this turn. Do NOT ask any further discovery questions — all required information is collected. Move the conversation forward: introduce Anthony, frame the call, and begin the booking flow. Any additional discovery question is a missed opportunity and a broken conversion.\n=====`
+      : '';
+
   const step10DeepWhyDirective =
     incomeGoalCapturedForStep10 && !deepWhyCapturedForStep10
       ? buildStep10DeepWhyDirective(
@@ -3526,7 +3564,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     ? `\n\n===== SMART MODE RESPONSE =====\nThe branch router could not confidently lock a branch for the current [JUDGE] step (${currentJudgeBranchMatch.confidence} confidence). Do not force the lead into a default branch.\n\nRespond naturally in the persona's voice. Address the lead's actual message, use the current step description and goal as direction, and end with one question that progresses the conversation toward this step's goal.\n\nDo not copy literal [MSG]/[ASK] content from sibling branches unless it clearly fits what the lead just said. Do not invent URLs, booking details, capital facts, or outcomes.\n=====`
     : '';
 
+  // Continuation directive — fires when the lead replied with a short
+  // encouragement phrase ("go on then", "aight go ahead", "tell me more",
+  // etc.) that the ACK_ONLY_PATTERNS gate classifies as acknowledgment-only.
+  // Without this, the LLM sees the phrase in isolation and associates it
+  // with skepticism/doubt, triggering a trust-recovery response ("I'm
+  // genuinely trying to help you out…"). The directive tells it to continue
+  // exactly where it left off. Injected at the top of baseSystemPrompt so
+  // it is present on the first attempt, not just retries.
+  const isLeadContinuationAck = isAcknowledgmentOnlyLeadMessage(
+    lastLeadMsg?.content
+  );
+  const continuationDirective = isLeadContinuationAck
+    ? `\n\n===== LEAD CONTINUATION SIGNAL =====\nThe lead just sent a brief continuation phrase ("${(lastLeadMsg?.content ?? '').trim()}"). This is an invitation to keep talking — it is NOT doubt, skepticism, or an objection. Do NOT open with trust-recovery language ("I'm genuinely trying to help", "I'm not here to sell", etc.). Continue exactly where you left off in the previous turn — pick up the thread and keep the conversation moving forward naturally.\n=====`
+    : '';
+
   const baseSystemPrompt =
+    continuationDirective +
+    qualificationCompleteDirective +
     coldStartStep1Directive +
     systemPrompt +
     unqualifiedGuard +
@@ -7685,6 +7740,7 @@ export type R24Reason =
   | 'durable_qualification_state' // Conversation was already verified in durable state
   | 'never_asked' // No verification Q found in conversation history
   | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet
+  | 'asked_once_awaiting_answer' // Q asked once, unblocking to avoid triple-ask
   | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
   | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
   | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
@@ -9213,6 +9269,23 @@ async function checkR24Verification(
   }
   mergedAnswers.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   if (mergedAnswers.length === 0) {
+    // One ask per conversation. If the capital question has already been
+    // asked at least once and the lead hasn't answered yet, unblock and
+    // let the conversation continue naturally — re-blocking causes the AI
+    // to ask again on every booking-handoff attempt, which is the triple-
+    // ask pattern Tega flagged. The lead will answer when ready; we do not
+    // need to prompt twice. If the account has a two-ask policy (via
+    // FIX 3 evasion guard at the caller), that caller handles the
+    // downsell path independently.
+    if (totalCapitalQuestionsAsked >= 1) {
+      return finalize({
+        blocked: false,
+        reason: 'asked_once_awaiting_answer',
+        parsedAmount: null,
+        verificationAskedAt: verificationAskedAt.id,
+        verificationConfirmedAt: null
+      });
+    }
     return finalize({
       blocked: true,
       reason: 'asked_but_no_answer',
