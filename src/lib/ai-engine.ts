@@ -8000,7 +8000,7 @@ export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
   // with the closer" pattern that doesn't name-check the closer in the
   // existing patterns.
   const handoffPhrases =
-    /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+for|call\s+confirmation|send(ing)?\s+you\s+(the|a)\s+link\s+(to|for)\s+(apply|book|grab|schedule)|here'?s\s+the\s+link|hop\s+on\s+(a\s+(quick\s+)?)?(call|chat|with\s+you)|will\s+hop\s+on|get\s+you\s+(all\s+)?set\s+up|link\s+to\s+(book|apply|grab|schedule)|gonna\s+send\s+you\s+the\s+link|fill\s+(it\s+|everything\s+)?out\s+and\s+(lmk|let\s+me\s+know)|ready\s+to\s+scale\s+up.*call|break\s+everything\s+down\s+for\s+you)\b/i;
+    /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+(for|with)|get\s+you\s+locked\s+in|call\s+confirmation|send(ing)?\s+you\s+(the|a)\s+link\s+(to|for)\s+(apply|book|grab|schedule)|here'?s\s+the\s+link|hop\s+on\s+(a\s+(quick\s+)?)?(call|chat|with\s+you)|will\s+hop\s+on|get\s+you\s+(all\s+)?set\s+up|link\s+to\s+(book|apply|grab|schedule)|gonna\s+send\s+you\s+the\s+link|fill\s+(it\s+|everything\s+)?out\s+and\s+(lmk|let\s+me\s+know)|ready\s+to\s+scale\s+up.*call|break\s+everything\s+down\s+for\s+you)\b/i;
   return handoffPhrases.test(joinedReply);
 }
 
@@ -8043,6 +8043,8 @@ export function detectBookingAdvancement(
     /\bhop\s+on\s+(a\s+(quick\s+)?)?(call|chat|with\s+you)\b/i,
     /\bwill\s+hop\s+on\b/i,
     /\bget\s+you\s+on\s+a\s+(quick\s+)?(call|chat)\b/i,
+    /\blocked\s+in\s+(with|for)\b/i,
+    /\bget\s+you\s+locked\s+in\b/i,
     /\bsend(ing)?\s+you\s+the\s+link\b/i,
     /\blink\s+to\s+(apply|book|grab|schedule)\b/i,
     /\bfill\s+(it\s+|everything\s+)?out\b/i,
