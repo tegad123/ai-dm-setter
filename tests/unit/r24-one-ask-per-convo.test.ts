@@ -1,7 +1,15 @@
-// Unit tests for R24 one-ask-per-conversation fix (Tega M3 re-open,
-// 2026-06-28). When the capital question has been asked exactly once and
-// the lead has not yet answered, checkR24Verification must UNBLOCK (not
-// re-ask) so the AI doesn't triple-prompt for capital.
+// Unit tests for R24 capital gate + continuation phrase detection.
+//
+// R24 behavior (Tega M3 second re-open, 2026-06-30):
+//   checkR24Verification is only called when isRoutingToBookingHandoff is true.
+//   When capital was asked once but not answered, the gate BLOCKS the booking
+//   attempt (reason='asked_but_no_answer') so the lead cannot reach BOOKED with
+//   capitalVerificationStatus=UNVERIFIED. During non-booking turns R24 is never
+//   called, so capital is not re-asked mid-conversation.
+//
+// ACK_ONLY / continuation phrase detection (Tega M3 first re-open, 2026-06-28):
+//   When the lead sends a short continuation phrase, isAcknowledgmentOnlyLeadMessage
+//   returns true and the continuation directive fires in ai-engine.
 //
 // Run: npx tsx --test tests/unit/r24-one-ask-per-convo.test.ts
 

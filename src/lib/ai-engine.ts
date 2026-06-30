@@ -5147,6 +5147,35 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
 
+      // Qualification-complete escape guard (Tega M3 re-open item 2,
+      // 2026-06-30). When all prereqs are met and the lead is pre-pitch,
+      // the qualificationCompleteDirective in baseSystemPrompt instructs
+      // the LLM to transition. If the model ignores it and generates a
+      // discovery question instead, this code gate forces a regen.
+      // Detecting a discovery question: parsed.stage is not a closing
+      // stage AND the generated reply ends with '?'.
+      if (
+        allPrereqsMet &&
+        leadNotYetPitched &&
+        capitalVerificationSatisfied &&
+        attempt < MAX_RETRIES
+      ) {
+        const qualCompleteMsg = (parsed.messages ?? [parsed.message]).join(' ');
+        const escapedDiscoveryQ =
+          parsed.stage !== 'SOFT_PITCH_COMMITMENT' &&
+          parsed.stage !== 'BOOKING' &&
+          /\?\s*$/.test(qualCompleteMsg.trim());
+        if (escapedDiscoveryQ) {
+          systemPromptForLLM =
+            baseSystemPrompt +
+            qualificationCompleteDirective +
+            `\n\n===== DISCOVERY QUESTION DETECTED — DISALLOWED =====\nYour last response ended with a discovery question. All qualification criteria are already met for this lead. You MUST NOT ask another discovery question on this turn. Transition to the soft pitch immediately: introduce ${(typeof promptConfigForGate?.callHandoff?.closerName === 'string' && promptConfigForGate.callHandoff.closerName) || personaForGate?.closerName || 'the closer'} and propose the call. Do NOT end this reply with a question about the lead's situation, goals, or challenges.\n=====`;
+          console.warn(
+            `[ai-engine] qual-complete gate: discovery question escaped on attempt ${attempt + 1} — forcing regen (stage=${parsed.stage ?? 'unknown'})`
+          );
+        }
+      }
+
       const transcribedVoiceNoteIgnoredFailed = quality.hardFails.some((f) =>
         f.includes('r29_transcribed_voice_note_ignored:')
       );
@@ -5524,6 +5553,34 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     if (attempt === MAX_RETRIES) {
+      // Qualification-complete exhaustion override — fires before ALL other
+      // exhaustion handlers. If all prereqs are met but the LLM exhausted all
+      // retries still producing a discovery question, inject a deterministic
+      // soft-pitch opener so the lead's experience is never a discovery Q when
+      // they are already qualified (Tega M3 re-open item 2, 2026-06-30).
+      if (allPrereqsMet && leadNotYetPitched && capitalVerificationSatisfied) {
+        const qualCompleteMsg = (parsed.messages ?? [parsed.message]).join(' ');
+        const escapedDiscoveryQ =
+          parsed.stage !== 'SOFT_PITCH_COMMITMENT' &&
+          parsed.stage !== 'BOOKING' &&
+          /\?\s*$/.test(qualCompleteMsg.trim());
+        if (escapedDiscoveryQ) {
+          const closerNameLabel =
+            (typeof promptConfigForGate?.callHandoff?.closerName === 'string' &&
+              promptConfigForGate.callHandoff.closerName) ||
+            personaForGate?.closerName ||
+            'Anthony';
+          const softPitchFallback = `bro real talk — you've given me everything I need to point you in the right direction. what I'd say is get on a quick call with ${closerNameLabel}, he can map out exactly what the process looks like for where you're at. you in the UK?`;
+          parsed.message = softPitchFallback;
+          parsed.messages = [softPitchFallback];
+          parsed.stage = 'SOFT_PITCH_COMMITMENT';
+          parsed.escalateToHuman = false;
+          console.error(
+            `[ai-engine] qual-complete gate EXHAUSTED — injecting deterministic soft-pitch (conv ${activeConversationId ?? 'unknown'})`
+          );
+        }
+      }
+
       // Priority overrides — checked before ALL other exhaustion handlers.
       // These three guards fire reliably on attempt 0 and the model reproduces
       // the same bad fragment through all retries. Every handler below either
@@ -7767,8 +7824,7 @@ export type R24Reason =
   | 'confirmed_affirmative' // Lead said "yeah" to a threshold-confirming Q (legacy path)
   | 'durable_qualification_state' // Conversation was already verified in durable state
   | 'never_asked' // No verification Q found in conversation history
-  | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet
-  | 'asked_once_awaiting_answer' // Q asked once, unblocking to avoid triple-ask
+  | 'asked_but_no_answer' // Q found, no subsequent LEAD reply yet — blocks booking until answered
   | 'answer_below_threshold' // Lead stated amount < threshold OR said "not much" / "broke"
   | 'answer_hedging' // Lead hedged ("kinda", "working on it") without a number
   | 'answer_ambiguous' // Lead's reply didn't parse ("depends", "varies")
@@ -9297,18 +9353,20 @@ async function checkR24Verification(
   }
   mergedAnswers.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   if (mergedAnswers.length === 0) {
-    // One ask per conversation. If the capital question has already been
-    // asked at least once and the lead hasn't answered yet, unblock and
-    // let the conversation continue naturally — re-blocking causes the AI
-    // to ask again on every booking-handoff attempt, which is the triple-
-    // ask pattern Tega flagged. The lead will answer when ready; we do not
-    // need to prompt twice. If the account has a two-ask policy (via
-    // FIX 3 evasion guard at the caller), that caller handles the
-    // downsell path independently.
+    // Capital question was asked at least once but the lead has not yet
+    // answered. This function is only ever called when
+    // isRoutingToBookingHandoff(parsed) is true (caller, line ~4385), so
+    // this is always a booking-attempt turn. Block the booking and let the
+    // existing asked_but_no_answer fallback re-surface the capital question
+    // once more before BOOKED is written. This prevents a lead from
+    // reaching BOOKED with capitalVerificationStatus = UNVERIFIED on a
+    // gated account (Tega M3 re-open item 1). During non-booking turns
+    // (discovery, general chat) this function is never called, so capital
+    // is not re-asked mid-conversation — only at the booking handoff.
     if (totalCapitalQuestionsAsked >= 1) {
       return finalize({
-        blocked: false,
-        reason: 'asked_once_awaiting_answer',
+        blocked: true,
+        reason: 'asked_but_no_answer',
         parsedAmount: null,
         verificationAskedAt: verificationAskedAt.id,
         verificationConfirmedAt: null
