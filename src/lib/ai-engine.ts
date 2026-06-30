@@ -3533,9 +3533,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     missingPrereqs.length === 0 &&
     incomeGoalCapturedForStep10 &&
     deepWhyCapturedForStep10;
+  const qualCompleteCloserName =
+    (typeof promptConfigForGate?.callHandoff?.closerName === 'string' &&
+      promptConfigForGate.callHandoff.closerName) ||
+    personaForGate?.closerName ||
+    'the closer';
   const qualificationCompleteDirective =
     allPrereqsMet && leadNotYetPitched && capitalVerificationSatisfied
-      ? `\n\n===== QUALIFICATION COMPLETE — TRANSITION TO SOFT PITCH NOW =====\nAll required qualification data has been captured for this lead:\n• Income goal: captured\n• Deep why / emotional reason: captured\n• Capital: confirmed available\n\nThe lead is READY. You MUST transition to the soft pitch on this turn. Do NOT ask any further discovery questions — all required information is collected. Move the conversation forward: introduce Anthony, frame the call, and begin the booking flow. Any additional discovery question is a missed opportunity and a broken conversion.\n=====`
+      ? `\n\n===== QUALIFICATION COMPLETE — TRANSITION TO SOFT PITCH NOW =====\nAll required qualification data has been captured for this lead:\n• Income goal: captured\n• Deep why / emotional reason: captured\n• Capital: confirmed available\n\nThe lead is READY. You MUST transition to the soft pitch on this turn. Do NOT ask any further discovery questions — all required information is collected. Move the conversation forward: introduce ${qualCompleteCloserName}, frame the call, and begin the booking flow. Any additional discovery question is a missed opportunity and a broken conversion.\n=====`
       : '';
 
   const step10DeepWhyDirective =
