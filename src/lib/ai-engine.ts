@@ -5851,6 +5851,23 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               console.warn(
                 `[ai-engine] R24 natural fallback still routed to booking (reason=${r24LastResult.reason}) — injecting capital question directly, aiActive preserved (convo ${activeConversationId})`
               );
+            } else if (r24LastResult.reason === 'answer_below_threshold') {
+              // Lead confirmed below threshold and the natural fallback still
+              // tried to book. Safe recovery: pitch the downsell directly.
+              // No human escalation needed — there is always a valid next
+              // message in this state (the downsell offer).
+              const downsellMsg = `i hear you bro. the capital for marcus's 1-on-1 is a bit higher than what you've got right now, but that doesn't mean you're stuck — my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build your capital up while you're learning. want me to send that over?`;
+              parsed.message = downsellMsg;
+              parsed.messages = [downsellMsg];
+              parsed.stage = 'SOFT_PITCH_COMMITMENT';
+              parsed.subStage = null;
+              parsed.softExit = false;
+              parsed.escalateToHuman = false;
+              parsed.voiceNoteAction = null;
+              finalQualityScore = Math.max(naturalQuality.score, 60);
+              console.warn(
+                `[ai-engine] R24 natural fallback still routed to booking (reason=answer_below_threshold) — injecting downsell pitch directly, aiActive preserved (convo ${activeConversationId})`
+              );
             } else {
               parsed.message =
                 "i don't wanna point you wrong here bro. give me a sec to double-check the right next step.";
