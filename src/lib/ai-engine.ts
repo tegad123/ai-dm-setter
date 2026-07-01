@@ -5828,6 +5828,29 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               console.log(
                 `[ai-engine] R24 soft-recovery applied for OUTBOUND convo ${activeConversationId} (msgCount=${conversationHistory.length}) — aiActive preserved.`
               );
+            } else if (
+              r24LastResult.reason === 'never_asked' ||
+              r24LastResult.reason === 'asked_but_no_answer'
+            ) {
+              // Capital was never asked (or asked but unanswered) and the
+              // natural fallback still tried to book. Safe recovery: ask
+              // the capital question directly. No human escalation needed —
+              // there is always a valid next message in this state.
+              const capitalQ =
+                r24LastResult.reason === 'asked_but_no_answer'
+                  ? 'no stress bro — just need a rough number so i can point you the right way. how much you working with?'
+                  : 'real quick before we lock anything in — how much capital do you have set aside for trading right now?';
+              parsed.message = capitalQ;
+              parsed.messages = [capitalQ];
+              parsed.stage = 'FINANCIAL_SCREENING';
+              parsed.subStage = null;
+              parsed.softExit = false;
+              parsed.escalateToHuman = false;
+              parsed.voiceNoteAction = null;
+              finalQualityScore = Math.max(naturalQuality.score, 60);
+              console.warn(
+                `[ai-engine] R24 natural fallback still routed to booking (reason=${r24LastResult.reason}) — injecting capital question directly, aiActive preserved (convo ${activeConversationId})`
+              );
             } else {
               parsed.message =
                 "i don't wanna point you wrong here bro. give me a sec to double-check the right next step.";
