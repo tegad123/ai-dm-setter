@@ -7,9 +7,6 @@
 //
 // Incidents that drove this feature:
 //   daetradez 2026-04-18: Lead expressed suicidal ideation → AI pitched trading
-//   Apex/ALi Raza 2026-06-30: Lead disclosed paralyzed mother + caregiver stress
-//                              → AI replied with "that's one of the most common
-//                              things I hear" (sales macro)
 //
 // Policy: false positives are ACCEPTABLE (operator can re-enable).
 //         False negatives are NOT. Err heavily on the side of caution.
@@ -21,8 +18,7 @@
 //   HARD    — single regex match fires immediately. No LLM call. These are
 //             phrases unambiguous enough on their own: direct ideation,
 //             suicide, self-harm, giving-up-on-life, spiritual crisis,
-//             last-hope appeals, caregiver hardship, medical disability,
-//             severe financial crisis.
+//             last-hope appeals, severe financial crisis.
 //
 //   MEDIUM  — regex matches a likely-distress phrase but common enough in
 //             trading DMs to produce occasional false positives. A Haiku
@@ -95,26 +91,6 @@ const HARD_PATTERNS: Signal[] = [
   {
     pattern: /\bdarkest\s+(season|time|place|moment|period|hour|day|night)\b/i,
     label: 'darkest_season'
-  },
-
-  // ── Caregiver hardship (added 2026-07-01, Apex/ALi Raza incident) ──────────
-  // Caring for a seriously ill or disabled family member is a genuine hardship
-  // signal. Low false-positive risk in trading-DM context — these phrases do
-  // not appear in normal qualification conversations.
-  {
-    pattern:
-      /\b(paralyz(ed|ing)|quadriplegic|bedridden|fully\s+disabled|stroke\s+victim|in\s+a\s+coma|on\s+life\s+support)\b/i,
-    label: 'caregiver_hardship'
-  },
-  {
-    pattern:
-      /\b(tak(e|ing)\s+care\s+of\s+(my\s+)?(mom|mother|dad|father|parent|wife|husband|sibling|brother|sister|grandm(a|other)|grandf(a|ather))|car(e|ing)\s+for\s+(my\s+)?(mom|mother|dad|father|parent|wife|husband|sibling|brother|sister|grandm(a|other)|grandf(a|ather)))\b/i,
-    label: 'caregiver_hardship'
-  },
-  {
-    pattern:
-      /\b(terminal(ly)?\s+(ill|cancer|diagnosis)|dying\s+(of|from)\s+cancer|hospice|end\s+of\s+life\s+care)\b/i,
-    label: 'medical_crisis'
   },
 
   // ── Severe financial crisis ───────────────────────────────────────────────

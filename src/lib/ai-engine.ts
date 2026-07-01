@@ -3908,6 +3908,70 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     personaId
   );
 
+  // P1 intercept (2026-07-02): identity-skepticism / scam questions must
+  // route to the account's OBJ-SCAM script on first ask — not fall through
+  // to whatever step macro the LLM happens to be on (which produced the
+  // "Maybe? 😊" Step-14-reframe failure on Apex/ALi Raza July 1 2026).
+  // Fires before the LLM retry loop so the step machine is bypassed entirely.
+  // Falls back to global text when no OBJ-SCAM entry is configured.
+  if (lastLeadMsg?.content) {
+    const IDENTITY_SCAM_PATTERNS = [
+      /am\s+i\s+(talk(ing)?\s+to\s+an?\s+ai|speak(ing)?\s+to\s+an?\s+ai)/i,
+      /is\s*this\s+(a\s+)?scam/i,
+      /is\s*this\s+(an?\s+)?ai\b/i,
+      /are\s+you\s+(a\s+)?(bot|ai|robot|chatbot|machine|computer)/i,
+      /\bare\s+you\s+an?\s+ai\b/i,
+      /am\s+i\s+talk(ing)?\s+to\s+a\s+(bot|robot|machine|chatbot|computer)/i,
+      /am\s+i\s+talk(ing)?\s+to\s+a\s+real\s+(person|human)/i,
+      /is\s+this\s+(a\s+)?(bot|robot|automated)/i,
+      /you\s+(sound|feel|seem|are\s+being)\s+(quite\s+)?(generic|robotic|scripted|automated|fake)/i,
+      /talk(ing)?\s+to\s+(a\s+|an\s+)?(real\s+)?(human|person)\??$/i,
+      /^\s*ai\s*\?*\s*$/i
+    ];
+    const isIdentityChallenge = IDENTITY_SCAM_PATTERNS.some((p) =>
+      p.test(lastLeadMsg!.content)
+    );
+    if (isIdentityChallenge) {
+      const accountScamScript = extractScamObjectionScript(
+        personaForGate?.objectionHandling
+      );
+      const scamReply =
+        accountScamScript ??
+        "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
+      console.info(
+        `[ai-engine] identity-challenge intercept — injecting ${accountScamScript ? 'account OBJ-SCAM script' : 'global fallback'} (conv ${activeConversationId})`
+      );
+      return {
+        reply: scamReply,
+        messages: [scamReply],
+        format: 'text',
+        stage: leadContext.status ?? '',
+        subStage: null,
+        stageConfidence: 1,
+        sentimentScore: 0,
+        experiencePath: null,
+        objectionDetected: 'scam',
+        stallType: null,
+        affirmationDetected: false,
+        followUpNumber: null,
+        softExit: false,
+        escalateToHuman: false,
+        leadTimezone: null,
+        selectedSlotIso: null,
+        leadEmail: null,
+        suggestedTag: 'objection-scam-intercepted',
+        suggestedTags: ['objection-scam-intercepted'],
+        shouldVoiceNote: false,
+        voiceNoteAction: null,
+        qualityScore: 100,
+        suggestedDelay: 0,
+        systemPromptVersion: 'identity-scam-intercept',
+        suggestionId: null,
+        capitalOutcome: 'not_evaluated'
+      };
+    }
+  }
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     qualityGateAttempts = attempt + 1;
     const sanitizedPrompt = resolveOrStripTemplateVariables(
