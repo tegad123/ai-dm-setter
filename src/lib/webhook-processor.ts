@@ -1631,7 +1631,7 @@ export async function processIncomingMessage(
     });
     if (account?.distressDetectionEnabled) {
       const { detectDistress } = await import('@/lib/distress-detector');
-      const distress = detectDistress(messageText);
+      const distress = await detectDistress(messageText);
       if (distress.detected) {
         console.warn(
           `[webhook-processor] DISTRESS DETECTED on conv ${conversationId} — label=${distress.label} match="${distress.match}" lead=@${senderHandle}`

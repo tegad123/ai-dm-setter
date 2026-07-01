@@ -5436,7 +5436,7 @@ async function distressBypassesRecovery(params: {
   if (!latestLead) return null;
   try {
     const { detectDistress } = await import('@/lib/distress-detector');
-    const distress = detectDistress(latestLead.content);
+    const distress = await detectDistress(latestLead.content);
     if (!distress.detected) return null;
     await createRecoveryEvent({
       accountId: params.accountId,
@@ -5860,7 +5860,7 @@ export async function attemptSelfRecovery(params: {
   if (latestLead) {
     try {
       const { detectDistress } = await import('@/lib/distress-detector');
-      const distress = detectDistress(latestLead.content);
+      const distress = await detectDistress(latestLead.content);
       if (distress.detected) {
         await createRecoveryEvent({
           accountId: params.accountId,

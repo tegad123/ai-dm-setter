@@ -1,4 +1,4 @@
-import { detectDistress } from '../src/lib/distress-detector';
+import { detectDistressSync } from '../src/lib/distress-detector';
 const cases: Array<[string, boolean, string]> = [
   [
     'Chairman I need your help am a Christian like you a born again am still a strongly trader 3years I am not consistency please help me how do you use sessions liquidity models strategy',
@@ -26,12 +26,33 @@ const cases: Array<[string, boolean, string]> = [
   ],
   ['help me bro', false, 'help_plea alone — no fire'],
   ['you are my last hope bro please help', true, 'last_hope_appeal — HARD'],
-  ['going through my darkest season right now', true, 'darkest_season — HARD']
+  ['going through my darkest season right now', true, 'darkest_season — HARD'],
+  // Caregiver / hardship patterns (added 2026-07-01)
+  [
+    'my mother got paralyzed back in 2024, i have been taking care of her and trying to make ends meet',
+    true,
+    'caregiver_hardship — paralyzed mother (Apex/ALi Raza incident)'
+  ],
+  [
+    'my dad is bedridden and I am taking care of him',
+    true,
+    'caregiver_hardship — bedridden father'
+  ],
+  [
+    'i cant afford rent this month',
+    true,
+    'financial_hardship — cant afford rent'
+  ],
+  [
+    'things are tough in the markets right now',
+    false,
+    'tough markets — NOT distress'
+  ]
 ];
 let pass = 0,
   fail = 0;
 for (const [text, expected, label] of cases) {
-  const r = detectDistress(text);
+  const r = detectDistressSync(text);
   const ok = r.detected === expected;
   if (ok) pass++;
   else fail++;

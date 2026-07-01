@@ -1,7 +1,7 @@
 import prisma from '@/lib/prisma';
 import { escalate } from '@/lib/escalation-dispatch';
 import { broadcastAIStatusChange, broadcastNotification } from '@/lib/realtime';
-import { detectDistress } from '@/lib/distress-detector';
+import { detectDistressSync } from '@/lib/distress-detector';
 import { attemptSelfRecovery } from '@/lib/script-state-recovery';
 import type { ScriptHistoryMessage } from '@/lib/script-state-recovery';
 import {
@@ -688,7 +688,7 @@ async function checkAutoTriggerSafety(
   const recent = conversation.messages.slice(0, 10);
   if (
     conversation.distressDetected ||
-    recent.some((message) => detectDistress(message.content).detected)
+    recent.some((message) => detectDistressSync(message.content).detected)
   ) {
     return { safe: false, reason: 'distress_detected_requires_human' };
   }

@@ -2439,7 +2439,7 @@ export async function generateReply(
   if (lastLeadMsg) {
     try {
       const { detectDistress } = await import('@/lib/distress-detector');
-      const distress = detectDistress(lastLeadMsg.content);
+      const distress = await detectDistress(lastLeadMsg.content);
       if (distress.detected) {
         console.warn(
           `[ai-engine] LAYER 2 distress detected — aborting generation. label=${distress.label} match="${distress.match}"`
@@ -3144,7 +3144,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       downsellConfig: true,
       // Fix B uses closer names to catch "call with {closerName}" / "chat
       // with {closerName}" phrases at any stage.
-      promptConfig: true
+      promptConfig: true,
+      // Scam per-account enforcement (2026-07-01): read OBJ-SCAM entry so
+      // the exhaustion handler uses the account's own script instead of the
+      // global hardcoded fallback.
+      objectionHandling: true
     }
   });
   const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
@@ -4380,11 +4384,23 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     //     reply. If either is missing, BLOCK this response and retry
     //     with a synthetic override directive appended to the system
     //     prompt.
+    // R24 downsell exclusion (2026-07-01). capitalThresholdMet=false in CDP
+    // means R24 already ran and confirmed the lead is below threshold — they
+    // are on the downsell path. Gating the course CTA the same as the
+    // coaching-call handoff strands these leads in the stall loop. R40
+    // already enforces correct behaviour for below-threshold leads.
+    const cdpForR24 = scriptStateSnapshot?.capturedDataPoints as
+      | Record<string, { value?: unknown } | undefined>
+      | undefined;
+    const leadIsOnDownsellPath =
+      cdpForR24?.capitalThresholdMet?.value === false;
+
     let r24Blocked = false;
     if (
       activeConversationId &&
       !rescheduleFlow &&
       !r37AcceptanceBypass &&
+      !leadIsOnDownsellPath &&
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0 &&
       isRoutingToBookingHandoff(parsed)
@@ -5619,12 +5635,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] broken_fragment_opener exhausted — injecting deterministic safe opener (conv ${activeConversationId}, continuationAck=${isLeadContinuationAck})`
         );
       } else if (scamParrotExhausted) {
+        const accountScamScript = extractScamObjectionScript(
+          personaForGate?.objectionHandling
+        );
         parsed.message =
+          accountScamScript ??
           "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
         parsed.messages = [parsed.message];
         parsed.escalateToHuman = false;
         console.warn(
-          `[ai-engine] scam_objection_parrot exhausted — injecting deterministic skepticism-address reply (conv ${activeConversationId})`
+          `[ai-engine] scam_objection_parrot exhausted — injecting ${accountScamScript ? 'account OBJ-SCAM script' : 'global fallback'} (conv ${activeConversationId})`
         );
       } else if (danglingTailExhausted) {
         parsed.message =
@@ -6185,13 +6205,17 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             `[ai-engine] dangling_template_tail — injecting deterministic bridging question (conv ${activeConversationId})`
           );
         } else if (scamParrot) {
+          const accountScamScriptInner = extractScamObjectionScript(
+            personaForGate?.objectionHandling
+          );
           const fallback =
+            accountScamScriptInner ??
             "i get that bro, honestly a lot of people had the same thought when they first heard about this. what specifically feels off to you? i'd rather address it straight than have you sitting with doubt";
           parsed.message = fallback;
           parsed.messages = [fallback];
           parsed.escalateToHuman = false;
           console.warn(
-            `[ai-engine] scam_objection_parrot — injecting deterministic skepticism-address reply (conv ${activeConversationId})`
+            `[ai-engine] scam_objection_parrot — injecting ${accountScamScriptInner ? 'account OBJ-SCAM script' : 'global fallback'} (conv ${activeConversationId})`
           );
         } else if (postBookingEmailHallucination) {
           const fallback =
@@ -7978,6 +8002,40 @@ export function buildR24BlockedFallbackMessage(
  *      verification question ("you got at least $X ready?") does NOT
  *      match these patterns so it correctly falls through the gate.
  */
+/**
+ * Extract the scam-objection script from a persona's objectionHandling field.
+ * Supports both array form [{type:'OBJ-SCAM', script:'...'}, ...]
+ * and object form {'OBJ-SCAM': {script:'...'}} or {'scam': '...'}.
+ * Returns null when no scam entry is configured (caller falls back to global
+ * hardcoded text so daetradez and similar accounts are backward compatible).
+ */
+function extractScamObjectionScript(obj: unknown): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  if (Array.isArray(obj)) {
+    const entry = (obj as Record<string, unknown>[]).find(
+      (o) => typeof o?.type === 'string' && /scam/i.test(String(o.type))
+    );
+    if (!entry) return null;
+    return (
+      (typeof entry.script === 'string' ? entry.script : null) ??
+      (typeof entry.response === 'string' ? entry.response : null)
+    );
+  }
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    if (/scam/i.test(key)) {
+      if (typeof val === 'string') return val;
+      if (val && typeof val === 'object') {
+        const v = val as Record<string, unknown>;
+        return (
+          (typeof v.script === 'string' ? v.script : null) ??
+          (typeof v.response === 'string' ? v.response : null)
+        );
+      }
+    }
+  }
+  return null;
+}
+
 export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
   // Rule 1: BOOKING stage at any sub_stage.
   if (parsed.stage === 'BOOKING') {
