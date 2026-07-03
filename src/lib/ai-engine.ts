@@ -3140,6 +3140,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       minimumCapitalRequired: true,
       capitalVerificationPrompt: true,
       closerName: true,
+      personaName: true,
       freeValueLink: true,
       downsellConfig: true,
       // Fix B uses closer names to catch "call with {closerName}" / "chat
@@ -3361,6 +3362,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     closerNames.push(handoffCfg.closerName);
   }
 
+  // Item 1 — Marcus third-person persona leak. When personaName and
+  // closerName share the same first name, the AI says "get on with Marcus"
+  // while being Marcus — a third-person break. Detect once here; the
+  // directive and the quality gate both reference these variables.
+  const personaNameNorm = (personaForGate?.personaName ?? '')
+    .toLowerCase()
+    .trim();
+  const resolvedCloserName =
+    personaForGate?.closerName ||
+    promptConfigForGate.callHandoff?.closerName ||
+    '';
+  const resolvedCloserNameNorm = resolvedCloserName.toLowerCase().trim();
+  const closerFirstName = resolvedCloserName.split(' ')[0] ?? '';
+  const closerFirstNameNorm = closerFirstName.toLowerCase().trim();
+  const isSamePerson =
+    closerFirstNameNorm.length > 0 &&
+    personaNameNorm.length > 0 &&
+    personaNameNorm.includes(closerFirstNameNorm);
+
   // 4. Call the LLM with quality gate (retry up to 2x on voice fails
   //    AND/OR R24 capital-verification-gate fails). systemPromptForLLM
   //    is a mutable copy so we can append an override directive when
@@ -3386,6 +3406,14 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     leadContext.status === 'UNQUALIFIED'
       ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been marked UNQUALIFIED (insufficient capital confirmed earlier in the thread). The sales conversation is effectively over. Your ONLY valid next actions are:\n  (a) Repeat the downsell pitch (lower-ticket course / funding partner) if the lead is re-engaging on that.\n  (b) Send the free-resource YouTube link per the script if they ask for help.\n  (c) Soft-exit with dignity — "when you're in a better spot hit me up" style.\nDo NOT ask trading strategy questions. Do NOT give market advice. Do NOT continue qualification (no Goal/Why, Urgency, Soft Pitch, Financial). Do NOT invite them to book a call. Do NOT send the Typeform / application link. The qualification flow is DONE. A short, warm, non-coaching reply is the correct output.\n=====`
       : '';
+
+  // Item 1 — persona identity directive for same-name accounts (e.g. Apex
+  // where persona is "Marcus Apex Rivera" and closerName is "Marcus"). The
+  // AI must never say "get on with Marcus" when it IS Marcus.
+  const personaIdentityDirective = isSamePerson
+    ? `\n\n===== PERSONA IDENTITY RULE =====\nYou ARE ${personaForGate!.personaName}. When proposing the call, say "let me get you on a call" or "I want to hop on a quick call with you" — NEVER refer to yourself in the third person. FORBIDDEN: "I'll get you on with ${closerFirstName}", "lined up with ${closerFirstName}", "chat with ${closerFirstName}", "locked in with ${closerFirstName}". You are ${closerFirstName}. Speak as ${closerFirstName}. First person only.\n=====`
+    : '';
+
   // baseSystemPrompt always carries the unqualified guard when relevant.
   // Retry-loop override assignments below use this as their base so the
   // guard doesn't get stripped when a more-specific override (R24, Fix B,
@@ -3594,6 +3622,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     coldStartStep1Directive +
     systemPrompt +
     unqualifiedGuard +
+    personaIdentityDirective +
     botDetectionDirective +
     earlyCapitalGateDirective +
     nextSlotIsCapitalDirective +
@@ -4629,6 +4658,21 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       f.includes('missing_required_question_on_ask_step:')
     );
 
+    // Item 2 — deep-why context loss. When the lead volunteers a motivator
+    // (family/house/car/etc.) but deepWhy isn't captured in CDP yet and the
+    // AI skips straight to step 13 obstacle question, intercept and force an
+    // acknowledgment before the next step fires.
+    const deepWhyContextIgnoredFailed =
+      !deepWhyCapturedForStep10 &&
+      !!lastLeadMsg &&
+      /\b(family|kids|daughter|son|mother|father|house|home|car|freedom|dream|parents|wife|husband|children)\b/i.test(
+        lastLeadMsg.content
+      ) &&
+      (parsed?.stage === 'OBSTACLE_IDENTIFICATION' ||
+        (typeof scriptStateSnapshot?.currentScriptStep === 'number' &&
+          scriptStateSnapshot.currentScriptStep >= 13)) &&
+      parsed?.stage !== 'GOAL_EMOTIONAL_WHY';
+
     if (
       quality.passed &&
       !unnecessarySchedulingQuestionFailed &&
@@ -4642,7 +4686,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       !r24Blocked &&
       !fixBBlocked &&
       !restrictedFundingBlocked &&
-      !fabricationBlocked
+      !fabricationBlocked &&
+      !deepWhyContextIgnoredFailed
     ) {
       if (attempt === 0) qualityGatePassedFirstAttempt = true;
       if (attempt > 0) {
@@ -5415,6 +5460,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         systemPromptForLLM = baseSystemPrompt + step10Override;
         console.warn(
           `[ai-engine] Step 10 (Deep Why) skip detected — forcing regen back to deep-why ask (attempt ${attempt + 1}/${MAX_RETRIES + 1})`
+        );
+      }
+
+      // Item 2 — deep-why context ignored. Lead volunteered a motivator
+      // (family/house/car) but AI skipped to step 13 obstacle question
+      // without acknowledging it. Force a regen that acknowledges first.
+      if (deepWhyContextIgnoredFailed) {
+        const motivatorSnippet = (lastLeadMsg?.content ?? '').slice(0, 100);
+        const deepWhyIgnoredOverride = `\n\n===== DEEP WHY — LEAD SHARED MOTIVATOR, DO NOT SKIP =====\nThe lead just shared a personal motivator: "${motivatorSnippet}". This IS their deep-why. You MUST acknowledge it specifically before asking anything else — do NOT fire a generic obstacle question without first reflecting what they said.\n\nREQUIRED on this regen:\n  1. Acknowledge their specific motivator in your own words ("bro, wanting that for your family hits different..." style).\n  2. Extract it to deep_why in capturedDataPoints.\n  3. THEN and only then advance to the next script step.\n\nFORBIDDEN: firing "what's been the main thing stopping you" or any obstacle question without first acknowledging what they shared.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + deepWhyIgnoredOverride;
+        console.warn(
+          `[ai-engine] Deep-why context ignored — lead shared motivator but AI skipped to obstacle Q. Forcing regen (attempt ${attempt + 1}/${MAX_RETRIES + 1}). lead="${motivatorSnippet.slice(0, 80)}"`
+        );
+      }
+
+      // Item 1 — third-person self-reference (persona name === closer name).
+      // When isSamePerson=true and the reply contains "[closerFirstName] will" /
+      // "with [closerFirstName]" the AI broke character. Force regen.
+      if (
+        isSamePerson &&
+        closerFirstName &&
+        parsed?.message &&
+        new RegExp(
+          `\\bwith\\s+${closerFirstName}\\b|\\b${closerFirstName}\\s+(will|can|is going to)\\b`,
+          'i'
+        ).test(parsed.message)
+      ) {
+        const thirdPersonOverride = `\n\n===== PERSONA IDENTITY VIOLATION — THIRD-PERSON SELF-REFERENCE =====\nYour previous reply referred to yourself in the third person ("with ${closerFirstName}", "${closerFirstName} will", etc.). You ARE ${personaForGate?.personaName ?? closerFirstName}. NEVER say "get on with ${closerFirstName}" or "${closerFirstName} will reach out" — that makes you sound like a middleman introducing someone else.\n\nREQUIRED on this regen: use FIRST PERSON when proposing the call. Say "let me get you on a call" or "I want to hop on a quick call with you". FORBIDDEN: any phrase that treats ${closerFirstName} as a separate person.\n=====`;
+        systemPromptForLLM = baseSystemPrompt + thirdPersonOverride;
+        console.warn(
+          `[ai-engine] Persona third-person self-reference detected — forcing first-person regen (attempt ${attempt + 1}/${MAX_RETRIES + 1}). closerFirstName="${closerFirstName}" persona="${personaForGate?.personaName ?? ''}"`
         );
       }
 
