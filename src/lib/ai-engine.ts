@@ -8343,7 +8343,15 @@ export function isRoutingToBookingHandoff(parsed: ParsedAIResponse): boolean {
   // existing patterns.
   const handoffPhrases =
     /\b(team\s+(is\s+)?(gonna|going\s+to|will)\s+(reach\s+out|get\s+in\s+touch|contact\s+you|set\s+(you\s+)?up|get\s+you\s+set|be\s+in\s+touch)|check\s+your\s+email\s+for\s+(the|your)\s+(call|confirmation|zoom|invite)|you'?re\s+all\s+set|locked\s+in\s+(for|with)|get\s+you\s+locked\s+in|call\s+confirmation|send(ing)?\s+you\s+(the|a)\s+link\s+(to|for)\s+(apply|book|grab|schedule)|here'?s\s+the\s+link|hop\s+on\s+(a\s+(quick\s+)?)?(call|chat|with\s+you)|will\s+hop\s+on|get\s+you\s+(all\s+)?set\s+up|link\s+to\s+(book|apply|grab|schedule)|gonna\s+send\s+you\s+the\s+link|fill\s+(it\s+|everything\s+)?out\s+and\s+(lmk|let\s+me\s+know)|ready\s+to\s+scale\s+up.*call|break\s+everything\s+down\s+for\s+you)\b/i;
-  return handoffPhrases.test(joinedReply);
+  if (handoffPhrases.test(joinedReply)) return true;
+  // Scheduling-time proposals ("you free monday at 11am", "how's tuesday
+  // at 3pm", "available wednesday morning") are implicit booking handoffs —
+  // the AI is proposing a call slot without a link, which bypasses the
+  // phrase-match above. Catch them so R24 keeps blocking until the lead
+  // is actually qualified.
+  const schedulingProposal =
+    /\b(you\s+free|are\s+you\s+free|you\s+available|are\s+you\s+available|how(?:'?s|\s+is)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday)\s+(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)\b/i;
+  return schedulingProposal.test(joinedReply);
 }
 
 /**
