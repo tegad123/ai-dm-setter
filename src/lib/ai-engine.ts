@@ -4558,6 +4558,110 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       fixBBlocked = fixBResult.blocked;
     }
 
+    // 5c-i. STANDALONE EVASION GUARD (Case E fix).
+    // checkR24Verification only runs when isRoutingToBookingHandoff=true,
+    // so the FIX 3 two-evasions counter inside it never accumulates during
+    // mid-conversation dodges. This guard fires on EVERY turn: if the AI
+    // has asked the capital question 2+ times and no lead reply ever named
+    // a number, lock the conversation to the downsell path immediately —
+    // regardless of whether this turn is a booking-handoff attempt.
+    if (
+      activeConversationId &&
+      !r24Blocked &&
+      !fixBBlocked &&
+      !leadIsOnDownsellPath &&
+      typeof capitalThreshold === 'number' &&
+      capitalThreshold > 0
+    ) {
+      const capitalQPatterns: RegExp[] = [
+        /\byou got at least \$\d/i,
+        /\byou have at least \$\d/i,
+        /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
+        /\bcapital ready\b/i,
+        /\bready to start with \$/i,
+        /\bjust to confirm.*\$/i,
+        /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
+        /\bwhat(?:'|')?s your (budget|capital|starting (amount|capital|budget))\b/i,
+        /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
+        /\bwhat(?:'|')?s your capital situation\b/i,
+        /\bcapital situation\s+like\b/i,
+        /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
+        /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
+        /\bwhat are you working with\b/i,
+        /\bon the (capital|money|budget) side\b/i
+      ];
+      const allAiMsgsForEvasion = conversationHistory.filter(
+        (m) => m.sender === 'AI'
+      );
+      const capQCountForEvasion = allAiMsgsForEvasion.filter((m) =>
+        capitalQPatterns.some((p) => p.test(m.content))
+      ).length;
+      if (capQCountForEvasion >= 2) {
+        const leadMsgsAfterFirstCapQ = (() => {
+          let firstCapQIdx = -1;
+          for (let i = 0; i < conversationHistory.length; i++) {
+            if (
+              conversationHistory[i].sender === 'AI' &&
+              capitalQPatterns.some((p) =>
+                p.test(conversationHistory[i].content)
+              )
+            ) {
+              firstCapQIdx = i;
+              break;
+            }
+          }
+          if (firstCapQIdx === -1) return [];
+          return conversationHistory
+            .slice(firstCapQIdx + 1)
+            .filter((m) => m.sender === 'LEAD');
+        })();
+        const evasionHasAnyAmount = leadMsgsAfterFirstCapQ.some((m) =>
+          /\$[\d,]+|\d+[\s,]*k\b|\d[\d,]*\s*(thousand|hundred|dollars?|grand)\b/i.test(
+            m.content
+          )
+        );
+        if (!evasionHasAnyAmount) {
+          r24Blocked = true;
+          r24WasEvaluatedThisTurn = true;
+          r24LastResult = {
+            blocked: true,
+            reason: 'answer_below_threshold',
+            parsedAmount: null,
+            parsedCurrency: null,
+            parsedAmountUsd: null,
+            verificationAskedAt: null,
+            verificationConfirmedAt: null
+          };
+          // Durably lock the conversation so Case D guard keeps it closed.
+          if (activeConversationId) {
+            prisma.conversation
+              .updateMany({
+                where: {
+                  id: activeConversationId,
+                  capitalVerificationStatus: {
+                    notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
+                  }
+                },
+                data: {
+                  capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
+                  capitalVerifiedAt: new Date(),
+                  capitalVerifiedAmount: 0
+                }
+              })
+              .catch((e: unknown) =>
+                console.error(
+                  '[ai-engine] Evasion guard durable-state write failed:',
+                  e
+                )
+              );
+          }
+          console.warn(
+            `[ai-engine] Standalone evasion guard fired: ${capQCountForEvasion} capital Qs asked, no amount answer found — routing to downsell for conv ${activeConversationId}`
+          );
+        }
+      }
+    }
+
     // 5c-ii. FUNDING-PARTNER GEOGRAPHY GATE. R24 blocks booking
     // attempts, but a model can still pitch "funding partner" as a
     // downsell/alternative without using booking-handoff language.
@@ -8829,7 +8933,7 @@ export function aiResponseAddressesPreObjection(text: string): boolean {
 // "has" via an FTMO / Apex / Topstep challenge is the FIRM's money.
 // See Tahir 2026-04-20 incident.
 const PROP_FIRM_PATTERN =
-  /\b(prop\s+firm|funded\s+account|funded\s+trader|ftmo|apex|topstep|the5ers|my\s+funded|firm'?s?\s+capital|firm\s+account|prop\s+challenge|challenge\s+account|funded\s+challenge|evaluation\s+account|\$k?\s*challenge|10k\s+challenge|25k\s+challenge|50k\s+challenge|100k\s+challenge|200k\s+challenge)\b/i;
+  /\b(prop\s+firm|funded\s+account|funded\s+trader|ftmo|apex|topstep|the5ers|my\s+funded|firm'?s?\s+capital|firm\s+account|prop\s+challenge|challenge\s+account|funded\s+challenge|evaluation\s+account|\$k?\s*challenge|10k\s+challenge|25k\s+challenge|50k\s+challenge|100k\s+challenge|200k\s+challenge|takeprofittrader|take\s+profit\s+trader|tradeify|bulenox|e8\s+funding|the\s+funded\s+trader|funder\s+trading|instant\s+funding|alpha\s+capital\s+group|myfundedfx|funded\s+next)\b/i;
 
 // Personal-capital indicators: when these appear alongside a prop-firm
 // mention, the number in the message is more likely tied to personal
@@ -9326,7 +9430,9 @@ async function persistR24VerificationState(
     (result.reason === 'confirmed_amount' ||
       result.reason === 'confirmed_affirmative');
   const explicitlyUnqualified =
-    result.blocked && result.reason === 'answer_below_threshold';
+    result.blocked &&
+    (result.reason === 'answer_below_threshold' ||
+      result.reason === 'answer_prop_firm_only');
   if (!qualified && !explicitlyUnqualified) return;
 
   const status = qualified ? 'VERIFIED_QUALIFIED' : 'VERIFIED_UNQUALIFIED';
@@ -9436,6 +9542,21 @@ async function checkR24Verification(
       blocked: false,
       reason: 'durable_qualification_state',
       parsedAmount: null,
+      verificationAskedAt: null,
+      verificationConfirmedAt: null
+    };
+  }
+  // Terminal downsell state: once a lead is confirmed unqualified, lock
+  // every subsequent turn into the downsell path without re-scanning.
+  // Without this, the next lead reply (responding to the downsell) has
+  // no capital amount → falls through to answer_vague → re-asks capital.
+  if (conv?.capitalVerificationStatus === 'VERIFIED_UNQUALIFIED') {
+    return {
+      blocked: true,
+      reason: 'answer_below_threshold',
+      parsedAmount: null,
+      parsedCurrency: null,
+      parsedAmountUsd: null,
       verificationAskedAt: null,
       verificationConfirmedAt: null
     };
