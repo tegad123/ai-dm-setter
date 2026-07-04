@@ -4588,7 +4588,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
         /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
         /\bwhat are you working with\b/i,
-        /\bon the (capital|money|budget) side\b/i
+        /\bon the (capital|money|budget) side\b/i,
+        /\bwhat(?:'|')?ve you got set aside\b/i,
+        /\bput toward this\b/i,
+        /\bgot set aside (to|for|right)\b/i,
+        /\bworking with (right now|financially|at the moment)\b/i,
+        /\bto put toward (this|it|trading|learning)\b/i
       ];
       const allAiMsgsForEvasion = conversationHistory.filter(
         (m) => m.sender === 'AI'
@@ -9606,14 +9611,19 @@ async function checkR24Verification(
     // and your education in USD", "what's your budget for this",
     // "what are you working with on the capital side", etc.
     /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-    /\bwhat(?:'|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
+    /\bwhat(?:’|’)?s your (budget|capital|starting (amount|capital|budget))\b/i,
     /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
-    /\bwhat(?:'|’)?s your capital situation\b/i,
+    /\bwhat(?:’|’)?s your capital situation\b/i,
     /\bcapital situation\s+like\b/i,
     /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
     /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
     /\bwhat are you working with\b/i,
-    /\bon the (capital|money|budget) side\b/i
+    /\bon the (capital|money|budget) side\b/i,
+    /\bwhat(?:’|’)?ve you got set aside\b/i,
+    /\bput toward this\b/i,
+    /\bgot set aside (to|for|right)\b/i,
+    /\bworking with (right now|financially|at the moment)\b/i,
+    /\bto put toward (this|it|trading|learning)\b/i
   ];
   if (customPrompt && customPrompt.trim().length >= 15) {
     const snippet = customPrompt.trim().slice(0, 30);
