@@ -4556,19 +4556,45 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             verificationAskedAt: null,
             verificationConfirmedAt: null
           };
+          // Write VERIFIED_UNQUALIFIED + update CDP capitalThresholdMet=false
+          // so the prompt sees the downsell state on the very next turn.
+          const passiveNow = new Date();
           prisma.conversation
-            .updateMany({
-              where: {
-                id: activeConversationId,
-                capitalVerificationStatus: {
-                  notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
+            .findUnique({
+              where: { id: activeConversationId },
+              select: { capturedDataPoints: true }
+            })
+            .then((convCdp) => {
+              const cdpPoints =
+                (convCdp?.capturedDataPoints as Record<string, unknown>) ?? {};
+              cdpPoints.capitalThresholdMet = {
+                value: false,
+                confidence: 'HIGH',
+                extractedFromMessageId: null,
+                extractionMethod: 'passive_capital_listener',
+                extractedAt: passiveNow.toISOString()
+              };
+              cdpPoints.verifiedCapitalUsd = {
+                value: passiveAnswer.amount,
+                confidence: 'HIGH',
+                extractedFromMessageId: null,
+                extractionMethod: 'passive_capital_listener',
+                extractedAt: passiveNow.toISOString()
+              };
+              return prisma.conversation.updateMany({
+                where: {
+                  id: activeConversationId,
+                  capitalVerificationStatus: {
+                    notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
+                  }
+                },
+                data: {
+                  capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
+                  capitalVerifiedAt: passiveNow,
+                  capitalVerifiedAmount: passiveAnswer.amount,
+                  capturedDataPoints: cdpPoints as Prisma.InputJsonValue
                 }
-              },
-              data: {
-                capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
-                capitalVerifiedAt: new Date(),
-                capitalVerifiedAmount: passiveAnswer.amount
-              }
+              });
             })
             .catch((e: unknown) =>
               console.error(
