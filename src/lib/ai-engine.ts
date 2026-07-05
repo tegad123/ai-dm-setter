@@ -4520,6 +4520,69 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       r24Blocked = r24LastResult.blocked;
     }
 
+    // 5b-i. PASSIVE CAPITAL LISTENER — catches leads who volunteer a
+    // below-threshold amount mid-discovery before the bot is routing to
+    // booking. R24 above only runs on booking-handoff turns, so without
+    // this a lead saying "$900" during discovery is never classified.
+    // Runs on every turn when R24 hasn't already blocked, status is still
+    // UNVERIFIED, and the lead's current message contains a parseable amount.
+    if (
+      activeConversationId &&
+      !r24Blocked &&
+      !leadIsOnDownsellPath &&
+      typeof capitalThreshold === 'number' &&
+      capitalThreshold > 0 &&
+      lastLeadMsg?.content
+    ) {
+      const convStatus = await prisma.conversation.findUnique({
+        where: { id: activeConversationId },
+        select: { capitalVerificationStatus: true }
+      });
+      if (convStatus?.capitalVerificationStatus === 'UNVERIFIED') {
+        const passiveAnswer = parseLeadCapitalAnswer(lastLeadMsg.content);
+        if (
+          passiveAnswer.kind === 'amount' &&
+          passiveAnswer.amount !== null &&
+          passiveAnswer.amount < capitalThreshold
+        ) {
+          r24Blocked = true;
+          r24WasEvaluatedThisTurn = true;
+          r24LastResult = {
+            blocked: true,
+            reason: 'answer_below_threshold',
+            parsedAmount: passiveAnswer.amount,
+            parsedCurrency: passiveAnswer.currency ?? null,
+            parsedAmountUsd: passiveAnswer.amount,
+            verificationAskedAt: null,
+            verificationConfirmedAt: null
+          };
+          prisma.conversation
+            .updateMany({
+              where: {
+                id: activeConversationId,
+                capitalVerificationStatus: {
+                  notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
+                }
+              },
+              data: {
+                capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
+                capitalVerifiedAt: new Date(),
+                capitalVerifiedAmount: passiveAnswer.amount
+              }
+            })
+            .catch((e: unknown) =>
+              console.error(
+                '[ai-engine] Passive capital listener persist failed:',
+                e
+              )
+            );
+          console.warn(
+            `[ai-engine] Passive capital listener fired: lead volunteered $${passiveAnswer.amount} below threshold $${capitalThreshold} — locking to downsell for conv ${activeConversationId}`
+          );
+        }
+      }
+    }
+
     // 5c. FIX B — broader capital-advancement gate. Independent of R24's
     //     `isRoutingToBookingHandoff` trigger; fires on ANY response
     //     that attempts to advance the lead (by stage OR content) when
