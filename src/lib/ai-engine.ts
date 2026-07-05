@@ -7113,7 +7113,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     activeConversationId &&
     typeof capitalThreshold === 'number' &&
     capitalThreshold > 0 &&
-    containsCapitalQuestion(parsed.message)
+    (parsed.messages ?? [parsed.message]).some((b: string) =>
+      containsCapitalQuestion(b)
+    )
   ) {
     prisma.$executeRaw`
       UPDATE "Conversation"
