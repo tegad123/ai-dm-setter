@@ -1037,6 +1037,7 @@ model Conversation {
   capitalVerificationStatus CapitalVerificationStatus @default(UNVERIFIED)
   capitalVerifiedAt         DateTime?
   capitalVerifiedAmount     Int?
+  capitalQAskedCount        Int                       @default(0)
 
   // ── Script-stage self-recovery ─────────────────────────────────
   currentScriptStep  Int     @default(1)

@@ -4559,12 +4559,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
 
     // 5c-i. STANDALONE EVASION GUARD (Case E fix).
-    // checkR24Verification only runs when isRoutingToBookingHandoff=true,
-    // so the FIX 3 two-evasions counter inside it never accumulates during
-    // mid-conversation dodges. This guard fires on EVERY turn: if the AI
-    // has asked the capital question 2+ times and no lead reply ever named
-    // a number, lock the conversation to the downsell path immediately —
-    // regardless of whether this turn is a booking-handoff attempt.
+    // Uses a durable DB counter (capitalQAskedCount) incremented each time
+    // the AI generates a reply containing a capital question — phrasing-agnostic,
+    // no regex matching required. When the counter reaches 2 and the lead has
+    // not given any amount answer since the first cap Q, lock to downsell.
     if (
       activeConversationId &&
       !r24Blocked &&
@@ -4573,53 +4571,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       typeof capitalThreshold === 'number' &&
       capitalThreshold > 0
     ) {
-      const capitalQPatterns: RegExp[] = [
-        /\byou got at least \$\d/i,
-        /\byou have at least \$\d/i,
-        /\bat least \$\d+[,\d]*\s*(in\s+capital|capital|ready|to\s+start)/i,
-        /\bcapital ready\b/i,
-        /\bready to start with \$/i,
-        /\bjust to confirm.*\$/i,
-        /\bhow much (do you |have you )?(got|have|set aside|saved|working with|to start|to invest|to put (in|aside))\b/i,
-        /\bwhat(?:'|')?s your (budget|capital|starting (amount|capital|budget))\b/i,
-        /\bwhat is your (budget|capital|starting (amount|capital|budget))\b/i,
-        /\bwhat(?:'|')?s your capital situation\b/i,
-        /\bcapital situation\s+like\b/i,
-        /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
-        /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
-        /\bwhat are you working with\b/i,
-        /\bon the (capital|money|budget) side\b/i,
-        /\bwhat(?:'|')?ve you got set aside\b/i,
-        /\bput toward this\b/i,
-        /\bgot set aside (to|for|right)\b/i,
-        /\bworking with (right now|financially|at the moment)\b/i,
-        /\bto put toward (this|it|trading|learning)\b/i
-      ];
-      const allAiMsgsForEvasion = conversationHistory.filter(
-        (m) => m.sender === 'AI'
-      );
-      const capQCountForEvasion = allAiMsgsForEvasion.filter((m) =>
-        capitalQPatterns.some((p) => p.test(m.content))
-      ).length;
-      if (capQCountForEvasion >= 2) {
-        const leadMsgsAfterFirstCapQ = (() => {
-          let firstCapQIdx = -1;
-          for (let i = 0; i < conversationHistory.length; i++) {
-            if (
-              conversationHistory[i].sender === 'AI' &&
-              capitalQPatterns.some((p) =>
-                p.test(conversationHistory[i].content)
-              )
-            ) {
-              firstCapQIdx = i;
-              break;
-            }
-          }
-          if (firstCapQIdx === -1) return [];
-          return conversationHistory
-            .slice(firstCapQIdx + 1)
-            .filter((m) => m.sender === 'LEAD');
-        })();
+      const convForEvasion = await prisma.conversation.findUnique({
+        where: { id: activeConversationId },
+        select: { capitalQAskedCount: true, capitalVerificationStatus: true }
+      });
+      const capQAskedCount = convForEvasion?.capitalQAskedCount ?? 0;
+      if (capQAskedCount >= 2) {
+        // Check lead messages after first cap Q for any amount — if none, evasion lock
+        const firstCapQIdx = conversationHistory.findIndex(
+          (m) =>
+            (m.sender === 'AI' || m.sender === 'HUMAN') &&
+            containsCapitalQuestion(m.content)
+        );
+        const leadMsgsAfterFirstCapQ =
+          firstCapQIdx === -1
+            ? []
+            : conversationHistory
+                .slice(firstCapQIdx + 1)
+                .filter((m) => m.sender === 'LEAD');
         const evasionHasAnyAmount = leadMsgsAfterFirstCapQ.some((m) =>
           /\$[\d,]+|\d+[\s,]*k\b|\d[\d,]*\s*(thousand|hundred|dollars?|grand)\b/i.test(
             m.content
@@ -4637,31 +4606,29 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             verificationAskedAt: null,
             verificationConfirmedAt: null
           };
-          // Durably lock the conversation so Case D guard keeps it closed.
-          if (activeConversationId) {
-            prisma.conversation
-              .updateMany({
-                where: {
-                  id: activeConversationId,
-                  capitalVerificationStatus: {
-                    notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
-                  }
-                },
-                data: {
-                  capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
-                  capitalVerifiedAt: new Date(),
-                  capitalVerifiedAmount: 0
+          // Durably lock so Case D guard keeps it closed on all future turns.
+          prisma.conversation
+            .updateMany({
+              where: {
+                id: activeConversationId,
+                capitalVerificationStatus: {
+                  notIn: ['VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN']
                 }
-              })
-              .catch((e: unknown) =>
-                console.error(
-                  '[ai-engine] Evasion guard durable-state write failed:',
-                  e
-                )
-              );
-          }
+              },
+              data: {
+                capitalVerificationStatus: 'VERIFIED_UNQUALIFIED',
+                capitalVerifiedAt: new Date(),
+                capitalVerifiedAmount: 0
+              }
+            })
+            .catch((e: unknown) =>
+              console.error(
+                '[ai-engine] Evasion guard durable-state write failed:',
+                e
+              )
+            );
           console.warn(
-            `[ai-engine] Standalone evasion guard fired: ${capQCountForEvasion} capital Qs asked, no amount answer found — routing to downsell for conv ${activeConversationId}`
+            `[ai-engine] Standalone evasion guard fired: capitalQAskedCount=${capQAskedCount}, no amount from lead — routing to downsell for conv ${activeConversationId}`
           );
         }
       }
@@ -7070,6 +7037,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         '[ai-engine] capturedDataPoints persist failed (non-fatal):',
         err
       )
+    );
+  }
+
+  // Increment capitalQAskedCount when the AI's generated reply contains a
+  // capital question. This is phrasing-agnostic — it uses the same
+  // containsCapitalQuestion classifier that already reads the conversation
+  // history, so any phrasing the AI invents is counted without new regexes.
+  // Only fires when capitalThreshold is configured and the conversation isn't
+  // already durably locked (VERIFIED_QUALIFIED / MANUALLY_OVERRIDDEN).
+  if (
+    activeConversationId &&
+    typeof capitalThreshold === 'number' &&
+    capitalThreshold > 0 &&
+    containsCapitalQuestion(parsed.message)
+  ) {
+    prisma.$executeRaw`
+      UPDATE "Conversation"
+      SET "capitalQAskedCount" = "capitalQAskedCount" + 1
+      WHERE id = ${activeConversationId}
+        AND "capitalVerificationStatus" NOT IN ('VERIFIED_QUALIFIED', 'MANUALLY_OVERRIDDEN')
+    `.catch((e: unknown) =>
+      console.error('[ai-engine] capitalQAskedCount increment failed:', e)
     );
   }
 
