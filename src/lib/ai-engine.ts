@@ -3402,9 +3402,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // free-resource YouTube link, or soft-exit. Without this block the
   // LLM drifts back into trading-strategy questions and keeps the
   // conversation going like nothing happened.
-  const unqualifiedGuard =
-    leadContext.status === 'UNQUALIFIED'
-      ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been confirmed UNQUALIFIED — insufficient capital or capital evasion earlier in this conversation. The qualification flow is PERMANENTLY CLOSED.\n\nYour ONLY valid next action on this turn:\n  • Pitch the ${downsellPriceWithSign} ${downsellProductName} course if you haven't yet: "i hear you bro — the 1-on-1 mentorship needs a bit more capital, but my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build toward it. want me to send that over?"\n  • If the lead already declined the downsell: soft-exit with dignity ("when you're in a better spot hit me up" style).\n  • If the lead is asking about the course / price / link: answer or deliver the link.\n\nSTRICTLY FORBIDDEN:\n  ✗ "what've you got set aside" / "what's your capital" / "rough ballpark" / ANY capital question\n  ✗ Continuing discovery (Goal/Why, Urgency, obstacles, strategy)\n  ✗ Offering a call with ${closerFirstName}\n  ✗ Sending the Typeform / booking link\n  ✗ Asking them to confirm capital "just so I know"\n  ✗ "I can't qualify you without that number"\n  ✗ Any phrasing that re-opens the capital question\n\nThe lead is disqualified. Pivot to downsell or exit — nothing else.\n=====`
+  // Only fire the strong downsell guard when BOTH lead.stage=UNQUALIFIED AND
+  // capitalThresholdMet=false in CDP. lead.stage alone can be UNQUALIFIED from
+  // passive-listener misfires on non-capital messages (e.g. "3 months").
+  const _sscdp = scriptStateSnapshot?.capturedDataPoints as
+    | Record<string, { value?: unknown } | undefined>
+    | undefined;
+  const _capitalConfirmedUnqualified =
+    _sscdp?.capitalThresholdMet?.value === false &&
+    leadContext.status === 'UNQUALIFIED';
+  const unqualifiedGuard = _capitalConfirmedUnqualified
+    ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been confirmed UNQUALIFIED — insufficient capital or capital evasion earlier in this conversation. The qualification flow is PERMANENTLY CLOSED.\n\nYour ONLY valid next action on this turn:\n  • Pitch the ${downsellPriceWithSign} ${downsellProductName} course if you haven't yet: "i hear you bro — the 1-on-1 mentorship needs a bit more capital, but my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build toward it. want me to send that over?"\n  • If the lead already declined the downsell: soft-exit with dignity ("when you're in a better spot hit me up" style).\n  • If the lead is asking about the course / price / link: answer or deliver the link.\n\nSTRICTLY FORBIDDEN:\n  ✗ "what've you got set aside" / "what's your capital" / "rough ballpark" / ANY capital question\n  ✗ Continuing discovery (Goal/Why, Urgency, obstacles, strategy)\n  ✗ Offering a call with ${closerFirstName}\n  ✗ Sending the Typeform / booking link\n  ✗ Asking them to confirm capital "just so I know"\n  ✗ "I can't qualify you without that number"\n  ✗ Any phrasing that re-opens the capital question\n\nThe lead is disqualified. Pivot to downsell or exit — nothing else.\n=====`
+    : leadContext.status === 'UNQUALIFIED'
+      ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been marked UNQUALIFIED (insufficient capital confirmed earlier in the thread). The sales conversation is effectively over. Your ONLY valid next actions are:\n  (a) Repeat the downsell pitch (lower-ticket course / funding partner) if the lead is re-engaging on that.\n  (b) Send the free-resource YouTube link per the script if they ask for help.\n  (c) Soft-exit with dignity — "when you're in a better spot hit me up" style.\nDo NOT ask trading strategy questions. Do NOT give market advice. Do NOT continue qualification (no Goal/Why, Urgency, Soft Pitch, Financial). Do NOT invite them to book a call. Do NOT send the Typeform / application link. The qualification flow is DONE. A short, warm, non-coaching reply is the correct output.\n=====`
       : '';
 
   // Item 1 — persona identity directive for same-name accounts (e.g. Apex
