@@ -2127,9 +2127,17 @@ function extractCapitalDataPoints(params: {
     );
 
     if (durableAmount === null && !hasExplicitUnqualifiedCapitalSignal) {
-      delete points.verifiedCapitalUsd;
-      delete points.capitalThresholdMet;
-      delete points.capitalAnswerType;
+      // Still enforce the downsell path — the DB status is authoritative.
+      // Evasion-locked leads (capitalQAskedCount gate) have no explicit amount
+      // but VERIFIED_UNQUALIFIED must still drive capitalThresholdMet=false.
+      setPoint(
+        points,
+        'capitalThresholdMet',
+        false,
+        'HIGH',
+        null,
+        'durable_capital_state'
+      );
       return;
     }
 
