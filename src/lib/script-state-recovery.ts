@@ -6429,6 +6429,20 @@ export async function applyStageOverride(params: {
   }
 
   const systemStage = snapshot?.systemStage || null;
+
+  // Reset mismatch counter when stages agree — previously the counter only ever
+  // incremented and was never cleared, so a single disagreement run at count 3+
+  // locked system stage authoritative for the rest of the conversation even after
+  // the stages converged again.
+  if (systemStage && llmStage && systemStage === llmStage) {
+    await prisma.conversation
+      .update({
+        where: { id: params.conversationId },
+        data: { stageMismatchCount: 0 }
+      })
+      .catch(() => null);
+  }
+
   if (systemStage && llmStage && systemStage !== llmStage) {
     const updated = await prisma.conversation
       .update({
@@ -6438,6 +6452,17 @@ export async function applyStageOverride(params: {
       })
       .catch(() => null);
     if ((updated?.stageMismatchCount ?? 0) > 2) {
+      // Hard ceiling: if the system stage has overridden the LLM > 15 times,
+      // the computed systemStage itself is stuck (e.g. step completion failure
+      // in a large history). Trust the LLM stage at that point.
+      if ((updated?.stageMismatchCount ?? 0) > 15) {
+        return {
+          finalStage: params.currentStage,
+          capitalOutcome: params.capitalOutcome,
+          reason: 'llm_stage_trusted_after_system_stuck',
+          stageMismatchCount: updated?.stageMismatchCount
+        };
+      }
       return {
         finalStage: systemStage,
         capitalOutcome: params.capitalOutcome,

@@ -9665,9 +9665,19 @@ async function checkR24Verification(
     };
   }
 
-  // Legacy defense-in-depth: active confirmed calls still count as passed,
-  // and now also persist durable qualification for future reschedules.
-  if (conv?.scheduledCallAt) {
+  // Legacy defense-in-depth: active confirmed calls count as passed only when
+  // the lead is already durably verified. An UNVERIFIED conversation with a
+  // scheduled call (e.g. prop-firm lead who slipped through) must still run
+  // the full capital check — do not short-circuit around it.
+  const convStatus = conv?.capitalVerificationStatus as
+    | string
+    | null
+    | undefined;
+  if (
+    conv?.scheduledCallAt &&
+    (convStatus === 'VERIFIED_QUALIFIED' ||
+      convStatus === 'MANUALLY_OVERRIDDEN')
+  ) {
     return finalize({
       blocked: false,
       reason: 'confirmed_affirmative',
@@ -9895,6 +9905,23 @@ async function checkR24Verification(
       verificationAskedAt: verificationAskedAt.id,
       verificationConfirmedAt: null
     });
+  }
+  // Prop-firm window contamination check. If ANY message in the answer window
+  // mentions a prop firm without also claiming personal liquid capital, a bare
+  // affirmative from a later message cannot qualify the lead — they may be
+  // confirming readiness to join, not confirming they have personal capital.
+  const windowHasPropFirmNoPersonalCapital = classifications.some(
+    (c) =>
+      PROP_FIRM_PATTERN.test(c.msg.content) &&
+      !PERSONAL_CAPITAL_INDICATOR.test(c.msg.content) &&
+      !PLUS_PHRASE.test(c.msg.content)
+  );
+  if (windowHasPropFirmNoPersonalCapital) {
+    for (const c of classifications) {
+      if (c.cls.kind === 'affirmative') {
+        c.cls = { kind: 'ambiguous', amount: null } as typeof c.cls;
+      }
+    }
   }
   // amount > disqualifier > affirmative > hedging > ambiguous.
   const priority: Record<string, number> = {
