@@ -3443,8 +3443,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       (m.sender === 'AI' || m.sender === 'HUMAN') &&
       containsCapitalQuestion(m.content)
   );
-  const capitalVerificationSatisfied =
-    hasCapitalVerificationQuestionAndAnswer(conversationHistory);
+  // capitalVerificationSatisfied: true only when R24 has actually evaluated
+  // capital — not just when any message appeared after the capital question.
+  // hasCapitalVerificationQuestionAndAnswer returns true even when the lead's
+  // reply was a duration ("3 years") that the parser rejected — the gate then
+  // treated capital as answered and let a call pitch through (Hamza Ali
+  // 2026-07-10). Override to false when CDP shows capitalThresholdMet is still
+  // null/undefined, meaning R24 never wrote a qualified decision.
+  const capitalVerificationSatisfied = (() => {
+    if (!hasCapitalVerificationQuestionAndAnswer(conversationHistory))
+      return false;
+    const thresholdMet = _sscdp?.capitalThresholdMet?.value;
+    // If CDP has no capitalThresholdMet entry, R24 hasn't made a decision yet
+    // — treat as unsatisfied so the gate still blocks a call pitch.
+    if (thresholdMet === undefined || thresholdMet === null) return false;
+    // If capitalThresholdMet is explicitly false, lead is unqualified —
+    // but capital WAS evaluated, so satisfied = true (gate uses other signals
+    // to block the call in the unqualified path).
+    return true;
+  })();
   const botDetectionCount = conversationHistory.filter(
     (m) => isLeadCapitalParseCandidate(m) && isBotDetectionQuestion(m.content)
   ).length;
@@ -8832,7 +8849,15 @@ const TIME_PATTERNS_TO_EXCLUDE: RegExp[] = [
   /\bin\s+\d{1,2}\s*hours?\b/gi, // "in 12 hours"
   /\b\d{1,2}\s*hour\s*ago\b/gi, // "2 hour ago"
   /\b\d{1,2}\s*hours?\b/gi, // "12 hours", "2 hours"
-  /\b\d{1,2}\s*o['’]clock\b/gi // "5 o'clock"
+  /\b\d{1,2}\s*o[‘’]clock\b/gi, // "5 o’clock"
+  // Duration expressions — "3 years", "18 months", "a couple years".
+  // These are trading-tenure answers, not capital amounts. Without stripping
+  // them the amount regex latches onto the leading number (Hamza Ali 2026-07-10:
+  // "3 years" → capitalVerifiedAmount=3 → wrong VERIFIED_UNQUALIFIED write).
+  /\b\d+\s*(?:and\s+a\s+half\s+)?years?\b/gi, // "3 years", "1 year", "2 and a half years"
+  /\b\d+\s*months?\b/gi, // "18 months", "6 month"
+  /\ba\s+(?:couple|few)\s+years?\b/gi, // "a couple years", "a few years"
+  /\bhalf\s+a\s+year\b/gi // "half a year"
 ];
 
 function stripTimeExpressions(text: string): string {
