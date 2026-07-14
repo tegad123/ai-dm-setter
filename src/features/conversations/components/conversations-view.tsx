@@ -192,6 +192,11 @@ export function ConversationsView() {
     [activeId, refetchList]
   );
 
+  const handleDeleteConversation = useCallback(() => {
+    setSelectedId(null);
+    refetchList();
+  }, [refetchList]);
+
   // SSE subscription: when the AI emits a new suggestion for any
   // conversation on this account, re-pull both the pending-suggestion
   // for the focused convo AND the conversation list (so the ⚡ icon
@@ -293,6 +298,7 @@ export function ConversationsView() {
           refetchMessages();
           refetchList();
         }}
+        onDelete={handleDeleteConversation}
       />
       {/* Right Sidebar — Summary / Score / Notes */}
       {activeApiConvo && (

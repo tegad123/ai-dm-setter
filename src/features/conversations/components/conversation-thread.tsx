@@ -5,6 +5,17 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from '@/components/ui/alert-dialog';
 import { selectDisplayTags } from '@/features/conversations/lib/select-display-tags';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LeadStageBadge } from '@/features/shared/lead-stage-badge';
@@ -17,7 +28,8 @@ import {
   IconRobot,
   IconUserCheck,
   IconBolt,
-  IconPencil
+  IconPencil,
+  IconTrash
 } from '@tabler/icons-react';
 import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
@@ -298,6 +310,8 @@ interface ConversationThreadProps {
   manualReply?: string | null;
   /** Called after approve / edit / dismiss so the parent can refetch. */
   onSuggestionActioned?: () => void;
+  /** Called after the conversation is deleted so the parent can navigate away. */
+  onDelete?: () => void;
 }
 
 function draftKey(conversationId: string) {
@@ -311,7 +325,8 @@ export function ConversationThread({
   onToggleAI,
   pendingSuggestion,
   manualReply,
-  onSuggestionActioned
+  onSuggestionActioned,
+  onDelete
 }: ConversationThreadProps) {
   const [message, setMessage] = useState(() => {
     try {
@@ -321,6 +336,7 @@ export function ConversationThread({
     }
   });
   const [sending, setSending] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // Tracks which messages have an unsend in flight so we can disable the
   // button + show a toast without lifting state up.
   const [unsendingIds, setUnsendingIds] = useState<Set<string>>(new Set());
@@ -416,6 +432,25 @@ export function ConversationThread({
     appliedManualReplyRef.current = key;
     setMessage(trimmed);
   }, [conversation.id, manualReply]);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await apiFetch(`/api/conversations/${conversation.id}`, {
+        method: 'DELETE'
+      });
+      toast.success('Conversation deleted');
+      onDelete?.();
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to delete conversation';
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleSend = async () => {
     if (!message.trim() || !onSendMessage) return;
@@ -517,6 +552,39 @@ export function ConversationThread({
               className='data-[state=checked]:bg-blue-500 data-[state=unchecked]:bg-green-500'
             />
           </div>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant='ghost'
+                size='icon'
+                className='text-muted-foreground hover:text-destructive h-8 w-8'
+                title='Delete conversation'
+                aria-label='Delete conversation'
+                disabled={deleting}
+              >
+                <IconTrash className='h-4 w-4' />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete the conversation with{' '}
+                  <strong>{conversation.leadName}</strong> and their lead
+                  record. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                >
+                  {deleting ? 'Deleting...' : 'Delete'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
