@@ -3417,6 +3417,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       ? `\n\n===== POST-UNQUALIFIED CONVERSATION GUARD =====\nThis lead has already been marked UNQUALIFIED (insufficient capital confirmed earlier in the thread). The sales conversation is effectively over. Your ONLY valid next actions are:\n  (a) Repeat the downsell pitch (lower-ticket course / funding partner) if the lead is re-engaging on that.\n  (b) Send the free-resource YouTube link per the script if they ask for help.\n  (c) Soft-exit with dignity — "when you're in a better spot hit me up" style.\nDo NOT ask trading strategy questions. Do NOT give market advice. Do NOT continue qualification (no Goal/Why, Urgency, Soft Pitch, Financial). Do NOT invite them to book a call. Do NOT send the Typeform / application link. The qualification flow is DONE. A short, warm, non-coaching reply is the correct output.\n=====`
       : '';
 
+  // TERMINAL-STATE GUARD (Avery Greene 2026-07-13 incident).
+  // When downsellInterestConfirmed=true AND the youtube/free-resource link
+  // already appears in AI message history, the conversation is over. The
+  // unqualifiedGuard above only fires when lead.stage=UNQUALIFIED, but stage
+  // can stay QUALIFIED if the passive listener wrote capitalThresholdMet=true
+  // (contradicting capitalVerificationStatus=VERIFIED_UNQUALIFIED). This guard
+  // is independent of lead.stage and capitalThresholdMet — it reads message
+  // history directly. A code-level check, not a prompt directive, so it cannot
+  // be overridden by LLM stage drift.
+  const _downsellConfirmed = _sscdp?.downsellInterestConfirmed?.value === true;
+  const _freeResourceDelivered =
+    _downsellConfirmed &&
+    priorAIMessages.some((m) =>
+      /https?:\/\/(www\.)?youtube\.com\/@/i.test(m.content || '')
+    );
+  const terminalStateGuard = _freeResourceDelivered
+    ? `\n\n===== CONVERSATION TERMINAL — FREE RESOURCE DELIVERED =====\nThis lead has already been sent the free YouTube resource link and said goodbye. The qualification flow, downsell pitch, and discovery questions are PERMANENTLY CLOSED.\n\nYour ONLY valid next actions:\n  • Acknowledge if the lead is asking a specific question about trading or the resource.\n  • Warm-close if the lead is re-engaging ("bet bro, the link is above — take your time with it 💪🏿").\n  • Soft-exit if they push for more ("when you're in a better spot capital-wise, hit me up and we'll talk proper").\n\nSTRICTLY FORBIDDEN:\n  ✗ ANY discovery question ("what's the main thing you're trying to fix", "where are you at", "what's your goal")\n  ✗ Re-pitching the mentorship or the $${downsellPriceStr} course\n  ✗ Capital questions\n  ✗ Booking or Typeform links\n  ✗ Any content that restarts the qualification flow\n\nOne short warm reply only. Nothing that re-opens the funnel.\n=====`
+    : '';
+
   // Item 1 — persona identity directive for same-name accounts (e.g. Apex
   // where persona is "Marcus Apex Rivera" and closerName is "Marcus"). The
   // AI must never say "get on with Marcus" when it IS Marcus.
@@ -3649,6 +3668,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     coldStartStep1Directive +
     systemPrompt +
     unqualifiedGuard +
+    terminalStateGuard +
     personaIdentityDirective +
     botDetectionDirective +
     earlyCapitalGateDirective +

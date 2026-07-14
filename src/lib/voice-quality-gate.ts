@@ -2707,6 +2707,37 @@ export function scoreVoiceQuality(
     }
   }
 
+  // 9h-vi-b. Lead-fragment echo parrot (Avery Greene 2026-07-13).
+  // Multi-bubble parsing sometimes produces a standalone bubble that is just
+  // a fragment of the lead's last message echoed back as a question
+  // ("too young?", "make your heart sink?", "gbpjpy?"). These are ≤6 tokens,
+  // end in "?", and contain a substring from the previous lead message.
+  // They read as the AI not paying attention. Detect and hard-fail.
+  if (options?.previousLeadMessage) {
+    const echoTokens = reply
+      .trim()
+      .toLowerCase()
+      .replace(/[?!.,]/g, '')
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+    const prevLower = options.previousLeadMessage.toLowerCase();
+    if (
+      echoTokens.length <= 6 &&
+      reply.trim().endsWith('?') &&
+      echoTokens.length >= 1 &&
+      // At least 2 consecutive tokens from the reply appear in the lead msg
+      echoTokens.some(
+        (tok, i) =>
+          i < echoTokens.length - 1 &&
+          prevLower.includes(tok + ' ' + echoTokens[i + 1])
+      )
+    ) {
+      hardFails.push(
+        `lead_fragment_echo: reply is a short question ("${reply.trim().slice(0, 60)}") that echoes a fragment of the lead's last message. This reads as the AI not paying attention. Respond to the full lead message with empathy and a forward-moving question or acknowledgment.`
+      );
+    }
+  }
+
   // 9h-vi. Post-booking email-delivery hallucination (Ahmad Ali 2026-06-24).
   // After a call is booked (scheduledCallAt is set), the AI should NOT
   // pivot to email-delivery instructions ("check your spam or promotions
