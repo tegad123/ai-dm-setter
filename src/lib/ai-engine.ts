@@ -6494,6 +6494,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('fabricated_url_in_reply:') ||
             f.includes('call_pitch_before_capital_verification:') ||
             f.includes('closer_or_call_in_downsell:') ||
+            // fabricated_time_slot: AI hallucinated a specific day+time for a
+            // call that was never booked (e.g. "sunday at 4pm"). Previously
+            // fell through to best-effort ship after retries; now hard-blocked
+            // because a confident false time confirmation is lead-facing harm.
+            f.includes('fabricated_time_slot:') ||
             // GENUINELY unshippable step-progression gates: these mean the AI
             // tried to pitch/route prematurely (real lead-facing / qualification
             // harm) — keep escalating.
@@ -8669,6 +8674,13 @@ const BOOKING_FABRICATION_PATTERNS: RegExp[] = [
   // spec with an any-name pattern — we check both "anthony" and the
   // persona's configured closer names via caller.
   /\b(anthony|your\s+closer|the\s+closer|my\s+partner|our\s+closer)\s+(will\s+be|is\s+going\s+to\s+be|is)\s+(on\s+the\s+call|in\s+the\s+call|ready|waiting|standing\s+by|available)\s*(shortly|soon|now|with\s+you|momentarily|for\s+you)?\b/i,
+  // "[name] will hop on with you [day] at [time]" — confident specific-time
+  // confirmation of a call that was never booked. Original fabrication gate
+  // missed this phrasing (Hamza Ali 2026-07-10). Matches both the
+  // "will hop on with you" form and closer-name-prefixed variants.
+  /\b\w+\s+will\s+hop\s+on\s+with\s+you\s+(this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i,
+  /\bwill\s+hop\s+on\s+with\s+you\s+(this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\b/i,
+  /\b\w+\s+will\s+hop\s+on\s+with\s+you\s+at\s+\d{1,2}/i,
   /\b(check\s+your\s+(email|inbox)|keep\s+an\s+eye\s+on\s+(your\s+)?email)\s+(for|to\s+see)\s+(the|your|a)?\s*(confirmation|zoom|link|invite|call\s+details)/i,
   /\byou'?re\s+all\s+set\s+for\s+(the|your|our)\s+(call|meeting|chat)\b/i,
   /\b(calendar|zoom|meeting|google\s+meet)\s+(invite|link|confirmation)\s+(is|has\s+been|will\s+be)?\s*(on\s+the\s+way|sent|coming|being\s+sent|in\s+your\s+inbox)/i,
@@ -8877,7 +8889,11 @@ const TIME_PATTERNS_TO_EXCLUDE: RegExp[] = [
   /\b\d+\s*(?:and\s+a\s+half\s+)?years?\b/gi, // "3 years", "1 year", "2 and a half years"
   /\b\d+\s*months?\b/gi, // "18 months", "6 month"
   /\ba\s+(?:couple|few)\s+years?\b/gi, // "a couple years", "a few years"
-  /\bhalf\s+a\s+year\b/gi // "half a year"
+  /\bhalf\s+a\s+year\b/gi, // "half a year"
+  // Schedule/shift range notation — "9-5 job", "8-4 shift", "7-3".
+  // The hyphen breaks word-boundary assumptions so duration patterns above
+  // don't catch it. Without this, "9-5" leaks 9 as a capital amount.
+  /\b\d{1,2}-\d{1,2}(\s*(job|shift|grind|schedule|work|daily|routine|life))?\b/gi
 ];
 
 function stripTimeExpressions(text: string): string {
@@ -8913,6 +8929,21 @@ function parseLeadAmountDetailsFromReply(
   let amount = parseFloat(intPart + decPart);
   if (!Number.isFinite(amount)) return null;
   if (m[3]) amount *= 1000; // "5k" → 5000, "2.5k" → 2500
+
+  // Number-context validation: require monetary evidence near the matched
+  // number. A bare number with no currency signal is almost certainly not
+  // a capital amount (age, percentage, experience years that slipped past
+  // stripTimeExpressions, etc.). Currency prefix OR a monetary keyword in
+  // the cleaned text is enough — this is intentionally permissive so
+  // natural phrasing ("I have 5 grand", "got 3000 to invest") still passes.
+  const hasCurrencyPrefix = /[$£€₦₵₱]|C\$/.test(m[0]);
+  const hasKSuffix = !!m[3];
+  const MONETARY_KEYWORDS =
+    /\b(grand|grands|bucks|dollars?|naira|pounds?|euros?|k\b|thousand|hundred|capital|liquid|invest|trading\s+with|working\s+with|set\s+aside|put\s+(toward|towards)|saved?|savings|afford|available|have|got|sitting|budget|funds?|cash|money|ready)\b/i;
+  if (!hasCurrencyPrefix && !hasKSuffix && !MONETARY_KEYWORDS.test(cleaned)) {
+    return null;
+  }
+
   return {
     amount: Math.round(amount),
     currency
