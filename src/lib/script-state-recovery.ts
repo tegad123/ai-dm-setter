@@ -3264,6 +3264,16 @@ function dataRequirementsForAskContent(
   if (
     /\b(how\s+much\s+(would|do)\s+you\s+(need|want)\s+to\s+be\s+making|how\s+much\s+(you'?d|you\s+would)\s+need|is\s+that\s+how\s+much\s+you'?d\s+need|how\s+far\s+away\s+would\s+that\s+be|how\s+much\s+(money\s+)?(are\s+you|do\s+you)\s+(trying|wanting|hoping)\s+to\s+make.{0,50}(trading|markets?)|what\s+(are|do)\s+you\s+(trying|wanting|hoping|looking|tryna).{0,50}(trading|markets?)|from\s+trading|trading\s+to\s+bring)\b/i.test(
       content
+    ) ||
+    // "so what's the main goal you're chasing with trading right now?" — the
+    // daetradez Goal Discovery step. Phrases the goal ask as "main goal /
+    // what's your goal" rather than "how much"; still an incomeGoal ask, so a
+    // volunteered income figure satisfies it and the step won't re-fire.
+    /\b(main\s+goal|what'?s\s+your\s+goal|what\s+goal|goal\s+you'?re\s+(chasing|after|going\s+for)|what\s+are\s+you\s+(chasing|going\s+for|aiming\s+for))\b.{0,40}\b(trading|markets?|with\s+this)\b/i.test(
+      content
+    ) ||
+    /\b(trading|markets?)\b.{0,40}\b(main\s+goal|what'?s\s+your\s+goal|goal\s+you'?re\s+(chasing|after))\b/i.test(
+      content
     )
   ) {
     requirements.push(dataRequirement('incomeGoal'));
