@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { broadcastConversationUpdate } from '@/lib/realtime';
+import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 import type { ConversationOutcome } from '@prisma/client';
 
 function capturedPointValue(points: unknown, key: string): unknown {
@@ -56,6 +57,9 @@ export async function updateConversationOutcome(
       },
       lead: {
         select: { stage: true }
+      },
+      persona: {
+        select: { promptConfig: true }
       }
     }
   });
@@ -64,6 +68,15 @@ export async function updateConversationOutcome(
 
   const { messages, lead } = conversation;
   const currentOutcome = conversation.outcome;
+
+  // Stage-progression suppression (Option A, daetradez low-ticket): outcome
+  // derivation is part of the qualification/booking machine — skip entirely
+  // for personas that disable it so the outcome dataset stays clean.
+  if (
+    personaConfigDisablesStageProgression(conversation.persona?.promptConfig)
+  ) {
+    return currentOutcome;
+  }
 
   // Don't downgrade terminal outcomes
   if (['BOOKED', 'SOFT_EXIT'].includes(currentOutcome)) {
@@ -272,9 +285,17 @@ export async function recordStageTimestamp(
   // (Record<string, true>), and the read cost difference vs. a narrow select
   // is negligible compared to the write/index hit.
   const convo = await prisma.conversation.findUnique({
-    where: { id: conversationId }
+    where: { id: conversationId },
+    include: { persona: { select: { promptConfig: true } } }
   });
   if (!convo) return;
+
+  // Stage-progression suppression (Option A, daetradez low-ticket): stage
+  // timestamps are qualification-machine artifacts — never backfill them
+  // for personas that disable stage progression.
+  if (personaConfigDisablesStageProgression(convo.persona?.promptConfig)) {
+    return;
+  }
 
   const now = new Date();
   const updates: Record<string, Date> = {};

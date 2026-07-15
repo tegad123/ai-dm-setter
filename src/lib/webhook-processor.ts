@@ -48,7 +48,10 @@ import { getMessages as getFacebookMessages } from '@/lib/facebook';
 import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
-import { transitionLeadStage } from '@/lib/lead-stage';
+import {
+  transitionLeadStage,
+  isStageProgressionDisabledForLead
+} from '@/lib/lead-stage';
 import { looksLikeMessageBody } from '@/lib/lead-name';
 import {
   buildQualityGateGeneratedResult,
@@ -2724,6 +2727,17 @@ export async function scheduleAIReply(
         : undefined
   };
 
+  // ── Stage-progression suppression flag (Option A) ─────────────
+  // Personas with disableLeadStageProgression: true run a script with no
+  // qualification or booking — the classifier below writes stage timestamps
+  // and InboundQualification rows directly, so it must be skipped for them.
+  // (transitionLeadStage / recordStageTimestamp / updateConversationOutcome /
+  // scoring are each gated at their own definitions in lead-stage.ts,
+  // conversation-state-machine.ts and scoring-integration.ts.)
+  const stageProgressionDisabled = await isStageProgressionDisabledForLead(
+    lead.id
+  );
+
   // ── Step 3.0: Inbound qualification classifier (first AI gen only) ──
   // Universal stage-skip intelligence: if this is the FIRST AI generation
   // for this conversation and the lead's opening messages revealed
@@ -2731,170 +2745,177 @@ export async function scheduleAIReply(
   // skip forward in the funnel. The skip is capped at +3 stages (+4 for
   // inbound leads) from Stage 1. Results are logged to InboundQualification
   // for analytics and re-used on subsequent turns via leadContext.preQualified.
-  try {
-    const aiMsgCount = await prisma.message.count({
-      where: { conversationId, sender: 'AI' }
-    });
-    const existing = await prisma.inboundQualification.findUnique({
-      where: { conversationId }
-    });
-
-    if (aiMsgCount === 0 && !existing) {
-      // First AI generation cycle — run the classifier
-      const leadMessages = messages
-        .filter((m) => m.sender === 'LEAD')
-        .map((m) => m.content)
-        .filter(
-          (c): c is string => typeof c === 'string' && c.trim().length > 0
-        );
-
-      // isInbound: the first message in the conversation was from the lead
-      // (they DMed us or commented first). This is the most reliable signal
-      // that the lead sought us out vs. us reaching out to them.
-      const isInbound = messages.length > 0 && messages[0].sender === 'LEAD';
-
-      const { classifyInboundQualification, applySkipCap, stageNumberToName } =
-        await import('@/lib/inbound-qualification-classifier');
-
-      const classification = await classifyInboundQualification(
-        accountId,
-        leadMessages,
-        isInbound
-      );
-
-      const { finalStartStage, capped } = applySkipCap(
-        classification.suggestedStartStage,
-        isInbound,
-        1 // new conversation always starts at stage 1 from the machine's POV
-      );
-      const stagesSkipped = Math.max(0, finalStartStage - 1);
-      const finalStageName = stageNumberToName(finalStartStage);
-
-      // Persist the classification result
-      await prisma.inboundQualification.create({
-        data: {
-          conversationId,
-          accountId,
-          leadId: lead.id,
-          suggestedStartStage: classification.suggestedStartStage,
-          finalStartStage,
-          stagesSkipped,
-          stageSkipReason: classification.stageSkipReason,
-          classifierConfidence: classification.confidence,
-          capped,
-          hasExperience: classification.extractedData.hasExperience,
-          experienceLevel: classification.extractedData.experienceLevel,
-          hasPainPoint: classification.extractedData.hasPainPoint,
-          painPointSummary: classification.extractedData.painPointSummary,
-          hasGoal: classification.extractedData.hasGoal,
-          goalSummary: classification.extractedData.goalSummary,
-          hasUrgency: classification.extractedData.hasUrgency,
-          urgencySummary: classification.extractedData.urgencySummary,
-          hasFinancialInfo: classification.extractedData.hasFinancialInfo,
-          financialSummary: classification.extractedData.financialSummary,
-          hasExplicitIntent: classification.extractedData.hasExplicitIntent,
-          intentType: classification.extractedData.intentType,
-          isInbound: classification.extractedData.isInbound,
-          rawResponse: classification.raw as object | undefined
-        }
+  if (!stageProgressionDisabled) {
+    try {
+      const aiMsgCount = await prisma.message.count({
+        where: { conversationId, sender: 'AI' }
+      });
+      const existing = await prisma.inboundQualification.findUnique({
+        where: { conversationId }
       });
 
-      // Back-fill lead.experience if the classifier detected one and the
-      // lead doesn't already have it set. Never overwrite an explicit value.
-      if (classification.extractedData.experienceLevel && !lead.experience) {
-        await prisma.lead
-          .update({
-            where: { id: lead.id },
-            data: { experience: classification.extractedData.experienceLevel }
-          })
-          .catch((err) => {
-            console.error(
-              '[webhook-processor] Failed to backfill lead.experience (non-fatal):',
-              err
-            );
-          });
-      }
+      if (aiMsgCount === 0 && !existing) {
+        // First AI generation cycle — run the classifier
+        const leadMessages = messages
+          .filter((m) => m.sender === 'LEAD')
+          .map((m) => m.content)
+          .filter(
+            (c): c is string => typeof c === 'string' && c.trim().length > 0
+          );
 
-      // Mark the skipped stage timestamps so the conversation state
-      // machine knows those stages were "auto-skipped". Use classifiedAt
-      // as the timestamp (same moment for each stage skipped).
-      if (stagesSkipped > 0) {
-        const now = new Date();
-        const stageTimestampField: Record<number, string> = {
-          1: 'stageOpeningAt',
-          2: 'stageSituationDiscoveryAt',
-          3: 'stageGoalEmotionalWhyAt',
-          4: 'stageUrgencyAt',
-          5: 'stageSoftPitchCommitmentAt',
-          6: 'stageFinancialScreeningAt',
-          7: 'stageBookingAt'
-        };
-        const toSet: Record<string, Date> = {};
-        for (let s = 1; s <= finalStartStage; s++) {
-          const field = stageTimestampField[s];
-          if (field) toSet[field] = now;
-        }
-        if (Object.keys(toSet).length > 0) {
-          await prisma.conversation
-            .update({ where: { id: conversationId }, data: toSet })
+        // isInbound: the first message in the conversation was from the lead
+        // (they DMed us or commented first). This is the most reliable signal
+        // that the lead sought us out vs. us reaching out to them.
+        const isInbound = messages.length > 0 && messages[0].sender === 'LEAD';
+
+        const {
+          classifyInboundQualification,
+          applySkipCap,
+          stageNumberToName
+        } = await import('@/lib/inbound-qualification-classifier');
+
+        const classification = await classifyInboundQualification(
+          accountId,
+          leadMessages,
+          isInbound
+        );
+
+        const { finalStartStage, capped } = applySkipCap(
+          classification.suggestedStartStage,
+          isInbound,
+          1 // new conversation always starts at stage 1 from the machine's POV
+        );
+        const stagesSkipped = Math.max(0, finalStartStage - 1);
+        const finalStageName = stageNumberToName(finalStartStage);
+
+        // Persist the classification result
+        await prisma.inboundQualification.create({
+          data: {
+            conversationId,
+            accountId,
+            leadId: lead.id,
+            suggestedStartStage: classification.suggestedStartStage,
+            finalStartStage,
+            stagesSkipped,
+            stageSkipReason: classification.stageSkipReason,
+            classifierConfidence: classification.confidence,
+            capped,
+            hasExperience: classification.extractedData.hasExperience,
+            experienceLevel: classification.extractedData.experienceLevel,
+            hasPainPoint: classification.extractedData.hasPainPoint,
+            painPointSummary: classification.extractedData.painPointSummary,
+            hasGoal: classification.extractedData.hasGoal,
+            goalSummary: classification.extractedData.goalSummary,
+            hasUrgency: classification.extractedData.hasUrgency,
+            urgencySummary: classification.extractedData.urgencySummary,
+            hasFinancialInfo: classification.extractedData.hasFinancialInfo,
+            financialSummary: classification.extractedData.financialSummary,
+            hasExplicitIntent: classification.extractedData.hasExplicitIntent,
+            intentType: classification.extractedData.intentType,
+            isInbound: classification.extractedData.isInbound,
+            rawResponse: classification.raw as object | undefined
+          }
+        });
+
+        // Back-fill lead.experience if the classifier detected one and the
+        // lead doesn't already have it set. Never overwrite an explicit value.
+        if (classification.extractedData.experienceLevel && !lead.experience) {
+          await prisma.lead
+            .update({
+              where: { id: lead.id },
+              data: { experience: classification.extractedData.experienceLevel }
+            })
             .catch((err) => {
               console.error(
-                '[webhook-processor] Failed to record skipped stage timestamps (non-fatal):',
+                '[webhook-processor] Failed to backfill lead.experience (non-fatal):',
                 err
               );
             });
         }
-      }
 
-      console.log(
-        `[webhook-processor] [inbound-qual] suggested=${classification.suggestedStartStage} final=${finalStartStage}(${finalStageName}) skipped=${stagesSkipped} capped=${capped} intent=${classification.extractedData.intentType} conf=${classification.confidence.toFixed(2)} isInbound=${isInbound}`
-      );
+        // Mark the skipped stage timestamps so the conversation state
+        // machine knows those stages were "auto-skipped". Use classifiedAt
+        // as the timestamp (same moment for each stage skipped).
+        if (stagesSkipped > 0) {
+          const now = new Date();
+          const stageTimestampField: Record<number, string> = {
+            1: 'stageOpeningAt',
+            2: 'stageSituationDiscoveryAt',
+            3: 'stageGoalEmotionalWhyAt',
+            4: 'stageUrgencyAt',
+            5: 'stageSoftPitchCommitmentAt',
+            6: 'stageFinancialScreeningAt',
+            7: 'stageBookingAt'
+          };
+          const toSet: Record<string, Date> = {};
+          for (let s = 1; s <= finalStartStage; s++) {
+            const field = stageTimestampField[s];
+            if (field) toSet[field] = now;
+          }
+          if (Object.keys(toSet).length > 0) {
+            await prisma.conversation
+              .update({ where: { id: conversationId }, data: toSet })
+              .catch((err) => {
+                console.error(
+                  '[webhook-processor] Failed to record skipped stage timestamps (non-fatal):',
+                  err
+                );
+              });
+          }
+        }
 
-      // Inject the pre-qualified context into leadContext so the prompt
-      // builder can emit the <pre_qualified_context> block.
-      if (finalStartStage > 1) {
-        leadContext.preQualified = {
-          suggestedStartStage: finalStartStage,
-          suggestedStartStageName: finalStageName,
-          stagesSkipped,
-          stageSkipReason: classification.stageSkipReason,
-          experienceLevel: classification.extractedData.experienceLevel,
-          painPointSummary: classification.extractedData.painPointSummary,
-          goalSummary: classification.extractedData.goalSummary,
-          urgencySummary: classification.extractedData.urgencySummary,
-          financialSummary: classification.extractedData.financialSummary,
-          intentType: classification.extractedData.intentType,
-          isInbound: classification.extractedData.isInbound
-        };
-      }
-    } else if (existing && aiMsgCount > 0) {
-      // Not the first turn, but we have a prior classification — keep
-      // injecting the pre-qualified summary so the AI remembers what the
-      // lead said across turns.
-      if (existing.finalStartStage > 1) {
-        const { stageNumberToName } = await import(
-          '@/lib/inbound-qualification-classifier'
+        console.log(
+          `[webhook-processor] [inbound-qual] suggested=${classification.suggestedStartStage} final=${finalStartStage}(${finalStageName}) skipped=${stagesSkipped} capped=${capped} intent=${classification.extractedData.intentType} conf=${classification.confidence.toFixed(2)} isInbound=${isInbound}`
         );
-        leadContext.preQualified = {
-          suggestedStartStage: existing.finalStartStage,
-          suggestedStartStageName: stageNumberToName(existing.finalStartStage),
-          stagesSkipped: existing.stagesSkipped,
-          stageSkipReason: existing.stageSkipReason,
-          experienceLevel: existing.experienceLevel,
-          painPointSummary: existing.painPointSummary,
-          goalSummary: existing.goalSummary,
-          urgencySummary: existing.urgencySummary,
-          financialSummary: existing.financialSummary,
-          intentType: existing.intentType,
-          isInbound: existing.isInbound
-        };
+
+        // Inject the pre-qualified context into leadContext so the prompt
+        // builder can emit the <pre_qualified_context> block.
+        if (finalStartStage > 1) {
+          leadContext.preQualified = {
+            suggestedStartStage: finalStartStage,
+            suggestedStartStageName: finalStageName,
+            stagesSkipped,
+            stageSkipReason: classification.stageSkipReason,
+            experienceLevel: classification.extractedData.experienceLevel,
+            painPointSummary: classification.extractedData.painPointSummary,
+            goalSummary: classification.extractedData.goalSummary,
+            urgencySummary: classification.extractedData.urgencySummary,
+            financialSummary: classification.extractedData.financialSummary,
+            intentType: classification.extractedData.intentType,
+            isInbound: classification.extractedData.isInbound
+          };
+        }
+      } else if (existing && aiMsgCount > 0) {
+        // Not the first turn, but we have a prior classification — keep
+        // injecting the pre-qualified summary so the AI remembers what the
+        // lead said across turns.
+        if (existing.finalStartStage > 1) {
+          const { stageNumberToName } = await import(
+            '@/lib/inbound-qualification-classifier'
+          );
+          leadContext.preQualified = {
+            suggestedStartStage: existing.finalStartStage,
+            suggestedStartStageName: stageNumberToName(
+              existing.finalStartStage
+            ),
+            stagesSkipped: existing.stagesSkipped,
+            stageSkipReason: existing.stageSkipReason,
+            experienceLevel: existing.experienceLevel,
+            painPointSummary: existing.painPointSummary,
+            goalSummary: existing.goalSummary,
+            urgencySummary: existing.urgencySummary,
+            financialSummary: existing.financialSummary,
+            intentType: existing.intentType,
+            isInbound: existing.isInbound
+          };
+        }
       }
+    } catch (err) {
+      console.error(
+        '[webhook-processor] Inbound qualification classifier failed (non-fatal):',
+        err
+      );
     }
-  } catch (err) {
-    console.error(
-      '[webhook-processor] Inbound qualification classifier failed (non-fatal):',
-      err
-    );
   }
 
   // ── Step 3-test: "september 2002" backdoor for booking flow tests ──
@@ -5418,22 +5439,15 @@ async function sendAIReply(
   // Personas with promptConfig.disableLeadStageProgression = true run a
   // script with no qualification or booking (e.g. daetradez low-ticket).
   // Advancing Lead.stage, writing LeadStageTransition rows, backfilling
-  // stage timestamps, and running post-reply scoring would contaminate the
-  // outcome dataset this funnel exists to build. Gate all four writes on
-  // this flag. Option B (typed schema column) is the durable follow-on.
-  const convForStage = await prisma.conversation
-    .findUnique({
-      where: { id: conversationId },
-      select: { persona: { select: { promptConfig: true } } }
-    })
-    .catch(() => null);
-  const personaForStage = convForStage?.persona ?? null;
-  const stageProgressionDisabled =
-    personaForStage?.promptConfig &&
-    typeof personaForStage.promptConfig === 'object' &&
-    !Array.isArray(personaForStage.promptConfig) &&
-    (personaForStage.promptConfig as Record<string, unknown>)
-      .disableLeadStageProgression === true;
+  // stage timestamps, running post-reply scoring, and applying auto-tags
+  // would contaminate the outcome dataset this funnel exists to build.
+  // Each writer is ALSO gated at its own definition (lead-stage.ts,
+  // conversation-state-machine.ts, scoring-integration.ts) — this block
+  // gate additionally covers applyAutoTags and skips redundant work.
+  // Option B (typed schema column) is the durable follow-on.
+  const stageProgressionDisabled = await isStageProgressionDisabledForLead(
+    lead.id
+  );
 
   if (!stageProgressionDisabled) {
     // ── Record stage timestamp ───────────────────────────────────

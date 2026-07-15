@@ -95,6 +95,57 @@ export function getStageActions(stage: LeadStage): {
   };
 }
 
+// -- Stage-progression suppression (Option A) ---------------------------------
+// Personas running a script with no qualification or booking (e.g. the
+// daetradez low-ticket website funnel) set
+// promptConfig.disableLeadStageProgression = true. Automated stage writes on
+// such conversations would record qualification/booking states for a funnel
+// that has neither, corrupting the outcome dataset. These helpers are the
+// single source of truth for that check — every stage-writing choke point
+// (transitionLeadStage, recordStageTimestamp, updateConversationOutcome,
+// post-message scoring) consults them. Option B (typed schema column) is the
+// durable follow-on.
+
+export function personaConfigDisablesStageProgression(
+  promptConfig: unknown
+): boolean {
+  return (
+    !!promptConfig &&
+    typeof promptConfig === 'object' &&
+    !Array.isArray(promptConfig) &&
+    (promptConfig as Record<string, unknown>).disableLeadStageProgression ===
+      true
+  );
+}
+
+export async function isStageProgressionDisabledForLead(
+  leadId: string
+): Promise<boolean> {
+  try {
+    const convo = await prisma.conversation.findFirst({
+      where: { leadId },
+      select: { persona: { select: { promptConfig: true } } }
+    });
+    return personaConfigDisablesStageProgression(convo?.persona?.promptConfig);
+  } catch {
+    return false;
+  }
+}
+
+export async function isStageProgressionDisabledForConversation(
+  conversationId: string
+): Promise<boolean> {
+  try {
+    const convo = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { persona: { select: { promptConfig: true } } }
+    });
+    return personaConfigDisablesStageProgression(convo?.persona?.promptConfig);
+  } catch {
+    return false;
+  }
+}
+
 // -- Core transition function ------------------------------------------------
 
 /**
@@ -124,6 +175,22 @@ export async function transitionLeadStage(
 
   // 2. No-op if already at target stage
   if (lead.stage === toStage) {
+    return lead;
+  }
+
+  // 2a. Stage-progression suppression (Option A, daetradez low-ticket).
+  //     Automated transitions are skipped entirely for personas that
+  //     disable stage progression — no Lead.stage write, no
+  //     LeadStageTransition audit row. Explicit operator moves
+  //     (transitionedBy === 'user') still go through, mirroring the
+  //     BUG-11 scoping below.
+  if (
+    transitionedBy !== 'user' &&
+    (await isStageProgressionDisabledForLead(leadId))
+  ) {
+    console.log(
+      `[lead-stage] stage progression disabled for lead ${leadId} — skipping ${lead.stage} → ${toStage} (by ${transitionedBy})`
+    );
     return lead;
   }
 

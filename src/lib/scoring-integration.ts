@@ -29,6 +29,7 @@ import {
   generateScoringContextForPrompt,
   type ScoringResult
 } from '@/lib/lead-scoring-engine';
+import { isStageProgressionDisabledForConversation } from '@/lib/lead-stage';
 import prisma from '@/lib/prisma';
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,14 @@ export async function runPostMessageScoring(
   leadMessageTimestamp?: Date
 ): Promise<ScoringResult | null> {
   try {
+    // Stage-progression suppression (Option A, daetradez low-ticket):
+    // quality/priority scores, temperature labels ("Hot Lead") and intent
+    // tags are qualification-machine outputs — skip scoring entirely for
+    // personas that disable stage progression.
+    if (await isStageProgressionDisabledForConversation(conversationId)) {
+      return null;
+    }
+
     // 1. Backfill effectiveness data on the AI message this is replying to
     if (leadMessageTimestamp) {
       await backfillMessageEffectiveness(conversationId, leadMessageTimestamp);
@@ -107,6 +116,14 @@ export async function getScoringContextForPrompt(
   accountId: string
 ): Promise<string> {
   try {
+    // Stage-progression suppression (Option A, daetradez low-ticket):
+    // computeLeadScore PERSISTS quality/priority scores + intent tags as a
+    // side effect, and temperature-adaptive prompting is qualification-
+    // machine behavior — skip both for personas that disable it.
+    if (await isStageProgressionDisabledForConversation(conversationId)) {
+      return '';
+    }
+
     const result = await computeLeadScore({
       conversationId,
       leadId,
@@ -137,6 +154,12 @@ export async function runPostAIReplyScoring(
   if (!stage) return;
 
   try {
+    // Stage-progression suppression (Option A, daetradez low-ticket): this
+    // writes stage timestamp fields — skip for personas that disable it.
+    if (await isStageProgressionDisabledForConversation(conversationId)) {
+      return;
+    }
+
     // Map stage to conversation timestamp field
     const stageFieldMap: Record<string, string> = {
       // New 7-stage SOP sequence
