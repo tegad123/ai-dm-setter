@@ -2814,8 +2814,18 @@ function extractVolunteeredDiscoveryFields(params: {
     if (msg.sender !== 'LEAD') continue;
     const content = msg.content ?? '';
 
+    // Run whenever there is no existing HIGH-confidence incomeGoal. A prior
+    // LLM variable-resolution pass often sets a MEDIUM-confidence string
+    // (e.g. "$2k") which does NOT satisfy the step-completion check
+    // (recentPointForRequirement requires HIGH confidence). Upgrading it to a
+    // HIGH numeric value extracted from the same lead message is what lets the
+    // goal step auto-complete instead of re-firing the scripted question.
     const existingGoal = capturedPointForKey(points, 'incomeGoal');
-    if (!existingGoal || !capturedDataPointHasValue(existingGoal)) {
+    const needsHighConfidenceGoal =
+      !existingGoal ||
+      !capturedDataPointHasValue(existingGoal) ||
+      existingGoal.confidence !== HIGH_CONFIDENCE;
+    if (needsHighConfidenceGoal) {
       const goalMatch = INCOME_GOAL_VOLUNTEERED_PATTERNS.exec(content);
       if (goalMatch) {
         // Scope amount extraction to the income-goal clause (from the match
@@ -2840,7 +2850,11 @@ function extractVolunteeredDiscoveryFields(params: {
       points,
       'tradingExperienceDuration'
     );
-    if (!existingDuration || !capturedDataPointHasValue(existingDuration)) {
+    const needsHighConfidenceDuration =
+      !existingDuration ||
+      !capturedDataPointHasValue(existingDuration) ||
+      existingDuration.confidence !== HIGH_CONFIDENCE;
+    if (needsHighConfidenceDuration) {
       if (TRADING_EXPERIENCE_VOLUNTEERED_PATTERNS.test(content)) {
         const duration = extractDurationPhrase(content);
         if (duration !== null) {
@@ -3937,6 +3951,15 @@ function pointCanSatisfyRequirementForStep(params: {
   stepNumber: number;
 }): boolean {
   if (params.requirement.key !== 'incomeGoal') return true;
+  // Anchor-free extraction (extractVolunteeredDiscoveryFields) captures the
+  // income goal from a lead message the LEAD volunteered before any scripted
+  // ask, so it has no sourceStepNumber to match against. Trust it to satisfy
+  // ANY income-goal step as long as it carries a numeric value — this is what
+  // lets a packed opening message ("3 years in, want an extra $2k a month")
+  // auto-complete the goal step instead of re-firing the scripted question.
+  if (params.point.extractionMethod === 'volunteered_incomeGoal_anchor_free') {
+    return capturedDataPointNumericValue(params.point) !== null;
+  }
   if (params.point.sourceStepNumber !== params.stepNumber) return false;
   return capturedDataPointNumericValue(params.point) !== null;
 }
