@@ -5414,66 +5414,92 @@ async function sendAIReply(
     }
   }
 
-  // ── Record stage timestamp ─────────────────────────────────────
-  if (result.stage) {
-    await recordStageTimestamp(conversationId, result.stage).catch((err) =>
-      console.error('[webhook-processor] Stage timestamp error:', err)
-    );
-  }
-  // F5.1 Phase 6B: also record the SOP stage DERIVED FROM THE REAL POSITION
-  // (systemStage), so the Stage Progression panel reflects where the
-  // conversation actually is — not just the (lagging) LLM-emitted stage.
-  // recordStageTimestamp is idempotent + cumulative, so calling it with the
-  // position-derived stage can only move the panel FORWARD, never back.
-  {
-    const sopFromPosition = stepToSopStage(result.systemStage);
-    if (sopFromPosition) {
-      await recordStageTimestamp(conversationId, sopFromPosition).catch((err) =>
-        console.error(
-          '[webhook-processor] Position-derived stage timestamp error:',
-          err
-        )
+  // ── Stage-progression suppression (Option A) ──────────────────
+  // Personas with promptConfig.disableLeadStageProgression = true run a
+  // script with no qualification or booking (e.g. daetradez low-ticket).
+  // Advancing Lead.stage, writing LeadStageTransition rows, backfilling
+  // stage timestamps, and running post-reply scoring would contaminate the
+  // outcome dataset this funnel exists to build. Gate all four writes on
+  // this flag. Option B (typed schema column) is the durable follow-on.
+  const convForStage = await prisma.conversation
+    .findUnique({
+      where: { id: conversationId },
+      select: { persona: { select: { promptConfig: true } } }
+    })
+    .catch(() => null);
+  const personaForStage = convForStage?.persona ?? null;
+  const stageProgressionDisabled =
+    personaForStage?.promptConfig &&
+    typeof personaForStage.promptConfig === 'object' &&
+    !Array.isArray(personaForStage.promptConfig) &&
+    (personaForStage.promptConfig as Record<string, unknown>)
+      .disableLeadStageProgression === true;
+
+  if (!stageProgressionDisabled) {
+    // ── Record stage timestamp ───────────────────────────────────
+    if (result.stage) {
+      await recordStageTimestamp(conversationId, result.stage).catch((err) =>
+        console.error('[webhook-processor] Stage timestamp error:', err)
       );
     }
-  }
+    // F5.1 Phase 6B: also record the SOP stage DERIVED FROM THE REAL POSITION
+    // (systemStage), so the Stage Progression panel reflects where the
+    // conversation actually is — not just the (lagging) LLM-emitted stage.
+    // recordStageTimestamp is idempotent + cumulative, so calling it with the
+    // position-derived stage can only move the panel FORWARD, never back.
+    {
+      const sopFromPosition = stepToSopStage(result.systemStage);
+      if (sopFromPosition) {
+        await recordStageTimestamp(conversationId, sopFromPosition).catch(
+          (err) =>
+            console.error(
+              '[webhook-processor] Position-derived stage timestamp error:',
+              err
+            )
+        );
+      }
+    }
 
-  // ── Post-AI-reply scoring (record stage progression for velocity) ──
-  runPostAIReplyScoring(conversationId, result.stage).catch((err) =>
-    console.error('[webhook-processor] Post-AI-reply scoring error:', err)
-  );
+    // ── Post-AI-reply scoring (record stage progression for velocity) ──
+    runPostAIReplyScoring(conversationId, result.stage).catch((err) =>
+      console.error('[webhook-processor] Post-AI-reply scoring error:', err)
+    );
 
-  // ── Update conversation outcome ────────────────────────────────
-  await updateConversationOutcome(conversationId).catch((err) =>
-    console.error('[webhook-processor] Outcome update error:', err)
-  );
+    // ── Update conversation outcome ──────────────────────────────
+    await updateConversationOutcome(conversationId).catch((err) =>
+      console.error('[webhook-processor] Outcome update error:', err)
+    );
 
-  // ── Auto-apply suggested tags ──────────────────────────────────
-  if (result.suggestedTags?.length > 0) {
-    await applyAutoTags(
-      lead.accountId,
+    // ── Auto-apply suggested tags ────────────────────────────────
+    if (result.suggestedTags?.length > 0) {
+      await applyAutoTags(
+        lead.accountId,
+        lead.id,
+        result.suggestedTags,
+        result.stageConfidence
+      ).catch((err) =>
+        console.error('[webhook-processor] Auto-tag error:', err)
+      );
+    }
+
+    // ── Update lead stage based on conversation stage ────────────
+    // Pass subStage + R24 capitalOutcome so the mapping can distinguish
+    // "reached FINANCIAL_SCREENING" (don't promote) from "passed R24"
+    // (promote to QUALIFIED) from "failed R24 / routed to downsell"
+    // (promote to UNQUALIFIED).
+    await updateLeadStageFromConversation(
       lead.id,
-      result.suggestedTags,
-      result.stageConfidence
-    ).catch((err) => console.error('[webhook-processor] Auto-tag error:', err));
+      lead.stage,
+      result.stage,
+      result.subStage ?? null,
+      result.capitalOutcome ?? 'not_evaluated',
+      // F5.1 Phase 6B: floor lead.stage to the real position when it's further
+      // along than the (lagging) LLM-emitted stage.
+      { systemStage: result.systemStage ?? null }
+    ).catch((err) =>
+      console.error('[webhook-processor] Lead stage update error:', err)
+    );
   }
-
-  // ── Update lead stage based on conversation stage ──────────────
-  // Pass subStage + R24 capitalOutcome so the mapping can distinguish
-  // "reached FINANCIAL_SCREENING" (don't promote) from "passed R24"
-  // (promote to QUALIFIED) from "failed R24 / routed to downsell"
-  // (promote to UNQUALIFIED).
-  await updateLeadStageFromConversation(
-    lead.id,
-    lead.stage,
-    result.stage,
-    result.subStage ?? null,
-    result.capitalOutcome ?? 'not_evaluated',
-    // F5.1 Phase 6B: floor lead.stage to the real position when it's further
-    // along than the (lagging) LLM-emitted stage.
-    { systemStage: result.systemStage ?? null }
-  ).catch((err) =>
-    console.error('[webhook-processor] Lead stage update error:', err)
-  );
 
   console.log(
     `[webhook-processor] AI reply sent for conversation ${conversationId} | stage: ${result.stage}`
