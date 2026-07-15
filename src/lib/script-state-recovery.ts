@@ -3819,8 +3819,17 @@ function parseVolunteeredRequirementValue(
     case 'tradingExperienceDuration':
     case 'workDuration':
       return extractDurationPhrase(content);
+    case 'incomeGoal': {
+      if (!hasAmountDisclosureContext(content)) return null;
+      // Scope to the income-goal clause so a leading unrelated number
+      // (e.g. "3 years") isn't mis-read as the goal. "been trading 3 years,
+      // want an extra $2k a month" must yield 2000, not 3. Falls back to the
+      // whole-message scan when no goal-clause pattern is present.
+      const goalMatch = INCOME_GOAL_VOLUNTEERED_PATTERNS.exec(content);
+      const scoped = goalMatch ? content.slice(goalMatch.index) : content;
+      return extractAmountUSD(scoped);
+    }
     case 'monthlyIncome':
-    case 'incomeGoal':
     case 'capital': {
       if (!hasAmountDisclosureContext(content)) return null;
       return extractAmountUSD(content);
