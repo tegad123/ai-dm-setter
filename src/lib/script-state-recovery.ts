@@ -2816,8 +2816,13 @@ function extractVolunteeredDiscoveryFields(params: {
 
     const existingGoal = capturedPointForKey(points, 'incomeGoal');
     if (!existingGoal || !capturedDataPointHasValue(existingGoal)) {
-      if (INCOME_GOAL_VOLUNTEERED_PATTERNS.test(content)) {
-        const amount = extractAmountUSD(content);
+      const goalMatch = INCOME_GOAL_VOLUNTEERED_PATTERNS.exec(content);
+      if (goalMatch) {
+        // Scope amount extraction to the income-goal clause (from the match
+        // position onward) so earlier numbers (e.g. "3 years") don't get
+        // mistakenly captured as the goal amount.
+        const goalClause = content.slice(goalMatch.index);
+        const amount = extractAmountUSD(goalClause);
         if (typeof amount === 'number' && amount > 0) {
           setPoint(
             points,
