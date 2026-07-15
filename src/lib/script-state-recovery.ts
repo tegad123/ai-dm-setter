@@ -2787,6 +2787,72 @@ function extractReplaceOrSupplement(params: {
   }
 }
 
+// Patterns that signal a lead is stating a monthly income GOAL from trading,
+// not their current job income.
+const INCOME_GOAL_VOLUNTEERED_PATTERNS =
+  /\b(need|want|make|earn|hit|reach|get\s+to|pull|bring\s+in)\s+(?:at\s+least\s+)?(?:(?:about|around|roughly|like|over|at\s+least)\s*)?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\$[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly)|(?:a\s+month|per\s+month|monthly).{0,60}\b(?:goal|target|number|aim)\b/i;
+
+// Patterns that signal a lead is stating their trading experience unprompted,
+// separate from a capital/duration conflation (e.g. "9-5 job").
+const TRADING_EXPERIENCE_VOLUNTEERED_PATTERNS =
+  /\b(?:(?:been|i(?:'?ve|\s+have)\s+been|i(?:'?ve|\s+have)\s+been)\s+(?:trading|in\s+(?:the\s+)?markets?|at\s+it)\s+(?:for\s+)?|(?:traded|trading)\s+for\s+|started\s+trading\s+)(?:about\s+|around\s+|for\s+)?(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:years?|yrs?|months?|mos?)\b|\b(?:\d+(?:\.\d+)?)\s*(?:year|yr|month)\s+(?:trader|experience|veteran)\b/i;
+
+/**
+ * Anchor-free extraction of incomeGoal and tradingExperienceDuration from
+ * any lead message, without requiring a prior AI scripted-ask as an anchor.
+ * Called after all anchor-based extractors so it only fills fields still
+ * missing (setPoint guards against overwriting HIGH-confidence existing data).
+ */
+function extractVolunteeredDiscoveryFields(params: {
+  points: CapturedDataPoints;
+  history: ScriptHistoryMessage[];
+}) {
+  const { points, history } = params;
+  const sorted = sortedHistory(history);
+
+  for (const msg of sorted) {
+    if (msg.sender !== 'LEAD') continue;
+    const content = msg.content ?? '';
+
+    const existingGoal = capturedPointForKey(points, 'incomeGoal');
+    if (!existingGoal || !capturedDataPointHasValue(existingGoal)) {
+      if (INCOME_GOAL_VOLUNTEERED_PATTERNS.test(content)) {
+        const amount = extractAmountUSD(content);
+        if (typeof amount === 'number' && amount > 0) {
+          setPoint(
+            points,
+            'incomeGoal',
+            amount,
+            'HIGH',
+            msg.id ?? null,
+            'volunteered_incomeGoal_anchor_free'
+          );
+        }
+      }
+    }
+
+    const existingDuration = capturedPointForKey(
+      points,
+      'tradingExperienceDuration'
+    );
+    if (!existingDuration || !capturedDataPointHasValue(existingDuration)) {
+      if (TRADING_EXPERIENCE_VOLUNTEERED_PATTERNS.test(content)) {
+        const duration = extractDurationPhrase(content);
+        if (duration !== null) {
+          setPoint(
+            points,
+            'tradingExperienceDuration',
+            duration,
+            'HIGH',
+            msg.id ?? null,
+            'volunteered_tradingExperienceDuration_anchor_free'
+          );
+        }
+      }
+    }
+  }
+}
+
 function extractDataPoints(params: {
   existing: Prisma.JsonValue | null | undefined;
   history: ScriptHistoryMessage[];
@@ -2865,6 +2931,13 @@ function extractDataPoints(params: {
     history: params.history,
     script: params.script
   });
+  // Anchor-free extraction: captures incomeGoal and tradingExperienceDuration
+  // from ANY lead message regardless of whether the AI has already asked the
+  // scripted question. Without this, when a lead packs experience + goal into
+  // their opening message the anchor-based extractors above find no prior AI
+  // ask to latch onto and leave these fields empty — causing the stage tracker
+  // to re-fire the scripted question even though the data was already given.
+  extractVolunteeredDiscoveryFields({ points, history: params.history });
 
   extractArtifactDeliveryDataPoints(
     points,
