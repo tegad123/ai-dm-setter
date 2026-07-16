@@ -3510,7 +3510,7 @@ export async function scheduleAIReply(
     broadcastAISuggestion(accountId, {
       conversationId,
       suggestedReply: result.reply,
-      stage: result.stage,
+      stage: result.stage ?? undefined,
       confidence: result.stageConfidence
     });
     console.log(
@@ -3610,7 +3610,7 @@ async function deliverBubbleGroup(params: {
   bubbles: string[];
   result: {
     reply: string;
-    stage: string;
+    stage: string | null;
     subStage?: string | null;
     stageConfidence: number;
     sentimentScore: number;
@@ -3896,7 +3896,7 @@ async function deliverSingleAIMessage(params: {
   };
   result: {
     reply: string;
-    stage: string;
+    stage: string | null;
     subStage?: string | null;
     stageConfidence: number;
     sentimentScore: number;
@@ -4163,7 +4163,7 @@ async function sendAIReply(
     // sendAIReply dispatches to deliverBubbleGroup instead of the
     // single-send path.
     messages: string[];
-    stage: string;
+    stage: string | null;
     subStage?: string | null;
     stageConfidence: number;
     sentimentScore: number;
@@ -4412,7 +4412,7 @@ async function sendAIReply(
     broadcastAISuggestion(accountId, {
       conversationId,
       suggestedReply: result.reply,
-      stage: result.stage,
+      stage: result.stage ?? undefined,
       confidence: result.stageConfidence
     });
     await prisma.conversation

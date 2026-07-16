@@ -27,6 +27,7 @@ import {
   type RequiredMessage
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
+import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 import {
   buildImageContextText,
   buildVoiceContextText
@@ -2320,7 +2321,9 @@ export interface GenerateReplyResult {
    */
   messages: string[];
   format: 'text' | 'voice_note';
-  stage: string;
+  // null when the persona disables stage progression (low-ticket script) —
+  // no funnel stage is emitted or stamped onto Message.stage for such personas.
+  stage: string | null;
   subStage: string | null;
   stageConfidence: number;
   sentimentScore: number;
@@ -7205,12 +7208,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
   }
 
+  // Blocker 2 (daetradez low-ticket): for personas that disable stage
+  // progression, emit NO funnel stage. parsed.stage still drives the reply
+  // internally, but nulling it here is the single upstream choke point — every
+  // Message.stage write and every downstream reader (operator panel, Live
+  // Conversations, Predictions, stage analytics, booking-probability scorer)
+  // derives from result.stage, so this neutralizes all of them at once. The
+  // script ENGINE's own progression (systemStage/currentScriptStep) is left
+  // intact below so the script still advances and Blocker 1 keeps working.
+  const suppressFunnelStage = personaConfigDisablesStageProgression(
+    personaForGate?.promptConfig
+  );
+
   return {
     reply: parsed.message,
     messages: parsed.messages,
     format: parsed.format as 'text' | 'voice_note',
-    stage: parsed.stage,
-    subStage: parsed.subStage,
+    stage: suppressFunnelStage ? null : parsed.stage,
+    subStage: suppressFunnelStage ? null : parsed.subStage,
     stageConfidence: parsed.stageConfidence,
     sentimentScore: parsed.sentimentScore,
     experiencePath: parsed.experiencePath,

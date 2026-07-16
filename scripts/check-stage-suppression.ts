@@ -148,12 +148,43 @@ async function main() {
   console.log('\n--- Conversation outcome ---');
   console.log('outcome:', conv.outcome ?? 'null (not written)');
 
-  const pass = transitions.length === 0 && setStamps.length === 0;
+  // Blocker 2 (reopened): assert the ENGINE emits no funnel stage — every AI
+  // Message.stage must be null. This is the store-C leak Tega flagged.
+  const aiMsgs = await retry(() =>
+    prisma.message.findMany({
+      where: { conversationId: convId, sender: 'AI' },
+      orderBy: { timestamp: 'asc' },
+      select: { stage: true, subStage: true, content: true }
+    })
+  );
+  console.log('\n--- AI Message.stage (engine output) ---');
+  const stampedMsgs = aiMsgs.filter((m) => m.stage != null);
+  if (aiMsgs.length === 0) {
+    console.log('(no AI messages yet)');
+  } else if (stampedMsgs.length === 0) {
+    console.log(
+      `ALL ${aiMsgs.length} AI messages have stage=null ✓ — engine emits no funnel stage`
+    );
+  } else {
+    stampedMsgs.forEach((m) =>
+      console.log(
+        `  stage=${m.stage} subStage=${m.subStage ?? '-'} | "${(m.content ?? '').slice(0, 50)}" ✗`
+      )
+    );
+    console.log(
+      `${stampedMsgs.length}/${aiMsgs.length} AI messages carry a funnel stage — engine NOT gated ✗`
+    );
+  }
+
+  const pass =
+    transitions.length === 0 &&
+    setStamps.length === 0 &&
+    stampedMsgs.length === 0;
   console.log(
     '\n' +
       (pass
-        ? 'PASS ✓ — zero stage writes for this conv'
-        : 'FAIL ✗ — stage writes detected')
+        ? 'PASS ✓ — zero stage writes AND engine emits no funnel stage'
+        : 'FAIL ✗ — stage state detected')
   );
 
   await prisma.$disconnect();

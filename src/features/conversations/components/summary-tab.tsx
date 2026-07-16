@@ -310,55 +310,61 @@ export function SummaryTab({
         {/* Call Details (human entry + reminders) */}
         <CallDetailsPanel conversationId={conversationId} />
 
-        {/* Stage Progression */}
-        <div className='rounded-lg border p-3'>
-          <h5 className='text-muted-foreground mb-2 text-xs font-semibold tracking-wider uppercase'>
-            Stage Progression
-          </h5>
-          {latestStageMsg?.stage && (
-            <div className='mb-2 flex items-center gap-1.5'>
-              <IconTarget className='text-primary h-3.5 w-3.5' />
-              <span className='text-xs font-medium'>
-                Current: {formatOutcome(latestStageMsg.stage)}
-              </span>
-            </div>
-          )}
-          <div className='space-y-1'>
-            {STAGES.map((stage, i) => {
-              const reached = detail
-                ? detail[stage.key as keyof ConversationDetail] != null
-                : false;
-              return (
-                <div key={stage.key} className='flex items-center gap-2'>
-                  <div
-                    className={cn(
-                      'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold',
-                      reached
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground'
+        {/* Stage Progression — hidden entirely when the conversation has no
+            stage signal at all (no current stage on any message AND no reached
+            SOP stages). Low-ticket personas that disable stage progression emit
+            neither, so the funnel panel does not render for them. Qualification
+            personas are unaffected. */}
+        {(latestStageMsg?.stage || reachedStages.length > 0) && (
+          <div className='rounded-lg border p-3'>
+            <h5 className='text-muted-foreground mb-2 text-xs font-semibold tracking-wider uppercase'>
+              Stage Progression
+            </h5>
+            {latestStageMsg?.stage && (
+              <div className='mb-2 flex items-center gap-1.5'>
+                <IconTarget className='text-primary h-3.5 w-3.5' />
+                <span className='text-xs font-medium'>
+                  Current: {formatOutcome(latestStageMsg.stage)}
+                </span>
+              </div>
+            )}
+            <div className='space-y-1'>
+              {STAGES.map((stage, i) => {
+                const reached = detail
+                  ? detail[stage.key as keyof ConversationDetail] != null
+                  : false;
+                return (
+                  <div key={stage.key} className='flex items-center gap-2'>
+                    <div
+                      className={cn(
+                        'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold',
+                        reached
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted text-muted-foreground'
+                      )}
+                    >
+                      {reached ? <IconCheck className='h-3 w-3' /> : i + 1}
+                    </div>
+                    <span
+                      className={cn(
+                        'text-xs',
+                        reached ? 'font-medium' : 'text-muted-foreground'
+                      )}
+                    >
+                      {stage.label}
+                    </span>
+                    {i < STAGES.length - 1 && (
+                      <IconArrowRight
+                        aria-hidden='true'
+                        className='text-muted-foreground/40 ml-auto h-3 w-3'
+                      />
                     )}
-                  >
-                    {reached ? <IconCheck className='h-3 w-3' /> : i + 1}
                   </div>
-                  <span
-                    className={cn(
-                      'text-xs',
-                      reached ? 'font-medium' : 'text-muted-foreground'
-                    )}
-                  >
-                    {stage.label}
-                  </span>
-                  {i < STAGES.length - 1 && (
-                    <IconArrowRight
-                      aria-hidden='true'
-                      className='text-muted-foreground/40 ml-auto h-3 w-3'
-                    />
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Outcome */}
         {detail?.outcome && detail.outcome !== 'ONGOING' && (
