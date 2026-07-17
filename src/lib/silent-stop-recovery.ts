@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { isStageProgressionDisabledForConversation } from '@/lib/lead-stage';
 import { escalate } from '@/lib/escalation-dispatch';
 import { broadcastAIStatusChange, broadcastNotification } from '@/lib/realtime';
 import { detectDistressSync } from '@/lib/distress-detector';
@@ -63,7 +64,9 @@ interface RecoveryDraft {
   success: boolean;
   action: string;
   messages: string[];
-  stage: string;
+  // null when the persona disables stage progression — recovery drafts
+  // hardcode funnel stages and must not stamp them on low-ticket convs.
+  stage: string | null;
   subStage: string | null;
   capitalOutcome:
     | 'passed'
@@ -1044,8 +1047,18 @@ export async function handleSilentStop(
   });
 
   try {
+    // Recovery drafts hardcode funnel stages (QUALIFYING / FINANCIAL_SCREENING
+    // / BOOKING_LINK_DROP). For personas that disable stage progression this
+    // path bypassed generateReply's suppression and stamped Message.stage —
+    // null the draft's stage/subStage before shipping.
+    const suppressFunnelStage = await isStageProgressionDisabledForConversation(
+      conversation.id
+    );
+    const draftToShip = suppressFunnelStage
+      ? { ...draft, stage: null, subStage: null }
+      : draft;
     await processScheduledReply(conversation.id, conversation.lead.accountId, {
-      generatedResult: buildStoredGeneratedResult(draft, event.id),
+      generatedResult: buildStoredGeneratedResult(draftToShip, event.id),
       createdAt: new Date(),
       messageType: 'silent_stop_recovery'
     });

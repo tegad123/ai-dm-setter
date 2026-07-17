@@ -154,6 +154,13 @@ async function main() {
         delete pc[k];
       }
     }
+    // assetLinks.bookingLink carries the same typeform URL — archive the
+    // nested key too so the "Booking link:" line drops from the prompt.
+    const assets = pc['assetLinks'] as Record<string, unknown> | undefined;
+    if (assets && assets['bookingLink'] !== undefined) {
+      archived['__assetLinksBookingLink'] = assets['bookingLink'];
+      delete assets['bookingLink'];
+    }
     if (persona.closerName) archived['__closerName'] = persona.closerName;
     pc[ARCHIVE_KEY] = archived;
 
