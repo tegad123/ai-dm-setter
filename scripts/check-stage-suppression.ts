@@ -77,6 +77,10 @@ async function main() {
       select: {
         id: true,
         outcome: true,
+        capitalVerificationStatus: true,
+        capturedDataPoints: true,
+        scheduledCallAt: true,
+        typeformFilledNoBooking: true,
         stageOpeningAt: true,
         stageSituationDiscoveryAt: true,
         stageGoalEmotionalWhyAt: true,
@@ -148,6 +152,38 @@ async function main() {
   console.log('\n--- Conversation outcome ---');
   console.log('outcome:', conv.outcome ?? 'null (not written)');
 
+  // Leak #3 (R24 engine injection): assert the capital machine never touched
+  // this conv — status stays UNVERIFIED, no capital CDP keys, no capital
+  // question in any AI message, no typeform screen-out, no booking state.
+  console.log('\n--- Capital / screening / booking state ---');
+  const capStatus: string =
+    (conv.capitalVerificationStatus as string) ?? 'null';
+  const cdp = (conv.capturedDataPoints ?? {}) as Record<string, unknown>;
+  const capitalCdpKeys = [
+    'capitalThresholdMet',
+    'verifiedCapitalUsd',
+    'capital',
+    'capitalQAskedCount',
+    'capitalAnswerType',
+    'downsellInterestConfirmed'
+  ].filter((k) => cdp[k] !== undefined);
+  const capClean =
+    (capStatus === 'UNVERIFIED' || capStatus === 'null') &&
+    capitalCdpKeys.length === 0 &&
+    conv.scheduledCallAt === null &&
+    conv.typeformFilledNoBooking !== true &&
+    conv.outcome !== 'UNQUALIFIED_REDIRECT';
+  console.log(
+    `capitalVerificationStatus: ${capStatus} ${capStatus === 'UNVERIFIED' || capStatus === 'null' ? '✓' : '✗'}`
+  );
+  console.log(
+    `capital CDP keys: ${capitalCdpKeys.length === 0 ? 'none ✓' : capitalCdpKeys.join(', ') + ' ✗'}`
+  );
+  console.log(`scheduledCallAt: ${conv.scheduledCallAt ?? 'null ✓'}`);
+  console.log(
+    `typeformFilledNoBooking: ${conv.typeformFilledNoBooking ? 'true ✗' : 'false ✓'}`
+  );
+
   // Blocker 2 (reopened): assert the ENGINE emits no funnel stage — every AI
   // Message.stage must be null. This is the store-C leak Tega flagged.
   const aiMsgs = await retry(() =>
@@ -156,6 +192,19 @@ async function main() {
       orderBy: { timestamp: 'asc' },
       select: { stage: true, subStage: true, content: true }
     })
+  );
+
+  // R24 text probe: no AI message may contain a capital/financial-screening ask.
+  const CAPITAL_Q_RE =
+    /\b(capital|how much (do you|you got|money).{0,30}(set aside|saved|invest|trading)|set aside for trading|credit (score|card)|how much are you working with)\b/i;
+  const capitalTextHits = aiMsgs.filter((m) =>
+    CAPITAL_Q_RE.test(m.content ?? '')
+  );
+  console.log(
+    `AI messages containing capital/screening language: ${capitalTextHits.length === 0 ? 'none ✓' : capitalTextHits.length + ' ✗'}`
+  );
+  capitalTextHits.forEach((m) =>
+    console.log(`  ✗ "${(m.content ?? '').slice(0, 90)}"`)
   );
   console.log('\n--- AI Message.stage (engine output) ---');
   const stampedMsgs = aiMsgs.filter((m) => m.stage != null);
@@ -179,12 +228,14 @@ async function main() {
   const pass =
     transitions.length === 0 &&
     setStamps.length === 0 &&
-    stampedMsgs.length === 0;
+    stampedMsgs.length === 0 &&
+    capClean &&
+    capitalTextHits.length === 0;
   console.log(
     '\n' +
       (pass
-        ? 'PASS ✓ — zero stage writes AND engine emits no funnel stage'
-        : 'FAIL ✗ — stage state detected')
+        ? 'PASS ✓ — zero stage writes, no funnel stage, no capital/screening/booking state'
+        : 'FAIL ✗ — engine state detected')
   );
 
   await prisma.$disconnect();

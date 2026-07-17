@@ -1903,7 +1903,11 @@ export async function processIncomingMessage(
     });
 
     if (
-      detectTypeformFilledNoBookingContext(previousAI?.content, messageText)
+      detectTypeformFilledNoBookingContext(previousAI?.content, messageText) &&
+      // Low-ticket personas (disableLeadStageProgression) have no
+      // typeform/booking flow — a content-regex coincidence must not
+      // screen the lead out as UNQUALIFIED + UNQUALIFIED_REDIRECT.
+      !(await isStageProgressionDisabledForLead(lead.id))
     ) {
       console.warn(
         `[webhook-processor] TYPEFORM_FILLED_NO_BOOKING detected on ${conversationId} — lead=@${senderHandle}`

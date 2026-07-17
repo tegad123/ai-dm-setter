@@ -2494,11 +2494,21 @@ export async function generateReply(
   // catches this before generation in normal live flow. This backstop
   // covers retries, tests, and any future entry point that calls
   // generateReply directly.
+  // Skipped for personas that disable stage progression (low-ticket
+  // funnels): they have no typeform/booking flow, so a content-regex
+  // coincidence must not stamp UNQUALIFIED + ship the high-ticket
+  // "team will review your application" soft exit. The persona fetch
+  // only runs when the regex actually matches (rare), so no cost on
+  // the normal path.
   if (
     detectTypeformFilledNoBookingContext(
       lastAiMsg?.content,
       lastLeadMsg?.content
-    )
+    ) &&
+    !(await prisma.aIPersona
+      .findUnique({ where: { id: personaId }, select: { promptConfig: true } })
+      .then((p) => personaConfigDisablesStageProgression(p?.promptConfig))
+      .catch(() => false))
   ) {
     return {
       reply: TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
@@ -3216,7 +3226,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // R24 early exit: if the lead has explicitly named capital as the
   // blocker, treat it as the capital answer. Do not ask a verification
   // question on top of it, and do not let the model pitch a call.
-  if (lastLeadMsg && hasExplicitCapitalConstraintSignal(lastLeadMsg.content)) {
+  // Only run the explicit-capital-constraint early exit when the persona
+  // actually HAS a capital qualification (threshold configured). On a
+  // no-qualification persona (e.g. daetradez low-ticket website funnel,
+  // minimumCapitalRequired=null) a lead volunteering financial hardship must
+  // NOT be force-marked VERIFIED_UNQUALIFIED or routed to the downsell —
+  // there is no capital bar to fail. This was engine leak #3's sibling: the
+  // one capital-machine path that survived a null threshold.
+  if (
+    typeof capitalThreshold === 'number' &&
+    capitalThreshold > 0 &&
+    lastLeadMsg &&
+    hasExplicitCapitalConstraintSignal(lastLeadMsg.content)
+  ) {
     if (activeConversationId) {
       await prisma.conversation
         .update({
@@ -7236,7 +7258,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     softExit: parsed.softExit,
     escalateToHuman: parsed.escalateToHuman,
     leadTimezone: parsed.leadTimezone,
-    selectedSlotIso: parsed.selectedSlotIso,
+    // Defense-in-depth: a suppressed persona has no booking flow, so never
+    // emit a slot even if the LLM hallucinates one. Auto-book already dies
+    // on the nulled subStage, but this removes the latent single-guard risk.
+    selectedSlotIso: suppressFunnelStage ? null : parsed.selectedSlotIso,
     leadEmail: parsed.leadEmail,
     suggestedTag: parsed.suggestedTag,
     suggestedTags: parsed.suggestedTags,
@@ -7251,7 +7276,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     systemPromptVersion,
     suggestionId,
     capitalOutcome,
+    // Computed from parsed.subStage (raw), so it must be independently
+    // forced off for suppressed personas — nulling the returned subStage
+    // alone would not stop the UNQUALIFIED_REDIRECT outcome write in the
+    // webhook processor.
     typeformFilledNoBooking:
+      !suppressFunnelStage &&
       parsed.subStage === 'TYPEFORM_NO_BOOKING' &&
       parsed.message === TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
     selfRecovered,
