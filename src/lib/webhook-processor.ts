@@ -4148,6 +4148,70 @@ async function deliverSingleAIMessage(params: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Once-per-conversation link guard (low-ticket personas)
+// ---------------------------------------------------------------------------
+// A URL already delivered by an AI message in this conversation must not
+// ship again on a persona that disables stage progression — the website
+// funnel sends its link exactly once. Exception: the lead's latest message
+// explicitly asks for the link again ("send it again", "didn't get the
+// link", "resend"). Bubbles whose only payload is a duplicate URL are
+// dropped; if nothing remains, the caller skips the ship entirely.
+const LINK_RESEND_REQUEST_RE =
+  /\b(send|drop|share)\s+(it|that|the\s+link)\s+again\b|\blink\s+again\b|\bdidn'?t\s+(get|receive)\s+(it|the\s+link)\b|\blost\s+the\s+link\b|\bresend\b|\bcan'?t\s+find\s+(it|the\s+link)\b/i;
+
+async function stripAlreadySentLinksForLowTicket(
+  conversationId: string,
+  leadId: string,
+  result: { reply: string; messages: string[] }
+): Promise<'ok' | 'stripped' | 'all_duplicate'> {
+  const urlRe = /https?:\/\/[^\s]+/g;
+  const outgoingUrls = new Set<string>(
+    result.messages.flatMap((m) => m.match(urlRe) ?? [])
+  );
+  if (outgoingUrls.size === 0) return 'ok';
+
+  if (!(await isStageProgressionDisabledForLead(leadId))) return 'ok';
+
+  const outgoingUrlList = Array.from(outgoingUrls);
+  const priorWithUrl = await prisma.message.findMany({
+    where: {
+      conversationId,
+      sender: 'AI',
+      deletedAt: null,
+      OR: outgoingUrlList.map((u) => ({ content: { contains: u } }))
+    },
+    select: { content: true }
+  });
+  if (priorWithUrl.length === 0) return 'ok';
+  const alreadySentUrls = new Set<string>(
+    priorWithUrl.flatMap((m) => m.content?.match(urlRe) ?? [])
+  );
+  const dupes = outgoingUrlList.filter((u) => alreadySentUrls.has(u));
+  if (dupes.length === 0) return 'ok';
+
+  const lastLeadMsg = await prisma.message.findFirst({
+    where: { conversationId, sender: 'LEAD', deletedAt: null },
+    orderBy: { timestamp: 'desc' },
+    select: { content: true }
+  });
+  if (
+    lastLeadMsg?.content &&
+    LINK_RESEND_REQUEST_RE.test(lastLeadMsg.content)
+  ) {
+    return 'ok'; // lead explicitly asked — allow the re-send
+  }
+
+  const kept = result.messages.filter((m) => !dupes.some((u) => m.includes(u)));
+  console.warn(
+    `[webhook-processor] link-resend guard: dropping ${result.messages.length - kept.length} bubble(s) re-sending [${dupes.join(', ')}] on ${conversationId}`
+  );
+  if (kept.length === 0) return 'all_duplicate';
+  result.messages = kept;
+  result.reply = kept[0];
+  return 'stripped';
+}
+
 async function sendAIReply(
   conversationId: string,
   accountId: string,
@@ -4218,6 +4282,31 @@ async function sendAIReply(
   // Delivery-path R17 backstop. scheduleAIReply normally sanitizes right after
   // generation, but direct/manual AI send paths can call this closer to ship.
   sanitizeAIResultDashes(result, conversationId);
+
+  // ── Once-per-conversation link guard (low-ticket personas) ─────
+  // Launch blocker (Ahsan Ali 2026-07-17): the funnel link was delivered,
+  // then re-sent a few turns later via a resurrected suggestion. For
+  // personas that disable stage progression, a URL that an AI message in
+  // this conversation has already delivered must not ship again — unless
+  // the lead's latest message explicitly asked for it. Ship-time guard so
+  // EVERY path (LLM re-send, cron resurrection, recovery) is covered.
+  const dupLinkOutcome = await stripAlreadySentLinksForLowTicket(
+    conversationId,
+    lead.id,
+    result
+  );
+  if (dupLinkOutcome === 'all_duplicate') {
+    console.warn(
+      `[webhook-processor] link-resend guard: entire reply for ${conversationId} was an already-sent link — skipping ship`
+    );
+    await prisma.conversation
+      .update({
+        where: { id: conversationId },
+        data: { awaitingAiResponse: false, awaitingSince: null }
+      })
+      .catch(() => null);
+    return;
+  }
 
   // ── LAYER 2 distress handler ──────────────────────────────────
   // ai-engine.generateReply sets distressDetected=true when the lead's

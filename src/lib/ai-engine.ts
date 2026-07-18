@@ -6956,6 +6956,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       // detection can Jaccard-compare the human's takeover against the
       // joined group. responseText still carries messages[0] for
       // back-compat with any legacy consumer that reads it directly.
+      //
+      // Stage suppression: the stored suggestion is a RESURRECTION SOURCE —
+      // process-scheduled-replies' fallback rebuilds a shippable result from
+      // aiStageReported when a ScheduledReply loses its generatedResult
+      // (constructor #7, Ahsan Ali 2026-07-17: stamped stage=QUALIFYING onto
+      // a re-shipped link message). Null the stored stage at this source for
+      // suppressed personas so no later resurrection can re-stamp it.
       const suggestion = await prisma.aISuggestion.create({
         data: {
           conversationId: convoId,
@@ -6974,8 +6981,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           intentConfidence: null, // TODO: pipe from classifier in future
           leadStageSnapshot: leadContext.status || null,
           leadTypeSnapshot: leadContext.experience || null,
-          aiStageReported: parsed.stage || null,
-          aiSubStageReported: parsed.subStage || null,
+          aiStageReported: personaConfigDisablesStageProgression(
+            personaForGate?.promptConfig
+          )
+            ? null
+            : parsed.stage || null,
+          aiSubStageReported: personaConfigDisablesStageProgression(
+            personaForGate?.promptConfig
+          )
+            ? null
+            : parsed.subStage || null,
           generatedDuringTrainingPhase: isOnboarding,
           modelUsed: modelUsedFinal,
           inputTokens: usageTotal.inputTokens,

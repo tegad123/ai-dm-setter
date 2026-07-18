@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { isStageProgressionDisabledForConversation } from '@/lib/lead-stage';
 import {
   classifyMetaDeliveryError,
   getScheduledReplyRetryAt,
@@ -120,7 +121,51 @@ async function fallbackGeneratedResultForReply(params: {
     }
   });
   if (!suggestion) return undefined;
-  return generatedResultFromSuggestion(suggestion) as Prisma.InputJsonValue;
+
+  // Resurrection dedup (Ahsan Ali 2026-07-17, double link-send): the newest
+  // un-actioned suggestion may be a draft of content that ALREADY shipped —
+  // resurrecting it re-sends the same bubbles ("yo bro, check this out" +
+  // funnel link, twice). If the suggestion's text already exists verbatim
+  // among delivered AI messages in this conversation, do not resurrect it.
+  const candidateTexts = [
+    suggestion.responseText,
+    ...(Array.isArray(suggestion.messageBubbles)
+      ? (suggestion.messageBubbles as unknown[]).filter(
+          (b): b is string => typeof b === 'string'
+        )
+      : [])
+  ]
+    .map((t) => t?.trim())
+    .filter((t): t is string => !!t && t.length > 0);
+  if (candidateTexts.length > 0) {
+    const alreadySent = await prisma.message.findFirst({
+      where: {
+        conversationId: params.conversationId,
+        sender: 'AI',
+        content: { in: candidateTexts }
+      },
+      select: { id: true }
+    });
+    if (alreadySent) {
+      console.warn(
+        `[process-scheduled-replies] fallback suggestion ${suggestion.id} matches already-delivered content on ${params.conversationId} — skipping resurrection`
+      );
+      return undefined;
+    }
+  }
+
+  const result = generatedResultFromSuggestion(suggestion);
+
+  // Stage suppression: the stored aiStageReported predates the source-null
+  // fix (or belongs to a qualification persona). Never let a resurrected
+  // result stamp a funnel stage on a persona that disables stage progression
+  // — this exact path put stage=QUALIFYING on a low-ticket Message row.
+  if (await isStageProgressionDisabledForConversation(params.conversationId)) {
+    result.stage = null as unknown as string;
+    result.subStage = null;
+  }
+
+  return result as Prisma.InputJsonValue;
 }
 
 async function alertTerminalScheduledReplyFailure(params: {
