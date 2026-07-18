@@ -888,6 +888,15 @@ export interface VoiceQualityOptions {
   capitalQuestionAsked?: boolean;
   /** Whether this account requires capital verification before booking/call pitch. */
   capitalVerificationRequired?: boolean;
+  /**
+   * Low-ticket personas (disableLeadStageProgression): the funnel has no
+   * booking or calls at all — ANY call pitch or booking-confirmation
+   * question in a draft is a hard fail, regardless of qualification state.
+   * Deterministic enforcement; prompt-level guidance regresses under drift
+   * (live 2026-07-18: "what day and time did you book for?" shipped on the
+   * website funnel).
+   */
+  suppressBookingLanguage?: boolean;
   /** True only after a capital question was asked and a lead answer was received. */
   capitalVerificationSatisfied?: boolean;
   /** Most recent lead message before this generated reply. */
@@ -2864,6 +2873,21 @@ export function scoreVoiceQuality(
   ) {
     hardFails.push(
       'call_pitch_before_capital_verification: call pitch detected before the capital question has been asked and answered'
+    );
+  }
+
+  // Low-ticket funnel: no booking, no calls — ever. Any call pitch or
+  // booking-confirmation phrasing is a hard fail on these personas.
+  if (
+    options?.suppressBookingLanguage === true &&
+    (containsCallPitch(reply) ||
+      containsBookingConfirmationQuestion(reply) ||
+      /\bwhat\s+day\s+(and|\/|&)?\s*time\b|\bdid\s+you\s+book\b|\bbook\s+(a|the|your)\s+(call|slot|time)\b/i.test(
+        reply
+      ))
+  ) {
+    hardFails.push(
+      'booking_language_on_lowticket: this funnel has NO calls and NO booking. Never pitch a call, never ask what the lead booked, never reference day/time scheduling. The only asset is the website link — talk about the link and what they saw on the page instead.'
     );
   }
 

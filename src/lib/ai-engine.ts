@@ -3916,6 +3916,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     capitalVerificationRequired:
       typeof capitalThreshold === 'number' && capitalThreshold > 0,
     capitalVerificationSatisfied,
+    // Low-ticket personas: hard-fail ANY call/booking language — the funnel
+    // has neither. Deterministic gate, not prompt guidance.
+    suppressBookingLanguage: personaConfigDisablesStageProgression(
+      personaForGate?.promptConfig
+    ),
     previousAIQuestions: priorAIQuestions,
     previousLeadMessage: lastLeadMsg?.content ?? null,
     previousLeadHadImage: lastLeadHadImage,
@@ -6524,6 +6529,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // fell through to best-effort ship after retries; now hard-blocked
             // because a confident false time confirmation is lead-facing harm.
             f.includes('fabricated_time_slot:') ||
+            // booking_language_on_lowticket: call/booking phrasing on a funnel
+            // with no calls ("what day and time did you book for?", live
+            // 2026-07-18). Confuses the lead AND arms the typeform screen-out
+            // regex — never best-effort ship it.
+            f.includes('booking_language_on_lowticket:') ||
             // GENUINELY unshippable step-progression gates: these mean the AI
             // tried to pitch/route prematurely (real lead-facing / qualification
             // harm) — keep escalating.
