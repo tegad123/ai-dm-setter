@@ -4149,30 +4149,80 @@ async function deliverSingleAIMessage(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Once-per-conversation link guard (low-ticket personas)
+// Link policy for low-ticket personas (once-per-conversation + deterministic
+// re-send on explicit request)
 // ---------------------------------------------------------------------------
-// A URL already delivered by an AI message in this conversation must not
-// ship again on a persona that disables stage progression — the website
-// funnel sends its link exactly once. Exception: the lead's latest message
-// explicitly asks for the link again ("send it again", "didn't get the
-// link", "resend"). Bubbles whose only payload is a duplicate URL are
-// dropped; if nothing remains, the caller skips the ship entirely.
+// Two invariants, both code-enforced with no model discretion:
+//   1. A URL already delivered by an AI message in this conversation must
+//      not ship again — the website funnel sends its link exactly once.
+//      Bubbles re-sending a delivered URL are dropped; if nothing remains,
+//      the caller skips the ship entirely.
+//   2. EXCEPT: when the lead's latest message explicitly asks for the link
+//      again ("send the link again", "didn't get it", "resend"), the reply
+//      IS the link — deterministically. If the model's draft doesn't
+//      contain the previously-sent URL, the draft is REPLACED with a short
+//      ack + the URL. A lead asking for the link is the highest-intent
+//      moment in the funnel; dropping them on a check-in loses the click
+//      (Tega, 2026-07-18 — the prompt-level exception regressed under
+//      model drift, so it is enforced here, not suggested).
 const LINK_RESEND_REQUEST_RE =
   /\b(send|drop|share)\s+(it|that|the\s+link)\s+again\b|\blink\s+again\b|\bdidn'?t\s+(get|receive)\s+(it|the\s+link)\b|\blost\s+the\s+link\b|\bresend\b|\bcan'?t\s+find\s+(it|the\s+link)\b/i;
 
-async function stripAlreadySentLinksForLowTicket(
+const urlRe = /https?:\/\/[^\s]+/g;
+
+async function enforceLowTicketLinkPolicy(
   conversationId: string,
   leadId: string,
   result: { reply: string; messages: string[] }
-): Promise<'ok' | 'stripped' | 'all_duplicate'> {
-  const urlRe = /https?:\/\/[^\s]+/g;
+): Promise<'ok' | 'stripped' | 'resent' | 'all_duplicate'> {
   const outgoingUrls = new Set<string>(
     result.messages.flatMap((m) => m.match(urlRe) ?? [])
   );
-  if (outgoingUrls.size === 0) return 'ok';
+
+  const lastLeadMsg = await prisma.message.findFirst({
+    where: { conversationId, sender: 'LEAD', deletedAt: null },
+    orderBy: { timestamp: 'desc' },
+    select: { content: true }
+  });
+  const leadAskedForLink = !!(
+    lastLeadMsg?.content && LINK_RESEND_REQUEST_RE.test(lastLeadMsg.content)
+  );
+
+  // Nothing outgoing carries a URL and the lead didn't ask for one — no
+  // policy applies. (Cheap early exit before the persona lookup.)
+  if (outgoingUrls.size === 0 && !leadAskedForLink) return 'ok';
 
   if (!(await isStageProgressionDisabledForLead(leadId))) return 'ok';
 
+  // ── Invariant 2: deterministic re-send on explicit request ─────
+  if (leadAskedForLink) {
+    const lastSentWithUrl = await prisma.message.findFirst({
+      where: {
+        conversationId,
+        sender: 'AI',
+        deletedAt: null,
+        content: { contains: 'http' }
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { content: true }
+    });
+    const previousUrl = lastSentWithUrl?.content?.match(urlRe)?.[0] ?? null;
+    if (previousUrl) {
+      const draftHasIt = result.messages.some((m) => m.includes(previousUrl));
+      if (!draftHasIt) {
+        console.warn(
+          `[webhook-processor] link policy: lead explicitly asked for the link on ${conversationId} — overriding model draft with deterministic re-send`
+        );
+        result.messages = ['my bad bro, here it is 💪🏿', previousUrl];
+        result.reply = result.messages[0];
+      }
+      return 'resent'; // draft ships with the URL either way
+    }
+    // No URL ever sent in this conv — nothing to re-send; fall through.
+  }
+
+  // ── Invariant 1: once per conversation ─────────────────────────
+  if (outgoingUrls.size === 0) return 'ok';
   const outgoingUrlList = Array.from(outgoingUrls);
   const priorWithUrl = await prisma.message.findMany({
     where: {
@@ -4189,18 +4239,6 @@ async function stripAlreadySentLinksForLowTicket(
   );
   const dupes = outgoingUrlList.filter((u) => alreadySentUrls.has(u));
   if (dupes.length === 0) return 'ok';
-
-  const lastLeadMsg = await prisma.message.findFirst({
-    where: { conversationId, sender: 'LEAD', deletedAt: null },
-    orderBy: { timestamp: 'desc' },
-    select: { content: true }
-  });
-  if (
-    lastLeadMsg?.content &&
-    LINK_RESEND_REQUEST_RE.test(lastLeadMsg.content)
-  ) {
-    return 'ok'; // lead explicitly asked — allow the re-send
-  }
 
   const kept = result.messages.filter((m) => !dupes.some((u) => m.includes(u)));
   console.warn(
@@ -4283,14 +4321,15 @@ async function sendAIReply(
   // generation, but direct/manual AI send paths can call this closer to ship.
   sanitizeAIResultDashes(result, conversationId);
 
-  // ── Once-per-conversation link guard (low-ticket personas) ─────
+  // ── Link policy (low-ticket personas) ──────────────────────────
   // Launch blocker (Ahsan Ali 2026-07-17): the funnel link was delivered,
-  // then re-sent a few turns later via a resurrected suggestion. For
-  // personas that disable stage progression, a URL that an AI message in
-  // this conversation has already delivered must not ship again — unless
-  // the lead's latest message explicitly asked for it. Ship-time guard so
-  // EVERY path (LLM re-send, cron resurrection, recovery) is covered.
-  const dupLinkOutcome = await stripAlreadySentLinksForLowTicket(
+  // then re-sent a few turns later via a resurrected suggestion. And the
+  // inverse (2026-07-18): a lead explicitly asking for the link again got
+  // a check-in instead of the URL. Both invariants are enforced here at
+  // ship time — link fires once per conversation, EXCEPT an explicit
+  // re-request deterministically ships the URL. Every path (LLM re-send,
+  // cron resurrection, recovery) is covered.
+  const dupLinkOutcome = await enforceLowTicketLinkPolicy(
     conversationId,
     lead.id,
     result
