@@ -897,6 +897,11 @@ export interface VoiceQualityOptions {
    * website funnel).
    */
   suppressBookingLanguage?: boolean;
+  /**
+   * Hard-fail drafts that duplicate a prior AI message verbatim (normalized,
+   * >= 20 chars). Low-ticket personas; compares against aiMessageHistoryFull.
+   */
+  verbatimRepeatGuard?: boolean;
   /** True only after a capital question was asked and a lead answer was received. */
   capitalVerificationSatisfied?: boolean;
   /** Most recent lead message before this generated reply. */
@@ -2889,6 +2894,42 @@ export function scoreVoiceQuality(
     hardFails.push(
       'booking_language_on_lowticket: this funnel has NO calls and NO booking. Never pitch a call, never ask what the lead booked, never reference day/time scheduling. The only asset is the website link — talk about the link and what they saw on the page instead.'
     );
+  }
+
+  // Verbatim self-repeat guard (Ahsan Ali 2026-07-19): the bot re-sent
+  // "Go ahead and check that out and let me know what stands out to you"
+  // word-for-word after the lead said they'd already engaged. A draft that
+  // duplicates a prior AI message verbatim reads robotic and ignores the
+  // lead's actual message — hard fail and regen with context.
+  if (
+    options?.verbatimRepeatGuard === true &&
+    Array.isArray(options?.aiMessageHistoryFull)
+  ) {
+    const normalizeForRepeat = (t: string) =>
+      t
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const priorNormalized = new Set(
+      options.aiMessageHistoryFull
+        .map((m) => (typeof m === 'string' ? m : (m?.content ?? '')))
+        .map((t) => normalizeForRepeat(t ?? ''))
+        .filter((t) => t.length >= 20)
+    );
+    const draftCandidates = [
+      normalizeForRepeat(reply),
+      ...reply
+        .split('\n')
+        .map((l) => normalizeForRepeat(l))
+        .filter((l) => l.length >= 20)
+    ];
+    const repeated = draftCandidates.find((c) => priorNormalized.has(c));
+    if (repeated) {
+      hardFails.push(
+        `verbatim_repeat_bubble: this reply repeats an earlier message word-for-word ("${repeated.slice(0, 60)}..."). Do not re-send the same sentence — respond to what the lead ACTUALLY just said, in fresh words.`
+      );
+    }
   }
 
   if (

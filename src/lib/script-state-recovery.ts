@@ -2789,8 +2789,12 @@ function extractReplaceOrSupplement(params: {
 
 // Patterns that signal a lead is stating a monthly income GOAL from trading,
 // not their current job income.
+// Live phrasings covered (Ali QA 2026-07-19): "my income goal is $2k/month",
+// "My goal is to hit a consistent $3,500/month" — verb-less "goal is" forms,
+// slash-month ("/month", "/mo") in the bare-$ alternative, and wider filler
+// words ("a consistent", "an extra") between the verb and the amount.
 const INCOME_GOAL_VOLUNTEERED_PATTERNS =
-  /\b(need|want|make|earn|hit|reach|get\s+to|pull|bring\s+in)\s+(?:at\s+least\s+)?(?:(?:about|around|roughly|like|over|at\s+least)\s*)?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\$[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly)|(?:a\s+month|per\s+month|monthly).{0,60}\b(?:goal|target|number|aim)\b/i;
+  /\b(need|want|make|earn|hit|reach|get\s+to|pull|bring\s+in)\s+(?:at\s+least\s+)?(?:(?:about|around|roughly|like|over|at\s+least|an?\s+(?:consistent|extra|steady|solid))\s*)?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\$[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\b(?:income\s+)?goal\s+is\s+(?:to\s+)?(?:\w+\s+){0,3}?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)?\b|(?:a\s+month|per\s+month|monthly).{0,60}\b(?:goal|target|number|aim)\b/i;
 
 // Patterns that signal a lead is stating their trading experience unprompted,
 // separate from a capital/duration conflation (e.g. "9-5 job").
@@ -4017,13 +4021,18 @@ function recentPointForRequirement(params: {
       ) ?? null;
     if (!leadMessage) continue;
     const leadTime = new Date(leadMessage.timestamp).getTime();
-    const sameTurnVolunteeredChain =
-      /^volunteered_/.test(point.extractionMethod) &&
-      leadTime <= params.afterTimeMs &&
-      params.afterTimeMs - leadTime <= 1;
+    // Volunteered points are CURSOR-EXEMPT (Ahmed Shah 2026-07-18): a fact
+    // the lead volunteered does not expire because an unrelated step was
+    // asked and answered in between. Previously only a 1ms same-turn chain
+    // was tolerated, so "packed opener → legitimately-asked step → goal
+    // step" rejected the opener-extracted goal as too old and re-fired the
+    // scripted goal question. Anchored (non-volunteered) points keep the
+    // temporal gate — those are answers to specific asks and must not
+    // satisfy a REVISITED step from a prior loop.
+    const isVolunteeredPoint = /^volunteered_/.test(point.extractionMethod);
     if (
       !Number.isFinite(leadTime) ||
-      (leadTime < params.afterTimeMs && !sameTurnVolunteeredChain)
+      (leadTime < params.afterTimeMs && !isVolunteeredPoint)
     ) {
       continue;
     }

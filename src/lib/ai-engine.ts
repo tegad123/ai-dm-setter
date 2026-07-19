@@ -3921,6 +3921,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     suppressBookingLanguage: personaConfigDisablesStageProgression(
       personaForGate?.promptConfig
     ),
+    // Low-ticket personas: hard-fail verbatim self-repeats (Ahsan Ali
+    // 2026-07-19 — CTA re-sent word-for-word after lead engagement).
+    verbatimRepeatGuard: personaConfigDisablesStageProgression(
+      personaForGate?.promptConfig
+    ),
     previousAIQuestions: priorAIQuestions,
     previousLeadMessage: lastLeadMsg?.content ?? null,
     previousLeadHadImage: lastLeadHadImage,
@@ -6534,6 +6539,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // 2026-07-18). Confuses the lead AND arms the typeform screen-out
             // regex — never best-effort ship it.
             f.includes('booking_language_on_lowticket:') ||
+            // verbatim_repeat_bubble: word-for-word duplicate of a prior AI
+            // message (Ahsan Ali 2026-07-19). Shipping a robotic repeat is the
+            // exact QA failure — escalate instead of best-effort shipping.
+            f.includes('verbatim_repeat_bubble:') ||
             // GENUINELY unshippable step-progression gates: these mean the AI
             // tried to pitch/route prematurely (real lead-facing / qualification
             // harm) — keep escalating.
