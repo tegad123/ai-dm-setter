@@ -5512,16 +5512,22 @@ async function sendAIReply(
 
   // ── Handle soft exit ──────────────────────────────────────────
   if (result.softExit && !result.typeformFilledNoBooking) {
+    // Low-ticket personas (leak #9, Shazim verification conv 2026-07-19):
+    // the LLM's softExit judgment stamped outcome=SOFT_EXIT on a funnel
+    // conv — funnel-outcome machinery writing on a persona that disables
+    // stage progression, visible as a red chip in the operator UI. Keep
+    // the awaiting-state cleanup (harmless), skip the outcome stamp.
+    const suppressOutcome = await isStageProgressionDisabledForLead(lead.id);
     await prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        outcome: 'SOFT_EXIT',
+        ...(suppressOutcome ? {} : { outcome: 'SOFT_EXIT' as const }),
         awaitingAiResponse: false,
         awaitingSince: null
       }
     });
     console.log(
-      `[webhook-processor] Soft exit triggered for ${conversationId}`
+      `[webhook-processor] Soft exit triggered for ${conversationId}${suppressOutcome ? ' (outcome stamp suppressed — low-ticket persona)' : ''}`
     );
   }
 

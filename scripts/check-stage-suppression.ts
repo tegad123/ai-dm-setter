@@ -167,12 +167,16 @@ async function main() {
     'capitalAnswerType',
     'downsellInterestConfirmed'
   ].filter((k) => cdp[k] !== undefined);
+  // outcome must stay ONGOING — any funnel-outcome stamp (SOFT_EXIT,
+  // UNQUALIFIED_REDIRECT, DORMANT, …) on a low-ticket conv is machinery
+  // leakage (leak #9 was outcome=SOFT_EXIT slipping past a !=UNQUALIFIED
+  // check and showing as a red chip in the UI).
   const capClean =
     (capStatus === 'UNVERIFIED' || capStatus === 'null') &&
     capitalCdpKeys.length === 0 &&
     conv.scheduledCallAt === null &&
     conv.typeformFilledNoBooking !== true &&
-    conv.outcome !== 'UNQUALIFIED_REDIRECT';
+    conv.outcome === 'ONGOING';
   console.log(
     `capitalVerificationStatus: ${capStatus} ${capStatus === 'UNVERIFIED' || capStatus === 'null' ? '✓' : '✗'}`
   );
