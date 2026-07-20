@@ -6543,6 +6543,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // message (Ahsan Ali 2026-07-19). Shipping a robotic repeat is the
             // exact QA failure — escalate instead of best-effort shipping.
             f.includes('verbatim_repeat_bubble:') ||
+            // capital_question_on_lowticket: LLM-improvised capital ask on a
+            // funnel with no financial screening (live 2026-07-20). This is
+            // THE launch-blocking behavior — never best-effort ship it.
+            f.includes('capital_question_on_lowticket:') ||
             // GENUINELY unshippable step-progression gates: these mean the AI
             // tried to pitch/route prematurely (real lead-facing / qualification
             // harm) — keep escalating.

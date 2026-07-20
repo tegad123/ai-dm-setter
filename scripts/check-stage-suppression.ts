@@ -199,8 +199,9 @@ async function main() {
   );
 
   // R24 text probe: no AI message may contain a capital/financial-screening ask.
+  // Includes the live 2026-07-20 phrasing "got set aside to put toward this".
   const CAPITAL_Q_RE =
-    /\b(capital|how much (do you|you got|money).{0,30}(set aside|saved|invest|trading)|set aside for trading|credit (score|card)|how much are you working with)\b/i;
+    /\b(capital|how much (do you|you got|money).{0,30}(set aside|saved|invest|trading)|set aside for trading|credit (score|card)|how much are you working with|(got|have)\s+set aside\s+to\s+put\s+(toward|towards|into)|put\s+(toward|towards|into)\s+(this|it|trading|the markets?)\s+(right now|to start))\b/i;
   const capitalTextHits = aiMsgs.filter((m) =>
     CAPITAL_Q_RE.test(m.content ?? '')
   );

@@ -2896,6 +2896,24 @@ export function scoreVoiceQuality(
     );
   }
 
+  // Low-ticket funnel: no capital/financial screening — ever. The R24
+  // machine is disarmed, but the LLM can still improvise a capital ask at
+  // the send step (live 2026-07-20: "what've you got set aside to put
+  // toward this right now?", emitted under a FINANCIAL_SCREENING stage the
+  // base prompt still elicits). Deterministic hard fail — same class as the
+  // booking gate. suppressBookingLanguage is the low-ticket signal.
+  if (
+    options?.suppressBookingLanguage === true &&
+    (containsCapitalQuestion(reply) ||
+      /\b(what(?:'|’)?s|hows?|how is)\s+your\s+(capital|money|budget|finances?)\b/i.test(
+        reply
+      ))
+  ) {
+    hardFails.push(
+      'capital_question_on_lowticket: this funnel has NO capital check and NO financial screening. Never ask what the lead has set aside, saved, can afford, or can put toward this — there is no money bar to clear. Talk about the website link and what they took from the page instead.'
+    );
+  }
+
   // Verbatim self-repeat guard (Ahsan Ali 2026-07-19): the bot re-sent
   // "Go ahead and check that out and let me know what stands out to you"
   // word-for-word after the lead said they'd already engaged. A draft that
@@ -4008,7 +4026,14 @@ export function containsCapitalQuestion(text: string): boolean {
     /\bset aside\b.*\b(for|toward|for (the |this )?markets?|for (your |the )?(education|trading))/i,
     /\bhow much (are you )?(working with|looking to (invest|start with|put (in|aside)))\b/i,
     /\bwhat are you working with\b/i,
-    /\bon the (capital|money|budget) side\b/i
+    /\bon the (capital|money|budget) side\b/i,
+    // "what've you got set aside to put toward this right now?" (live
+    // 2026-07-20) — "got/have set aside" + "put toward" without an explicit
+    // money noun. Also "how much you got/have to put toward/into this".
+    /\b(what(?:'|’)?ve|what have|what do)\s+you\s+(got|have)\s+set aside\b/i,
+    /\b(got|have)\s+set aside\s+to\s+put\s+(toward|towards|into)\b/i,
+    /\bhow much.{0,25}\bto\s+put\s+(toward|towards|into)\s+(this|it|trading|the markets?)\b/i,
+    /\bput\s+(toward|towards|into)\s+(this|it|trading|the markets?)\s+(right now|to start)\b/i
   ];
   return patterns.some((pattern) => pattern.test(text));
 }
