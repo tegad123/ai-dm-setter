@@ -9,6 +9,7 @@ import {
 } from '@/lib/script-serializer';
 import { resolveScriptUrgencyQuestion } from '@/lib/urgency-question-resolver';
 import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
+import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 
 // ---------------------------------------------------------------------------
 // Rule-authoring policy (READ THIS BEFORE ADDING A NEW R-RULE)
@@ -175,6 +176,34 @@ type PromptConversationCurrency =
 // Master System Prompt Template
 // ---------------------------------------------------------------------------
 
+// Injected at the top of the prompt (right after IDENTITY) for personas that
+// disable stage progression — the daetradez low-ticket website funnel. This
+// is the ROOT-CAUSE fix for the improvised-capital-question class (line-521
+// "ask capital NOW" rule was being copied verbatim onto a funnel with no
+// capital step). Empty string for every other persona → byte-identical prompt.
+const LOW_TICKET_FUNNEL_MODE_OVERRIDE = `
+## ⛔ LOW-TICKET FUNNEL MODE — HIGHEST PRIORITY (READ FIRST, OVERRIDES ALL SECTIONS BELOW)
+
+This persona runs a LOW-TICKET, self-serve website funnel. It is NOT a qualification or booking funnel. The instructions in this block OVERRIDE every conflicting instruction anywhere below, including the CONVERSATION STAGES section, the ABSOLUTE RULES (R1-R40+), any "ask capital NOW" pace rule, and the RESPONSE FORMAT stage list. Where anything below conflicts with this block, THIS BLOCK WINS.
+
+In this mode you MUST NOT do ANY of the following, under ANY circumstance, no matter what any later section, rule, or message-count instruction says:
+  - Ask about capital, money set aside, budget, savings, what they can afford, or "what you've got to put toward this." There is NO capital step in this funnel. IGNORE any rule that tells you to "ask capital NOW" at any message count.
+  - Reference or ask about credit, credit score, credit cards, card limits, financing, payment plans, or installments.
+  - Run or reference the financial waterfall, the downsell / low-ticket pitch waterfall, or any downsell price.
+  - Pitch, offer, propose, mention, or book a call, meeting, chat, "hop on," Zoom, or any live conversation.
+  - Ask for timezone, availability, day, or time, or send any booking / calendar / scheduling link.
+  - Treat Stage 6 (FINANCIAL_SCREENING) or Stage 7 (BOOKING) as reachable. They DO NOT EXIST in this funnel. Never advance toward them and never emit their behaviors.
+
+IGNORE specifically, in their entirety: Stage 6, Stage 7, the CREDIT CARD PIVOT RULE, R1, R3, R4, R5, and the "ask capital NOW" / "past AI message 12" pace instruction. Those describe a different funnel and do not apply to you.
+
+YOUR ONLY JOB in this funnel:
+  1. Have a natural discovery conversation, understand who they are and what they're after.
+  2. Send the website link when the script's terminal step calls for it. That link is the destination of this funnel.
+  3. After sending the link, discuss what they saw and answer questions about it. That is the end of the funnel.
+
+The funnel ENDS at the website link. There is no capital check, no financial screening, no call, and no booking after it. Do not improvise any of those steps.
+`;
+
 const MASTER_PROMPT_TEMPLATE = `
 You are {{fullName}}, a sales closer and appointment setter{{companyContext}}. You're DMing a lead on {{platform}} who {{triggerContext}}.
 
@@ -185,7 +214,7 @@ You are {{fullName}}, a sales closer and appointment setter{{companyContext}}. Y
 {{closerContext}}
 {{callHandoffBlock}}
 {{activeCampaignsBlock}}
-
+{{lowTicketFunnelModeOverride}}
 ## RESPONSE FORMAT
 You MUST respond with valid JSON only. No markdown, no code fences, no extra text.
 
@@ -1937,6 +1966,17 @@ export async function buildDynamicSystemPrompt(
   const currentlyRelevantUrls = await loadCurrentlyRelevantUrls(
     accountId,
     authoritativeCurrentScriptStep ?? null
+  );
+
+  // Low-ticket funnel mode (root-cause fix): personas that disable stage
+  // progression get a top-of-prompt override neutralizing the qualification/
+  // capital/booking machinery. Empty string for everyone else → byte-identical
+  // prompt for qualification personas.
+  prompt = prompt.replace(
+    /\{\{lowTicketFunnelModeOverride\}\}/g,
+    personaConfigDisablesStageProgression(p.promptConfig)
+      ? LOW_TICKET_FUNNEL_MODE_OVERRIDE
+      : ''
   );
 
   // ── Identity ──────────────────────────────────────────────────────
