@@ -22,6 +22,7 @@ import {
 } from '@/lib/script-step-progression';
 import { equivalentCapturedDataPointKeys } from '@/lib/captured-data-keys';
 import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
+import { findVerbatimRepeat } from '@/lib/verbatim-normalize';
 
 export interface QualityResult {
   score: number; // 0.0 – 1.0
@@ -2923,26 +2924,10 @@ export function scoreVoiceQuality(
     options?.verbatimRepeatGuard === true &&
     Array.isArray(options?.aiMessageHistoryFull)
   ) {
-    const normalizeForRepeat = (t: string) =>
-      t
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    const priorNormalized = new Set(
-      options.aiMessageHistoryFull
-        .map((m) => (typeof m === 'string' ? m : (m?.content ?? '')))
-        .map((t) => normalizeForRepeat(t ?? ''))
-        .filter((t) => t.length >= 20)
+    const priorTexts = options.aiMessageHistoryFull.map((m) =>
+      typeof m === 'string' ? m : (m?.content ?? '')
     );
-    const draftCandidates = [
-      normalizeForRepeat(reply),
-      ...reply
-        .split('\n')
-        .map((l) => normalizeForRepeat(l))
-        .filter((l) => l.length >= 20)
-    ];
-    const repeated = draftCandidates.find((c) => priorNormalized.has(c));
+    const repeated = findVerbatimRepeat(reply, priorTexts);
     if (repeated) {
       hardFails.push(
         `verbatim_repeat_bubble: this reply repeats an earlier message word-for-word ("${repeated.slice(0, 60)}..."). Do not re-send the same sentence — respond to what the lead ACTUALLY just said, in fresh words.`

@@ -52,6 +52,7 @@ import {
   transitionLeadStage,
   isStageProgressionDisabledForLead
 } from '@/lib/lead-stage';
+import { isVerbatimRepeatBubble } from '@/lib/verbatim-normalize';
 import { looksLikeMessageBody } from '@/lib/lead-name';
 import {
   buildQualityGateGeneratedResult,
@@ -5025,7 +5026,7 @@ async function sendAIReply(
   const libraryVN = (result as any)?._libraryVoiceNote as
     | { id: string; audioFileUrl: string; triggerType: string }
     | undefined;
-  const useMultiBubble =
+  let useMultiBubble =
     Array.isArray(result.messages) &&
     result.messages.length > 1 &&
     !result.shouldVoiceNote &&
@@ -5197,6 +5198,79 @@ async function sendAIReply(
       const holding = 'give me one sec to get that locked in for you 🙏';
       result.reply = holding;
       result.messages = [holding];
+    }
+  }
+
+  // ── Post-mutation egress re-validation (deterministic) ─────────
+  // Ship-time transforms above — dash sanitize, the low-ticket link strip,
+  // and booking-URL append — MUTATE result.messages AFTER the generation-time
+  // quality gate ran. A bubble that becomes a standalone verbatim repeat only
+  // after a strip was never re-checked (Ali QA 2026-07-21: a duplicate-link
+  // strip left the CTA "Go ahead and check that out…" which duplicated an
+  // earlier bubble word-for-word, and it shipped). Re-run the deterministic
+  // verbatim-repeat check on the FINAL payload here — the single choke point
+  // where every mutation is applied but nothing is sent or persisted yet.
+  // Reuses the SAME normalizer as the gate so the two agree exactly.
+  {
+    const finalBubbles = Array.isArray(result.messages)
+      ? result.messages
+      : [result.reply];
+    const hasUrlBubble = finalBubbles.some((b) => /https?:\/\//i.test(b ?? ''));
+    if (finalBubbles.length > 0) {
+      const priorAi = await prisma.message
+        .findMany({
+          where: { conversationId, sender: 'AI', deletedAt: null },
+          orderBy: { timestamp: 'desc' },
+          take: 40,
+          select: { content: true }
+        })
+        .then((rows) => rows.map((r) => r.content))
+        .catch(() => [] as (string | null)[]);
+      const keptBubbles = finalBubbles.filter(
+        (b) => !isVerbatimRepeatBubble(b ?? '', priorAi)
+      );
+      const droppedCount = finalBubbles.length - keptBubbles.length;
+      if (droppedCount > 0) {
+        console.warn(
+          `[webhook-processor] egress re-validation: dropped ${droppedCount} verbatim-repeat bubble(s) on ${conversationId} (post-ship-mutation)`
+        );
+        // If a URL bubble survives, keep shipping it — the link is the funnel's
+        // payload and losing it is worse than a repeated CTA. Only when nothing
+        // meaningful remains do we skip the ship entirely.
+        const meaningful = keptBubbles.filter(
+          (b) => (b ?? '').trim().length > 0
+        );
+        if (meaningful.length === 0) {
+          if (hasUrlBubble) {
+            // Ship only the (deduped) URL bubble(s).
+            const urlBubbles = finalBubbles.filter((b) =>
+              /https?:\/\//i.test(b ?? '')
+            );
+            result.messages = urlBubbles;
+            result.reply = urlBubbles[0] ?? result.reply;
+          } else {
+            console.warn(
+              `[webhook-processor] egress re-validation: nothing left to ship on ${conversationId} — skipping`
+            );
+            await prisma.conversation
+              .update({
+                where: { id: conversationId },
+                data: { awaitingAiResponse: false, awaitingSince: null }
+              })
+              .catch(() => null);
+            return;
+          }
+        } else {
+          result.messages = meaningful;
+          result.reply = meaningful[0];
+        }
+        useMultiBubble =
+          Array.isArray(result.messages) &&
+          result.messages.length > 1 &&
+          !result.shouldVoiceNote &&
+          !result.voiceNoteAction?.slot_id &&
+          !libraryVN;
+      }
     }
   }
 

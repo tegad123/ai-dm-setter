@@ -2555,8 +2555,12 @@ function extractDurationPhrase(text: string): string | null {
     return `since ${sinceMatch[1]}`;
   }
 
+  // Handles: "3 years", "18 months", "a solid year", "a good year", "a couple
+  // years", "a few years", "a year and a half". The "a <adjective> <unit>"
+  // branch (Ali QA 2026-07-21: "a solid year" was silently dropped) treats an
+  // article+adjective+unit as quantity 1. "and a half" is captured as a suffix.
   const durationMatch = normalized.match(
-    /\b((?:about|around|roughly|almost|over|under|like|for)?\s*(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:years?|yrs?|months?|mos?|weeks?|wks?|days?))\b/i
+    /\b((?:about|around|roughly|almost|over|under|nearly|like|for)?\s*(?:(?:a|an)\s+(?:solid|good|whole)\s+(?:years?|yrs?|months?|mos?|weeks?|wks?|days?)|(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|couple(?:\s+of)?|few|several)\s+(?:years?|yrs?|months?|mos?|weeks?|wks?|days?))(?:\s+and\s+a\s+half)?)\b/i
   );
   if (!durationMatch?.[1]) return null;
 
@@ -2796,10 +2800,16 @@ function extractReplaceOrSupplement(params: {
 const INCOME_GOAL_VOLUNTEERED_PATTERNS =
   /\b(need|want|make|earn|hit|reach|get\s+to|pull|bring\s+in)\s+(?:at\s+least\s+)?(?:(?:about|around|roughly|like|over|at\s+least|an?\s+(?:consistent|extra|steady|solid))\s*)?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\$[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)\b|\b(?:income\s+)?goal\s+is\s+(?:to\s+)?(?:\w+\s+){0,3}?\$?[\d,]+(?:\.\d+)?k?\s*(?:a\s+month|per\s+month|monthly|\/\s*month|\/mo)?\b|(?:a\s+month|per\s+month|monthly).{0,60}\b(?:goal|target|number|aim)\b/i;
 
-// Patterns that signal a lead is stating their trading experience unprompted,
-// separate from a capital/duration conflation (e.g. "9-5 job").
+// Patterns that signal a lead is stating their trading experience unprompted.
+// Structure: a trading-verb anchor, then UP TO 8 words of instrument/filler
+// ("forex and indices for about", "commodities and crypto"), then a duration
+// core. The word-gap (Ali QA 2026-07-21) is why "I've been trading forex and
+// indices for about a solid year" and "...commodities and crypto for about 3
+// years" previously failed — the instrument name broke the old adjacency
+// requirement. The trading-verb anchor is KEPT so unrelated durations
+// ("a 9 to 5 job", "a year of college", "3 months to decide") stay excluded.
 const TRADING_EXPERIENCE_VOLUNTEERED_PATTERNS =
-  /\b(?:(?:been|i(?:'?ve|\s+have)\s+been|i(?:'?ve|\s+have)\s+been)\s+(?:trading|in\s+(?:the\s+)?markets?|at\s+it)\s+(?:for\s+)?|(?:traded|trading)\s+for\s+|started\s+trading\s+)(?:about\s+|around\s+|for\s+)?(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:years?|yrs?|months?|mos?)\b|\b(?:\d+(?:\.\d+)?)\s*(?:year|yr|month)\s+(?:trader|experience|veteran)\b/i;
+  /\b(?:been\s+trading|i(?:'?ve|\s+have)\s+been\s+trading|been\s+in\s+(?:the\s+)?markets?|traded|trading|started\s+trading|at\s+it)\b(?:\s+\w+){0,8}?\s+(?:(?:about|around|roughly|almost|over|under|nearly|like|for)\s+)?(?:(?:a|an)\s+(?:solid|good|whole)\s+(?:years?|yrs?|months?|mos?)|(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|couple(?:\s+of)?|few|several)\s+(?:years?|yrs?|months?|mos?))(?:\s+and\s+a\s+half)?\b|\b\d+(?:\.\d+)?\s*(?:year|yr|month)\s+(?:trader|experience|veteran)\b|\btrading\s+since\s+(?:19|20)\d{2}\b/i;
 
 /**
  * Anchor-free extraction of incomeGoal and tradingExperienceDuration from
@@ -3219,7 +3229,17 @@ function dataRequirementsForAskContent(
     /\bhow\s+long\b.{0,80}\b(markets?|trading|trader|at\s+it)\b/i.test(
       content
     ) ||
-    /\b(markets?|trading)\b.{0,80}\bhow\s+long\b/i.test(content)
+    /\b(markets?|trading)\b.{0,80}\bhow\s+long\b/i.test(content) ||
+    // The daetradez step-2 experience ask phrases it as "are you new in the
+    // markets or have you been trading for a while?" — no "how long" at all.
+    // Without this branch the step carries ZERO requirements, so a captured
+    // tradingExperienceDuration can never auto-complete it and the bot
+    // re-asks (Ali QA 2026-07-21, Hamza Ali + Ali Hamza). Mirror the anchor
+    // promptPattern in extractTradingExperienceDuration.
+    /\bnew\s+(?:to\s+trading|in\s+(?:the\s+)?markets?)\b/i.test(content) ||
+    /\bbeen\s+(?:trading|in\s+(?:the\s+)?markets?)\s+for\s+a\s+while\b/i.test(
+      content
+    )
   ) {
     requirements.push(dataRequirement('tradingExperienceDuration'));
   }

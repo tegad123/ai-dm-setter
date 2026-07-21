@@ -344,7 +344,9 @@ function formatCompactMoneyAmount(value: number): string {
   if (abs >= 1000 && value % 1000 === 0) {
     return `$${value / 1000}k`;
   }
-  return `$${value}`;
+  // Thousands separator, no cents (Ali QA 2026-07-21: "$3500" / bare "3500"
+  // rendered in the pitch — should read "$3,500").
+  return `$${value.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 }
 
 function normalizeResolvedVariableValue(
@@ -373,24 +375,67 @@ function normalizeResolvedVariableValue(
     return first || null;
   }
 
+  const isPhraseKind = [
+    'obstacle',
+    'deepWhy',
+    'desiredOutcome',
+    'generic'
+  ].includes(spec.kind);
+
+  // Phrase kinds are interpolated verbatim into the pre-link pitch
+  // ("…and wanting {{deepWhy}}…"). A lead message often TRAILS a question or
+  // filler after the real answer ("okayman, how did you become so much
+  // successful" — Ali QA 2026-07-21). Cut everything from the first sentence
+  // terminator or interrogative onward so only the clean lead-in survives,
+  // BEFORE the terminal-punctuation strip below.
+  if (isPhraseKind) {
+    // Drop a trailing question clause: split on the first '?' or an
+    // interrogative opener mid-string.
+    const qCut = value.search(
+      /[?]|,?\s+(?:how|why|what|when|where|who|which|are|do|does|did|can|could|would|is)\b\s+(?:did|do|does|you|i|we|is|are|the)\b/i
+    );
+    if (qCut > 0) value = value.slice(0, qCut).trim();
+    // Strip leading greeting/filler tokens even when attached (no word
+    // boundary): "okayman ..." -> "...", "yo bro ..." -> "..."
+    value = value
+      .replace(
+        /^(?:ok(?:ay)?|yo+|hey+|hi+|sup|bro|man|dude|lol|haha|honestly|literally|tbh|ngl|umm?|uh+|so|well|like)[\s,]*/i,
+        ''
+      )
+      .replace(
+        /^(?:ok(?:ay)?|yo+|hey+|hi+|sup|bro|man|dude|lol|haha|honestly|literally|tbh|ngl|umm?|uh+|so|well|like)[\s,]*/i,
+        ''
+      )
+      .trim();
+  }
+
   value = value.replace(/[.。!?]+$/g, '').trim();
+  if (!value || wordCount(value) < 2) {
+    // Nothing meaningful left after cleaning a phrase kind — safer to fall
+    // through to the neutral fallback than inject a fragment.
+    if (isPhraseKind) return null;
+  }
 
   const quoteLike =
     /["“”]/.test(value) ||
     hasEmoji(value) ||
     /\b(?:bro|lol|lmao|haha|man)\b/i.test(value) ||
     /^(?:honestly|literally|tbh|ngl|honestly bro|i mean)\b/i.test(value);
-  if (
-    quoteLike &&
-    ['obstacle', 'deepWhy', 'desiredOutcome', 'generic'].includes(spec.kind)
-  ) {
+  if (quoteLike && isPhraseKind) {
     return null;
   }
 
-  if (
-    ['obstacle', 'deepWhy', 'desiredOutcome', 'generic'].includes(spec.kind)
-  ) {
+  if (isPhraseKind) {
     if (/^(?:the lead|they|he|she|i|we)\b/i.test(value)) return null;
+    // A residual interrogative anywhere means we captured a question, not a
+    // stated goal/why — reject rather than inject it into the pitch.
+    if (
+      /\b(?:how did you|how do you|why do you|what do you|can you|could you)\b/i.test(
+        value
+      )
+    ) {
+      return null;
+    }
     if (wordCount(value) > 20) return null;
   }
 
