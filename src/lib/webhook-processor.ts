@@ -1640,14 +1640,32 @@ export async function processIncomingMessage(
         console.warn(
           `[webhook-processor] DISTRESS DETECTED on conv ${conversationId} — label=${distress.label} match="${distress.match}" lead=@${senderHandle}`
         );
-        // Pause AI + mark distress atomically. These fields are permanent
-        // — the flag stays true even if an operator re-enables AI later,
-        // so the prompt override can check-in instead of pitching.
+        // TERMINAL PAUSE — hold the conversation until a HUMAN clears it.
+        //
+        // 2026-07-22 (F1). Before this, distress set only the annotation
+        // fields and the conversation kept generating: a lead who disclosed
+        // ideation and then deflected ("nah im good bro, send me that link")
+        // got the full sales funnel 60 seconds later, with no human in the
+        // loop. The pause this comment used to describe did not exist —
+        // aiActive=false was stripped from both distress layers by commit
+        // 8c6fa91 (2026-05-06, "remove all automatic AI-off behavior").
+        //
+        // We set awaitingHumanReview, NOT aiActive, deliberately:
+        //   - it is already a hard pre-generation block (scheduleAIReply)
+        //     AND is checked at the webhook edge, so it cannot be bypassed
+        //     by the lead simply sending another message;
+        //   - it was untouched by 8c6fa91, so this does not reinstate the
+        //     automatic AI-off behaviour that commit intentionally removed;
+        //   - shouldAutoClearAwaitingHumanReview() already refuses to
+        //     auto-clear when distressDetected is true — that guard exists
+        //     and has simply never been reachable until now.
+        // Only an operator replying (or explicitly clearing) releases it.
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
             awaitingAiResponse: false,
             awaitingSince: null,
+            awaitingHumanReview: true,
             distressDetected: true,
             distressDetectedAt: now,
             distressMessageId: message.id
@@ -4357,10 +4375,12 @@ async function sendAIReply(
   // ai-engine.generateReply sets distressDetected=true when the lead's
   // latest message matched the distress detector — happens when Layer 1
   // (processIncomingMessage pre-generation gate) was bypassed somehow
-  // (retried webhook, stale cron-fired ScheduledReply, etc.). We run
-  // the SAME flow Layer 1 runs: flip aiActive, flag the conversation,
-  // cancel pending replies, notify the operator, ship a dedicated
-  // supportive response. Skip all normal ship logic below.
+  // (retried webhook, stale cron-fired ScheduledReply, etc.). We run the
+  // SAME flow Layer 1 runs: set the terminal awaitingHumanReview pause,
+  // flag the conversation, cancel pending replies, notify the operator,
+  // ship a dedicated supportive response. Skip all normal ship logic.
+  // (2026-07-22 F1: this comment previously said "flip aiActive" — that
+  // write was removed by 8c6fa91 and no pause existed. See Layer 1.)
   if (result.distressDetected) {
     console.warn(
       `[webhook-processor] Layer 2 distress path engaged for conv ${conversationId} — match="${result.distressMatch}" label=${result.distressLabel}`
@@ -4379,6 +4399,8 @@ async function sendAIReply(
         data: {
           awaitingAiResponse: false,
           awaitingSince: null,
+          // Terminal pause — same contract as Layer 1 (F1, 2026-07-22).
+          awaitingHumanReview: true,
           distressDetected: true,
           distressDetectedAt: new Date(),
           distressMessageId: latestLead?.id ?? null
