@@ -50,11 +50,27 @@ interface Signal {
 // ── HARD patterns ────────────────────────────────────────────────────────────
 // Single match fires alone.
 
+// ─────────────────────────────────────────────────────────────────────────
+// INTERIM (2026-07-22, F1 part 2). These patterns were widened after a
+// production miss: a lead wrote "giving up on life" and the pattern was
+// `give up on life` — no gerund alternation, so a textbook ideation phrase
+// did not match and the safety gate never ran.
+//
+// This is a STOPGAP, explicitly not the fix. A phrase list cannot cover
+// natural language: it still misses whole categories (caregiving for a
+// paralyzed relative, bereavement, abuse) that carry no fixed wording. The
+// real fix is the classifier-first path, where the LLM decides and these
+// patterns become a zero-latency fast path underneath it.
+//
+// Every alternation below is inflection coverage (giv-e/es/ing/gave,
+// end/ends/ending, kill/kills/killing, want/wants/wanted/wanting) plus the
+// four phrasings from Tega's test set that regex CAN express.
+// ─────────────────────────────────────────────────────────────────────────
 const HARD_PATTERNS: Signal[] = [
   // Direct suicidal ideation
   {
     pattern:
-      /\b(give\s+up\s+on\s+life|end\s+it\s+all|kill\s+myself|want\s+to\s+die|wanna\s+die|gonna\s+die|going\s+to\s+die|wish\s+i\s+(was|were)\s+dead|take\s+my\s+(own\s+)?life|end\s+my\s+life)\b/i,
+      /\b((giv(e|es|ing)|gave)\s+up\s+on\s+life|end(s|ing)?\s+it\s+all|kill(s|ing)?\s+(myself|my\s?self)|want(s|ed|ing)?\s+to\s+die|wanna\s+die|gonna\s+die|going\s+to\s+die|wish\s+i\s+(was|were)\s+dead|tak(e|ing)\s+my\s+(own\s+)?life|end(ing)?\s+my\s+life)\b/i,
     label: 'direct_ideation'
   },
   {
@@ -62,17 +78,18 @@ const HARD_PATTERNS: Signal[] = [
     label: 'suicide_mention'
   },
   {
-    pattern: /\b(self[-\s]?harm|hurt(ing)?\s+myself|harm(ing)?\s+myself)\b/i,
+    pattern:
+      /\b(self[-\s]?harm|hurt(ing|s)?\s+myself|harm(ing|s)?\s+myself|cut(ting)?\s+myself)\b/i,
     label: 'self_harm'
   },
   {
     pattern:
-      /\b(rather\s+be\s+dead|better\s+off\s+dead|don'?t\s+want\s+to\s+(live|be\s+here)|tired\s+of\s+living|not\s+worth\s+living|no\s+reason\s+to\s+live|what'?s\s+the\s+point\s+of\s+living)\b/i,
+      /\b(rather\s+be\s+dead|better\s+off\s+dead|don'?t\s+(want|wanna)\s+to?\s*(live|be\s+here)|dont\s+wanna\s+be\s+here|tired\s+of\s+living|not\s+worth\s+living|no\s+reason\s+to\s+live|what'?s\s+the\s+point\s+of\s+living)\b/i,
     label: 'indirect_ideation'
   },
   {
     pattern:
-      /\b(nothing\s+left\s+to\s+live\s+for|can'?t\s+go\s+on|done\s+with\s+life|no\s+point\s+(in\s+)?going\s+on)\b/i,
+      /\b(nothing\s+left\s+to\s+live\s+for|can'?t\s+go\s+on|done\s+with\s+(life|everything|all\s+of\s+(this|it))|no\s+point\s+(in\s+)?going\s+on|what'?s\s+the\s+point\s+of\s+(any(thing)?|it\s+all|any\s+of\s+this)|can'?t\s+do\s+this\s+anymore)\b/i,
     label: 'giving_up'
   },
   // Spiritual crisis
