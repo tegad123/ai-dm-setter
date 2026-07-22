@@ -1681,7 +1681,12 @@ export async function processIncomingMessage(
             leadName: senderName,
             leadHandle: senderHandle,
             title: 'URGENT — distress signal detected, review immediately',
-            body: `${senderName} (@${senderHandle}): the lead's latest message matched a crisis / distress pattern ("${distress.match}"). AI has been paused on this conversation. Please review and respond personally.`,
+            // 2026-07-22: this body previously claimed "AI has been paused on
+            // this conversation." That has been FALSE since commit 8c6fa91
+            // (2026-05-06) stripped aiActive=false from the distress path —
+            // operators read the alert and reasonably assumed a lead was safe
+            // who was not. State only what is actually true.
+            body: `${senderName} (@${senderHandle}): the lead's latest message matched a crisis / distress pattern ("${distress.match}"). Please review and respond personally NOW.`,
             details: `Match: "${distress.match}"`,
             link
           });
@@ -4397,7 +4402,9 @@ async function sendAIReply(
           leadName: lead.name,
           leadHandle: lead.handle,
           title: 'URGENT — distress signal detected, review immediately',
-          body: `${lead.name} (@${lead.handle}): the lead's latest message matched a crisis / distress pattern ("${result.distressMatch ?? 'unknown'}"). AI has been paused. Please review and respond personally. (Layer 2 safety net — Layer 1 was bypassed, investigate.)`,
+          // 2026-07-22: removed the false "AI has been paused" claim — see the
+          // Layer 1 note above. Untrue since 8c6fa91 (2026-05-06).
+          body: `${lead.name} (@${lead.handle}): the lead's latest message matched a crisis / distress pattern ("${result.distressMatch ?? 'unknown'}"). Please review and respond personally NOW. (Layer 2 safety net — Layer 1 was bypassed, investigate.)`,
           details: `Match: "${result.distressMatch ?? 'unknown'}" (Layer 2)`,
           link
         });

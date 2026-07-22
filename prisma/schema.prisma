@@ -1833,6 +1833,45 @@ model BookingRoutingAudit {
   @@index([routingAllowed, createdAt])
 }
 
+// Per-turn generation trace. Added 2026-07-22 at Tega's request after his
+// adversarial run: every finding in that report had to be reconstructed from
+// delivered message text because this did not exist. Fix verification cannot
+// be done that way, and instrumentation shipped inside a fix commit cannot
+// independently verify that fix — so this lands as its own commit.
+//
+// One row per AI generation turn. Deliberately denormalised and
+// self-contained so a reviewer can answer "what did the engine think, and
+// what did we send it" from this table alone.
+model GenerationTurnTrace {
+  id             String   @id @default(cuid())
+  conversationId String
+  accountId      String
+  // Inbound message that triggered this turn (null for cron/recovery turns).
+  leadMessageId  String?
+  // Script position the engine computed for this turn.
+  branchSelected String?
+  stepNumber     Int?
+  systemStage    String?
+  // Stage the MODEL emitted (before any suppression). Kept distinct from
+  // systemStage so "model proposed X, code computed Y" is visible per turn.
+  stageEmitted   String?
+  subStageEmitted String?
+  // Resolved script variables: [{ name, value, source, confidence }]
+  variablesState Json?
+  // The fully assembled system prompt handed to the model. Large — this is
+  // the artifact F2 ("which surface carries 'Anthony'") is unanswerable
+  // without. Trimmed to a cap at write time.
+  promptSent     String?  @db.Text
+  promptChars    Int?
+  // What actually shipped, plus gate outcome.
+  replyPreview   String?
+  qualityHardFails Json?
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([accountId, createdAt])
+}
+
 model Script {
   id                 String           @id @default(cuid())
   accountId          String

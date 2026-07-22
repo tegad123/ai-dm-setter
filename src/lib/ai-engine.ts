@@ -29,6 +29,10 @@ import {
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 import {
+  recordGenerationTurn,
+  type ResolvedVariableTrace
+} from '@/lib/generation-trace';
+import {
   buildImageContextText,
   buildVoiceContextText
 } from '@/lib/media-processing';
@@ -896,6 +900,52 @@ async function persistJudgeClassifierTrace(params: {
       capturedDataPoints: capturedDataPoints as Prisma.InputJsonValue
     }
   });
+}
+
+/**
+ * Flatten capturedDataPoints into the variable-state shape the per-turn trace
+ * records. Instrumentation only (2026-07-22) — shows what each script
+ * variable resolved to AND where it came from, which is the artifact F3
+ * ("variables storing unanswered questions") was unanswerable without.
+ */
+function variableTraceFromCapturedPoints(
+  points: Record<string, unknown> | undefined
+): ResolvedVariableTrace[] | null {
+  if (!points || typeof points !== 'object') return null;
+  const out: ResolvedVariableTrace[] = [];
+  for (const [key, raw] of Object.entries(points)) {
+    // Skip the engine's own bookkeeping blobs — only real captured fields.
+    if (
+      key === 'branchHistory' ||
+      key === 'generateReplyTrace' ||
+      key === 'lastClassifierTrace' ||
+      key === 'lastStepCompletionTrace' ||
+      key === 'stepCompletionTrace'
+    ) {
+      continue;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const point = raw as {
+      value?: unknown;
+      confidence?: unknown;
+      extractionMethod?: unknown;
+    };
+    if (!('value' in point)) continue;
+    out.push({
+      name: key,
+      value:
+        point.value === null || point.value === undefined
+          ? null
+          : String(point.value).slice(0, 300),
+      source:
+        typeof point.extractionMethod === 'string'
+          ? point.extractionMethod
+          : 'unknown',
+      confidence:
+        typeof point.confidence === 'string' ? point.confidence : undefined
+    });
+  }
+  return out.length > 0 ? out : null;
 }
 
 async function persistGenerateReplyTrace(params: {
@@ -7023,6 +7073,38 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       });
       suggestionId = suggestion.id;
+
+      // ── Per-turn generation trace (instrumentation, 2026-07-22) ──
+      // Records what the ENGINE computed vs what the MODEL emitted, the
+      // resolved variables, and the assembled prompt. Every finding in
+      // Tega's adversarial run had to be reconstructed from delivered
+      // message text because none of this was recorded. Non-fatal by
+      // contract — a trace failure never costs a reply.
+      void recordGenerationTurn({
+        conversationId: convoId,
+        accountId,
+        leadMessageId: lastLeadMsg?.id ?? null,
+        branchSelected: scriptStateSnapshot?.selectedBranchLabel ?? null,
+        stepNumber: scriptStateSnapshot?.currentStep?.stepNumber ?? null,
+        systemStage: scriptStateSnapshot?.currentStep?.title ?? null,
+        // parsed.stage/subStage are the MODEL's proposal, captured BEFORE
+        // any low-ticket suppression nulls them — that distinction is the
+        // whole point of recording both.
+        stageEmitted: parsed.stage ?? null,
+        subStageEmitted: parsed.subStage ?? null,
+        // Variable state is recovered from the persisted capturedDataPoints
+        // (the same source the resolver reads), so the trace reflects what
+        // the turn actually resolved rather than a separate snapshot.
+        variablesState: variableTraceFromCapturedPoints(
+          scriptStateSnapshot?.capturedDataPoints as
+            | Record<string, unknown>
+            | undefined
+        ),
+        promptSent: systemPrompt,
+        replyPreview: parsed.message ?? null,
+        qualityHardFails: qualityGateHardFails ?? null
+      });
+
       if (scriptStateSnapshot?.currentStep) {
         try {
           const stepCompletionTraceForBranchHistory = asJsonObject(
