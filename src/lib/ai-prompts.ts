@@ -365,7 +365,7 @@ Your behavior here depends on whether a calendar integration is connected. The *
 **Follow this state machine STRICTLY:**
 
 PRE-STEP GATE — respond to the lead before advancing. Before asking for timezone, proposing slots, or pushing for a day/time, check the lead's LAST message:
-- If the lead asked a question ("what's the agenda?", "who's Anthony?", "how long is the call?", "is it free?", "what will we cover?") → answer it directly and completely first. Do NOT give a throwaway one-liner and immediately pivot to "what timezone are you in?". If the question deserves a real answer, answer it and wait for their reply.
+- If the lead asked a question ("what's the agenda?", "who am I speaking to?", "how long is the call?", "is it free?", "what will we cover?") → answer it directly and completely first. Do NOT give a throwaway one-liner and immediately pivot to "what timezone are you in?". If the question deserves a real answer, answer it and wait for their reply.
 - If the lead signaled they need time or aren't ready this turn ("let me check my schedule", "let me look at my calendar", "give me a sec", "I'll get back to you", "not right now", "lemme think") → acknowledge and hold. Do NOT push a day/time or timezone this turn. Acknowledge naturally ("no rush, take your time — just lmk when you've had a look") and stop. Do NOT append "what day looks best?" or "what timezone are you in?". This overrides the general TIME_DELAY "always pin a specific time" rule: a lead who is mid-booking and explicitly asked to check their calendar has already committed — pressuring them for a slot now reads as pushy. Wait for them to come back, then resume the booking step.
 - Only when the lead's last message neither asks an unanswered question nor requests time → proceed with the matching CASE below.
 
@@ -1418,6 +1418,22 @@ function buildSupplementalSections(
 ): string {
   const parts: string[] = [];
 
+  // F2 (2026-07-22): COMPOSE, DON'T OVERRIDE. For personas that disable
+  // stage progression (low-ticket website funnels — no call, no booking, no
+  // qualification), the booking/call script BODIES must not be assembled
+  // into the prompt at all. Previously only the URLs were gated, so the
+  // prose still shipped: soft-pitch copy, booking scripts, no-show scripts,
+  // pre-call messages and the "CALL HOMEWORK PAGE" section (whose body
+  // literally reads "This page tells leads what to expect on their call").
+  // That is the surface that produced "not everyone has what it takes to be
+  // profitable so the call with Anthony is free" on a funnel with no call.
+  // An "ignore the above" instruction appended after 150 lines of concrete
+  // call-selling copy loses; omitting the copy does not.
+  const lowTicketFunnel =
+    !!config &&
+    typeof config === 'object' &&
+    (config as Record<string, unknown>).disableLeadStageProgression === true;
+
   const rawHomeworkUrl =
     typeof config.homeworkUrl === 'string' &&
     /^https?:\/\//i.test(config.homeworkUrl.trim())
@@ -1429,7 +1445,7 @@ function buildSupplementalSections(
   )
     ? rawHomeworkUrl
     : null;
-  if (homeworkUrl) {
+  if (homeworkUrl && !lowTicketFunnel) {
     parts.push(`\n### CALL HOMEWORK PAGE
 Homework page: ${homeworkUrl}
 This page tells leads what to expect on their call and how to prepare. Do NOT send this link until the lead has confirmed a specific day and time for their call. The homework link is only sent as call preparation, not during the booking flow.`);
@@ -1623,6 +1639,14 @@ function buildLegacyTenantData(
 ): string {
   const sections: string[] = [];
 
+  // F2 (2026-07-22) — same compose-don't-override rule as
+  // buildSupplementalSections: a persona with no call/booking/qualification
+  // must not have call-selling copy assembled into its prompt at all.
+  const lowTicketFunnel =
+    !!config &&
+    typeof config === 'object' &&
+    (config as Record<string, unknown>).disableLeadStageProgression === true;
+
   sections.push(
     'The sections below contain all brand-specific scripts, proof points, and content. Use these verbatim where indicated.'
   );
@@ -1688,9 +1712,9 @@ function buildLegacyTenantData(
       `\n### URGENCY SCRIPTS\n${typeof urgencyScripts === 'string' ? urgencyScripts : JSON.stringify(urgencyScripts, null, 2)}`
     );
 
-  // Soft pitch scripts
+  // Soft pitch scripts — omitted entirely on low-ticket funnels (F2)
   const softPitch = config.softPitchScripts || config.callPitchMessage;
-  if (softPitch)
+  if (softPitch && !lowTicketFunnel)
     sections.push(
       `\n### SOFT PITCH SCRIPTS\n${typeof softPitch === 'string' ? softPitch : JSON.stringify(softPitch, null, 2)}`
     );
@@ -1737,10 +1761,10 @@ function buildLegacyTenantData(
       `\n### LOW-TICKET PITCH SEQUENCE\nUse this when all financial waterfall levels are exhausted:\n${typeof lowTicket === 'string' ? lowTicket : JSON.stringify(lowTicket, null, 2)}`
     );
 
-  // Booking scripts
+  // Booking scripts — omitted entirely on low-ticket funnels (F2)
   const bookingScripts =
     config.bookingScripts || config.bookingConfirmationMessage;
-  if (bookingScripts)
+  if (bookingScripts && !lowTicketFunnel)
     sections.push(
       `\n### BOOKING SCRIPTS\n${typeof bookingScripts === 'string' ? bookingScripts : JSON.stringify(bookingScripts, null, 2)}`
     );
@@ -1809,8 +1833,8 @@ function buildLegacyTenantData(
       sections.push(`\n### STALL SCRIPTS\n${legacyStalls.join('\n\n')}`);
   }
 
-  // No-show scripts
-  const noShow = p.noShowProtocol as any;
+  // No-show scripts — a funnel with no calls cannot have no-shows (F2)
+  const noShow = lowTicketFunnel ? null : (p.noShowProtocol as any);
   if (noShow) {
     const nsParts: string[] = [];
     if (noShow.firstNoShow)
@@ -1821,15 +1845,15 @@ function buildLegacyTenantData(
       sections.push(`\n### NO-SHOW SCRIPTS\n${nsParts.join('\n')}`);
   }
 
-  // Pre-call sequence
-  const preCall = p.preCallSequence as any[];
+  // Pre-call sequence — no calls on a low-ticket funnel, so no pre-call (F2)
+  const preCall = lowTicketFunnel ? null : (p.preCallSequence as any[]);
   if (preCall?.length) {
     const pcText = preCall
       .map((step: any) => `- ${step.timing}: "${step.message}"`)
       .join('\n');
     sections.push(`\n### PRE-CALL MESSAGES\n${pcText}`);
   } else {
-    const preCallConfig = config.preCallMessages;
+    const preCallConfig = lowTicketFunnel ? null : config.preCallMessages;
     if (preCallConfig) {
       const pcParts: string[] = [];
       if (preCallConfig.nightBefore)

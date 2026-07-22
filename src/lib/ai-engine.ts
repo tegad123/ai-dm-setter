@@ -6023,19 +6023,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           parsed.stage !== 'BOOKING' &&
           /\?\s*$/.test(qualCompleteMsg.trim());
         if (escapedDiscoveryQ) {
+          // F2 (2026-07-22): this branch DETERMINISTICALLY overwrites the
+          // reply with a call pitch. It previously fell back to a hardcoded
+          // 'Anthony' when no closer was configured — and nulling
+          // closerName + archiving callHandoff for the low-ticket persona
+          // made both alternatives falsy, so this became MORE likely to
+          // fire, not less. "the call with Anthony is free" reached a lead
+          // on a funnel with no call and no Anthony.
+          //
+          // Now: no fallback name, ever. If no closer is configured there is
+          // no closer to reference, so we do not synthesise a call pitch at
+          // all — we leave the model's reply alone rather than inventing a
+          // person and a call that do not exist.
           const closerNameLabel =
             (typeof promptConfigForGate?.callHandoff?.closerName === 'string' &&
               promptConfigForGate.callHandoff.closerName) ||
             personaForGate?.closerName ||
-            'Anthony';
-          const softPitchFallback = `bro real talk — you've given me everything I need to point you in the right direction. what I'd say is get on a quick call with ${closerNameLabel}, he can map out exactly what the process looks like for where you're at. you in the UK?`;
-          parsed.message = softPitchFallback;
-          parsed.messages = [softPitchFallback];
-          parsed.stage = 'SOFT_PITCH_COMMITMENT';
-          parsed.escalateToHuman = false;
-          console.error(
-            `[ai-engine] qual-complete gate EXHAUSTED — injecting deterministic soft-pitch (conv ${activeConversationId ?? 'unknown'})`
-          );
+            null;
+          if (closerNameLabel) {
+            const softPitchFallback = `bro real talk — you've given me everything I need to point you in the right direction. what I'd say is get on a quick call with ${closerNameLabel}, he can map out exactly what the process looks like for where you're at. you in the UK?`;
+            parsed.message = softPitchFallback;
+            parsed.messages = [softPitchFallback];
+            parsed.stage = 'SOFT_PITCH_COMMITMENT';
+            parsed.escalateToHuman = false;
+            console.error(
+              `[ai-engine] qual-complete gate EXHAUSTED — injecting deterministic soft-pitch (conv ${activeConversationId ?? 'unknown'})`
+            );
+          } else {
+            console.error(
+              `[ai-engine] qual-complete gate EXHAUSTED but NO closer configured — skipping call-pitch injection (conv ${activeConversationId ?? 'unknown'})`
+            );
+          }
         }
       }
 
