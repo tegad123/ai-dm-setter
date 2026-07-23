@@ -798,7 +798,20 @@ function serializeAction(
         return `${indent}[${tag}] RUNTIME MESSAGE DIRECTIVE (do NOT output the braces or directive text literally): "${directive}". Write a natural message that satisfies this instruction using the lead's context. If the directive explicitly says to add/include/use an exact quoted phrase, include that phrase exactly.`;
       }
       if (/\{\{[^}]+\}\}/.test(content)) {
-        return `${indent}[${tag}] REQUIRED MESSAGE (send exact wording; substitute variables from lead context; do not output braces or placeholder text; do not paraphrase non-variable words): "${content}"`;
+        // F6 (2026-07-22): a {{token}} that survived resolution is UNRESOLVED —
+        // the resolver had no captured value for it. The old instruction told
+        // the model to "substitute variables from lead context", which invited
+        // it to FABRICATE a value (invent a goal/why the lead never stated).
+        // Instead, name the missing variable and forbid inventing it: rephrase
+        // around the gap or drop the clause, never make one up. Detectable in
+        // the prompt dump (grep for UNRESOLVED VARIABLE) and logged.
+        const unresolved = Array.from(
+          content.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)
+        ).map((m) => m[1].trim());
+        console.warn(
+          `[script-serializer] F6 unresolved variable(s) in message: ${unresolved.join(', ')}`
+        );
+        return `${indent}[${tag}] REQUIRED MESSAGE with UNRESOLVED VARIABLE(S) [${unresolved.join(', ')}] — the lead has NOT given a value for these. Do NOT invent, guess, or infer one. Rephrase the message so it reads naturally WITHOUT the missing value (drop or generalize that clause); never output the braces or a fabricated value: "${content}"`;
       }
       return `${indent}[${tag}] REQUIRED MESSAGE (send verbatim, do not paraphrase or reorder): "${content}"`;
     }
@@ -811,9 +824,22 @@ function serializeAction(
         context?.previousAction?.actionType === 'send_message'
           ? 'ask immediately after the preceding [MSG], in the same reply; '
           : '';
-      const requirement = /\{\{[^}]+\}\}/.test(content)
-        ? `REQUIRED QUESTION (${sameReplyPrefix}use this exact question, substituting the variable with what the lead actually said)`
-        : `REQUIRED QUESTION (${sameReplyPrefix}use this exact wording)`;
+      // F6 (2026-07-22): distinguish an unresolved {{token}} (no captured value)
+      // from the ordinary case. "substituting the variable with what the lead
+      // actually said" is correct ONLY when a value exists; when it doesn't,
+      // that phrasing licenses fabrication. Forbid inventing a value here too.
+      let requirement: string;
+      if (/\{\{[^}]+\}\}/.test(content)) {
+        const unresolved = Array.from(
+          content.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)
+        ).map((m) => m[1].trim());
+        console.warn(
+          `[script-serializer] F6 unresolved variable(s) in question: ${unresolved.join(', ')}`
+        );
+        requirement = `REQUIRED QUESTION with UNRESOLVED VARIABLE(S) [${unresolved.join(', ')}] (${sameReplyPrefix}the lead has NOT stated a value for these — do NOT invent or infer one; rephrase the question naturally without the missing value, never output the braces)`;
+      } else {
+        requirement = `REQUIRED QUESTION (${sameReplyPrefix}use this exact wording)`;
+      }
       return `${indent}[${tag}] ${requirement}: "${content}"`;
     }
 

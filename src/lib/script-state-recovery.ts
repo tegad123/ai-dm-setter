@@ -1194,6 +1194,53 @@ function hasLeadReplyAfter(
   );
 }
 
+// F4/F3 (2026-07-22). Answer-satisfaction gate. The engine previously
+// completed an ASK step (and bound its variable) on the FIRST lead reply
+// after the ask, regardless of content — so a lead who asked "how much does
+// this cost" instead of answering advanced the step AND had the price
+// question stored as the step's answer.
+//
+// This returns FALSE only for a CLEAR non-answer: a pricing/cost question, an
+// explicit deferral ("hold up, answer me first"), or a bare question back
+// with no declarative answer clause. It is deliberately conservative and
+// defaults to TRUE for anything with answer substance — including a statement
+// that also asks something ("i want 5k a month, is that realistic?") — so it
+// can never wrongly BLOCK a legitimate advance. Deterministic, no LLM.
+export function replyAnswersAsk(reply: string | null | undefined): boolean {
+  const t = (reply ?? '').trim();
+  if (t.length === 0) return false;
+  const lower = t.toLowerCase();
+  const core = lower
+    .replace(/^(ok(ay)?|yeah?|yes|sure|hmm+|well|so|bro|man)[\s,]+/i, '')
+    .trim();
+
+  const deferral =
+    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why do you (need|wanna) (to )?know|dont send|don'?t send)\b/i.test(
+      lower
+    ) || /^(wait|hold)\b/i.test(core);
+
+  const pricingQuestion =
+    /\b(how much (does|is|would)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it)\b/i.test(
+      lower
+    ) || /^(price|cost)\??$/i.test(core);
+
+  const startsInterrogative =
+    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should)\b/i.test(
+      core
+    );
+  const isBareQuestion =
+    (core.endsWith('?') || startsInterrogative) &&
+    core.split(/\s+/).length <= 12 &&
+    !/\b(i|we|my)\s+(want|need|make|earn|been|have|do|did|got|am|feel|just)\b/i.test(
+      core
+    );
+
+  if (deferral) return false;
+  if (pricingQuestion) return false;
+  if (isBareQuestion) return false;
+  return true;
+}
+
 function findSetterMessageForContent(
   history: ScriptHistoryMessage[],
   requiredContent: string | null | undefined,
@@ -1638,6 +1685,15 @@ function stepCompletionFromHistory(
         afterTimeMs
       );
       const leadReply = sent ? hasLeadReplyAfter(sorted, sent) : null;
+      // F4/F3 gate (2026-07-22): an ASK step only completes on a reply that
+      // actually answers it. A reply that is itself a question back ("how much
+      // does this cost"), a pricing question, or an explicit deferral does NOT
+      // complete the step and does NOT get bound as the step's answer — it
+      // parks the position so the same ask is re-driven next turn.
+      if (sent && leadReply && !replyAnswersAsk(leadReply.content)) {
+        lastReason = 'ask_reply_did_not_answer';
+        continue;
+      }
       if (sent && leadReply) {
         return {
           complete: true,
@@ -1696,6 +1752,17 @@ function stepCompletionFromHistory(
         const leadReply = askBySuggestion
           ? hasLeadReplyAfter(sorted, askBySuggestion)
           : null;
+        // F4/F3 gate (2026-07-22): same answer-satisfaction rule as the
+        // text-match ASK path above — a pure question-back / deferral must not
+        // complete the ask or bind its variable.
+        if (
+          askBySuggestion &&
+          leadReply &&
+          !replyAnswersAsk(leadReply.content)
+        ) {
+          lastReason = 'ask_reply_did_not_answer';
+          continue;
+        }
         if (askBySuggestion && leadReply) {
           return {
             complete: true,
@@ -4593,6 +4660,40 @@ export function computeSystemStage(
 
   const previousCurrentScriptStep = options.previousCurrentScriptStep ?? null;
   const maxAdvanceSteps = options.maxAdvanceSteps ?? 1;
+
+  // F5 (2026-07-22): monotonic step floor at the LAST-PERSISTED position.
+  // The durableMinStepNumber floor above only holds the line at steps with a
+  // proven step_completed event; early in a conversation (or after the F4 gate
+  // parks a step on a non-answer) a fresh re-derivation could compute a
+  // candidate BELOW where we already were and silently walk the lead backward
+  // — re-asking a question they already answered. currentScriptStep is the
+  // single source of truth for "where we are"; never move below it. This is a
+  // floor, not an advance: it can only raise a too-low candidate back up to the
+  // prior position, never push forward (that stays governed by the cap below).
+  if (
+    candidate.step &&
+    typeof previousCurrentScriptStep === 'number' &&
+    previousCurrentScriptStep > 0 &&
+    candidate.step.stepNumber < previousCurrentScriptStep
+  ) {
+    const candidateStepNumber = candidate.step.stepNumber;
+    const heldStep =
+      steps.find((step) => step.stepNumber === previousCurrentScriptStep) ??
+      steps.find((step) => step.stepNumber > candidateStepNumber) ??
+      null;
+    if (heldStep && heldStep.stepNumber > candidateStepNumber) {
+      console.warn(
+        `[script-state-recovery] F5 step floor: blocked backward move ` +
+          `${previousCurrentScriptStep}→${candidateStepNumber}; ` +
+          `held at ${heldStep.stepNumber} (candidate reason: ${candidate.reason})`
+      );
+      candidate = {
+        step: heldStep,
+        reason: `prev_step_floor:${candidate.reason}`
+      };
+    }
+  }
+
   if (
     candidate.step &&
     typeof previousCurrentScriptStep === 'number' &&

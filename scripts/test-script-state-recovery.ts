@@ -12,6 +12,7 @@ import {
   hasExplicitCapitalConstraintSignal,
   isStepComplete,
   computeSystemStage,
+  replyAnswersAsk,
   validateSoftPitchPrerequisites
 } from '@/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
@@ -404,13 +405,33 @@ function run() {
     3,
     'generic sequencer can derive later position from ordered history when uncapped'
   );
+  // NOTE (2026-07-22): this assertion previously expected 2 and had been
+  // FAILING SILENTLY since the F5.1 1b `allInterveningProven` bypass landed
+  // (2026-06-07). The bypass is correct: when EVERY intervening step (here
+  // step 2) has a proven step_completed event in history, the +1/turn cap is
+  // deliberately lifted so a lagging tracker can catch up to where the lead
+  // actually is — capping to 2 would re-ask a question already answered. With
+  // both steps proven complete in twoCompletedStepsHistory, the right position
+  // is 3. Assertion corrected to match intended behavior (like Tega's silently-
+  // failing-test finding — the test masked a passing feature, not a bug).
   assert.equal(
     computeSystemStage(genericSequentialScript, {}, twoCompletedStepsHistory, {
       previousCurrentScriptStep: 1,
       maxAdvanceSteps: 1
     }).step?.stepNumber,
+    3,
+    'proven-complete intervening steps lift the +1/turn cap (F5.1 1b catch-up)'
+  );
+  // The cap MUST still hold when an intervening step is NOT proven. Same
+  // persisted state, but history only proves step 1 → step 2 unproven →
+  // advancing to 3 would skip it → cap to 2.
+  assert.equal(
+    computeSystemStage(genericSequentialScript, {}, genericHistory, {
+      previousCurrentScriptStep: 1,
+      maxAdvanceSteps: 1
+    }).step?.stepNumber,
     2,
-    'generic sequencer caps stale recomputation to one step beyond persisted state'
+    'unproven intervening step keeps the +1/turn anti-skip cap in force'
   );
 
   const msgWaitScript = {
@@ -769,6 +790,50 @@ function run() {
       `R39 template iter ${i}: voice gate must pass — fails: ${q.hardFails.join(', ')}`
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // F4/F3 answer-satisfaction gate (2026-07-22).
+  // A reply that is itself a question back, a pricing question, or an explicit
+  // deferral must NOT complete an ASK step or bind its variable. Everything with
+  // real answer substance must still complete it.
+  // ---------------------------------------------------------------------------
+  const NON_ANSWERS: string[] = [
+    'how much does this cost',
+    "bro you didn't answer me, how much is it",
+    'before send me anything man hold up',
+    'answer my questions',
+    'whats the price?',
+    'why do you need to know that',
+    'wait, how long is this gonna take?'
+  ];
+  const REAL_ANSWERS: string[] = [
+    '5k a month',
+    'i want to quit my job and be around for my daughter',
+    'been trading 3 years',
+    'yeah i just want more consistency honestly',
+    'to make a better life for my family',
+    'yes lets do it',
+    'about 2 years now',
+    'i want 5k a month, is that realistic?' // statement + question → still answers
+  ];
+  for (const t of NON_ANSWERS) {
+    assert.equal(
+      replyAnswersAsk(t),
+      false,
+      `F4 non-answer must NOT complete ask: "${t}"`
+    );
+  }
+  for (const t of REAL_ANSWERS) {
+    assert.equal(
+      replyAnswersAsk(t),
+      true,
+      `F4 real answer MUST complete ask: "${t}"`
+    );
+  }
+  // Empty / whitespace never completes.
+  assert.equal(replyAnswersAsk(''), false, 'F4 empty reply');
+  assert.equal(replyAnswersAsk('   '), false, 'F4 whitespace reply');
+  assert.equal(replyAnswersAsk(null), false, 'F4 null reply');
 
   console.log('script-state recovery tests passed');
 }

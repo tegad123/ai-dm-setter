@@ -470,23 +470,27 @@ function variableAliases(variableName: string): string[] {
       'struggle'
     ]);
   }
-  if (
-    normalized.includes('desired') ||
-    normalized.includes('outcome') ||
-    normalized.includes('deepwhy') ||
-    normalized === 'why'
-  ) {
-    add([
-      'desiredOutcome',
-      'desired_outcome',
-      'deepWhy',
-      'deep_why',
-      'goalReason',
-      'why'
-    ]);
+  // F6/F3 (2026-07-22): these three were one collapsed bucket — `goal` pulled
+  // in `desiredOutcome`, which pulled in `deepWhy`/`why`. So the lead's income
+  // target ("5k a month") and their motivation ("be around for my daughter")
+  // resolved to the SAME variable and overwrote each other. They are distinct
+  // captured concepts and must resolve independently:
+  //   • desiredOutcome — the tangible result they want (life change)
+  //   • deepWhy         — the underlying motivation / reason
+  //   • goal            — the income/number target
+  // Narrowed so an income goal no longer aliases into desiredOutcome or why.
+  if (normalized.includes('desired') || normalized.includes('outcome')) {
+    add(['desiredOutcome', 'desired_outcome']);
   }
-  if (normalized.includes('goal')) {
-    add(['incomeGoal', 'income_goal', 'goal', 'desiredOutcome']);
+  if (
+    normalized.includes('deepwhy') ||
+    normalized === 'why' ||
+    normalized.includes('goalreason')
+  ) {
+    add(['deepWhy', 'deep_why', 'goalReason', 'why']);
+  }
+  if (normalized.includes('goal') && !normalized.includes('goalreason')) {
+    add(['incomeGoal', 'income_goal', 'goal']);
   }
   if (normalized.includes('day') || normalized.includes('time')) {
     add(['dayAndTime', 'day_and_time', 'scheduledCallAt']);
