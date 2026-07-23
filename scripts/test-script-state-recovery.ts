@@ -846,7 +846,13 @@ function run() {
     'answer my questions',
     'whats the price?',
     'why do you need to know that',
-    'wait, how long is this gonna take?'
+    'wait, how long is this gonna take?',
+    // hardened 2026-07-23 (research false-pass fixes):
+    'why do I need to tell you that first', // "why do I need" deferral
+    'and how is this any different from all the other programs that promise the same exact thing', // long pure question
+    "what's the damage", // pricing paraphrase
+    'is this free or paid', // pricing paraphrase
+    'not gonna say till you tell me more' // refusal
   ];
   const REAL_ANSWERS: string[] = [
     '5k a month',
@@ -856,7 +862,12 @@ function run() {
     'to make a better life for my family',
     'yes lets do it',
     'about 2 years now',
-    'i want 5k a month, is that realistic?' // statement + question → still answers
+    'i want 5k a month, is that realistic?', // statement + question → still answers
+    // hardened 2026-07-23 (research false-block fixes):
+    "not yet, but i've got 5k ready to go", // defers timing BUT answers capital
+    'enough to get started, why?', // answers + trailing question
+    'like 10k saved up', // hedged quantity answer
+    'maybe 6 months or so' // duration answer
   ];
   for (const t of NON_ANSWERS) {
     assert.equal(

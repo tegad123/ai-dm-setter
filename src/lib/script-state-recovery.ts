@@ -1211,33 +1211,64 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
   if (t.length === 0) return false;
   const lower = t.toLowerCase();
   const core = lower
-    .replace(/^(ok(ay)?|yeah?|yes|sure|hmm+|well|so|bro|man)[\s,]+/i, '')
+    .replace(
+      /^(and|but|so|ok(ay)?|yeah?|yes|yep|yup|nah?|nope|sure|hmm+|well|bro|man)[\s,]+/i,
+      ''
+    )
     .trim();
 
+  // "Answer substance" — a first-person declarative clause that states info the
+  // ask was after. If the reply carries this, it ANSWERS even if it also asks
+  // something ("not yet, but i've got 5k ready", "enough to get started, why?",
+  // "i want 5k a month, is that realistic?"). Hardened 2026-07-23: this check
+  // now runs FIRST and short-circuits, fixing the false-BLOCK of real answers
+  // that happened to end in a question.
+  const hasAnswerSubstance =
+    /\b(i|we|my|i'?m|i'?ve|im|ive)\s+(want|wanna|need|make|makin|earn|been|have|got|do|did|am|feel|just|already|trade|traded|started|work|working|use|used)\b/i.test(
+      core
+    ) ||
+    /\b\d/.test(core) || // any number (income goal, capital, duration, "2 years")
+    /\b(a\s+)?(month|year|week|day)s?\b/i.test(core) || // duration answers
+    /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core); // hedged quantity answers
+
+  // Deferral / refusal-to-answer. Added "why do I need" (research false-pass).
   const deferral =
-    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why do you (need|wanna) (to )?know|dont send|don'?t send)\b/i.test(
+    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why (do|would) (you|i) (need|have|wanna|gotta) (to )?(know|tell|answer|give)|dont send|don'?t send|not gonna (say|answer|tell))\b/i.test(
       lower
     ) || /^(wait|hold)\b/i.test(core);
 
   const pricingQuestion =
-    /\b(how much (does|is|would)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it)\b/i.test(
+    /\b(how much (does|is|would|for|to)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it|what(?:'|’)?s? the (damage|cost|price)|is (this|it) (free|paid|expensive))\b/i.test(
       lower
     ) || /^(price|cost)\??$/i.test(core);
 
   const startsInterrogative =
-    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should)\b/i.test(
+    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should|whats?|hows?)\b/i.test(
       core
     );
-  const isBareQuestion =
+  // A question with NO answer substance. Word cap raised 12→20 so longer pure
+  // questions ("and how is this any different from the other programs that
+  // promise the same thing?") are caught (research false-pass).
+  const isPureQuestion =
     (core.endsWith('?') || startsInterrogative) &&
-    core.split(/\s+/).length <= 12 &&
-    !/\b(i|we|my)\s+(want|need|make|earn|been|have|do|did|got|am|feel|just)\b/i.test(
-      core
-    );
+    core.split(/\s+/).length <= 20;
 
+  // Answer substance wins even over a deferral when the reply carries a
+  // concrete quantity/number/duration — "not yet, but i've got 5k ready" both
+  // defers the timing AND answers the capital ask; the answer is what matters.
+  // A BARE deferral ("not yet", "hold up") has no such substance and still
+  // blocks.
+  const hasConcreteAnswer =
+    /\b\d/.test(core) ||
+    /\b(a\s+)?(month|year|week|day)s?\b/i.test(core) ||
+    /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core);
+  if (hasConcreteAnswer) return true;
   if (deferral) return false;
   if (pricingQuestion) return false;
-  if (isBareQuestion) return false;
+  // A non-deferral reply with first-person answer substance answers the ask
+  // (even with a trailing question); a pure question-back does not.
+  if (hasAnswerSubstance) return true;
+  if (isPureQuestion) return false;
   return true;
 }
 
@@ -1652,6 +1683,20 @@ function stepCompletionFromHistory(
             ? hasLeadReplyAfter(sorted, askBySuggestion)
             : null;
           if (askBySuggestion && leadReply) {
+            // F4 (2026-07-23): this judgment/deep-why path completed on ANY
+            // lead reply, content-blind — the live 3→4 deferral advance. Gate
+            // it on answer-satisfaction like the plain-ASK paths: a pure
+            // question-back / deferral / pricing question does NOT complete the
+            // step. BUT preserve the original anti-loop purpose — after the step
+            // has been re-asked ≥2 times, force-complete regardless so a lead
+            // who keeps deflecting can't park the position forever (better to
+            // move on than re-ask infinitely). So: hold on a non-answer for the
+            // first 1–2 asks, then the anti-loop escape releases it.
+            const answered = replyAnswersAsk(leadReply.content);
+            if (!answered && reAskCount < 2) {
+              lastReason = 'judgment_ask_reply_did_not_answer';
+              continue;
+            }
             return {
               complete: true,
               completedAt: new Date(leadReply.timestamp).getTime(),
@@ -1659,10 +1704,11 @@ function stepCompletionFromHistory(
               aiMessageIds: askBySuggestion.id ? [askBySuggestion.id] : [],
               leadMessageId: leadReply.id ?? null,
               sentAt: new Date(askBySuggestion.timestamp).toISOString(),
-              reason:
-                reAskCount >= 2
+              reason: answered
+                ? reAskCount >= 2
                   ? 'completed_by_judgment_ask_reply_antiloop'
-                  : 'completed_by_judgment_ask_reply',
+                  : 'completed_by_judgment_ask_reply'
+                : 'completed_by_judgment_ask_reply_antiloop_unanswered',
               selectedBranchLabel,
               selectedSuggestionId,
               historyMessagesWithSelectedSuggestionId
