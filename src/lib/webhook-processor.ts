@@ -26,6 +26,7 @@ import {
   detectMetadataLeak,
   detectTypeformFilledNoBookingContext,
   sanitizeDashCharacters,
+  lowTicketHarmCategory,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
 } from '@/lib/voice-quality-gate';
 import {
@@ -50,7 +51,8 @@ import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import {
   transitionLeadStage,
-  isStageProgressionDisabledForLead
+  isStageProgressionDisabledForLead,
+  personaConfigDisablesStageProgression
 } from '@/lib/lead-stage';
 import { isVerbatimRepeatBubble } from '@/lib/verbatim-normalize';
 import { looksLikeMessageBody } from '@/lib/lead-name';
@@ -3649,6 +3651,11 @@ async function deliverBubbleGroup(params: {
     systemPromptVersion: string;
     suggestionId?: string | null;
   };
+  // Low-ticket persona (disableLeadStageProgression). When true, every bubble
+  // is re-checked for call/booking/capital/scheduling harm just before it
+  // ships — the last line of defense on the drip-send path — and a LEAD reply
+  // mid-group (not just a HUMAN takeover) aborts the remaining bubbles.
+  suppressBookingLanguage: boolean;
   now: Date;
 }): Promise<{
   groupId: string;
@@ -3656,7 +3663,14 @@ async function deliverBubbleGroup(params: {
   failedAt: Date | null;
   firstMessageId: string;
 }> {
-  const { conversationId, lead, bubbles, result, now } = params;
+  const {
+    conversationId,
+    lead,
+    bubbles,
+    result,
+    suppressBookingLanguage,
+    now
+  } = params;
   const sanitizedBubbles = bubbles.map((bubble) =>
     sanitizeDashCharacters(bubble)
   );
@@ -3688,23 +3702,44 @@ async function deliverBubbleGroup(params: {
     const isFirst = i === 0;
     const bubble = sanitizedBubbles[i];
 
-    // Mid-group human-takeover check (skip on the first bubble — we
-    // already passed the top-of-sendAIReply preflight).
+    // Mid-group interrupt check (skip on the first bubble — we already passed
+    // the top-of-sendAIReply preflight). Aborts on EITHER a human takeover OR a
+    // fresh LEAD reply. The lead-reply abort (2026-07-23) matters because a
+    // lead who answers mid-drip has changed the context the later bubbles were
+    // generated for — shipping a now-stale bubble (e.g. a pitch queued before
+    // the lead's answer arrived) is exactly how the live "call with Anthony"
+    // bubble reached the lead after they'd already replied.
     if (!isFirst) {
-      const humanInterrupt = await prisma.message.findFirst({
+      const interrupt = await prisma.message.findFirst({
         where: {
           conversationId,
-          sender: 'HUMAN',
+          sender: { in: ['HUMAN', 'LEAD'] },
           timestamp: { gt: groupStart }
         },
-        select: { id: true }
+        select: { id: true, sender: true }
       });
-      if (humanInterrupt) {
-        abortedByHuman = true;
+      if (interrupt) {
+        abortedByHuman = interrupt.sender === 'HUMAN';
         console.log(
-          `[webhook-processor] Multi-bubble group ${group.id} aborted at bubble ${i}/${sanitizedBubbles.length}: human took over`
+          `[webhook-processor] Multi-bubble group ${group.id} aborted at bubble ${i}/${sanitizedBubbles.length}: ${interrupt.sender} replied mid-group`
         );
         break;
+      }
+    }
+
+    // Low-ticket per-bubble harm re-gate (last line of defense on the drip-send
+    // path). The egress re-gate in sendAIReply already stripped harmful bubbles
+    // before scheduling, but this guarantees a violating bubble can never leave
+    // the send loop even if it reached here by any path. Skip the bubble; if it
+    // was the ONLY bubble the loop simply delivers nothing (the egress gate
+    // guarantees a safe line exists when the whole payload was harmful).
+    if (suppressBookingLanguage) {
+      const harm = lowTicketHarmCategory(bubble);
+      if (harm) {
+        console.error(
+          `[webhook-processor] low-ticket drip re-gate: SKIPPING harmful bubble ${i}/${sanitizedBubbles.length} (${harm}) on group ${group.id}: "${bubble.slice(0, 60)}"`
+        );
+        continue;
       }
     }
 
@@ -5303,6 +5338,65 @@ async function sendAIReply(
     }
   }
 
+  // ── Low-ticket harm egress re-gate (deterministic, 2026-07-23) ─────────
+  // The single ship-time choke point where every mutation is applied but
+  // nothing is sent yet. The generation-time gate can MISS a phrasing (regex
+  // gaps) or a non-guarded exhaustion branch can ship a violating draft; this
+  // is the safety net. For a low-ticket persona (disableLeadStageProgression),
+  // drop ANY bubble that pitches a call, asks a capital question, or references
+  // scheduling/booking/closer. If that empties the payload, substitute one safe
+  // on-persona line so the lead is never ghosted. Runs BEFORE the multi-bubble
+  // vs single split, so it protects both paths — and, unlike leak-13's
+  // generation-time guard, it also covers the drip-send path downstream.
+  const lowTicketPersonaRow = await prisma.conversation
+    .findUnique({
+      where: { id: conversationId },
+      select: { persona: { select: { promptConfig: true } } }
+    })
+    .catch(() => null);
+  const suppressBookingLowTicket = personaConfigDisablesStageProgression(
+    lowTicketPersonaRow?.persona?.promptConfig
+  );
+  {
+    if (suppressBookingLowTicket) {
+      const finalBubbles = Array.isArray(result.messages)
+        ? result.messages
+        : [result.reply];
+      const harmBubbles = finalBubbles.filter(
+        (b) => lowTicketHarmCategory(b) !== null
+      );
+      if (harmBubbles.length > 0) {
+        const kept = finalBubbles.filter(
+          (b) =>
+            lowTicketHarmCategory(b) === null && (b ?? '').trim().length > 0
+        );
+        console.warn(
+          `[webhook-processor] low-ticket egress re-gate: dropped ${harmBubbles.length}/${finalBubbles.length} harmful bubble(s) on ${conversationId} — ` +
+            harmBubbles
+              .map(
+                (b) => `${lowTicketHarmCategory(b)}:"${(b ?? '').slice(0, 50)}"`
+              )
+              .join(' | ')
+        );
+        if (kept.length === 0) {
+          const safeLowTicket =
+            'for sure bro, everything you need to get started is on the page i mentioned, take a look through it and lmk what stands out to you';
+          result.messages = [safeLowTicket];
+          result.reply = safeLowTicket;
+        } else {
+          result.messages = kept;
+          result.reply = kept[0];
+        }
+        useMultiBubble =
+          Array.isArray(result.messages) &&
+          result.messages.length > 1 &&
+          !result.shouldVoiceNote &&
+          !result.voiceNoteAction?.slot_id &&
+          !libraryVN;
+      }
+    }
+  }
+
   let deliveredReplyText = result.reply;
   let deliveredAt = now;
 
@@ -5313,6 +5407,7 @@ async function sendAIReply(
       lead,
       bubbles: result.messages,
       result,
+      suppressBookingLanguage: suppressBookingLowTicket,
       now
     });
     deliveredReplyText = result.messages

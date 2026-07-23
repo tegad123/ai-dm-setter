@@ -2882,19 +2882,17 @@ export function scoreVoiceQuality(
     );
   }
 
-  // Low-ticket funnel: no booking, no calls — ever. Any call pitch or
-  // booking-confirmation phrasing is a hard fail on these personas.
-  if (
-    options?.suppressBookingLanguage === true &&
-    (containsCallPitch(reply) ||
-      containsBookingConfirmationQuestion(reply) ||
-      /\bwhat\s+day\s+(and|\/|&)?\s*time\b|\bdid\s+you\s+book\b|\bbook\s+(a|the|your)\s+(call|slot|time)\b/i.test(
-        reply
-      ))
-  ) {
-    hardFails.push(
-      'booking_language_on_lowticket: this funnel has NO calls and NO booking. Never pitch a call, never ask what the lead booked, never reference day/time scheduling. The only asset is the website link — talk about the link and what they saw on the page instead.'
-    );
+  // Low-ticket funnel: no booking, no calls, no scheduling — ever. Any call
+  // pitch, booking-confirmation, or scheduling/timezone phrasing is a hard fail
+  // on these personas. Uses the shared lowTicketHarmCategory predicate (the
+  // same one the egress + drip-send re-gates use) so all three layers agree.
+  if (options?.suppressBookingLanguage === true) {
+    const harm = lowTicketHarmCategory(reply);
+    if (harm === 'call_booking' || harm === 'scheduling') {
+      hardFails.push(
+        'booking_language_on_lowticket: this funnel has NO calls and NO booking. Never pitch a call, never ask what the lead booked, never reference day/time scheduling or timezone, never name a closer. The only asset is the website link — talk about the link and what they saw on the page instead.'
+      );
+    }
   }
 
   // Low-ticket funnel: no capital/financial screening — ever. The R24
@@ -2905,10 +2903,7 @@ export function scoreVoiceQuality(
   // booking gate. suppressBookingLanguage is the low-ticket signal.
   if (
     options?.suppressBookingLanguage === true &&
-    (containsCapitalQuestion(reply) ||
-      /\b(what(?:'|’)?s|hows?|how is)\s+your\s+(capital|money|budget|finances?)\b/i.test(
-        reply
-      ))
+    lowTicketHarmCategory(reply) === 'capital'
   ) {
     hardFails.push(
       'capital_question_on_lowticket: this funnel has NO capital check and NO financial screening. Never ask what the lead has set aside, saved, can afford, or can put toward this — there is no money bar to clear. Talk about the website link and what they took from the page instead.'
@@ -4021,6 +4016,62 @@ export function containsCapitalQuestion(text: string): boolean {
     /\bput\s+(toward|towards|into)\s+(this|it|trading|the markets?)\s+(right now|to start)\b/i
   ];
   return patterns.some((pattern) => pattern.test(text));
+}
+
+// ── Low-ticket harm: single source of truth ──────────────────────────────
+// A low-ticket funnel persona (disableLeadStageProgression / suppressBooking-
+// Language) has NO calls, NO booking, NO capital screening, NO closer, NO
+// scheduling — its only asset is a website link. This predicate is the ONE
+// place that decides whether a piece of generated text is forbidden for such a
+// persona. It is called at generation (the hard-fail gates above), at the
+// egress choke point, AND per-bubble at drip-send time, so a phrasing that
+// slips one layer is still caught before it reaches the lead.
+//
+// Broadened 2026-07-23 (full-pipeline research) beyond the original gate
+// regexes, which missed many natural phrasings ("let's set up a call", "you
+// free for a call this week?", "what timezone are you in?", "how much you
+// working with", "i'll have my closer reach out", "Anthony can walk you
+// through it"). These extra patterns close those holes.
+const LOW_TICKET_CALL_BOOKING_EXTRA_RE =
+  /\b(set\s*up|schedule|book|hop\s+on|jump\s+on|get\s+on|do)\s+(a\s+|an\s+|the\s+|your\s+)?(quick\s+)?(call|chat|zoom|session|meeting|convo|conversation)\b|\b(a\s+)?(free\s+)?(strategy|coaching|discovery|game\s*plan)\s+(call|session|chat)\b|\bfree\s+(strategy|coaching|discovery)\s+session\b|\b(you\s+)?(free|available|around)\s+(for|to\s+(hop|jump|get)\s+on)\s+(a\s+)?(call|chat|zoom|session)\b|\bwhen(?:'|’)?s?\s+(a\s+)?good\s+time\b|\bcalendly\b|\bcal\.com\b|\bbooking\s+link\b|\bthe\s+(call|session|chat|meeting)\s+(is|with|will)\b|\b(closer|coach|mentor|advisor|team\s+member)\s+(will|can|is\s+gonna|is\s+going\s+to|to)?\s*(reach\s+out|hop\s+on|call\s+you|walk\s+you|get\s+on)\b|\bhave\s+(my|the|our|a)\s+(closer|coach|mentor|advisor|team\s+member)\s+(reach|hop|call|get)\b|\b(reach\s+out\s+to|hop\s+on\s+with|get\s+you\s+(on|booked|locked\s+in))\b|\bwalk\s+you\s+through\s+it\s+(on|over)\s+(a\s+)?(call|chat|zoom)\b/i;
+
+const LOW_TICKET_SCHEDULING_TIMEZONE_RE =
+  /\bwhat\s+(day|time)\s+(works|are\s+you\s+free|is\s+(good|best|better))\b|\bwhen\s+are\s+you\s+(free|available)\b|\bwhat(?:'|’)?s\s+your\s+(schedule|availability|time\s*zone)\b|\bwhat\s+time\s*zone\s+(are\s+you|you)\b|\bwhich\s+(day|time)\b/i;
+
+const LOW_TICKET_CAPITAL_EXTRA_RE =
+  /\bhow\s+much\s+(you|are\s+you)\s+(working\s+with|got|have)\b|\byou\s+got\s+(any\s+)?(money|cash|capital|funds?)\s+(to\s+(start|begin|put|invest)|saved|set\s+aside)\b|\bcan\s+you\s+afford\b|\bdo\s+you\s+have\s+enough\s+(to\s+(start|get\s+going|invest)|money|capital)\b|\bwhat\s+(kind\s+of\s+)?budget\b|\b(are\s+you\s+)?financially\s+ready\b|\b(some|any)\s+cash\s+to\s+put\s+in\b|\bmoney\s+to\s+(start|invest|put\s+(in|toward))\b/i;
+
+// Returns the harm category if the text is forbidden on a low-ticket persona,
+// or null if clean. Reuses the existing gate predicates AND the broadened
+// patterns above.
+export function lowTicketHarmCategory(
+  text: string | null | undefined
+): 'call_booking' | 'capital' | 'scheduling' | null {
+  const t = (text ?? '').trim();
+  if (t.length === 0) return null;
+  if (
+    containsCallPitch(t) ||
+    containsBookingConfirmationQuestion(t) ||
+    LOW_TICKET_CALL_BOOKING_EXTRA_RE.test(t) ||
+    /\bwhat\s+day\s+(and|\/|&)?\s*time\b|\bdid\s+you\s+book\b|\bbook\s+(a|the|your)\s+(call|slot|time)\b/i.test(
+      t
+    )
+  ) {
+    return 'call_booking';
+  }
+  if (containsCapitalQuestion(t) || LOW_TICKET_CAPITAL_EXTRA_RE.test(t)) {
+    return 'capital';
+  }
+  if (LOW_TICKET_SCHEDULING_TIMEZONE_RE.test(t)) {
+    return 'scheduling';
+  }
+  return null;
+}
+
+export function containsLowTicketHarm(
+  text: string | null | undefined
+): boolean {
+  return lowTicketHarmCategory(text) !== null;
 }
 
 export function containsIncomeGoalQuestion(text: string): boolean {

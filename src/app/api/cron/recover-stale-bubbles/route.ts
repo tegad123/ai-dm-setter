@@ -24,7 +24,11 @@ import prisma from '@/lib/prisma';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { broadcastNewMessage, broadcastNotification } from '@/lib/realtime';
-import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
+import {
+  sanitizeDashCharacters,
+  lowTicketHarmCategory
+} from '@/lib/voice-quality-gate';
+import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60;
@@ -113,6 +117,7 @@ export async function GET(req: NextRequest) {
         where: { id: group.conversationId },
         select: {
           aiActive: true,
+          persona: { select: { promptConfig: true } },
           lead: {
             select: {
               id: true,
@@ -145,33 +150,52 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // Also check for a HUMAN message that landed after group start —
-      // if the operator already manually replied, recovery would
-      // duplicate / step on their message.
-      const humanInterrupt = await prisma.message.findFirst({
+      // Also check for a HUMAN or LEAD message that landed after group start.
+      // HUMAN → operator already replied (recovery would step on it). LEAD →
+      // the lead moved the conversation on; shipping stale queued bubbles (e.g.
+      // a pitch generated before the lead's reply) is exactly the mid-group
+      // leak this recovery path must not reintroduce. (2026-07-23: was HUMAN-only.)
+      const interrupt = await prisma.message.findFirst({
         where: {
           conversationId: group.conversationId,
-          sender: 'HUMAN',
+          sender: { in: ['HUMAN', 'LEAD'] },
           timestamp: { gt: group.generatedAt }
         },
-        select: { id: true }
+        select: { id: true, sender: true }
       });
-      if (humanInterrupt) {
+      if (interrupt) {
         await prisma.messageGroup.update({
           where: { id: group.id },
           data: {
             failedAt: now,
-            deliveryNotes: { reason: 'human_replied_during_abandon' }
+            deliveryNotes: {
+              reason:
+                interrupt.sender === 'HUMAN'
+                  ? 'human_replied_during_abandon'
+                  : 'lead_replied_during_abandon'
+            }
           }
         });
         continue;
       }
+
+      const suppressBookingLowTicket = personaConfigDisablesStageProgression(
+        conv.persona?.promptConfig
+      );
 
       // Ship the missing bubbles in order.
       let groupFailed = false;
       let lastShippedAt = now;
       for (let i = shipped; i < bubbles.length; i++) {
         const bubble = sanitizeDashCharacters(bubbles[i]);
+        // Low-ticket harm re-gate on the recovery path — never re-ship a
+        // call/booking/capital/scheduling bubble to a low-ticket persona.
+        if (suppressBookingLowTicket && lowTicketHarmCategory(bubble)) {
+          console.error(
+            `[recover-stale-bubbles] SKIPPING harmful bubble ${i} (${lowTicketHarmCategory(bubble)}) on low-ticket group ${group.id}`
+          );
+          continue;
+        }
         try {
           let messageId: string | null = null;
           if (conv.lead.platform === 'INSTAGRAM') {
