@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { callHaikuText } from '@/lib/haiku-text';
 import prisma from '@/lib/prisma';
+import { latestLeadMessageIsNonAnswer as latestLeadIsNonAnswerShared } from '@/lib/answer-satisfaction';
 
 export interface ScriptVariableHistoryMessage {
   id?: string | null;
@@ -50,6 +51,10 @@ type ScriptVariableExtractor = (params: {
 // names, an LLM extraction is NOT allowed to become a persisted binding unless
 // the lead actually answered — otherwise it resolves non-authoritatively (copy
 // can still render, nothing fabricated gets stored).
+// Explicit-only variables carry a value the LEAD must have STATED. Extended
+// 2026-07-23 (full-pipeline research) beyond the original goal/why/outcome set
+// to obstacle / urgency / lifeImpact — the research found these were fabricated
+// through the volunteered + branchHistory paths with no answer check.
 const EXPLICIT_ONLY_VARIABLE_NORMS = new Set(
   [
     'goal',
@@ -60,7 +65,14 @@ const EXPLICIT_ONLY_VARIABLE_NORMS = new Set(
     'deepwhy',
     'deep_why',
     'goalreason',
-    'why'
+    'why',
+    'obstacle',
+    'mainobstacle',
+    'earlyobstacle',
+    'urgency',
+    'lifeimpact',
+    'life_impact',
+    'painpoint'
   ].map((n) => n.replace(/[^a-z0-9]/g, ''))
 );
 
@@ -69,40 +81,13 @@ function isExplicitOnlyVariable(variableName: string): boolean {
   return EXPLICIT_ONLY_VARIABLE_NORMS.has(norm);
 }
 
-// Latest LEAD message is a non-answer (question back / deferral) → an
-// explicit-only variable must not be bound from an LLM inference this turn.
-// Mirrors the answer-satisfaction semantics of replyAnswersAsk in
-// script-state-recovery (kept local to avoid a circular import).
+// Answer-satisfaction comes from the shared leaf module so this layer and the
+// step-completion layer never drift (they did — this module's copy lagged the
+// hardening applied to replyAnswersAsk). Imported at top of file.
 function latestLeadMessageIsNonAnswer(
   history: ScriptVariableHistoryMessage[]
 ): boolean {
-  const lastLead = [...history]
-    .reverse()
-    .find((m) => (m.sender ?? '').toUpperCase() === 'LEAD');
-  const t = (lastLead?.content ?? '').trim().toLowerCase();
-  if (t.length === 0) return false;
-  const core = t
-    .replace(/^(ok(ay)?|yeah?|yes|sure|hmm+|well|so|bro|man)[\s,]+/i, '')
-    .trim();
-  const deferral =
-    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why do you (need|wanna) (to )?know|dont send|don'?t send)\b/i.test(
-      t
-    ) || /^(wait|hold)\b/i.test(core);
-  const pricing =
-    /\b(how much (does|is|would)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it)\b/i.test(
-      t
-    ) || /^(price|cost)\??$/i.test(core);
-  const startsInterrogative =
-    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should)\b/i.test(
-      core
-    );
-  const bareQuestion =
-    (core.endsWith('?') || startsInterrogative) &&
-    core.split(/\s+/).length <= 12 &&
-    !/\b(i|we|my)\s+(want|need|make|earn|been|have|do|did|got|am|feel|just)\b/i.test(
-      core
-    );
-  return deferral || pricing || bareQuestion;
+  return latestLeadIsNonAnswerShared(history);
 }
 
 type ScriptVariableValueKind =
@@ -838,12 +823,28 @@ export async function resolveScriptVariablesForTexts(
     if (!resolution) {
       const inferred = inferFromBranchHistory(variableName, context);
       if (inferred) {
+        // F6/F3 (2026-07-23): branchHistory inference is the SIBLING of the LLM
+        // path below — it assembles a value from a step_completed event's
+        // leadMessage, which itself may be a non-answer (the ungated judgment/
+        // message-wait completion paths). For explicit-only variables, don't
+        // persist it when the latest lead message was a non-answer; resolve it
+        // non-authoritatively (usable this turn, never stored).
+        const branchHistoryBlocked =
+          isExplicitOnlyVariable(variableName) &&
+          latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
+        if (branchHistoryBlocked) {
+          console.warn(
+            `[script-variable-resolver] F6 blocked persisted branchHistory binding ` +
+              `for explicit-only variable "${variableName}" — latest lead message ` +
+              `is a non-answer; resolving non-authoritatively (shouldPersist=false)`
+          );
+        }
         resolution = {
           variableName,
           value: inferred,
           source: 'branchHistory',
           confidence: 'MEDIUM',
-          shouldPersist: true
+          shouldPersist: !branchHistoryBlocked
         };
       }
     }

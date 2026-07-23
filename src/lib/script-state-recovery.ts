@@ -11,6 +11,7 @@ import {
   isBookingInfoRequestText
 } from '@/lib/booking-info-extractor';
 import { removeInvalidScriptVariableResolutionKeys } from '@/lib/script-variable-resolver';
+import { replyAnswersAsk } from '@/lib/answer-satisfaction';
 import type { CallProposalPrereq } from '@/lib/script-step-progression';
 import {
   canonicalCapturedDataPointKey,
@@ -1194,83 +1195,11 @@ function hasLeadReplyAfter(
   );
 }
 
-// F4/F3 (2026-07-22). Answer-satisfaction gate. The engine previously
-// completed an ASK step (and bound its variable) on the FIRST lead reply
-// after the ask, regardless of content — so a lead who asked "how much does
-// this cost" instead of answering advanced the step AND had the price
-// question stored as the step's answer.
-//
-// This returns FALSE only for a CLEAR non-answer: a pricing/cost question, an
-// explicit deferral ("hold up, answer me first"), or a bare question back
-// with no declarative answer clause. It is deliberately conservative and
-// defaults to TRUE for anything with answer substance — including a statement
-// that also asks something ("i want 5k a month, is that realistic?") — so it
-// can never wrongly BLOCK a legitimate advance. Deterministic, no LLM.
-export function replyAnswersAsk(reply: string | null | undefined): boolean {
-  const t = (reply ?? '').trim();
-  if (t.length === 0) return false;
-  const lower = t.toLowerCase();
-  const core = lower
-    .replace(
-      /^(and|but|so|ok(ay)?|yeah?|yes|yep|yup|nah?|nope|sure|hmm+|well|bro|man)[\s,]+/i,
-      ''
-    )
-    .trim();
-
-  // "Answer substance" — a first-person declarative clause that states info the
-  // ask was after. If the reply carries this, it ANSWERS even if it also asks
-  // something ("not yet, but i've got 5k ready", "enough to get started, why?",
-  // "i want 5k a month, is that realistic?"). Hardened 2026-07-23: this check
-  // now runs FIRST and short-circuits, fixing the false-BLOCK of real answers
-  // that happened to end in a question.
-  const hasAnswerSubstance =
-    /\b(i|we|my|i'?m|i'?ve|im|ive)\s+(want|wanna|need|make|makin|earn|been|have|got|do|did|am|feel|just|already|trade|traded|started|work|working|use|used)\b/i.test(
-      core
-    ) ||
-    /\b\d/.test(core) || // any number (income goal, capital, duration, "2 years")
-    /\b(a\s+)?(month|year|week|day)s?\b/i.test(core) || // duration answers
-    /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core); // hedged quantity answers
-
-  // Deferral / refusal-to-answer. Added "why do I need" (research false-pass).
-  const deferral =
-    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why (do|would) (you|i) (need|have|wanna|gotta) (to )?(know|tell|answer|give)|dont send|don'?t send|not gonna (say|answer|tell))\b/i.test(
-      lower
-    ) || /^(wait|hold)\b/i.test(core);
-
-  const pricingQuestion =
-    /\b(how much (does|is|would|for|to)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it|what(?:'|’)?s? the (damage|cost|price)|is (this|it) (free|paid|expensive))\b/i.test(
-      lower
-    ) || /^(price|cost)\??$/i.test(core);
-
-  const startsInterrogative =
-    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should|whats?|hows?)\b/i.test(
-      core
-    );
-  // A question with NO answer substance. Word cap raised 12→20 so longer pure
-  // questions ("and how is this any different from the other programs that
-  // promise the same thing?") are caught (research false-pass).
-  const isPureQuestion =
-    (core.endsWith('?') || startsInterrogative) &&
-    core.split(/\s+/).length <= 20;
-
-  // Answer substance wins even over a deferral when the reply carries a
-  // concrete quantity/number/duration — "not yet, but i've got 5k ready" both
-  // defers the timing AND answers the capital ask; the answer is what matters.
-  // A BARE deferral ("not yet", "hold up") has no such substance and still
-  // blocks.
-  const hasConcreteAnswer =
-    /\b\d/.test(core) ||
-    /\b(a\s+)?(month|year|week|day)s?\b/i.test(core) ||
-    /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core);
-  if (hasConcreteAnswer) return true;
-  if (deferral) return false;
-  if (pricingQuestion) return false;
-  // A non-deferral reply with first-person answer substance answers the ask
-  // (even with a trailing question); a pure question-back does not.
-  if (hasAnswerSubstance) return true;
-  if (isPureQuestion) return false;
-  return true;
-}
+// Answer-satisfaction gate moved to the shared leaf module @/lib/answer-satisfaction
+// (2026-07-23) so the step-completion layer and the variable-resolver layer use
+// ONE hardened predicate instead of drifting copies. Imported above; re-exported
+// here for existing callers/tests that import it from this module.
+export { replyAnswersAsk };
 
 function findSetterMessageForContent(
   history: ScriptHistoryMessage[],
@@ -2626,6 +2555,28 @@ function extractValueAfterPrompt<T>(params: {
     ) {
       continue;
     }
+    // F4/F6 (2026-07-23): the reply can PARSE a value yet be a non-answer — a
+    // question-back that happens to contain a number ("how much do i need to
+    // make 6k though?") would otherwise bind incomeGoal=6000 from a clarifying
+    // question. Two guards: (1) the shared non-answer gate (deferral/pricing),
+    // and (2) a stricter local interrogative check, because at this
+    // prompt-anchored numeric bind site an INTERROGATIVE reply that contains a
+    // number is almost always a clarifying question, not the answer — and the
+    // shared gate's concrete-number shortcut would otherwise pass it. A terse
+    // real answer ("6k", "2 years", "about 5k") is not interrogative and binds.
+    const askContent = (msg.content ?? '').trim();
+    const askCore = askContent
+      .toLowerCase()
+      .replace(/^(and|but|so|ok(ay)?|well|hmm+|bro|man)[\s,]+/i, '')
+      .trim();
+    const looksInterrogative =
+      askContent.includes('?') ||
+      /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should|whats?|hows?)\b/i.test(
+        askCore
+      );
+    if (looksInterrogative || !replyAnswersAsk(msg.content)) {
+      continue;
+    }
     const value = parse(msg.content);
     if (value !== null && value !== undefined && value !== '') {
       const inferredSourceStepNumber = steps?.length
@@ -3306,7 +3257,13 @@ const DATA_REQUIREMENT_ALIASES: Record<string, string[]> = {
     'jobReplacementIntent'
   ],
   incomeGoal: ['income_goal', 'desiredIncome', 'tradingIncomeGoal'],
-  deepWhy: ['deep_why', 'desiredOutcome', 'desired_outcome'],
+  // F6/F3 (2026-07-23): deepWhy and desiredOutcome are DISTINCT captured
+  // concepts (motivation vs tangible result) and must not satisfy each other's
+  // requirement — collapsing them let one overwrite/stand-in for the other,
+  // the recovery-side twin of the resolver variableAliases collapse. Keep only
+  // deepWhy's own casing/underscore variants here.
+  deepWhy: ['deep_why', 'goalReason', 'goal_reason'],
+  desiredOutcome: ['desired_outcome'],
   obstacle: ['early_obstacle', 'earlyObstacle', 'mainObstacle'],
   capital: ['capitalAmount', 'capital_amount', 'availableCapital'],
   fullName: ['full_name', 'name'],

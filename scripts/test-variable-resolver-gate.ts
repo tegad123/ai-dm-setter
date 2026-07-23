@@ -75,6 +75,44 @@ async function run() {
     );
   }
 
+  // Extended explicit-only set (2026-07-23): obstacle / deepWhy / desiredOutcome
+  // now also refuse to persist an LLM/branchHistory value when the latest lead
+  // message is a non-answer.
+  async function resolveVar(varName: string, latestLead: string) {
+    const map = await resolveScriptVariablesForTexts(
+      [`tell me about your {{${varName}}}`],
+      {
+        accountId: 'test-account',
+        extractor: async () => 'fabricated value',
+        context: {
+          capturedDataPoints: {},
+          conversationHistory: [
+            { sender: 'AI', content: 'whats been the hardest part?' },
+            { sender: 'LEAD', content: latestLead }
+          ]
+        }
+      }
+    );
+    return map.resolvedVariables.find(
+      (r) => r.variableName.toLowerCase() === varName.toLowerCase()
+    );
+  }
+  for (const varName of ['obstacle', 'deepWhy', 'desiredOutcome']) {
+    const blocked = await resolveVar(varName, 'how much does this cost');
+    assert.ok(blocked, `resolution exists for ${varName}`);
+    assert.equal(
+      blocked!.shouldPersist,
+      false,
+      `F6 extended: ${varName} must NOT persist on a non-answer`
+    );
+    const ok = await resolveVar(varName, 'i keep blowing my account honestly');
+    assert.equal(
+      ok!.shouldPersist,
+      true,
+      `F6 extended: ${varName} SHOULD persist on a real answer`
+    );
+  }
+
   console.log('variable-resolver F6 gate tests passed');
 }
 

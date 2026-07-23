@@ -9902,21 +9902,42 @@ async function persistR24VerificationState(
       points.capital = {
         value: result.parsedAmount,
         confidence: 'HIGH',
-        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        // F6 data-integrity fix (2026-07-23): this was set to
+        // verificationConfirmedAt (a TIMESTAMP), not a message id — so
+        // recentPointForRequirement's `message.id === point.extractedFromMessageId`
+        // match never matched and silently dropped these points from
+        // requirement-satisfaction. R24GateResult carries no source message id,
+        // so null is the honest value (the point is durable DB-derived state,
+        // not anchored to one message).
+        extractedFromMessageId: null,
         extractionMethod: 'semantic_capital_classification',
         extractedAt
       };
       points.verifiedCapitalUsd = {
         value: result.parsedAmountUsd ?? result.parsedAmount,
         confidence: 'HIGH',
-        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        // F6 data-integrity fix (2026-07-23): this was set to
+        // verificationConfirmedAt (a TIMESTAMP), not a message id — so
+        // recentPointForRequirement's `message.id === point.extractedFromMessageId`
+        // match never matched and silently dropped these points from
+        // requirement-satisfaction. R24GateResult carries no source message id,
+        // so null is the honest value (the point is durable DB-derived state,
+        // not anchored to one message).
+        extractedFromMessageId: null,
         extractionMethod: 'semantic_capital_classification',
         extractedAt
       };
       points.capitalThresholdMet = {
         value: qualified,
         confidence: 'HIGH',
-        extractedFromMessageId: result.verificationConfirmedAt ?? null,
+        // F6 data-integrity fix (2026-07-23): this was set to
+        // verificationConfirmedAt (a TIMESTAMP), not a message id — so
+        // recentPointForRequirement's `message.id === point.extractedFromMessageId`
+        // match never matched and silently dropped these points from
+        // requirement-satisfaction. R24GateResult carries no source message id,
+        // so null is the honest value (the point is durable DB-derived state,
+        // not anchored to one message).
+        extractedFromMessageId: null,
         extractionMethod: 'semantic_capital_classification',
         extractedAt
       };
