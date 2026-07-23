@@ -4955,6 +4955,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       f.includes('missing_required_question_on_ask_step:')
     );
 
+    // F2 (2026-07-23, live Seemal repro). A draft can carry MULTIPLE hard
+    // fails at once. When it fails a low-severity script-ADHERENCE gate
+    // (mandatory_ask_skipped / step_distance_violation) AND a high-severity
+    // low-ticket harm gate (booking_language_on_lowticket /
+    // capital_question_on_lowticket), the script-adherence best-effort branch
+    // (below) fires FIRST in the if/else-if chain and ships the draft AS-IS —
+    // carrying the booking/call violation out with it, before the
+    // hardUnshippable escalate branch is ever reached. Proven live: "the call
+    // with Anthony is free though..." shipped on a low-ticket persona despite
+    // booking_language_on_lowticket hard-failing. This flag lets the
+    // best-effort branches refuse to ship such a draft so it falls through to
+    // the hard-unshippable escalate path.
+    const lowTicketHardHarmFailed = quality.hardFails.some(
+      (f) =>
+        f.includes('booking_language_on_lowticket:') ||
+        f.includes('capital_question_on_lowticket:')
+    );
+
     // Item 2 — deep-why context loss. When the lead volunteers a motivator
     // (family/house/car/etc.) but deepWhy isn't captured in CDP yet and the
     // AI skips straight to step 13 obstacle question, intercept and force an
@@ -6346,7 +6364,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         parsed.stage = 'SOFT_EXIT';
         parsed.softExit = false;
         parsed.escalateToHuman = true;
-      } else if (fixBBlocked || fabricationBlocked) {
+      } else if (
+        (fixBBlocked || fabricationBlocked) &&
+        !lowTicketHardHarmFailed
+      ) {
         // Fix B / booking-fabrication exhaustion — soft-fail policy
         // (2026-04-20 policy change). Shipping d2a03e8's hard-escalate
         // created too many cold pauses on conversations where the LLM
@@ -6388,12 +6409,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           );
         }
       } else if (
-        unnecessarySchedulingQuestionFailed ||
-        logisticsBeforeQualificationFailed ||
-        repeatedQuestionFailed ||
-        msgVerbatimViolationFailed ||
-        mandatoryAskSkippedFailed ||
-        stepDistanceViolationFailed
+        (unnecessarySchedulingQuestionFailed ||
+          logisticsBeforeQualificationFailed ||
+          repeatedQuestionFailed ||
+          msgVerbatimViolationFailed ||
+          mandatoryAskSkippedFailed ||
+          stepDistanceViolationFailed) &&
+        // F2 (2026-07-23): never best-effort ship a draft that ALSO carries a
+        // low-ticket call/booking/capital violation — that harm must not ride
+        // out on a script-adherence soft-fail. Fall through to hardUnshippable.
+        !lowTicketHardHarmFailed
       ) {
         // Loosened 2026-04-30 (was hard escalate_to_human). The
         // "AI asked a slightly off follow-up question" class — these
@@ -6658,6 +6683,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             f.includes('call_pitch_before_capital_verification:') ||
             f.includes('closer_or_call_in_downsell:') ||
             f.includes('capital_question_premature:') ||
+            // F2 (2026-07-23): low-ticket call/booking/capital harm blocks the
+            // verbatim-recovery path too, so a draft carrying it can't be
+            // "recovered" and shipped around the low-ticket harm guard below.
+            f.includes('booking_language_on_lowticket:') ||
+            f.includes('capital_question_on_lowticket:') ||
             // mandatory_ask_skipped / step_distance_violation removed here too
             // (2026-06-05): now soft drift, so they no longer block the
             // verbatim deterministic-injection recovery path below.
@@ -6760,6 +6790,43 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                   aiStageReported: parsed.stage || null,
                   aiSubStageReported: parsed.subStage || null,
                   contentPreview: literalInjectMsgs.join(' | ').slice(0, 200)
+                }
+              })
+              .catch(() => null);
+          }
+        } else if (lowTicketHardHarmFailed) {
+          // F2 (2026-07-23, live Seemal repro). The draft carries a low-ticket
+          // call/booking/capital violation that survived all retries (often
+          // alongside script-adherence fails that would otherwise best-effort
+          // ship it). Do NOT ship the violating draft and do NOT cold-escalate
+          // the whole funnel — inject a safe, on-persona line that keeps the
+          // lead pointed at the website (the funnel's only asset) with no call,
+          // no booking, no capital ask. AI stays active.
+          const safeLowTicket =
+            'for sure bro — everything you need to get started is on the page i mentioned, take a look through it and lmk what stands out to you 🙌';
+          parsed.message = safeLowTicket;
+          parsed.messages = [safeLowTicket];
+          parsed.stage = parsed.stage || 'SITUATION_DISCOVERY';
+          parsed.subStage = null;
+          parsed.softExit = false;
+          parsed.escalateToHuman = false;
+          parsed.voiceNoteAction = null;
+          console.warn(
+            `[ai-engine] low-ticket call/booking/capital violation survived retries — injecting safe website-link line (no escalate) on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
+          );
+          if (activeConversationId) {
+            await prisma.bookingRoutingAudit
+              .create({
+                data: {
+                  conversationId: activeConversationId,
+                  accountId,
+                  personaMinimumCapital: capitalThreshold,
+                  routingAllowed: false,
+                  regenerationForced: true,
+                  blockReason: 'lowticket_harm_replaced_with_safe_line',
+                  aiStageReported: parsed.stage || null,
+                  aiSubStageReported: parsed.subStage || null,
+                  contentPreview: safeLowTicket.slice(0, 200)
                 }
               })
               .catch(() => null);

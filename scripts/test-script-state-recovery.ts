@@ -508,6 +508,48 @@ function run() {
     'Tega sequence blocks capital immediately after income goal'
   );
 
+  // F2 (2026-07-23, live Seemal repro cmrp4fxl1005qle047vnnmcp6): the EXACT
+  // message that shipped on a low-ticket persona — "the call with Anthony is
+  // free though..." — must hard-fail booking_language_on_lowticket when
+  // suppressBookingLanguage is on. (The gate DID fire live; the bug was the
+  // exhaustion ship-path carrying it out anyway, fixed in ai-engine. This locks
+  // in that the gate itself flags this phrasing.)
+  const lowTicketCallPitch = scoreVoiceQualityGroup(
+    [
+      'right now we don’t even know if you’re a good fit yet, not everyone has what it takes to be profitable. the call with Anthony is free though, we give you a gameplan and see if it makes sense from there.'
+    ],
+    {
+      aiMessageCount: 4,
+      skipLegacyPacingGates: true,
+      suppressBookingLanguage: true,
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    lowTicketCallPitch.hardFails.some((failure) =>
+      failure.includes('booking_language_on_lowticket:')
+    ),
+    'F2: "the call with Anthony is free" hard-fails booking_language_on_lowticket on a low-ticket persona'
+  );
+  // And the same phrasing must NOT hard-fail booking language when the persona
+  // is a normal qualification persona (suppressBookingLanguage off) — the gate
+  // is persona-scoped, not global.
+  const qualPersonaCallPitch = scoreVoiceQualityGroup(
+    ['the call with Anthony is free though, we give you a gameplan.'],
+    {
+      aiMessageCount: 12,
+      skipLegacyPacingGates: true,
+      suppressBookingLanguage: false,
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    !qualPersonaCallPitch.hardFails.some((failure) =>
+      failure.includes('booking_language_on_lowticket:')
+    ),
+    'F2: booking_language_on_lowticket does NOT fire on a normal qualification persona'
+  );
+
   assert.equal(
     hasExplicitCapitalConstraintSignal(
       'capital and lack of knowledge is my problem'
