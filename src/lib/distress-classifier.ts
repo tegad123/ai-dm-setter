@@ -46,6 +46,14 @@ DO NOT fire (confirmed=false) for:
 Response format:
 {"confirmed": true|false, "reason": "<one sentence explaining decision>"}`;
 
+// Standing production risk fixed here (2026-07-22), separate from the
+// classifier-first rework: the SDK defaults to a 10-MINUTE request timeout
+// and 2 retries. This call sits on the inbound webhook path (Layer 1
+// distress gate), so a single hung Haiku request could block a webhook for
+// up to ~10 minutes with retries. We bound it hard.
+const CLASSIFIER_TIMEOUT_MS = 1200;
+const CLASSIFIER_MAX_RETRIES = 1;
+
 export async function classifyDistressIntent(
   text: string
 ): Promise<ClassifierResult> {
@@ -55,13 +63,22 @@ export async function classifyDistressIntent(
       return { confirmed: false, reason: 'no_api_key' };
     }
 
-    const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 64,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: `Message: "${text}"` }]
+    // Per-request timeout + a tight retry cap. maxRetries drops from the
+    // SDK default of 2 to 1; the client-level timeout is a hard per-attempt
+    // ceiling. Worst case is now ~2 attempts * 1200ms, not 10 minutes.
+    const client = new Anthropic({
+      apiKey,
+      maxRetries: CLASSIFIER_MAX_RETRIES
     });
+    const response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 64,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: `Message: "${text}"` }]
+      },
+      { timeout: CLASSIFIER_TIMEOUT_MS }
+    );
 
     const raw =
       response.content[0]?.type === 'text'
@@ -72,8 +89,17 @@ export async function classifyDistressIntent(
       confirmed: Boolean(parsed.confirmed),
       reason: typeof parsed.reason === 'string' ? parsed.reason : 'parsed'
     };
-  } catch {
-    // Fail-open: don't block generation on classifier errors
-    return { confirmed: false, reason: 'classifier_error' };
+  } catch (err) {
+    // Fail-open here (secondary/MEDIUM-tier path): don't block generation on
+    // classifier errors. The classifier-first rework introduces a distinct
+    // `ok` field so the PRIMARY path can fail CLOSED instead — this function's
+    // current callers all treat "no answer" as "not distress", which is
+    // correct only because HARD regex already fired upstream.
+    const kind =
+      err instanceof Error &&
+      (err.name === 'APIConnectionTimeoutError' || /timeout/i.test(err.message))
+        ? 'classifier_timeout'
+        : 'classifier_error';
+    return { confirmed: false, reason: kind };
   }
 }
