@@ -41,6 +41,70 @@ type ScriptVariableExtractor = (params: {
   accountId: string;
 }) => Promise<string | null>;
 
+// F6/F3 (2026-07-23, surfaced by the live Seemal repro). These variables carry
+// a value the LEAD must have STATED — a goal, a motivation, an income target.
+// The LLM extractor was inferring them from surrounding context (e.g. deriving
+// goal="consistent profitability" from "never really consistent" when the lead
+// had only DEFERRED), then persisting the invention at MEDIUM confidence so it
+// stuck and drove copy ("that's a real goal" when no goal was given). For these
+// names, an LLM extraction is NOT allowed to become a persisted binding unless
+// the lead actually answered — otherwise it resolves non-authoritatively (copy
+// can still render, nothing fabricated gets stored).
+const EXPLICIT_ONLY_VARIABLE_NORMS = new Set(
+  [
+    'goal',
+    'incomegoal',
+    'income_goal',
+    'desiredoutcome',
+    'desired_outcome',
+    'deepwhy',
+    'deep_why',
+    'goalreason',
+    'why'
+  ].map((n) => n.replace(/[^a-z0-9]/g, ''))
+);
+
+function isExplicitOnlyVariable(variableName: string): boolean {
+  const norm = normalizeTemplateKey(variableName).replace(/[^a-z0-9]/g, '');
+  return EXPLICIT_ONLY_VARIABLE_NORMS.has(norm);
+}
+
+// Latest LEAD message is a non-answer (question back / deferral) → an
+// explicit-only variable must not be bound from an LLM inference this turn.
+// Mirrors the answer-satisfaction semantics of replyAnswersAsk in
+// script-state-recovery (kept local to avoid a circular import).
+function latestLeadMessageIsNonAnswer(
+  history: ScriptVariableHistoryMessage[]
+): boolean {
+  const lastLead = [...history]
+    .reverse()
+    .find((m) => (m.sender ?? '').toUpperCase() === 'LEAD');
+  const t = (lastLead?.content ?? '').trim().toLowerCase();
+  if (t.length === 0) return false;
+  const core = t
+    .replace(/^(ok(ay)?|yeah?|yes|sure|hmm+|well|so|bro|man)[\s,]+/i, '')
+    .trim();
+  const deferral =
+    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why do you (need|wanna) (to )?know|dont send|don'?t send)\b/i.test(
+      t
+    ) || /^(wait|hold)\b/i.test(core);
+  const pricing =
+    /\b(how much (does|is|would)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it)\b/i.test(
+      t
+    ) || /^(price|cost)\??$/i.test(core);
+  const startsInterrogative =
+    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should)\b/i.test(
+      core
+    );
+  const bareQuestion =
+    (core.endsWith('?') || startsInterrogative) &&
+    core.split(/\s+/).length <= 12 &&
+    !/\b(i|we|my)\s+(want|need|make|earn|been|have|do|did|got|am|feel|just)\b/i.test(
+      core
+    );
+  return deferral || pricing || bareQuestion;
+}
+
 type ScriptVariableValueKind =
   | 'name'
   | 'obstacle'
@@ -682,11 +746,21 @@ function buildExtractorPrompt(params: {
     .map((example) => `- '${example}'`)
     .join('\n');
 
+  // F6 (2026-07-23): for explicit-only variables, forbid INFERENCE. The model
+  // was deriving a goal from adjacent context ("never consistent" → "consistent
+  // profitability") when the lead had not stated one. Only extract what the lead
+  // literally said; if they deferred, asked a question, or only implied it,
+  // return NONE.
+  const explicitOnlyRule = isExplicitOnlyVariable(params.variableName)
+    ? `\nIMPORTANT: Only return a value the lead EXPLICITLY STATED in their own words. Do NOT infer, guess, or derive it from context. If the lead deferred, asked a question back, or only implied it, return NONE.\n`
+    : '';
+
   return (
     `Extract the lead's {{${params.variableName}}} from this sales DM conversation.\n` +
     `Return ONLY a short ${spec.typeLabel} in this format: ${spec.formatSpec}.\n` +
-    `No explanation. No full sentences. No quote from the lead. If unclear, return NONE.\n\n` +
-    `Examples of CORRECT output:\n${correct}\n\n` +
+    `No explanation. No full sentences. No quote from the lead. If unclear, return NONE.` +
+    explicitOnlyRule +
+    `\n\nExamples of CORRECT output:\n${correct}\n\n` +
     `Examples of WRONG output:\n${wrong}\n\n` +
     `Conversation history:\n${params.history || '(none)'}\n\n` +
     `Return the value:`
@@ -782,12 +856,29 @@ export async function resolveScriptVariablesForTexts(
       });
       const cleanExtracted = cleanExtractorValue(extracted, variableName);
       if (cleanExtracted) {
+        // F6/F3 (2026-07-23): for explicit-only variables (goal/why/outcome),
+        // do NOT let an LLM inference become a PERSISTED binding when the lead's
+        // latest message was itself a non-answer. The model may still have
+        // returned a plausible value inferred from earlier context, but binding
+        // it would fabricate a stated goal the lead never gave. Resolve it
+        // non-authoritatively: usable for this turn's copy, never written to
+        // capturedDataPoints, so it can't stick or drive later stages.
+        const explicitOnlyBlocked =
+          isExplicitOnlyVariable(variableName) &&
+          latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
+        if (explicitOnlyBlocked) {
+          console.warn(
+            `[script-variable-resolver] F6 blocked persisted LLM binding for ` +
+              `explicit-only variable "${variableName}" — latest lead message is a ` +
+              `non-answer; resolving non-authoritatively (shouldPersist=false)`
+          );
+        }
         resolution = {
           variableName,
           value: cleanExtracted,
           source: 'llm',
           confidence: 'MEDIUM',
-          shouldPersist: true
+          shouldPersist: !explicitOnlyBlocked
         };
       }
     }
