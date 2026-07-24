@@ -163,3 +163,40 @@ Both real prod conversations, clean-slate before/after, reproducible sequences.
 | F1 deflection does NOT release hold | ✅ no AI reply | ✅ no AI reply |
 
 Pending: **Ali independent verification** on both accounts (his sign-off, not self-verified).
+
+---
+
+## Remaining deliverables shipped (2026-07-24)
+
+### `05d74b9` — F9 · State-machine design proposal
+`F9_STATE_MACHINE_PROPOSAL.md`. One-page design (proposal only, no code). Principle: **code owns state, models own language understanding**. Grounded in the F1–F6 evidence — every P0 was the same shape (a state decision reachable from multiple sites → a guard at one bypassed at another). Three pillars: one transition function, states-as-data transition table (illegal transitions unrepresentable), one `canSend` egress gate. Incremental non-big-bang migration behind a flag with shadow-compare. **Awaiting Tega review + build-start date.**
+
+### `88e6aaa` — Health-check alarm (Tega non-negotiable #2)
+`runHealthChecks` + `rollupStatus` existed but had NO scheduled executor — the only caller was the admin page, so `distress_handled` (FAIL when a distress conv is aiActive >1h) was silently never evaluated. New cron `GET /api/cron/health-sweep` (`*/15 * * * *`): CRON_SECRET auth, loops accounts, persists rollup to `Account.healthStatus`/`lastHealthCheck`, on CRITICAL fires a throttled (1/account/hr) Slack + `Sentry.captureMessage` + `Sentry.flush` + dashboard alert. **Demo verified** (`scripts/demo-health-sweep-alert.ts`): seed a distress conv >2h old still aiActive → `distress_handled` FAILs → rollup CRITICAL → "ALERT WOULD FIRE: true" → state restored.
+
+### `c081a49` — Classifier-first distress (shadow mode) — Tega option (b)
+The LLM classifier becomes the PRIMARY detector; regex demotes to a fast-path accelerator. **Ships in SHADOW MODE** — regex stays authoritative, the classifier runs alongside and every regex-vs-classifier comparison is logged to `DistressShadowLog` for the joint review before the authoritative flip ("data, not vibes"). Includes: `ok`-distinct-from-`detected` (fail-CLOSED capable), ideation-as-top-category prompt, kill switch `DISTRESS_CLASSIFIER_ENABLED`, LRU cache, `DISTRESS_SHADOW_MODE` gate, review tool `scripts/review-distress-shadow.ts`.
+- **Two bugs found + fixed in the process** (the plan's "#1 day-one outage risk"): `max_tokens` 64→300 (truncated the richer JSON → parse error → fail-closed pause on every message), and Haiku's ```` ```json ```` fence broke `JSON.parse` — the EXISTING MEDIUM-tier `classifyDistressIntent` had the same latent fence bug (silently fail-opening) and is fixed too.
+- **LIVE smoke 8/8**: catches both caregiving cases + "dont even wanna be here anymore" + bereavement (all regex-impossible), ignores the four normal-sales-talk cases.
+- **Flip to authoritative is a separate later step** after the joint shadow-log review.
+
+## COMPLETE commit → deliverable map (for Tega's message)
+| Commit | Deliverable |
+|---|---|
+| `cbb2e85` | instrumentation (GenerationTurnTrace) + false-alert copy |
+| `9e55a78` | F1a terminal distress pause |
+| `c1de3ba` | F1b interim inflection detection |
+| `5205689` | F2 hardcoded Anthony + booking prose (prompt-side) |
+| `fe9f993` | classifier timeout (standing webhook-block P0) |
+| `637b976` `f852749` `00b0ea5` | F3/F4/F5/F6 + F6-deeper + F2-ship first pass (superseded below) |
+| **`0d3287f`** | **F2 root — send-time low-ticket re-gate (Class 3)** |
+| **`28199ef`** | **F4 — all step-completion paths gated (Class 1)** |
+| **`896f8d0`** | **F3/F6 — all variable-binding paths gated (Class 2)** |
+| **`907821d`** | **F1 distress miss ("dont even wanna be here")** |
+| **`05d74b9`** | **F9 design proposal** |
+| **`88e6aaa`** | **health-check alarm (cron executor + alerts)** |
+| **`c081a49`** | **classifier-first distress (shadow mode)** |
+
+**Two-account live verification: ALL of F1–F6 pass on both Seemal + Shazim.** Health-check demo fires. Classifier-first 8/8 live incl. the regex-impossible caregiving cases.
+
+**The ONE remaining item is Ali's independent sign-off** — everything he needs (conv IDs, before/after, commit map) is in this log.
