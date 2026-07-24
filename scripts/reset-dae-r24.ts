@@ -1,11 +1,9 @@
 // Resets only the R24/capital gate state on the current test conversation
 // so we can re-test different capital answers without re-driving the full funnel.
-// Clears: capitalVerificationStatus, capitalVerifiedAt, capitalVerifiedAmount,
-// and the capitalThresholdMet CDP slot.
 //
 // Usage: npx tsx scripts/reset-dae-r24.ts
 
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { config } from 'dotenv';
 import path from 'path';
 config({ path: path.resolve(process.cwd(), '.env'), override: true });
@@ -50,24 +48,28 @@ async function main() {
   );
   if (!conv) throw new Error('no conversation found');
 
-  console.log('BEFORE: capitalStatus=', conv.capitalVerificationStatus);
+  console.log(
+    'BEFORE capitalStatus=',
+    conv.capitalVerificationStatus,
+    'convId=',
+    conv.id
+  );
 
-  // Strip capitalThresholdMet from CDP
+  // Strip capitalThresholdMet + verifiedCapitalUsd from CDP
   const cdp = (conv.capturedDataPoints ?? {}) as Record<string, unknown>;
   delete cdp['capitalThresholdMet'];
   delete cdp['verifiedCapitalUsd'];
+  delete cdp['capital'];
 
-  await retry(() =>
-    (prisma as any).conversation.update({
-      where: { id: conv.id },
-      data: {
-        capitalVerificationStatus: null,
-        capitalVerifiedAt: null,
-        capitalVerifiedAmount: null,
-        capturedDataPoints: cdp
-      }
-    })
-  );
+  // Use $executeRaw to bypass Prisma enum type restriction on null
+  await prisma.$executeRaw`
+    UPDATE "Conversation"
+    SET "capitalVerificationStatus" = NULL,
+        "capitalVerifiedAt" = NULL,
+        "capitalVerifiedAmount" = NULL,
+        "capturedDataPoints" = ${JSON.stringify(cdp)}::jsonb
+    WHERE id = ${conv.id}
+  `;
 
   const after = await retry(() =>
     prisma.conversation.findUnique({
@@ -75,8 +77,7 @@ async function main() {
       select: { capitalVerificationStatus: true }
     })
   );
-  console.log('AFTER: capitalStatus=', after?.capitalVerificationStatus);
-  console.log('convId=', conv.id);
+  console.log('AFTER capitalStatus=', after?.capitalVerificationStatus);
   await prisma.$disconnect();
 }
 main().catch(async (e) => {

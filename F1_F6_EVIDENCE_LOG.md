@@ -146,4 +146,20 @@ F6 (leak-12) covered 1 of ~7 writer classes. Fix: extracted the ONE hardened ans
 | **`28199ef`** | **Class 1 — all step-completion paths gated** | comprehensive |
 | **`896f8d0`** | **Class 2 — all variable-binding paths gated** | comprehensive |
 
-Pending: re-run the full 7-message repro on Seemal AND Shazim once `896f8d0` deploys; Ali independent verification on both.
+### `907821d` — leak-17 · F1 distress MISS found on the SECOND account
+The Shazim repro (different phrasing than Seemal) MISSED "honestly some days i dont even wanna be here anymore" — the intervening "even" broke the indirect_ideation adjacency, so distressDetected=false and the AI advanced the step treating it as a goal answer. Widened the pattern to tolerate intervening adverbs + "anymore"; safety-first (errs toward over-detection). 25/25 distress tests. Re-verified live post-deploy: 988 pause fires, step holds. **This is the payoff of two-account verification — Seemal alone ("giving up on life", already caught) would not have surfaced it.**
+
+## Two-account live verification — COMPLETE (2026-07-24)
+Both real prod conversations, clean-slate before/after, reproducible sequences.
+
+| Finding | Seemal `cmrp4fxl1005qle047vnnmcp6` | Shazim `cmruac0ud007slc04lmbpkl98` |
+|---|---|---|
+| F4 price no-advance | ✅ held step 1 | ✅ held step 1 |
+| F2 no Anthony/call leak (turn 3) | ✅ clean | ✅ clean |
+| F5 no backward move | ✅ | ✅ |
+| F6 no fabricated variable | ✅ goal not bound on deferral | ✅ goal not bound on deferral |
+| F3 real goal binds correct value | ✅ incomeGoal=5000 | ✅ incomeGoal=10000 |
+| F1 distress terminal pause | ✅ awaitingHuman=true + 988 | ✅ (after leak-17) awaitingHuman=true + 988 |
+| F1 deflection does NOT release hold | ✅ no AI reply | ✅ no AI reply |
+
+Pending: **Ali independent verification** on both accounts (his sign-off, not self-verified).
