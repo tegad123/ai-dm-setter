@@ -2,14 +2,14 @@
 
 **Prepared for:** Tega
 **Repo / branch:** `github.com:tegad123/ai-dm-setter.git` · `main` · HEAD `de7b90b`
-**Scope:** Your 2026-07-21 adversarial run (9 findings, 3 P0) + the two non-negotiables (health-check alarm, classifier-first distress) + F9 design proposal.
+**Scope:** Your 2026-07-21 adversarial run (9 findings, 3 P0) + the two non-negotiables (health-check alarm, classifier-first distress) + the state-machine design proposal (**Fix D** — renamed per your note; "F9" reverts to per-lead Lead Memory).
 **Standard applied (yours):** commit ID + before/after on real production data via the repro + independent verification. No narrative-only claims.
 
 ---
 
 ## 1. TL;DR
 
-- **All 9 findings (F1–F9) addressed.** F1–F6 are **live-verified on two production accounts** (Seemal + Shazim). F7/F8 fixed. F9 delivered as a one-page proposal (awaiting your build-start date).
+- **All 9 adversarial-run findings addressed.** F1–F6 are **live-verified on two production accounts** (Seemal + Shazim). F7/F8 fixed. The 9th (state-machine design, now **Fix D**) delivered as a proposal — v2 answers your four questions (awaiting a build-start date).
 - **Both non-negotiables shipped:** health-check alarm (with a demonstrated alert firing) and classifier-first distress (in shadow mode, per your call).
 - **The one open item is your independent verifier's sign-off** — everything needed for it is in this report and in `F1_F6_EVIDENCE_LOG.md`. We did not self-certify.
 - **What we changed in approach after your feedback:** when the first live repro exposed our initial fixes as *partial*, we stopped hotfixing, ran a full end-to-end pipeline trace (every path, file:line), and re-fixed the *whole surface* per failure class. That's why the later commits (leak-14/15/16) supersede the earlier ones.
@@ -58,8 +58,8 @@ Every row: what was wrong, the root cause on prod, the fix commit, and how it wa
 - **Root cause:** the Anthropic SDK defaults to a 10-minute request timeout + 2 retries, on the inbound webhook path.
 - **Fix (own commit, per your instruction):** `fe9f993` — 1200ms per-attempt timeout, `maxRetries=1`.
 
-### F9 — State-machine design proposal
-- **Delivered:** `F9_STATE_MACHINE_PROPOSAL.md` (`05d74b9`). One page, no code. Principle: **code owns state, models own language understanding**. Three pillars: one transition function, a states-as-data transition table (illegal transitions unrepresentable), one `canSend` egress gate. Incremental, behind a flag, shadow-compared — not a big-bang rewrite. **Awaiting your review + a build-start date.**
+### 9th finding — State-machine design proposal (**Fix D**)
+- **Delivered:** `FIX_D_STATE_MACHINE_PROPOSAL.md` (renamed from the mislabeled `F9_…`). One page, no code. Principle: **code owns state, models own language understanding**. Three pillars: one transition function, a states-as-data transition table (illegal transitions unrepresentable), one `canSend` egress gate. Incremental, behind a flag, shadow-compared — not a big-bang rewrite. **v2 answers your four questions** (validation-failure path, the F6 read side, egress-first re-sequencing, per-phase independent verification). **Awaiting a build-start date.**
 
 ---
 
@@ -124,7 +124,7 @@ The two-account approach earned its keep: **Shazim's different distress phrasing
 | **`28199ef`** | 07-24 | **F4 — all step-completion paths gated (Class 1)** |
 | **`896f8d0`** | 07-24 | **F3/F6 — all variable-binding paths gated (Class 2)** |
 | **`907821d`** | 07-24 | **F1 distress miss ("dont even wanna be here")** |
-| **`05d74b9`** | 07-24 | **F9 design proposal** |
+| **`05d74b9`** | 07-24 | **state-machine proposal (Fix D)** |
 | **`88e6aaa`** | 07-24 | **health-check alarm** |
 | **`c081a49`** | 07-24 | **classifier-first distress (shadow mode)** |
 
@@ -145,7 +145,7 @@ The code is merged to `main` and deploys on push. Two features need env flags se
 ## 8. What's left
 
 1. **Independent verification** of F1–F6 by your verifier (not self-certified). Everything needed is here + in `F1_F6_EVIDENCE_LOG.md`: conv IDs, before/after, commit map.
-2. **F9 review + build-start date** from you.
+2. **Fix D review + build-start date** from you (v2 answers your four questions).
 3. **Classifier flip to authoritative** — after we jointly review the shadow-log fire rate (`scripts/review-distress-shadow.ts`). This is deliberately gated on data, not shipped blind.
 
-Daniel can go live on the F1–F6 verified fixes. F9 gates the state-machine rework for client two.
+Daniel can go live on the F1–F6 verified fixes. Fix D (the state-machine rework) gates the recurrence-proofing for client two.
