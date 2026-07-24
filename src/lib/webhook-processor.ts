@@ -1637,7 +1637,14 @@ export async function processIncomingMessage(
     });
     if (account?.distressDetectionEnabled) {
       const { detectDistress } = await import('@/lib/distress-detector');
-      const distress = await detectDistress(messageText);
+      // Shadow mode (2026-07-24): when DISTRESS_SHADOW_MODE=true, the classifier
+      // runs alongside regex and the comparison is logged for joint review —
+      // regex stays authoritative until the flip. Off = current behavior.
+      const distress = await detectDistress(messageText, {
+        shadowClassifier: process.env.DISTRESS_SHADOW_MODE === 'true',
+        conversationId,
+        accountId
+      });
       if (distress.detected) {
         console.warn(
           `[webhook-processor] DISTRESS DETECTED on conv ${conversationId} — label=${distress.label} match="${distress.match}" lead=@${senderHandle}`

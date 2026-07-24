@@ -243,12 +243,95 @@ export function detectDistressSync(text: string): DistressDetectionResult {
   return { detected: false, label: null, match: null };
 }
 
+export interface DetectDistressOptions {
+  /**
+   * Shadow mode (2026-07-24, classifier-first rollout). When set, the LLM
+   * classifier runs ALONGSIDE the regex tiers and its verdict is logged for
+   * joint review — but REGEX STAYS AUTHORITATIVE (the returned result is the
+   * regex verdict). This lets us compare classifier vs regex fire-rate on real
+   * traffic before flipping the classifier authoritative. Off = current
+   * behavior exactly.
+   */
+  shadowClassifier?: boolean;
+  conversationId?: string | null;
+  accountId?: string | null;
+}
+
+// Best-effort shadow log — records the regex-vs-classifier comparison. Never
+// throws, never blocks the caller (fire-and-forget). Only the disagreements
+// (agreed=false) are the joint-review queue.
+async function logDistressShadow(params: {
+  text: string;
+  regex: DistressDetectionResult;
+  conversationId?: string | null;
+  accountId?: string | null;
+}): Promise<void> {
+  try {
+    const started = Date.now();
+    const { classifyDistress } = await import('@/lib/distress-classifier');
+    const c = await classifyDistress(params.text);
+    const latencyMs = Date.now() - started;
+    const agreed = params.regex.detected === c.detected;
+    const { default: prisma } = await import('@/lib/prisma');
+    await prisma.distressShadowLog
+      .create({
+        data: {
+          conversationId: params.conversationId ?? null,
+          accountId: params.accountId ?? null,
+          messageText: params.text.slice(0, 2000),
+          regexDetected: params.regex.detected,
+          regexLabel: params.regex.label ?? null,
+          classifierDetected: c.detected,
+          classifierOk: c.ok,
+          classifierCategory: c.category ?? null,
+          classifierReason: c.reason,
+          agreed,
+          latencyMs
+        }
+      })
+      .catch(() => {});
+    if (!agreed) {
+      console.warn(
+        `[distress-shadow] DISAGREEMENT regex=${params.regex.detected}(${params.regex.label ?? '-'}) ` +
+          `classifier=${c.detected}(${c.category ?? '-'}, ok=${c.ok}) :: "${params.text.slice(0, 80)}"`
+      );
+    }
+  } catch {
+    // shadow logging must never affect the live path
+  }
+}
+
 /**
  * Full async scan — HARD + SOFT+combo (sync) then MEDIUM tier (Haiku confirm).
  * This is the function called by ai-engine.ts Layer 2 and webhook-processor.ts
  * Layer 1.
+ *
+ * With `opts.shadowClassifier`, additionally runs the classifier-first detector
+ * in the background and logs a regex-vs-classifier comparison row (regex stays
+ * authoritative — shadow only).
  */
 export async function detectDistress(
+  text: string,
+  opts: DetectDistressOptions = {}
+): Promise<DistressDetectionResult> {
+  const regexResult = await detectDistressRegexTiers(text);
+  // Shadow mode: run the classifier-first detector alongside and log the
+  // comparison, but return the AUTHORITATIVE regex verdict. Fire-and-forget.
+  if (opts.shadowClassifier) {
+    void logDistressShadow({
+      text,
+      regex: regexResult,
+      conversationId: opts.conversationId,
+      accountId: opts.accountId
+    });
+  }
+  return regexResult;
+}
+
+// The current regex-authoritative detector (HARD/SOFT sync + MEDIUM Haiku
+// confirm). Unchanged behavior — extracted so detectDistress can wrap it with
+// shadow-mode logging.
+async function detectDistressRegexTiers(
   text: string
 ): Promise<DistressDetectionResult> {
   // Run sync tiers first — if they fire, skip the LLM call entirely

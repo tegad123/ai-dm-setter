@@ -1872,6 +1872,35 @@ model GenerationTurnTrace {
   @@index([accountId, createdAt])
 }
 
+// Shadow-mode comparison ledger for the classifier-first distress rollout.
+// While regex stays AUTHORITATIVE, the LLM classifier runs alongside and its
+// verdict is recorded here (never acted on) so the classifier's fire rate can
+// be reviewed against regex on real traffic — "data, not vibes" — before the
+// authoritative flip. `agreed=false` rows are the review queue: every case the
+// classifier would have paused that regex did not (or vice-versa).
+model DistressShadowLog {
+  id             String   @id @default(cuid())
+  conversationId String?
+  accountId      String?
+  // The inbound text (capped at write time).
+  messageText    String   @db.Text
+  // Regex (currently authoritative) verdict.
+  regexDetected  Boolean
+  regexLabel     String?
+  // Classifier (shadow) verdict.
+  classifierDetected Boolean
+  classifierOk   Boolean  // false = classifier unavailable/errored (fail-closed signal)
+  classifierCategory String?
+  classifierReason String?
+  // Do the two agree? false rows are the joint-review queue.
+  agreed         Boolean
+  latencyMs      Int?
+  createdAt      DateTime @default(now())
+
+  @@index([agreed, createdAt])
+  @@index([conversationId, createdAt])
+}
+
 model Script {
   id                 String           @id @default(cuid())
   accountId          String
