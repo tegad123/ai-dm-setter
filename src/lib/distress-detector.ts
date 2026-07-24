@@ -83,8 +83,14 @@ const HARD_PATTERNS: Signal[] = [
     label: 'self_harm'
   },
   {
+    // Tolerate intervening adverbs ("even", "really", "just", "also") between
+    // "dont" and "want/wanna", and an optional "anymore" suffix — live Shazim
+    // repro 2026-07-24 MISSED "dont even wanna be here anymore" because the old
+    // pattern required "dont" directly adjacent to "want/wanna" and to
+    // "live/be here". (Interim regex patch; the classifier-first close is what
+    // ultimately covers arbitrary phrasing.)
     pattern:
-      /\b(rather\s+be\s+dead|better\s+off\s+dead|don'?t\s+(want|wanna)\s+to?\s*(live|be\s+here)|dont\s+wanna\s+be\s+here|tired\s+of\s+living|not\s+worth\s+living|no\s+reason\s+to\s+live|what'?s\s+the\s+point\s+of\s+living)\b/i,
+      /\b(rather\s+be\s+dead|better\s+off\s+dead|don'?t\s+(even\s+|really\s+|just\s+|also\s+)?(want|wanna)\s+(to\s+)?(live|be\s+here)(\s+anymore)?|dont\s+(even\s+|really\s+|just\s+)?wanna\s+be\s+here(\s+anymore)?|tired\s+of\s+living|not\s+worth\s+living|no\s+reason\s+to\s+live|what'?s\s+the\s+point\s+of\s+living)\b/i,
     label: 'indirect_ideation'
   },
   {

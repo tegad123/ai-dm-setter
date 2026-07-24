@@ -68,6 +68,15 @@ const cases: Array<[string, boolean, string]> = [
   ['dont wanna be here anymore', true, 'F1 — indirect, no apostrophe'],
   ["what's the point of any of this", true, 'F1 — "any of this" (was: living)'],
   ["i'm done with everything", true, 'F1 — "everything" (was: life)'],
+  // F1 — live Shazim repro 2026-07-24 MISS: intervening "even" broke the
+  // adjacency the pattern required. These must never regress.
+  [
+    'honestly some days i dont even wanna be here anymore',
+    true,
+    'F1 — PROD MISS: "dont EVEN wanna be here anymore"'
+  ],
+  ['i dont really want to live anymore', true, 'F1 — "really" + "anymore"'],
+  ['i just dont wanna be here anymore', true, 'F1 — "just" intervening'],
   // False-positive guards for the widened patterns above.
   [
     'this market is killing me',
