@@ -116,3 +116,34 @@ The AI shipped *"the call with Anthony is free though, we give you a gameplan…
 - Fix: `lowTicketHardHarmFailed` guard on both best-effort branches + verbatim-recovery path; new priority branch injects a safe website-link line (AI stays active) instead of shipping the pitch or cold-escalating. Gate-level regression added (exact shipped text hard-fails under suppressBookingLanguage; does NOT fire on a qualification persona).
 
 **Process note (for Tega):** this is the live repro doing exactly its job — two unit-green fixes exposed as incomplete on real production data, caught before Daniel's leads hit them. Re-verification of the full 7-message sequence pending the `00b0ea5` deploy, then Ali on both accounts.
+
+---
+
+## Full-pipeline research + comprehensive fixes (2026-07-23)
+After the live repro exposed leak-11/12/13 as partial, we STOPPED hotfixing and did an evidence-based end-to-end trace of the three failure classes (three parallel research agents, file:line for every claim, grounded in the real failed-run traces). Findings: each earlier fix covered only a fraction of its surface. The comprehensive fixes cover the whole surface, one class per commit, with tests at the predicate/integration layer rather than isolated units.
+
+### `0d3287f` — leak-14 · Class 3: send-time low-ticket re-gate (TRUE P0 leak root)
+The generation-time gate DID catch the Anthony bubble. The leak shipped on the **multi-bubble drip-send path** (`deliverBubbleGroup`), which sent bubbles over 8–15s with NO per-bubble re-check and aborted only on a HUMAN takeover — not on the gate verdict and not on the LEAD reply that arrived mid-group. leak-13 lived upstream in the generation exhaustion loop and never ran there. Fix: ONE `lowTicketHarmCategory` predicate (broadened to catch the many phrasings the old regexes missed — "let's set up a call", "what timezone are you in?", "how much you working with", "i'll have my closer reach out") enforced at THREE layers: generation gate, egress choke point, and per-bubble at drip-send + recover-stale-bubbles cron; LEAD reply now aborts a group too. Test: 32/32 (22 harmful blocked incl. exact live line + every regex-miss; 10 safe allowed).
+
+### `28199ef` — leak-15 · Class 1: gate all step-completion paths
+`replyAnswersAsk` was wired into only 2 of ~7 completion paths. The live 3→4 deferral advanced through `completed_by_judgment_ask_reply` (deep-why = ask+wait+runtime_judgment, returns before the gated plain-ASK paths). Fix: gate the judgment path while preserving its anti-loop purpose (hold on a non-answer for the first 1–2 asks, then force-complete so a serial deflector can't park forever). Hardened `replyAnswersAsk` against research-found false-pass ("why do I need", long pure questions, pricing paraphrases) and false-block (real answers ending in a question / deferring timing while stating a number).
+
+### `896f8d0` — leak-16 · Class 2: close all fabricated-variable binding paths
+F6 (leak-12) covered 1 of ~7 writer classes. Fix: extracted the ONE hardened answer-satisfaction predicate into a shared leaf module (`answer-satisfaction.ts`) so the recovery and resolver layers can't drift (the drift was the gap); gated the branchHistory-inference and anchored numeric extractors on it; extended the explicit-only set to obstacle/deepWhy/desiredOutcome/urgency/lifeImpact; split the recovery-side deepWhy↔desiredOutcome alias collapse; fixed the `extractedFromMessageId`-set-to-a-timestamp data-integrity bug.
+
+**Commit → finding map (for Tega's final message):**
+| Commit | Finding | |
+|---|---|---|
+| `cbb2e85` | instrumentation + false-alert copy | |
+| `9e55a78` | F1a terminal distress pause | |
+| `c1de3ba` | F1b interim detection | |
+| `5205689` | F2 hardcoded Anthony + booking prose (prompt-side) | |
+| `fe9f993` | classifier timeout (standing P0) | |
+| `637b976` | F3/F4/F5/F6 first pass (gate/floor/sentinel) | superseded by 14–16 |
+| `f852749` | F6 deeper — LLM extractor fabrication | folded into leak-16 |
+| `00b0ea5` | F2 exhaustion-ship guard | superseded by leak-14 |
+| **`0d3287f`** | **Class 3 — send-time low-ticket re-gate (P0 leak root)** | comprehensive |
+| **`28199ef`** | **Class 1 — all step-completion paths gated** | comprehensive |
+| **`896f8d0`** | **Class 2 — all variable-binding paths gated** | comprehensive |
+
+Pending: re-run the full 7-message repro on Seemal AND Shazim once `896f8d0` deploys; Ali independent verification on both.
