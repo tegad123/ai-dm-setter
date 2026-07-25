@@ -200,3 +200,21 @@ The LLM classifier becomes the PRIMARY detector; regex demotes to a fast-path ac
 **Two-account live verification: ALL of F1–F6 pass on both Seemal + Shazim.** Health-check demo fires. Classifier-first 8/8 live incl. the regex-impossible caregiving cases.
 
 **The ONE remaining item is Ali's independent sign-off** — everything he needs (conv IDs, before/after, commit map) is in this log.
+
+---
+
+# ADVERSARIAL RUN #2 RESPONSE (2026-07-25)
+
+Tega's run-2 (conv `cmrzgulcs000rjm047g6w3t7q`): F1/F2/F4 PASS, F3/F5 FAIL, F6 intermittent, N1–N4 new. Every finding root-caused from the ACTUAL TRACE (not transcript), fixed, unit-locked. Multi-run live verification pending deploy.
+
+| Commit | Finding | Trace-proven root cause → fix |
+|---|---|---|
+| `4993063` | trace access (Tega's immediate demand) | `/dashboard/traces` viewer + `GET /api/conversations/[id]/traces` + `TRACE_REPORTS_RUN2.md` (dumps for Tega's conv + Ali's 3 REAL convs — his PDF pasted wrong IDs; his runs were fresh: `cmrz6atll…`, `cmrz7b8fw…`, `cmrz8jz1…`) |
+| `00e394a` | **N1 P0** — link never delivered | 3 stacked: verbatim soft-fail dropped step-7's bridge MSG; step 7 parked on wait; **step-8 send_link URL is the example.com PLACEHOLDER in the active script**. Fix: required-MSG appended verbatim at exhaustion; send_link enforcement at final return (append missing link / swap echoed placeholder / never ship dead link + throttled "Funnel link not configured" alert). CONFIG NEEDED from Tega/Daniel: set the real funnel URL. |
+| `4a3673b` | **F3 P0** — slot-offset binding | urgency←deep-why answer [llm], life_impact←consequence answer [branchHistory]. Fix: question-anchored binding — buildVariableAskAnchors from the script; LLM tier scoped to the variable's own (ask→reply) pair; branchHistory only from the variable's own step; no anchor answered → NO guess, template renders without it. Unit test reproduces run-2 exactly. |
+| `986425c` | **N3** — 9-min silence + retry storm | scheduledReply burned 5 attempts; each regenerated draft dropped WHOLE at egress verbatim gate; FAILED + awaitingAiResponse=false = heartbeat-invisible (the 4h Ali Hamza case). Fix: egress ships best single bubble instead of silence (the blocked reply was the CORRECT re-ask); 5 ship-time guards + cron terminal path now heartbeat-recoverable. |
+| `6ffcd72` | **F5** — content regression | Steps were MONOTONIC (floor worked); the CONTENT regressed via fully IMPROVISED questions (script has no obstacle step at all). Fix: earlier_step_ask_regression + reasks_captured_variable (anchor-driven) + offscript_question_on_lowticket hard-fail; exhaustion re-drives the current step's scripted ask. Legit re-drive (F4-correct re-ask) proven NOT to fail. |
+| `f1676aa` | **N4** — false "AI sent unverified response" | Audit row written at GENERATION, before delivery; egress can suppress after. Fix: dashboard verifies an AI message actually exists in the delivery window; blocked rows render "AI reply was blocked before sending". |
+| `eb20da8` | **F6 + F2-gap** | deep_why="leave my job" (life-impact language) via default-true volunteer cue → per-slot semantic cues (deepWhy/lifeImpact/obstacle). Fit language ("not everyone has what it takes") shipped post-fix in Ali's own screenshot → 'qualification' harm category, hard-failed + in the never-best-effort set + auto-covered at all send-time re-gates. |
+
+**N2** (branch copy mismatch) — downstream of F3 binding; re-check in the multi-run. **Verification protocol:** Tega's exact 8-message repro **3× on fresh leads**, trace-checked per turn (F6 intermittency = the finding, so single-pass is insufficient), then Ali re-runs with trace access, then Tega spot-check.
