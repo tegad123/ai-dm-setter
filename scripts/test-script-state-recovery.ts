@@ -1001,6 +1001,149 @@ function run() {
     'F5: off-script question stays soft on qualification personas'
   );
 
+  // ── Capital P0 (2026-07-26, Tega trace review — Ahmed Shah false binding) ──
+  // Live prod message that minted verifiedCapitalUsd=10000 on a low-ticket
+  // persona: income GOAL ($10k/month rate) + "spend more TIME with my family".
+  const ahmedMessage =
+    'Yeah, my current income goal is around $10,000 a month, my main obstacle ' +
+    'right now is just not having a predictable client acquisition system, ' +
+    'and honestly, the deep why behind all of this is that I want financial ' +
+    'freedom so I can spend more time with my family without stressing about cash flow';
+  const ahmedHistory = [
+    {
+      id: 'ai_deepwhy_q',
+      sender: 'AI' as const,
+      content:
+        "what's your income goal and what's the deep why behind wanting this?",
+      timestamp: new Date('2026-07-25T10:00:00Z')
+    },
+    {
+      id: 'lead_ahmed',
+      sender: 'LEAD' as const,
+      content: ahmedMessage,
+      timestamp: new Date('2026-07-25T10:01:00Z')
+    }
+  ];
+
+  // 1) HIGH-TICKET persona: signal/rate/fallback hardening alone must refuse
+  //    to read Ahmed's message as capital ("spend more time" is not money;
+  //    "$10,000 a month" is a rate; no amount in the capital clause).
+  const ahmedHighTicket = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: ahmedHistory
+  });
+  assert.equal(
+    ahmedHighTicket.verifiedCapitalUsd,
+    undefined,
+    'capital-P0: Ahmed message must not bind capital on ANY persona'
+  );
+  assert.equal(
+    ahmedHighTicket.capitalThresholdMet,
+    undefined,
+    'capital-P0: Ahmed message must not stamp capitalThresholdMet'
+  );
+
+  // 2) LOW-TICKET persona: the entire capital machinery is disarmed — even a
+  //    textbook volunteered-capital statement must not bind.
+  const lowTicketVolunteered = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    promptConfig: { disableLeadStageProgression: true },
+    history: [
+      {
+        id: 'lead_vol',
+        sender: 'LEAD' as const,
+        content: "i've got about 5k saved up to put toward this",
+        timestamp: new Date('2026-07-25T10:01:00Z')
+      }
+    ]
+  });
+  assert.equal(
+    lowTicketVolunteered.verifiedCapitalUsd,
+    undefined,
+    'capital-P0: low-ticket persona never binds volunteered capital'
+  );
+  assert.equal(
+    lowTicketVolunteered.capitalThresholdMet,
+    undefined,
+    'capital-P0: low-ticket persona never stamps capitalThresholdMet'
+  );
+
+  // 3) Positive control: legit volunteered capital still binds on high-ticket.
+  const highTicketVolunteered = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'lead_vol2',
+        sender: 'LEAD' as const,
+        content: "i've got about 5k saved up to put toward this",
+        timestamp: new Date('2026-07-25T10:01:00Z')
+      }
+    ]
+  });
+  assertHigh(
+    highTicketVolunteered,
+    'verifiedCapitalUsd',
+    5000,
+    'capital-P0: high-ticket volunteered capital still binds'
+  );
+
+  // 4) Bundled goal+capital: clause scoping still binds the CAPITAL figure,
+  //    not the income-goal rate that appears later in the same clause.
+  const bundled = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'lead_bundled',
+        sender: 'LEAD' as const,
+        content: "i've got 5k saved and i want to make 10k a month eventually",
+        timestamp: new Date('2026-07-25T10:01:00Z')
+      }
+    ]
+  });
+  assertHigh(
+    bundled,
+    'verifiedCapitalUsd',
+    5000,
+    'capital-P0: rate guard is amount-adjacent, bundled 5k still binds'
+  );
+
+  // 5) Pure rate must never parse as capital, any persona.
+  const rateOnly = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'lead_rate',
+        sender: 'LEAD' as const,
+        content: 'i have $2,000 a month coming in from my job',
+        timestamp: new Date('2026-07-25T10:01:00Z')
+      }
+    ]
+  });
+  assert.equal(
+    rateOnly.verifiedCapitalUsd,
+    undefined,
+    'capital-P0: "$2,000 a month" is a rate, never capital'
+  );
+
+  // 6) "spend more time/energy" phrasing alone must not signal capital.
+  const spendTime = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'lead_time',
+        sender: 'LEAD' as const,
+        content:
+          'i just want freedom so i can spend more time with my kids, maybe 3 days a week',
+        timestamp: new Date('2026-07-25T10:01:00Z')
+      }
+    ]
+  });
+  assert.equal(
+    spendTime.verifiedCapitalUsd,
+    undefined,
+    'capital-P0: "spend more time" is not a capital signal'
+  );
+
   console.log('script-state recovery tests passed');
 }
 

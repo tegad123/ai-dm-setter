@@ -2254,8 +2254,30 @@ function extractVolunteeredCapital(params: {
     // onward — so "5k saved" is read, not the earlier income-goal figure.
     const signalIdx = signalMatch.index ?? 0;
     const capitalClause = content.slice(signalIdx);
-    const amount = extractAmountUSD(capitalClause) ?? extractAmountUSD(content);
+    // P0 (2026-07-26): clause-ONLY. The old `?? extractAmountUSD(content)`
+    // fallback defeated the bundled-message guard above — when the capital
+    // clause had no number ("I can spend more time with my family"), it fell
+    // back to the WHOLE message and grabbed the income-goal figure. No amount
+    // in the capital clause = no capital statement, full stop.
+    const amount = extractAmountUSD(capitalClause);
     if (typeof amount !== 'number' || amount <= 0) continue;
+    // Rate-vs-stock guard: "$10,000 a month" is an income RATE, not capital.
+    // Checked on the text IMMEDIATELY AFTER the parsed amount (not the whole
+    // clause) so "i've got 5k saved and want 10k a month" still binds the 5k.
+    // Applies to ALL personas, not just low-ticket.
+    const amountMatch = capitalClause.match(
+      /\b\$?\s*(?:at\s+least\s+|need\s+|make\s+|earn\s+|around\s+|about\s+|roughly\s+|maybe\s+|like\s+|approximately\s+)?(\d+(?:[.,]\d+)?)\s*([km])?\b/i
+    );
+    const afterAmount = amountMatch
+      ? capitalClause.slice((amountMatch.index ?? 0) + amountMatch[0].length)
+      : '';
+    if (
+      /^\s*(?:usd\s*|dollars?\s*)?(?:(?:a|per|\/)\s*(?:month|mo|week|wk|year|yr)|monthly|weekly|yearly)\b/i.test(
+        afterAmount
+      )
+    ) {
+      continue;
+    }
     const ts = new Date(msg.timestamp).getTime();
     if (!best || ts >= best.ts) {
       best = { amount, id: msg.id ?? null, ts };
@@ -2963,13 +2985,26 @@ function extractDataPoints(params: {
   }) as CapturedDataPoints;
   const threshold = params.persona?.minimumCapitalRequired ?? null;
 
-  extractCapitalDataPoints({
-    points,
-    history: params.history,
-    threshold,
-    durableStatus: params.durableStatus,
-    durableAmount: params.durableAmount
-  });
+  // P0 (2026-07-26, Tega trace review): capital qualification machinery must
+  // NOT run on personas that disable stage progression — their scripts have no
+  // capital step, so there is nothing to verify and any capture is by
+  // definition a false qualification. Live proof (Ahmed Shah,
+  // cmrz6atll000ml70470dpk5dv): "my current income goal is around $10,000 a
+  // month ... so I can spend more time with my family" minted
+  // verifiedCapitalUsd=10000 / capitalThresholdMet=true at HIGH.
+  const capitalMachineryDisabled =
+    (params.persona?.promptConfig as Record<string, unknown> | null | undefined)
+      ?.disableLeadStageProgression === true;
+
+  if (!capitalMachineryDisabled) {
+    extractCapitalDataPoints({
+      points,
+      history: params.history,
+      threshold,
+      durableStatus: params.durableStatus,
+      durableAmount: params.durableAmount
+    });
+  }
 
   // Phase 7B (2026-06-09): capture VOLUNTEERED capital EVERY turn. The
   // question-anchored extractCapitalDataPoints above only fires when an AI
@@ -2978,7 +3013,9 @@ function extractDataPoints(params: {
   // this, verifiedCapitalUsd stays null until the LLM emits a high-intent stage
   // (the old async passive scan) — a chicken-and-egg that dead-ended the funnel.
   // Runs synchronously here so it's captured on the SAME turn the lead says it.
-  extractVolunteeredCapital({ points, history: params.history, threshold });
+  if (!capitalMachineryDisabled) {
+    extractVolunteeredCapital({ points, history: params.history, threshold });
+  }
 
   extractAffirmationAfterPrompt({
     points,
@@ -6415,8 +6452,12 @@ export function isSelfRecoveryTrigger(params: {
  * ("lost 5k", "made 5k last month") that `parseLeadCapitalAnswer` would
  * otherwise pass as kind='amount' since its disqualifier list is narrower.
  */
+// P0 hardening (2026-07-26): the (invest|put|commit|spend) branch matched
+// "so I can SPEND more TIME with my family" — spending TIME, not money — and
+// that false signal is what minted capital from an income goal on Ahmed Shah.
+// The verb branch now refuses time/energy/effort objects.
 const PASSIVE_CAPITAL_SIGNAL_PHRASES =
-  /\b(i\s+have(\s+(around|about|roughly|currently))?|i'?ve\s+(got|saved)|i\s+saved|saved\s+up|i\s+(can|will|am\s+ready\s+to)\s+(invest|put|commit|spend)|i'?m\s+(putting|investing|working\s+with|ready\s+to\s+(invest|put))|my\s+budget(\s+is)?|i\s+got(\s+about|\s+around)?\s+\S+\s+(saved|to\s+(invest|put|spend|use)))\b/i;
+  /\b(i\s+have(\s+(around|about|roughly|currently))?|i'?ve\s+(got|saved)|i\s+saved|saved\s+up|i\s+(can|will|am\s+ready\s+to)\s+(invest|put|commit|spend)(?!\s+(more\s+)?(time|energy|effort|hours))|i'?m\s+(putting|investing|working\s+with|ready\s+to\s+(invest|put))|my\s+budget(\s+is)?|i\s+got(\s+about|\s+around)?\s+\S+\s+(saved|to\s+(invest|put|spend|use)))\b/i;
 
 /**
  * Negative-context guard: phrases that put a number in an anti-capital
@@ -6428,7 +6469,7 @@ const PASSIVE_CAPITAL_SIGNAL_PHRASES =
  * unqualified lead through to booking.
  */
 const PASSIVE_NEGATIVE_CONTEXT =
-  /\b(i\s+(lost|made|owe|spent|wasted|blew|burned|earn|earned|make)|lost\s+(in\s+)?(the\s+)?(market|trade|trading)|i'?m\s+(making|earning|losing|paying)|my\s+(salary|income|paycheck|job\s+pays?)|paid?\s+(me|us)\s+\$?\d)/i;
+  /\b(i\s+(lost|made|owe|spent|wasted|blew|burned|earn|earned|make)|lost\s+(in\s+)?(the\s+)?(market|trade|trading)|i'?m\s+(making|earning|losing|paying)|my\s+(salary|income|paycheck|job\s+pays?)|my\s+(current\s+)?(income|revenue)\s+goal|paid?\s+(me|us)\s+\$?\d)/i;
 
 /**
  * F5.1 passive scan: when the LLM emits a high-intent stage but capital was
@@ -6458,7 +6499,7 @@ async function scanForPassiveCapitalQualification(
               select: {
                 personas: {
                   take: 1,
-                  select: { minimumCapitalRequired: true }
+                  select: { minimumCapitalRequired: true, promptConfig: true }
                 }
               }
             }
@@ -6466,8 +6507,16 @@ async function scanForPassiveCapitalQualification(
         }
       }
     });
-    threshold =
-      row?.lead?.account?.personas?.[0]?.minimumCapitalRequired ?? null;
+    const persona = row?.lead?.account?.personas?.[0] ?? null;
+    // P0 (2026-07-26): low-ticket personas have no capital step — the passive
+    // scan must never qualify/disqualify on capital for them.
+    if (
+      (persona?.promptConfig as Record<string, unknown> | null | undefined)
+        ?.disableLeadStageProgression === true
+    ) {
+      return null;
+    }
+    threshold = persona?.minimumCapitalRequired ?? null;
   } catch {
     return null;
   }
@@ -6766,6 +6815,7 @@ export function extractCapturedDataPointsForTest(params: {
   minimumCapitalRequired?: number | null;
   durableStatus?: string | null;
   durableAmount?: number | null;
+  promptConfig?: Prisma.JsonValue | null;
 }): CapturedDataPoints {
   return extractDataPoints({
     existing: params.existing,
@@ -6776,7 +6826,7 @@ export function extractCapturedDataPointsForTest(params: {
       capitalVerificationPrompt: null,
       freeValueLink: null,
       downsellConfig: null,
-      promptConfig: null
+      promptConfig: params.promptConfig ?? null
     },
     durableStatus: params.durableStatus,
     durableAmount: params.durableAmount

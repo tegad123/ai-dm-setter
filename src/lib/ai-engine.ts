@@ -3228,7 +3228,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       objectionHandling: true
     }
   });
-  const capitalThreshold = personaForGate?.minimumCapitalRequired ?? null;
+  // P0 (2026-07-26, Tega trace review): low-ticket funnel personas have NO
+  // capital step — nulling the threshold at the source disarms the ENTIRE
+  // capital machinery downstream (R24 booking-handoff gate, passive capital
+  // listener, EARLY CAPITAL GATE / NEXT SLOT: CAPITAL directives,
+  // capitalVerificationRequired voice-gate flag), since every arm conditions
+  // on capitalThreshold > 0. Live proof this was armed: Ahmed Shah
+  // (cmrz6atll000ml70470dpk5dv) got verifiedCapitalUsd=10000 minted from an
+  // income-goal sentence on a persona whose script never asks about capital.
+  const capitalThreshold = personaConfigDisablesStageProgression(
+    personaForGate?.promptConfig
+  )
+    ? null
+    : (personaForGate?.minimumCapitalRequired ?? null);
   const capitalCustomPrompt = personaForGate?.capitalVerificationPrompt ?? null;
   // Audit F2.2 — multi-tenant downsell wording. Pull product name + price
   // from persona.downsellConfig with daetradez-compatible fallbacks so
