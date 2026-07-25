@@ -7541,9 +7541,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     const PLACEHOLDER_URL_RE =
       /https?:\/\/(www\.)?(example\.(com|org|net)|your-?domain\.[a-z]+|placeholder\.[a-z]+)\S*/gi;
     const URL_RE = /https?:\/\/\S+/i;
-    const sendLinkActions = (
-      scriptStateSnapshot?.currentStep?.actions ?? []
-    ).filter(
+    // Pool step-level AND branch-level actions — production scripts keep all
+    // actions on branches (the daetradez script has ZERO step-level actions),
+    // so reading only currentStep.actions silently disabled this enforcement.
+    const currentStepAllActions = [
+      ...(scriptStateSnapshot?.currentStep?.actions ?? []),
+      ...(scriptStateSnapshot?.currentStep?.branches ?? []).flatMap(
+        (b) => b?.actions ?? []
+      )
+    ];
+    const sendLinkActions = currentStepAllActions.filter(
       (a: {
         actionType?: string;
         linkUrl?: string | null;

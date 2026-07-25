@@ -301,6 +301,40 @@ async function run() {
     'anchor from step-title hint'
   );
 
+  // CRITICAL regression (2026-07-25, found LIVE): production scripts keep ALL
+  // actions on BRANCHES — the daetradez script has ZERO step-level actions and
+  // the runtime loader even filters step actions to branchId:null. An anchor
+  // builder reading only step.actions receives empty pools and silently
+  // disables the entire F3/F5 anchoring (exactly what happened on the first
+  // post-deploy verification run). Branch-shaped steps MUST produce anchors.
+  const branchShaped = buildVariableAskAnchors([
+    {
+      stepNumber: 4,
+      title: 'Why the Goal Matters',
+      actions: [], // step-level empty — the production shape
+      branches: [
+        {
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content: 'Store as {{deepWhy}}.'
+            },
+            {
+              actionType: 'ask_question',
+              content: 'But why is {{goal}} so important to you though?'
+            }
+          ]
+        }
+      ]
+    }
+  ] as any);
+  assert.ok(
+    branchShaped.some(
+      (a) => a.variableName === 'deepWhy' && a.askContents.length > 0
+    ),
+    'CRITICAL: anchors must build from BRANCH-level actions (production shape)'
+  );
+
   console.log('variable-resolver F3 anchor tests passed');
 }
 
