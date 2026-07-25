@@ -28,6 +28,7 @@ import {
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
+import { isVerbatimRepeatBubble } from '@/lib/verbatim-normalize';
 import {
   recordGenerationTurn,
   type ResolvedVariableTrace
@@ -6451,6 +6452,52 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                 : mandatoryAskSkippedFailed
                   ? 'mandatory_ask_skipped'
                   : 'step_distance_violation';
+
+        // N1 (2026-07-25, Tega run-2 P0). When the exhausted gate is
+        // msg_verbatim_violation, do NOT ship the paraphrase WITHOUT the
+        // required [MSG] — append the literal required message(s) the gate says
+        // are missing. Live failure this fixes: step 7's bridge line ("This
+        // breaks down exactly how we help people go from where you're at to
+        // {{goal}}…") was dropped on this soft-fail path, so step 7 never
+        // completed and step 8's funnel link NEVER fired — the conversion path
+        // died. The system HAS the exact operator-authored text; shipping the
+        // model's ack + the verbatim [MSG] beats shipping the paraphrase alone.
+        if (msgVerbatimViolationFailed) {
+          const requiredLiterals = [
+            ...(activeBranchRequiredMessages ?? [])
+              .filter(
+                (m) =>
+                  !m.isPlaceholder &&
+                  typeof m.content === 'string' &&
+                  m.content.trim().length > 0
+              )
+              .map((m) => m.content.trim()),
+            ...currentStepRequiredMessagesForGate
+              .map((m) => (m ?? '').trim())
+              .filter((m) => m.length > 0)
+          ]
+            // never ship unresolved template braces
+            .filter((m) => !/\{\{[^}]+\}\}/.test(m));
+          const bubbles = Array.isArray(parsed.messages)
+            ? [...parsed.messages]
+            : [parsed.message];
+          let appended = 0;
+          for (const required of requiredLiterals) {
+            if (appended >= 2) break; // cap: at most 2 injected bubbles
+            // already present (verbatim or near-verbatim)? skip.
+            if (isVerbatimRepeatBubble(required, bubbles)) continue;
+            bubbles.push(required);
+            appended += 1;
+          }
+          if (appended > 0) {
+            parsed.messages = bubbles;
+            parsed.message = bubbles[0];
+            console.warn(
+              `[ai-engine] msg_verbatim exhaustion — appended ${appended} required [MSG] bubble(s) verbatim so the script content still ships (conv ${activeConversationId})`
+            );
+          }
+        }
+
         console.warn(
           `[ai-engine] ${gateType} gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate), logging audit row for dashboard review on convo ${activeConversationId}`
         );
@@ -7433,6 +7480,118 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     `.catch((e: unknown) =>
       console.error('[ai-engine] capitalQAskedCount increment failed:', e)
     );
+  }
+
+  // ── N1 (2026-07-25): deterministic funnel-link delivery ─────────────────
+  // The funnel's ONE conversion asset must be delivered by CODE, not model
+  // compliance. When the CURRENT step carries a send_link action:
+  //   • if the configured URL is real and no outbound bubble contains a URL,
+  //     append the link as its own bubble;
+  //   • if the configured URL is a PLACEHOLDER (the active daetradez script's
+  //     step-8 send_link is literally https://example.com/dae-funnel), NEVER
+  //     ship the dead link — strip it and fire a loud, throttled operator
+  //     alert that the funnel URL is unconfigured. We deliberately do NOT
+  //     fall back to persona.freeValueLink here: that is the free-value
+  //     YouTube asset, a different destination than the paid funnel page —
+  //     silently swapping would misdirect leads.
+  {
+    const PLACEHOLDER_URL_RE =
+      /https?:\/\/(www\.)?(example\.(com|org|net)|your-?domain\.[a-z]+|placeholder\.[a-z]+)\S*/gi;
+    const URL_RE = /https?:\/\/\S+/i;
+    const sendLinkActions = (
+      scriptStateSnapshot?.currentStep?.actions ?? []
+    ).filter(
+      (a: {
+        actionType?: string;
+        linkUrl?: string | null;
+        content?: string | null;
+      }) => a.actionType === 'send_link'
+    );
+    if (sendLinkActions.length > 0) {
+      const rawUrl = (
+        sendLinkActions
+          .map(
+            (a: { linkUrl?: string | null; content?: string | null }) =>
+              (a.linkUrl ?? '').trim() ||
+              ((a.content ?? '').match(URL_RE)?.[0] ?? '')
+          )
+          .find((u: string) => u.length > 0) ?? ''
+      ).trim();
+      const isPlaceholder =
+        rawUrl.length === 0 ||
+        new RegExp(PLACEHOLDER_URL_RE.source, 'i').test(rawUrl);
+      const bubbles = Array.isArray(parsed.messages)
+        ? [...parsed.messages]
+        : [parsed.message];
+
+      if (!isPlaceholder) {
+        // Real URL configured. Swap any placeholder the model echoed from the
+        // prompt, and guarantee the link ships if every bubble omitted it.
+        let mutated = false;
+        for (let i = 0; i < bubbles.length; i++) {
+          const swapped = bubbles[i].replace(PLACEHOLDER_URL_RE, rawUrl);
+          if (swapped !== bubbles[i]) {
+            bubbles[i] = swapped;
+            mutated = true;
+          }
+        }
+        if (!bubbles.some((b) => URL_RE.test(b))) {
+          bubbles.push(rawUrl);
+          mutated = true;
+          console.warn(
+            `[ai-engine] N1 link enforcement — send_link step active but no URL in outbound bubbles; appended configured link (conv ${activeConversationId})`
+          );
+        }
+        if (mutated) {
+          parsed.messages = bubbles;
+          parsed.message = bubbles[0];
+        }
+      } else {
+        // Placeholder / unconfigured. Strip dead links from the outbound and
+        // alert the operator loudly (once per hour per account).
+        const cleaned = bubbles
+          .map((b) => b.replace(PLACEHOLDER_URL_RE, '').trim())
+          .filter((b) => b.length > 0);
+        if (
+          cleaned.length !== bubbles.length ||
+          cleaned.some((b, i) => b !== bubbles[i])
+        ) {
+          parsed.messages = cleaned.length > 0 ? cleaned : [parsed.message];
+          parsed.message = parsed.messages[0];
+        }
+        console.error(
+          `[ai-engine] N1 FUNNEL LINK NOT CONFIGURED — current step has a send_link action but its URL is a placeholder (${rawUrl || 'empty'}). The funnel cannot convert until the real URL is set on the script's send_link action. (conv ${activeConversationId})`
+        );
+        try {
+          const titlePrefix = 'Funnel link not configured';
+          const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+          const existing = await prisma.notification.findFirst({
+            where: {
+              accountId,
+              type: 'SYSTEM',
+              title: { contains: titlePrefix },
+              createdAt: { gte: oneHourAgo }
+            },
+            select: { id: true }
+          });
+          if (!existing) {
+            await prisma.notification.create({
+              data: {
+                accountId,
+                type: 'SYSTEM',
+                title: `${titlePrefix} — link step cannot deliver`,
+                body: `The active script's send_link step still holds a placeholder URL (${rawUrl || 'empty'}). Set the real funnel URL on the script's Send Link action — until then the funnel has no conversion path.`
+              }
+            });
+          }
+        } catch (nErr) {
+          console.error(
+            '[ai-engine] N1 placeholder-link notification failed (non-fatal):',
+            nErr
+          );
+        }
+      }
+    }
   }
 
   // Blocker 2 (daetradez low-ticket): for personas that disable stage
