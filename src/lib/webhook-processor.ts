@@ -4716,8 +4716,12 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          awaitingAiResponse: false,
-          awaitingSince: null
+          // N3 (2026-07-25): heartbeat-recoverable, not a dead-end. awaitingAiResponse
+          // stays TRUE so silent-stop-heartbeat re-drives within ~10 min if the
+          // operator has not acted — a blocked send must never be permanent silence.
+          awaitingAiResponse: true,
+          awaitingSince: new Date(),
+          lastSilentStopAt: new Date()
         }
       });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -4772,8 +4776,12 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          awaitingAiResponse: false,
-          awaitingSince: null
+          // N3 (2026-07-25): heartbeat-recoverable, not a dead-end. awaitingAiResponse
+          // stays TRUE so silent-stop-heartbeat re-drives within ~10 min if the
+          // operator has not acted — a blocked send must never be permanent silence.
+          awaitingAiResponse: true,
+          awaitingSince: new Date(),
+          lastSilentStopAt: new Date()
         }
       });
       await prisma.voiceQualityFailure
@@ -4840,8 +4848,12 @@ async function sendAIReply(
         await prisma.conversation.update({
           where: { id: conversationId },
           data: {
-            awaitingAiResponse: false,
-            awaitingSince: null
+            // N3 (2026-07-25): heartbeat-recoverable, not a dead-end. awaitingAiResponse
+            // stays TRUE so silent-stop-heartbeat re-drives within ~10 min if the
+            // operator has not acted — a blocked send must never be permanent silence.
+            awaitingAiResponse: true,
+            awaitingSince: new Date(),
+            lastSilentStopAt: new Date()
           }
         });
         const { escalate } = await import('@/lib/escalation-dispatch');
@@ -4906,8 +4918,12 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          awaitingAiResponse: false,
-          awaitingSince: null
+          // N3 (2026-07-25): heartbeat-recoverable, not a dead-end. awaitingAiResponse
+          // stays TRUE so silent-stop-heartbeat re-drives within ~10 min if the
+          // operator has not acted — a blocked send must never be permanent silence.
+          awaitingAiResponse: true,
+          awaitingSince: new Date(),
+          lastSilentStopAt: new Date()
         }
       });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -4979,8 +4995,12 @@ async function sendAIReply(
       await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          awaitingAiResponse: false,
-          awaitingSince: null
+          // N3 (2026-07-25): heartbeat-recoverable, not a dead-end. awaitingAiResponse
+          // stays TRUE so silent-stop-heartbeat re-drives within ~10 min if the
+          // operator has not acted — a blocked send must never be permanent silence.
+          awaitingAiResponse: true,
+          awaitingSince: new Date(),
+          lastSilentStopAt: new Date()
         }
       });
       const { escalate } = await import('@/lib/escalation-dispatch');
@@ -5320,16 +5340,46 @@ async function sendAIReply(
             result.messages = urlBubbles;
             result.reply = urlBubbles[0] ?? result.reply;
           } else {
-            console.warn(
-              `[webhook-processor] egress re-validation: nothing left to ship on ${conversationId} — skipping`
-            );
-            await prisma.conversation
-              .update({
-                where: { id: conversationId },
-                data: { awaitingAiResponse: false, awaitingSince: null }
-              })
-              .catch(() => null);
-            return;
+            // N3 (2026-07-25, Tega run-2): this used to SKIP the ship entirely,
+            // which produced a 9-minute silence at the lead's highest-intent
+            // moment ("how much is it") and a 5-attempt regenerate-and-drop
+            // storm — every attempt regenerated a near-identical draft, the
+            // gate dropped it whole, and the scheduledReply died FAILED with
+            // "completed without delivering an AI Message". The blocked reply
+            // (the deep-why RE-ASK after a non-answer) was actually the CORRECT
+            // reply — a near-repeat re-ask beats silence, full stop. Ship the
+            // single best bubble instead of nothing: prefer the last question
+            // bubble (a re-drive of the current ask), else the last bubble.
+            const fallback =
+              [...finalBubbles]
+                .reverse()
+                .find((b) => (b ?? '').includes('?') && (b ?? '').trim()) ??
+              [...finalBubbles].reverse().find((b) => (b ?? '').trim()) ??
+              null;
+            if (fallback) {
+              console.warn(
+                `[webhook-processor] egress re-validation: all bubbles were repeats on ${conversationId} — shipping best single bubble instead of silence (N3)`
+              );
+              result.messages = [fallback];
+              result.reply = fallback;
+            } else {
+              console.warn(
+                `[webhook-processor] egress re-validation: nothing left to ship on ${conversationId} — leaving heartbeat-recoverable`
+              );
+              // Keep the conversation visible to silent-stop-heartbeat (it
+              // requires awaitingAiResponse=true) so recovery is ≤10 min, not
+              // a permanent stall the dashboard only notices at 4h.
+              await prisma.conversation
+                .update({
+                  where: { id: conversationId },
+                  data: {
+                    awaitingAiResponse: true,
+                    lastSilentStopAt: new Date()
+                  }
+                })
+                .catch(() => null);
+              return;
+            }
           }
         } else {
           result.messages = meaningful;

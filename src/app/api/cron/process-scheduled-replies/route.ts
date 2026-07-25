@@ -482,16 +482,19 @@ export async function GET(req: NextRequest) {
         await prisma.conversation
           .update({
             where: { id: reply.conversationId },
-            data: terminalFailure
-              ? {
-                  awaitingAiResponse: false,
-                  awaitingSince: null,
-                  lastSilentStopAt: new Date()
-                }
-              : {
-                  awaitingAiResponse: true,
-                  lastSilentStopAt: new Date()
-                }
+            // N3 (2026-07-25, Tega run-2): terminal failure used to set
+            // awaitingAiResponse=false, which makes the conversation INVISIBLE
+            // to silent-stop-heartbeat (it filters awaitingAiResponse=true) —
+            // the lead got permanent silence until a human noticed the 4h
+            // "stuck" tile. Keep it heartbeat-visible: the heartbeat's
+            // contextual re-engagement is the recovery of last resort. The
+            // operator alert (alertTerminalScheduledReplyFailure above) still
+            // fires either way.
+            data: {
+              awaitingAiResponse: true,
+              awaitingSince: new Date(),
+              lastSilentStopAt: new Date()
+            }
           })
           .catch(() => null);
         failed++;
