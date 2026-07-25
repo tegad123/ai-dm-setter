@@ -3792,6 +3792,27 @@ function hasRequirementSpecificVolunteeredCue(
       return /\b(capital|saved|set\s+aside|funds?|cash|budget|invest|investment|start\s+with|account\s+size|ready\s+to\s+start)\b/i.test(
         content
       );
+    // F6 (2026-07-25, Tega run-2): prose requirements used to fall through to
+    // `default: true` — ANY keyword-bearing volunteered clause bound to
+    // whichever prose slot the upcoming step needed. Run-2 proof:
+    // deep_why="leave my job" (that is LIFE-IMPACT language, not motivation).
+    // Each prose slot now requires its OWN semantic cue, so "leave my job"
+    // volunteers into life impact and "tired of trading time for money /
+    // want to be free" into deep why — never cross-bound.
+    case 'deepWhy':
+    case 'deep_why':
+      return /\b(because|tired\s+of|sick\s+of|hate|fed\s+up|freedom|be\s+free|matters?\s+to\s+me|reason|driving|done\s+with|why\s+i)\b/i.test(
+        content
+      );
+    case 'lifeImpact':
+    case 'life_impact':
+      return /\b(quit|leave|leaving)\s+(my\s+)?(job|9.?5|nine.?to.?five)\b|\bfire\s+my\s+boss\b|\b(more\s+)?time\s+with\b|\bfamily|kids?|daughter|son|wife|husband\b|\btravel\b|\bday\s+to\s+day\b|\bbe\s+around\b|\bfull.?time\b/i.test(
+        content
+      );
+    case 'obstacle':
+      return /\b(struggl|stuck|blow(n|ing)?\s+(my\s+)?account|inconsisten|problem|holding\s+(me\s+)?back|keep\s+(losing|giving|blowing)|give\s+it\s+(all\s+)?back|revenge\s+trad|no\s+(real\s+)?(system|structure|plan)|wing(ing)?\s+it)\b/i.test(
+        content
+      );
     default:
       return true;
   }

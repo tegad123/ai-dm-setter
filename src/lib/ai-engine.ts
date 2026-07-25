@@ -4993,7 +4993,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     const lowTicketHardHarmFailed = quality.hardFails.some(
       (f) =>
         f.includes('booking_language_on_lowticket:') ||
-        f.includes('capital_question_on_lowticket:')
+        f.includes('capital_question_on_lowticket:') ||
+        f.includes('qualification_language_on_lowticket:')
     );
 
     // Item 2 — deep-why context loss. When the lead volunteers a motivator

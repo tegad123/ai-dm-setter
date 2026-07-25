@@ -2970,6 +2970,15 @@ export function scoreVoiceQuality(
         'booking_language_on_lowticket: this funnel has NO calls and NO booking. Never pitch a call, never ask what the lead booked, never reference day/time scheduling or timezone, never name a closer. The only asset is the website link — talk about the link and what they saw on the page instead.'
       );
     }
+    // F2-gap (2026-07-25): fit/qualification framing is high-ticket prose — a
+    // low-ticket funnel has no qualification step, so "good fit" / "not
+    // everyone has what it takes" reads as gatekeeping the lead out of a
+    // website link. Hard fail.
+    if (harm === 'qualification') {
+      hardFails.push(
+        'qualification_language_on_lowticket: this funnel has NO qualification step — never tell the lead you are checking if they are a "good fit" or that "not everyone has what it takes". Answer them directly and keep them moving toward the website link.'
+      );
+    }
   }
 
   // Low-ticket funnel: no capital/financial screening — ever. The R24
@@ -4118,12 +4127,22 @@ const LOW_TICKET_SCHEDULING_TIMEZONE_RE =
 const LOW_TICKET_CAPITAL_EXTRA_RE =
   /\bhow\s+much\s+(you|are\s+you)\s+(working\s+with|got|have)\b|\byou\s+got\s+(any\s+)?(money|cash|capital|funds?)\s+(to\s+(start|begin|put|invest)|saved|set\s+aside)\b|\bcan\s+you\s+afford\b|\bdo\s+you\s+have\s+enough\s+(to\s+(start|get\s+going|invest)|money|capital)\b|\bwhat\s+(kind\s+of\s+)?budget\b|\b(are\s+you\s+)?financially\s+ready\b|\b(some|any)\s+cash\s+to\s+put\s+in\b|\bmoney\s+to\s+(start|invest|put\s+(in|toward))\b/i;
 
+// F2-gap (2026-07-25, Tega run-2 + Ali's own screenshot): qualification / fit
+// language shipped on a low-ticket persona POST-fix ("we don't even know if
+// you're a good fit yet, not everyone has what it takes to be profitable").
+// The low-ticket funnel has NO qualification step — fit-framing is high-ticket
+// master-template prose and reads as gatekeeping on a funnel whose only job is
+// the website link. Verified NOT present in the low-ticket script's own copy,
+// so blocking it cannot collide with scripted content.
+const LOW_TICKET_QUALIFICATION_RE =
+  /\b(good\s+fit|right\s+fit|see\s+if\s+(you('re|\s+are)?|it('s|\s+is)?)\s+a\s+(good\s+)?fit|not\s+everyone\s+(has|is)\s+what\s+it\s+takes|we\s+don'?t\s+even\s+know\s+if\s+you|if\s+you('re|\s+are)\s+a\s+(good\s+)?fit|qualify\s+(you|for\s+this)|see\s+if\s+it\s+makes\s+sense\s+to\s+work\s+together)\b/i;
+
 // Returns the harm category if the text is forbidden on a low-ticket persona,
 // or null if clean. Reuses the existing gate predicates AND the broadened
 // patterns above.
 export function lowTicketHarmCategory(
   text: string | null | undefined
-): 'call_booking' | 'capital' | 'scheduling' | null {
+): 'call_booking' | 'capital' | 'scheduling' | 'qualification' | null {
   const t = (text ?? '').trim();
   if (t.length === 0) return null;
   if (
@@ -4141,6 +4160,11 @@ export function lowTicketHarmCategory(
   }
   if (LOW_TICKET_SCHEDULING_TIMEZONE_RE.test(t)) {
     return 'scheduling';
+  }
+  // Checked LAST: a message carrying both a call pitch and fit-framing (the
+  // live-leaked line did) categorizes as the more severe call_booking.
+  if (LOW_TICKET_QUALIFICATION_RE.test(t)) {
+    return 'qualification';
   }
   return null;
 }

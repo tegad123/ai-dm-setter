@@ -42,7 +42,19 @@ const HARMFUL: Array<[string, string]> = [
   ['what day works for you?', 'scheduling'],
   ['what timezone are you in?', 'scheduling'],
   ['when are you free?', 'scheduling'],
-  ["what's your availability like?", 'scheduling']
+  ["what's your availability like?", 'scheduling'],
+  // F2-gap (2026-07-25): fit/qualification framing — shipped POST-fix in
+  // Ali's own Ali Raza screenshot; a low-ticket funnel has no qualification.
+  [
+    "right now we don't even know if you're a good fit yet, not everyone has what it takes to be profitable",
+    'qualification'
+  ],
+  ['we need to see if you are a good fit first', 'qualification'],
+  ['not everyone has what it takes to be profitable', 'qualification'],
+  [
+    'we give you a gameplan and see if it makes sense to work together',
+    'qualification'
+  ]
 ];
 
 // MUST NOT be flagged — legitimate low-ticket funnel copy (website-link asset).
