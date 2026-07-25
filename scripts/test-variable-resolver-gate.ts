@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict';
 import {
+  anchoredCaptureIsConsistent,
   buildVariableAskAnchors,
   resolveScriptVariablesForTexts
 } from '@/lib/script-variable-resolver';
@@ -333,6 +334,82 @@ async function run() {
       (a) => a.variableName === 'deepWhy' && a.askContents.length > 0
     ),
     'CRITICAL: anchors must build from BRANCH-level actions (production shape)'
+  );
+
+  // F3-hotfix3: model judgment captures (the 4th writer) gated by the same
+  // anchoring rule. Run-A live case: urgency captured from the PRE-ask answer.
+  const URG_ASK =
+    "Why does that matter to you right now specifically though like why is this the time you're actually doing something about it";
+  const CAPTURE_HISTORY = [
+    {
+      sender: 'AI',
+      content: 'but why is 10k a month so important to you though?'
+    },
+    {
+      sender: 'LEAD',
+      content:
+        "because I'm tired of trading time for money and I want to be free"
+    },
+    { sender: 'AI', content: URG_ASK },
+    {
+      sender: 'LEAD',
+      content: 'inconsistency honestly, I do well for a month then give it back'
+    }
+  ];
+  const CAPTURE_ANCHORS = [
+    {
+      variableName: 'deepWhy',
+      stepNumber: 4,
+      askContents: ['But why is {{goal}} so important to you though?']
+    },
+    { variableName: 'urgency', stepNumber: 6, askContents: [URG_ASK] },
+    {
+      variableName: 'goal',
+      stepNumber: 3,
+      askContents: [
+        "So what's the main goal you're chasing with trading right now?"
+      ]
+    }
+  ];
+  assert.equal(
+    anchoredCaptureIsConsistent(
+      'urgency',
+      "it'd break me, i've already given it two years",
+      CAPTURE_ANCHORS as any,
+      CAPTURE_HISTORY as any
+    ),
+    false,
+    'capture gate: urgency from the PRE-ask answer must be BLOCKED (Run-A live case)'
+  );
+  assert.equal(
+    anchoredCaptureIsConsistent(
+      'deepWhy',
+      'i want to be free',
+      CAPTURE_ANCHORS as any,
+      CAPTURE_HISTORY as any
+    ),
+    true,
+    'capture gate: deepWhy grounded in its own answered ask must PASS'
+  );
+  assert.equal(
+    anchoredCaptureIsConsistent(
+      'goal',
+      '10k a month',
+      CAPTURE_ANCHORS as any,
+      CAPTURE_HISTORY as any
+    ),
+    false,
+    'capture gate: goal whose ask was never delivered must be BLOCKED (incomeGoal covers rendering)'
+  );
+  assert.equal(
+    anchoredCaptureIsConsistent(
+      'experience',
+      'been trading 2 years',
+      CAPTURE_ANCHORS as any,
+      CAPTURE_HISTORY as any
+    ),
+    true,
+    'capture gate: non-explicit-only keys keep legacy behavior'
   );
 
   console.log('variable-resolver F3 anchor tests passed');

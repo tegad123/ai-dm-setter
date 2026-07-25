@@ -63,6 +63,7 @@ import {
 } from '@/lib/script-serializer';
 import {
   applyResolvedScriptVariables,
+  anchoredCaptureIsConsistent,
   buildVariableAskAnchors,
   isValidTemplateVariableName,
   persistScriptVariableResolutions,
@@ -7490,15 +7491,42 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     totalCaptures &&
     Object.keys(totalCaptures).length > 0
   ) {
-    persistCapturedDataPointMerge({
-      conversationId: activeConversationId,
-      incoming: totalCaptures
-    }).catch((err) =>
-      console.error(
-        '[ai-engine] capturedDataPoints persist failed (non-fatal):',
-        err
-      )
-    );
+    // F3-hotfix3 (2026-07-25, live Run-A residual): model-emitted judgment
+    // captures are a FOURTH writer of captured state and were ungated — live,
+    // the model stored the PRE-ask consequence answer as {{urgency}} and its
+    // merge semantics (newer-overwrites-older raw strings) let it clobber
+    // correct values. For anchored explicit-only variables, a model capture
+    // only persists when the variable's scripted ask was DELIVERED and the
+    // captured value is grounded in the lead's direct reply to it — the same
+    // single anchoring rule the resolver uses ("code owns state").
+    const anchorFilteredCaptures: Record<string, string> = {};
+    for (const [key, value] of Object.entries(totalCaptures)) {
+      if (typeof value !== 'string') continue;
+      const consistent = anchoredCaptureIsConsistent(
+        key,
+        value,
+        scriptAskAnchorsForTurn,
+        scriptVariableResolutionContext.conversationHistory ?? []
+      );
+      if (!consistent) {
+        console.warn(
+          `[ai-engine] F3 blocked model judgment capture "${key}"="${value.slice(0, 50)}" — not grounded in the variable's own delivered ask/reply (conv ${activeConversationId})`
+        );
+        continue;
+      }
+      anchorFilteredCaptures[key] = value;
+    }
+    if (Object.keys(anchorFilteredCaptures).length > 0) {
+      persistCapturedDataPointMerge({
+        conversationId: activeConversationId,
+        incoming: anchorFilteredCaptures
+      }).catch((err) =>
+        console.error(
+          '[ai-engine] capturedDataPoints persist failed (non-fatal):',
+          err
+        )
+      );
+    }
   }
 
   // Increment capitalQAskedCount when the AI's generated reply contains a

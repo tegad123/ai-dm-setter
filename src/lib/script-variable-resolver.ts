@@ -300,6 +300,37 @@ function askMatchesMessage(askContent: string, message: string): boolean {
   return hits / askTokens.length >= 0.6;
 }
 
+// Model-emitted judgment captures ("Store as {{x}}" executed by the LLM) are a
+// FOURTH writer of captured state, previously ungated — Run A live: it stored
+// the pre-ask consequence answer as urgency. For anchored explicit-only
+// variables, such a capture is only trustworthy when the variable's scripted
+// ask was DELIVERED, its direct reply ANSWERS it, and the captured value is
+// grounded in that reply. Unanchored variables keep legacy behavior.
+export function anchoredCaptureIsConsistent(
+  variableName: string,
+  value: string,
+  anchors: VariableAskAnchor[] | undefined,
+  history: ScriptVariableHistoryMessage[]
+): boolean {
+  if (!isExplicitOnlyVariable(variableName)) return true;
+  const entries = anchorEntriesForVariable(variableName, anchors);
+  if (entries.length === 0) return true; // no anchors known — legacy
+  const anchored = findAnchoredReply(
+    history,
+    entries.flatMap((a) => a.askContents)
+  );
+  if (!anchored?.reply) return false; // ask never delivered/answered
+  if (!replyAnswersAskShared(anchored.reply)) return false;
+  const valTokens = askMatchTokens(value);
+  if (valTokens.length === 0) {
+    return anchored.reply.toLowerCase().includes(value.toLowerCase().trim());
+  }
+  const replyTokens = new Set(askMatchTokens(anchored.reply));
+  let hits = 0;
+  for (const t of valTokens) if (replyTokens.has(t)) hits += 1;
+  return hits / valTokens.length >= 0.5;
+}
+
 // Newest-first: find the last AI/HUMAN message that delivered one of the
 // variable's scripted asks, and the lead's direct reply to it.
 function findAnchoredReply(
@@ -993,7 +1024,7 @@ function buildExtractorPrompt(params: {
   // F3 (2026-07-25): anchored extraction — the value must come from the lead's
   // DIRECT reply to the question that asks for this variable, nothing else.
   const anchorRule = params.anchorQuestion
-    ? `\nThe lead was asked: "${params.anchorQuestion}"\nExtract ONLY from the lead's direct reply to that question. If their reply does not answer it, return NONE.\n`
+    ? `\nThe lead was asked: "${params.anchorQuestion}"\nExtract ONLY from the lead's direct reply to that question. If their reply does not answer it, return NONE. If their reply answers a DIFFERENT question instead (for example it describes an obstacle, a goal amount, or their background when the question asked about timing or motivation), return NONE — do not repurpose it.\n`
     : '';
 
   return (
@@ -1111,14 +1142,24 @@ export async function resolveScriptVariablesForTexts(
         // message-wait completion paths). For explicit-only variables, don't
         // persist it when the latest lead message was a non-answer; resolve it
         // non-authoritatively (usable this turn, never stored).
+        // F3-hotfix3 (2026-07-25, live Run-A residual): the step-number
+        // shortcut was NOT sufficient — a step can COMPLETE via a reply that
+        // arrived while its ask was never DELIVERED (Run A: step 5 completed
+        // on "it'd break me…" although the life-impact ask never shipped, and
+        // branchHistory then OVERWROTE the correct life_impact="free"). For
+        // anchored explicit-only variables, branchHistory is therefore NEVER
+        // authoritative: the anchored (delivered ask → direct reply) pair in
+        // the LLM tier is the ONLY persist path. branchHistory stays available
+        // turn-locally for copy.
         const branchHistoryBlocked =
           explicitOnly &&
-          latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
+          (hasAnchors ||
+            latestLeadMessageIsNonAnswer(context.conversationHistory ?? []));
         if (branchHistoryBlocked) {
           console.warn(
-            `[script-variable-resolver] F6 blocked persisted branchHistory binding ` +
-              `for explicit-only variable "${variableName}" — latest lead message ` +
-              `is a non-answer; resolving non-authoritatively (shouldPersist=false)`
+            `[script-variable-resolver] blocked persisted branchHistory binding ` +
+              `for explicit-only variable "${variableName}" (${hasAnchors ? 'anchored — pair-extraction is the only persist path' : 'latest lead message is a non-answer'}); ` +
+              `resolving non-authoritatively (shouldPersist=false)`
           );
         }
         resolution = {
@@ -1131,7 +1172,18 @@ export async function resolveScriptVariablesForTexts(
       }
     }
 
-    if (!resolution && (context.conversationHistory ?? []).length > 0) {
+    // F3-hotfix3: an anchored explicit-only variable must reach the pair
+    // extraction even when branchHistory produced a turn-local value above —
+    // the pair is the ONLY authoritative binder for these.
+    const anchoredCanSupersede =
+      explicitOnly &&
+      hasAnchors &&
+      resolution !== null &&
+      !resolution.shouldPersist;
+    if (
+      (!resolution || anchoredCanSupersede) &&
+      (context.conversationHistory ?? []).length > 0
+    ) {
       // F3 (2026-07-25): question-anchored extraction for explicit-only
       // variables. When the script's anchors are available, the LLM extractor
       // is scoped to the (anchored ask → direct reply) PAIR — it can no longer
