@@ -18,6 +18,7 @@ import {
 } from '@/lib/runtime-judgment-evaluator';
 import {
   applyResolvedScriptVariables,
+  buildVariableAskAnchors,
   persistScriptVariableResolutions,
   resolveScriptVariablesForTexts,
   type ScriptVariableResolutionContext,
@@ -183,7 +184,13 @@ export async function serializeScriptForPrompt(
           collectLeadFacingActionTexts(renderedSteps),
           {
             accountId,
-            context: routingContext.variableResolutionContext
+            context: {
+              ...routingContext.variableResolutionContext,
+              // F3 (2026-07-25): question anchors from the FULL script (not
+              // just renderedSteps — smart mode narrows those) so explicit-only
+              // prose vars only persist from their own ask's reply.
+              askAnchors: buildVariableAskAnchors(script.steps)
+            }
           }
         )
       : null;

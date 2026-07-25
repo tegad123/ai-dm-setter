@@ -63,6 +63,7 @@ import {
 } from '@/lib/script-serializer';
 import {
   applyResolvedScriptVariables,
+  buildVariableAskAnchors,
   isValidTemplateVariableName,
   persistScriptVariableResolutions,
   resolveEmittedPlaceholders,
@@ -3047,7 +3048,14 @@ export async function generateReply(
   )
     ? await resolveScriptVariablesForTexts(gateVariableResolutionTexts, {
         accountId,
-        context: scriptVariableResolutionContext
+        context: {
+          ...scriptVariableResolutionContext,
+          // F3 (2026-07-25): question anchors from the script — explicit-only
+          // prose vars may only persist from their OWN ask's reply.
+          askAnchors: buildVariableAskAnchors(
+            scriptStateSnapshot?.script?.steps ?? null
+          )
+        }
       })
     : null;
   if (gateVariableResolutionMap) {

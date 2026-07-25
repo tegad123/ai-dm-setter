@@ -2,7 +2,10 @@ import { Prisma } from '@prisma/client';
 
 import { callHaikuText } from '@/lib/haiku-text';
 import prisma from '@/lib/prisma';
-import { latestLeadMessageIsNonAnswer as latestLeadIsNonAnswerShared } from '@/lib/answer-satisfaction';
+import {
+  latestLeadMessageIsNonAnswer as latestLeadIsNonAnswerShared,
+  replyAnswersAsk as replyAnswersAskShared
+} from '@/lib/answer-satisfaction';
 
 export interface ScriptVariableHistoryMessage {
   id?: string | null;
@@ -16,6 +19,23 @@ export interface ScriptVariableResolutionContext {
   capturedDataPoints?: Record<string, unknown> | null;
   conversationHistory?: ScriptVariableHistoryMessage[];
   leadContext?: Record<string, unknown> | null;
+  /**
+   * F3 (2026-07-25, Tega run-2). Question anchors for explicit-only prose
+   * variables, built from the SCRIPT by callers that have step access
+   * (buildVariableAskAnchors). When present, an explicit-only variable may
+   * only PERSIST from the LLM / branchHistory tiers when its value comes from
+   * the lead's reply to THAT variable's own scripted ask — not from whichever
+   * nearby answer the upcoming template happened to need. This is what stops
+   * the slot-offset class (deep-why answer bound to urgency, urgency answer
+   * bound to life_impact) that run-2 proved on prod.
+   */
+  askAnchors?: VariableAskAnchor[];
+}
+
+export interface VariableAskAnchor {
+  variableName: string;
+  stepNumber: number | null;
+  askContents: string[];
 }
 
 export interface ScriptVariableResolution {
@@ -40,6 +60,8 @@ type ScriptVariableExtractor = (params: {
   variableName: string;
   conversationHistory: ScriptVariableHistoryMessage[];
   accountId: string;
+  /** F3: when set, extraction is scoped to the anchored ask→reply pair. */
+  anchorQuestion?: string;
 }) => Promise<string | null>;
 
 // F6/F3 (2026-07-23, surfaced by the live Seemal repro). These variables carry
@@ -88,6 +110,196 @@ function latestLeadMessageIsNonAnswer(
   history: ScriptVariableHistoryMessage[]
 ): boolean {
   return latestLeadIsNonAnswerShared(history);
+}
+
+// ── F3: question anchors (2026-07-25) ──────────────────────────────────────
+
+interface AnchorSourceStep {
+  stepNumber?: number | null;
+  title?: string | null;
+  canonicalQuestion?: string | null;
+  actions?: Array<{
+    actionType?: string | null;
+    content?: string | null;
+  }> | null;
+}
+
+// Title → variable fallbacks for steps whose runtime_judgment doesn't name the
+// {{token}} explicitly. Kept to the explicit-only prose set.
+const STEP_TITLE_VARIABLE_HINTS: Array<{ pattern: RegExp; variable: string }> =
+  [
+    { pattern: /life\s*impact/i, variable: 'life_impact' },
+    { pattern: /why\s+the\s+goal\s+matters|deep\s*why/i, variable: 'deepWhy' },
+    { pattern: /matters\s+now|urgency/i, variable: 'urgency' },
+    { pattern: /goal\s+discovery|main\s+goal/i, variable: 'goal' },
+    { pattern: /obstacle|keeping\s+you\s+stuck/i, variable: 'obstacle' }
+  ];
+
+/**
+ * Build the ask→variable anchor map from script steps. A variable is anchored
+ * to a step when the step's runtime_judgment text names its {{token}} (e.g.
+ * "Store as {{urgency}}") or the step title implies it; the anchor's
+ * askContents are the step's scripted ask_question texts (+ canonicalQuestion).
+ * Callers with script access (ai-engine, script-serializer) thread the result
+ * into ScriptVariableResolutionContext.askAnchors.
+ */
+export function buildVariableAskAnchors(
+  steps: AnchorSourceStep[] | null | undefined
+): VariableAskAnchor[] {
+  const anchors: VariableAskAnchor[] = [];
+  for (const step of steps ?? []) {
+    const actions = step.actions ?? [];
+    const asks = actions
+      .filter(
+        (a) =>
+          a?.actionType === 'ask_question' &&
+          typeof a.content === 'string' &&
+          a.content.trim().length > 0
+      )
+      .map((a) => (a.content as string).trim());
+    if (
+      typeof step.canonicalQuestion === 'string' &&
+      step.canonicalQuestion.trim().length > 0
+    ) {
+      asks.push(step.canonicalQuestion.trim());
+    }
+    if (asks.length === 0) continue;
+
+    const varNames = new Set<string>();
+    // {{tokens}} named inside runtime_judgment directives ("Store as {{urgency}}")
+    for (const action of actions) {
+      if (action?.actionType !== 'runtime_judgment') continue;
+      const content = typeof action.content === 'string' ? action.content : '';
+      for (const m of Array.from(
+        content.matchAll(/\{\{\s*([^{}]{1,80}?)\s*\}\}/g)
+      )) {
+        const name = m[1].trim();
+        if (isExplicitOnlyVariable(name)) varNames.add(name);
+      }
+    }
+    // title fallback
+    const title = step.title ?? '';
+    for (const hint of STEP_TITLE_VARIABLE_HINTS) {
+      if (hint.pattern.test(title)) varNames.add(hint.variable);
+    }
+
+    for (const variableName of Array.from(varNames)) {
+      anchors.push({
+        variableName,
+        stepNumber:
+          typeof step.stepNumber === 'number' ? step.stepNumber : null,
+        askContents: asks
+      });
+    }
+  }
+  return anchors;
+}
+
+function anchorEntriesForVariable(
+  variableName: string,
+  anchors: VariableAskAnchor[] | undefined
+): VariableAskAnchor[] {
+  if (!anchors || anchors.length === 0) return [];
+  const targets = new Set(
+    variableAliases(variableName).map((a) =>
+      normalizeTemplateKey(a).replace(/[^a-z0-9]/g, '')
+    )
+  );
+  targets.add(normalizeTemplateKey(variableName).replace(/[^a-z0-9]/g, ''));
+  return anchors.filter((anchor) => {
+    const anchorNorms = new Set(
+      variableAliases(anchor.variableName).map((a) =>
+        normalizeTemplateKey(a).replace(/[^a-z0-9]/g, '')
+      )
+    );
+    anchorNorms.add(
+      normalizeTemplateKey(anchor.variableName).replace(/[^a-z0-9]/g, '')
+    );
+    for (const t of Array.from(targets)) if (anchorNorms.has(t)) return true;
+    return false;
+  });
+}
+
+const ASK_MATCH_STOPWORDS = new Set([
+  'the',
+  'a',
+  'an',
+  'to',
+  'of',
+  'and',
+  'or',
+  'is',
+  'are',
+  'you',
+  'your',
+  'that',
+  'this',
+  'it',
+  'for',
+  'in',
+  'on',
+  'so',
+  'do',
+  'does',
+  'be',
+  'like',
+  'bro',
+  'man',
+  'though',
+  'right',
+  'now',
+  'what',
+  'whats',
+  'why',
+  'how'
+]);
+
+function askMatchTokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/\{\{[^}]*\}\}/g, ' ') // scripted asks embed {{tokens}}
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !ASK_MATCH_STOPWORDS.has(t));
+}
+
+// Does a delivered AI message match a scripted ask? Token-overlap on the
+// scripted ask's significant tokens — asks get lightly paraphrased in
+// delivery ("but why is 10k a month so important to you though?" vs the
+// scripted "But why is {{their stated goal}} so important to you though?"),
+// so exact matching would anchor nothing.
+function askMatchesMessage(askContent: string, message: string): boolean {
+  const askTokens = askMatchTokens(askContent);
+  if (askTokens.length < 2) return false;
+  const messageTokens = new Set(askMatchTokens(message));
+  let hits = 0;
+  for (const t of askTokens) if (messageTokens.has(t)) hits += 1;
+  return hits / askTokens.length >= 0.6;
+}
+
+// Newest-first: find the last AI/HUMAN message that delivered one of the
+// variable's scripted asks, and the lead's direct reply to it.
+function findAnchoredReply(
+  history: ScriptVariableHistoryMessage[],
+  askContents: string[]
+): { ask: string; reply: string | null } | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    const sender = (msg.sender ?? '').toUpperCase();
+    if (sender !== 'AI' && sender !== 'HUMAN') continue;
+    const content = msg.content ?? '';
+    if (!askContents.some((ask) => askMatchesMessage(ask, content))) continue;
+    // direct reply = next LEAD message after the ask
+    let reply: string | null = null;
+    for (let j = i + 1; j < history.length; j++) {
+      if ((history[j].sender ?? '').toUpperCase() === 'LEAD') {
+        reply = history[j].content ?? null;
+        break;
+      }
+    }
+    return { ask: content, reply };
+  }
+  return null;
 }
 
 type ScriptVariableValueKind =
@@ -641,7 +853,12 @@ function findMessageById(
 
 function inferFromBranchHistory(
   variableName: string,
-  context: ScriptVariableResolutionContext
+  context: ScriptVariableResolutionContext,
+  // F3 (2026-07-25): when question anchors exist for this variable, only a
+  // step_completed event from the variable's OWN anchored step may supply the
+  // value — a completion of a NEIGHBORING step must not (that is exactly how
+  // life_impact absorbed the urgency answer on Tega's run-2).
+  allowedStepNumbers?: Set<number>
 ): string | null {
   const events = branchHistoryEvents(context.capturedDataPoints);
   const history = context.conversationHistory ?? [];
@@ -652,6 +869,15 @@ function inferFromBranchHistory(
 
   for (const event of [...events].reverse()) {
     if (event.eventType !== 'step_completed') continue;
+    if (
+      allowedStepNumbers &&
+      !(
+        typeof event.stepNumber === 'number' &&
+        allowedStepNumbers.has(event.stepNumber)
+      )
+    ) {
+      continue;
+    }
     const searchable = [
       event.stepTitle,
       event.selectedBranchLabel,
@@ -722,6 +948,7 @@ export function parseScriptVariableExtractorValue(
 function buildExtractorPrompt(params: {
   variableName: string;
   history: string;
+  anchorQuestion?: string;
 }): string {
   const spec = getVariableValueSpec(params.variableName);
   const correct = spec.correctExamples
@@ -740,11 +967,18 @@ function buildExtractorPrompt(params: {
     ? `\nIMPORTANT: Only return a value the lead EXPLICITLY STATED in their own words. Do NOT infer, guess, or derive it from context. If the lead deferred, asked a question back, or only implied it, return NONE.\n`
     : '';
 
+  // F3 (2026-07-25): anchored extraction — the value must come from the lead's
+  // DIRECT reply to the question that asks for this variable, nothing else.
+  const anchorRule = params.anchorQuestion
+    ? `\nThe lead was asked: "${params.anchorQuestion}"\nExtract ONLY from the lead's direct reply to that question. If their reply does not answer it, return NONE.\n`
+    : '';
+
   return (
     `Extract the lead's {{${params.variableName}}} from this sales DM conversation.\n` +
     `Return ONLY a short ${spec.typeLabel} in this format: ${spec.formatSpec}.\n` +
     `No explanation. No full sentences. No quote from the lead. If unclear, return NONE.` +
     explicitOnlyRule +
+    anchorRule +
     `\n\nExamples of CORRECT output:\n${correct}\n\n` +
     `Examples of WRONG output:\n${wrong}\n\n` +
     `Conversation history:\n${params.history || '(none)'}\n\n` +
@@ -756,6 +990,7 @@ async function extractVariableWithHaiku(params: {
   variableName: string;
   conversationHistory: ScriptVariableHistoryMessage[];
   accountId: string;
+  anchorQuestion?: string;
 }): Promise<string | null> {
   const history = params.conversationHistory
     .slice(-20)
@@ -769,7 +1004,8 @@ async function extractVariableWithHaiku(params: {
     logPrefix: '[script-variable-resolver]',
     prompt: buildExtractorPrompt({
       variableName: params.variableName,
-      history
+      history,
+      anchorQuestion: params.anchorQuestion
     })
   });
 
@@ -796,6 +1032,12 @@ export async function resolveScriptVariablesForTexts(
     const normalized = normalizeTemplateKey(variableName);
     let resolution: ScriptVariableResolution | null = null;
 
+    const explicitOnly = isExplicitOnlyVariable(variableName);
+    const anchorEntries = explicitOnly
+      ? anchorEntriesForVariable(variableName, context.askAnchors)
+      : [];
+    const hasAnchors = anchorEntries.length > 0;
+
     const direct = resolveFromRecord(variableName, context.capturedDataPoints);
     if (direct) {
       resolution = {
@@ -821,7 +1063,24 @@ export async function resolveScriptVariablesForTexts(
     }
 
     if (!resolution) {
-      const inferred = inferFromBranchHistory(variableName, context);
+      // F3 (2026-07-25): when the variable has question anchors, only a
+      // step_completed event from its OWN anchored step(s) may supply the
+      // value — a neighboring step's completion must not (that is exactly how
+      // life_impact absorbed the urgency answer on run-2).
+      const allowedStepNumbers = hasAnchors
+        ? new Set(
+            anchorEntries
+              .map((a) => a.stepNumber)
+              .filter((n): n is number => typeof n === 'number')
+          )
+        : undefined;
+      const inferred = inferFromBranchHistory(
+        variableName,
+        context,
+        allowedStepNumbers && allowedStepNumbers.size > 0
+          ? allowedStepNumbers
+          : undefined
+      );
       if (inferred) {
         // F6/F3 (2026-07-23): branchHistory inference is the SIBLING of the LLM
         // path below — it assembles a value from a step_completed event's
@@ -830,7 +1089,7 @@ export async function resolveScriptVariablesForTexts(
         // persist it when the latest lead message was a non-answer; resolve it
         // non-authoritatively (usable this turn, never stored).
         const branchHistoryBlocked =
-          isExplicitOnlyVariable(variableName) &&
+          explicitOnly &&
           latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
         if (branchHistoryBlocked) {
           console.warn(
@@ -850,37 +1109,75 @@ export async function resolveScriptVariablesForTexts(
     }
 
     if (!resolution && (context.conversationHistory ?? []).length > 0) {
-      const extracted = await extractor({
-        variableName,
-        conversationHistory: context.conversationHistory ?? [],
-        accountId: params.accountId
-      });
-      const cleanExtracted = cleanExtractorValue(extracted, variableName);
-      if (cleanExtracted) {
-        // F6/F3 (2026-07-23): for explicit-only variables (goal/why/outcome),
-        // do NOT let an LLM inference become a PERSISTED binding when the lead's
-        // latest message was itself a non-answer. The model may still have
-        // returned a plausible value inferred from earlier context, but binding
-        // it would fabricate a stated goal the lead never gave. Resolve it
-        // non-authoritatively: usable for this turn's copy, never written to
-        // capturedDataPoints, so it can't stick or drive later stages.
-        const explicitOnlyBlocked =
-          isExplicitOnlyVariable(variableName) &&
-          latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
-        if (explicitOnlyBlocked) {
+      // F3 (2026-07-25): question-anchored extraction for explicit-only
+      // variables. When the script's anchors are available, the LLM extractor
+      // is scoped to the (anchored ask → direct reply) PAIR — it can no longer
+      // roam the whole history and hand back whichever nearby answer the
+      // upcoming template needed (the slot-offset class: urgency ← deep-why
+      // answer, life_impact ← urgency answer, proven on run-2). If the
+      // variable's own ask was never delivered — or the lead's direct reply
+      // didn't answer it — there is NOTHING to bind: fall through to the
+      // fallback tier (template renders without the value; the script's own
+      // "no urgency" variants exist for exactly this).
+      let scopedHistory: ScriptVariableHistoryMessage[] | null = null;
+      let anchorQuestion: string | null = null;
+      let skipLlmTier = false;
+      if (explicitOnly && hasAnchors) {
+        const anchored = findAnchoredReply(
+          context.conversationHistory ?? [],
+          anchorEntries.flatMap((a) => a.askContents)
+        );
+        if (anchored?.reply && replyAnswersAskShared(anchored.reply)) {
+          anchorQuestion = anchored.ask;
+          scopedHistory = [
+            { sender: 'AI', content: anchored.ask },
+            { sender: 'LEAD', content: anchored.reply }
+          ];
+        } else {
+          // Anchored variable whose ask never got a real answer → no LLM
+          // guessing. Deterministic omission beats a fabricated/mis-slotted
+          // value ("code owns state, models own language").
+          skipLlmTier = true;
           console.warn(
-            `[script-variable-resolver] F6 blocked persisted LLM binding for ` +
-              `explicit-only variable "${variableName}" — latest lead message is a ` +
-              `non-answer; resolving non-authoritatively (shouldPersist=false)`
+            `[script-variable-resolver] F3 anchored variable "${variableName}" has ` +
+              `no answered ask in history — skipping LLM tier (no guess), template ` +
+              `renders without it`
           );
         }
-        resolution = {
+      }
+      if (!skipLlmTier) {
+        const extracted = await extractor({
           variableName,
-          value: cleanExtracted,
-          source: 'llm',
-          confidence: 'MEDIUM',
-          shouldPersist: !explicitOnlyBlocked
-        };
+          conversationHistory:
+            scopedHistory ?? context.conversationHistory ?? [],
+          accountId: params.accountId,
+          anchorQuestion: anchorQuestion ?? undefined
+        });
+        const cleanExtracted = cleanExtractorValue(extracted, variableName);
+        if (cleanExtracted) {
+          // F6/F3 (2026-07-23): for explicit-only variables (goal/why/outcome),
+          // do NOT let an LLM inference become a PERSISTED binding when the lead's
+          // latest message was itself a non-answer. Anchored-pair extractions are
+          // exempt — their evidence is the pair itself, not the latest message.
+          const explicitOnlyBlocked =
+            explicitOnly &&
+            !anchorQuestion &&
+            latestLeadMessageIsNonAnswer(context.conversationHistory ?? []);
+          if (explicitOnlyBlocked) {
+            console.warn(
+              `[script-variable-resolver] F6 blocked persisted LLM binding for ` +
+                `explicit-only variable "${variableName}" — latest lead message is a ` +
+                `non-answer; resolving non-authoritatively (shouldPersist=false)`
+            );
+          }
+          resolution = {
+            variableName,
+            value: cleanExtracted,
+            source: 'llm',
+            confidence: 'MEDIUM',
+            shouldPersist: !explicitOnlyBlocked
+          };
+        }
       }
     }
 
