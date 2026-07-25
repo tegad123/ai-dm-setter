@@ -562,6 +562,11 @@ async function getAllowedUrls(accountId: string): Promise<Set<string>> {
       addUrl(readJsonString(persona.promptConfig, 'downsellLink'));
       addUrl(readJsonString(persona.promptConfig, 'youtubeFallbackUrl'));
       addUrl(readJsonString(persona.promptConfig, 'freeValueLink'));
+      // Persona-level funnel URL (2026-07-26): promptConfig.funnelLink is the
+      // low-ticket funnel's conversion link (N1 fallback when the script's
+      // send_link action holds a placeholder) — without this the sanitizer
+      // would rewrite the code-injected link to "[link removed]".
+      addUrl(readJsonString(persona.promptConfig, 'funnelLink'));
       if (!hasActiveRelationalScript) {
         addUrl(readJsonString(persona.promptConfig, 'bookingTypeformUrl'));
         addUrl(readJsonString(persona.promptConfig, 'typeformUrl'));

@@ -7695,7 +7695,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }) => a.actionType === 'send_link'
     );
     if (sendLinkActions.length > 0) {
-      const rawUrl = (
+      const scriptActionUrl = (
         sendLinkActions
           .map(
             (a: { linkUrl?: string | null; content?: string | null }) =>
@@ -7704,9 +7704,27 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           )
           .find((u: string) => u.length > 0) ?? ''
       ).trim();
-      const isPlaceholder =
-        rawUrl.length === 0 ||
-        new RegExp(PLACEHOLDER_URL_RE.source, 'i').test(rawUrl);
+      const urlIsPlaceholder = (u: string) =>
+        u.length === 0 || new RegExp(PLACEHOLDER_URL_RE.source, 'i').test(u);
+      // Persona-level funnel URL (Tega's decision, 2026-07-26): the funnel
+      // link lives on the persona (promptConfig.funnelLink — additive, no
+      // migration) so operators configure it once instead of per script
+      // action. Resolution order: script send_link action → persona
+      // funnelLink → alert. freeValueLink stays the free-value YouTube
+      // asset and is NEVER used here.
+      const personaFunnelLink = (() => {
+        const pc = personaForGate?.promptConfig as
+          | Record<string, unknown>
+          | null
+          | undefined;
+        const v =
+          typeof pc?.funnelLink === 'string' ? pc.funnelLink.trim() : '';
+        return URL_RE.test(v) && !urlIsPlaceholder(v) ? v : '';
+      })();
+      const rawUrl = !urlIsPlaceholder(scriptActionUrl)
+        ? scriptActionUrl
+        : personaFunnelLink;
+      const isPlaceholder = urlIsPlaceholder(rawUrl);
       const bubbles = Array.isArray(parsed.messages)
         ? [...parsed.messages]
         : [parsed.message];
@@ -7767,7 +7785,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                 accountId,
                 type: 'SYSTEM',
                 title: `${titlePrefix} — link step cannot deliver`,
-                body: `The active script's send_link step still holds a placeholder URL (${rawUrl || 'empty'}). Set the real funnel URL on the script's Send Link action — until then the funnel has no conversion path.`
+                body: `The active script's send_link step still holds a placeholder URL (${scriptActionUrl || 'empty'}) and the persona has no funnelLink configured. Set the real funnel URL on the persona (promptConfig.funnelLink) or the script's Send Link action — until then the funnel has no conversion path.`
               }
             });
           }
