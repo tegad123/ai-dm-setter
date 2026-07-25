@@ -1171,7 +1171,7 @@ export async function GET(request: NextRequest) {
     // during daily check; no hard pause. Same dismiss semantics as
     // other items — resurface if a new LEAD message arrives after
     // dismissal.
-    const attentionUnverifiedSent = unverifiedSentRows
+    const unverifiedCandidates = unverifiedSentRows
       .filter((r) => {
         const passingAt = passingByConv.get(r.conversationId);
         // If a passing audit exists AFTER the gate exhaustion, the
@@ -1179,7 +1179,45 @@ export async function GET(request: NextRequest) {
         if (passingAt && passingAt > r.createdAt) return false;
         return true;
       })
-      .filter((r) => !isDismissed(r.conversationId, 'unverified_sent'))
+      .filter((r) => !isDismissed(r.conversationId, 'unverified_sent'));
+
+    // N4 (2026-07-25, Tega run-2): the audit row is written at GENERATION
+    // time, before delivery — egress can suppress the send afterward, so
+    // "AI sent unverified response" was showing on conversations where
+    // NOTHING was sent (it fired on the verification conversations
+    // themselves). Verify delivery: an AI Message must exist shortly after
+    // the audit row, else the item renders as "blocked", not "sent".
+    const unverifiedDelivered = new Map<string, boolean>();
+    if (unverifiedCandidates.length > 0) {
+      const earliest = new Date(
+        Math.min(...unverifiedCandidates.map((r) => r.createdAt.getTime())) -
+          60 * 1000
+      );
+      const aiMsgs = await prisma.message.findMany({
+        where: {
+          conversationId: {
+            in: unverifiedCandidates.map((r) => r.conversationId)
+          },
+          sender: 'AI',
+          timestamp: { gte: earliest }
+        },
+        select: { conversationId: true, timestamp: true }
+      });
+      for (const r of unverifiedCandidates) {
+        const delivered = aiMsgs.some(
+          (m) =>
+            m.conversationId === r.conversationId &&
+            m.timestamp.getTime() >= r.createdAt.getTime() - 60 * 1000 &&
+            m.timestamp.getTime() <= r.createdAt.getTime() + 15 * 60 * 1000
+        );
+        unverifiedDelivered.set(
+          `${r.conversationId}:${r.createdAt.toISOString()}`,
+          delivered
+        );
+      }
+    }
+
+    const attentionUnverifiedSent = unverifiedCandidates
       .map((r) => {
         const conv = convById.get(r.conversationId);
         if (!conv) return null;
@@ -1189,7 +1227,11 @@ export async function GET(request: NextRequest) {
           leadId: conv.lead.id,
           leadName: conv.lead.name,
           leadHandle: conv.lead.handle,
-          flaggedAt: r.createdAt.toISOString()
+          flaggedAt: r.createdAt.toISOString(),
+          delivered:
+            unverifiedDelivered.get(
+              `${r.conversationId}:${r.createdAt.toISOString()}`
+            ) ?? false
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);

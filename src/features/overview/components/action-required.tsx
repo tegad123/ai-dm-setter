@@ -161,6 +161,9 @@ interface AttentionUnverifiedSent {
   leadName: string;
   leadHandle: string;
   flaggedAt: string;
+  /** N4 (2026-07-25): false when the gate exhausted but egress suppressed the
+   *  send — the copy must not claim a message was sent when nothing was. */
+  delivered?: boolean;
 }
 interface AttentionHistoricalMetadataLeak {
   type: 'historical_metadata_leak';
@@ -844,7 +847,9 @@ function renderAttention(
               <span className='font-medium'>{item.leadName}</span>
               <span className='text-muted-foreground'>
                 {' '}
-                — AI sent unverified response, review recommended
+                {item.delivered === false
+                  ? '— AI reply was blocked before sending, review the conversation'
+                  : '— AI sent unverified response, review recommended'}
               </span>
             </span>
           }
