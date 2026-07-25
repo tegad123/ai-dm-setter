@@ -114,14 +114,22 @@ function latestLeadMessageIsNonAnswer(
 
 // ── F3: question anchors (2026-07-25) ──────────────────────────────────────
 
+interface AnchorSourceAction {
+  actionType?: string | null;
+  content?: string | null;
+}
+
 interface AnchorSourceStep {
   stepNumber?: number | null;
   title?: string | null;
   canonicalQuestion?: string | null;
-  actions?: Array<{
-    actionType?: string | null;
-    content?: string | null;
-  }> | null;
+  actions?: AnchorSourceAction[] | null;
+  // CRITICAL (2026-07-25, found live): in production scripts the actions live
+  // on BRANCHES — the daetradez script has ZERO step-level actions (the
+  // runtime loader even filters `branchId: null`). An anchor builder that only
+  // reads step.actions receives empty pools and silently disables the entire
+  // F3/F5 anchoring. Branch actions MUST be pooled in.
+  branches?: Array<{ actions?: AnchorSourceAction[] | null }> | null;
 }
 
 // Title → variable fallbacks for steps whose runtime_judgment doesn't name the
@@ -148,7 +156,12 @@ export function buildVariableAskAnchors(
 ): VariableAskAnchor[] {
   const anchors: VariableAskAnchor[] = [];
   for (const step of steps ?? []) {
-    const actions = step.actions ?? [];
+    // Pool step-level AND branch-level actions — production scripts keep
+    // everything on branches (see AnchorSourceStep note).
+    const actions: AnchorSourceAction[] = [
+      ...(step.actions ?? []),
+      ...(step.branches ?? []).flatMap((b) => b?.actions ?? [])
+    ];
     const asks = actions
       .filter(
         (a) =>
