@@ -218,3 +218,28 @@ Tega's run-2 (conv `cmrzgulcs000rjm047g6w3t7q`): F1/F2/F4 PASS, F3/F5 FAIL, F6 i
 | `eb20da8` | **F6 + F2-gap** | deep_why="leave my job" (life-impact language) via default-true volunteer cue → per-slot semantic cues (deepWhy/lifeImpact/obstacle). Fit language ("not everyone has what it takes") shipped post-fix in Ali's own screenshot → 'qualification' harm category, hard-failed + in the never-best-effort set + auto-covered at all send-time re-gates. |
 
 **N2** (branch copy mismatch) — downstream of F3 binding; re-check in the multi-run. **Verification protocol:** Tega's exact 8-message repro **3× on fresh leads**, trace-checked per turn (F6 intermittency = the finding, so single-pass is insufficient), then Ali re-runs with trace access, then Tega spot-check.
+
+---
+
+## RUN-2 FIXES — LIVE MULTI-RUN VERIFICATION (2026-07-25/26)
+
+Three clean-slate runs of Tega's exact repro sequence, trace-checked. Four additional integration gaps were caught LIVE by this protocol and fixed same-hour (each invisible to unit fixtures): `1eb4c0c`+`f6b3b3a` (production scripts keep ALL actions on branches — empty anchor pools silently disabled F3/F5), `05e781b` (dedup guard killed the legitimate re-drive after a non-answer — an 8th silent dead-end), `d34dce1` (branchHistory step-shortcut + the model's own judgment-captures as an ungated 4th writer), `250516f` (ask-less MESSAGE steps skipped wholesale had no enforcement).
+
+| Checkpoint | Run A (Seemal `cms0h8ly1…`) | Run B (Shazim `cms0ic2xg…`) | Run C (Seemal `cms0lugpg…`) |
+|---|---|---|---|
+| Multi-step skip, no fabrication (F6) | ✅ | ✅ | ✅ |
+| Price probe: hold + immediate re-drive, right slot (F4/N3) | ✅ "10k a month" in seconds | ✅ | ✅ |
+| No call/booking/fit/price language (F2) | ✅ | ✅ | ✅ |
+| Asks on-script, no improvised discovery (F5) | ✅ verbatim urgency ask | ✅ | ✅ |
+| Bindings in correct slots only (F3) | residual → fixed d34dce1 | ✅ clean | ✅ clean |
+| Step-7 payload + bridge delivered (N1) | ✅ bridge | skip → fixed 250516f → ✅ both | ✅ both |
+| Step-8: NO dead link + "Funnel link not configured" alert (N1) | n/a (distress first) | ✅ alert FIRED 16:43:18Z | ✅ no dead link |
+| Distress → 988 + terminal hold (F1) | ✅ | ✅ | ✅ |
+| Deflection does NOT release (F1) | ✅ no reply | ✅ no reply | ✅ no reply |
+
+**Determinism (B vs C):** lead-facing behavior identical — same flow, same variant selection (goal-only personalization, clean grammar, zero raw-quote breakage), same holds. 
+
+**Documented residuals (flagged, not hidden):**
+1. `{{goal}}` renders the neutral fallback "that goal" in some turns instead of "10k a month" (tier-1 freshness timing) — cosmetic, never wrong-valued.
+2. Run B captured `urgency="inconsistency…"` via a model judgment-capture that passed the GROUNDING gate (value is verbatim the reply to the delivered urgency ask) but is semantically obstacle content; it never reached lead-facing copy (goal-only variant selected). Full semantic gating of judgment captures = route them through the anchored extractor — noted for Fix D scope.
+3. Step-8's real funnel URL still unconfigured (placeholder) — engine refuses dead links + alerts; **needs Daniel's URL** (config, their side).
