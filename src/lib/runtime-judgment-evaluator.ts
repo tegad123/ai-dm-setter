@@ -217,7 +217,17 @@ export function mergeCapturedDataPoints(
     ) {
       continue;
     }
-    base[canonicalKey] = value;
+    // Structured write (2026-07-26, Tega trace review): raw strings carried
+    // no provenance — traces couldn't tell a model judgment capture from an
+    // anchored extractor point. Same {value, confidence, extractionMethod,
+    // extractedAt} shape every other writer uses; readers already unwrap it.
+    base[canonicalKey] = {
+      value,
+      confidence: 'MEDIUM',
+      extractedFromMessageId: null,
+      extractionMethod: 'model_judgment_capture',
+      extractedAt: new Date().toISOString()
+    };
   }
   return base;
 }
@@ -244,9 +254,16 @@ export function buildPriorCapturedSignalsBlock(
   for (const [key, value] of Object.entries(capturedDataPoints)) {
     if (!known.has(key)) continue;
     if (value === null || value === undefined) continue;
-    const str = typeof value === 'string' ? value : String(value);
+    // Unwrap structured {value, confidence, ...} points — String(object)
+    // would render "[object Object]" into the prompt.
+    const unwrapped =
+      typeof value === 'object' && !Array.isArray(value) && 'value' in value
+        ? (value as { value: unknown }).value
+        : value;
+    if (unwrapped === null || unwrapped === undefined) continue;
+    const str = typeof unwrapped === 'string' ? unwrapped : String(unwrapped);
     const trimmed = str.trim();
-    if (trimmed.length === 0) continue;
+    if (trimmed.length === 0 || trimmed === '[object Object]') continue;
     entries.push([key, trimmed]);
   }
   if (entries.length === 0) return null;

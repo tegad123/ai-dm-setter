@@ -77,7 +77,10 @@ function normalizeCapturedDataKey(key: string): string {
 const NORMALIZED_TO_CANONICAL_KEY = new Map<string, string>();
 
 for (const [canonical, aliases] of Object.entries(CAPTURED_DATA_KEY_ALIASES)) {
-  NORMALIZED_TO_CANONICAL_KEY.set(normalizeCapturedDataKey(canonical), canonical);
+  NORMALIZED_TO_CANONICAL_KEY.set(
+    normalizeCapturedDataKey(canonical),
+    canonical
+  );
   for (const alias of aliases) {
     NORMALIZED_TO_CANONICAL_KEY.set(normalizeCapturedDataKey(alias), canonical);
   }
@@ -85,6 +88,20 @@ for (const [canonical, aliases] of Object.entries(CAPTURED_DATA_KEY_ALIASES)) {
 
 export function canonicalCapturedDataPointKey(key: string): string {
   return NORMALIZED_TO_CANONICAL_KEY.get(normalizeCapturedDataKey(key)) ?? key;
+}
+
+/**
+ * Canonical key names (the alias map's keys). Used with script variable
+ * names to whitelist model judgment-capture keys — the model must not
+ * invent storage keys ("inconsistency", "bottleneck", "goal_amount") that
+ * no reader or script token ever consumes (Tega, 2026-07-26 trace review).
+ */
+export const CANONICAL_CAPTURED_DATA_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(CAPTURED_DATA_KEY_ALIASES)
+);
+
+export function normalizeCapturedDataPointKeyForAllowlist(key: string): string {
+  return normalizeCapturedDataKey(key);
 }
 
 export function equivalentCapturedDataPointKeys(key: string): string[] {

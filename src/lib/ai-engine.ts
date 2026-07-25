@@ -58,6 +58,10 @@ import {
   parseCapturedDataPointsFromResponse
 } from '@/lib/runtime-judgment-evaluator';
 import {
+  CANONICAL_CAPTURED_DATA_KEYS,
+  canonicalCapturedDataPointKey
+} from '@/lib/captured-data-keys';
+import {
   collectRuntimeJudgmentVariableNames,
   selectStep1BranchesForPrompt
 } from '@/lib/script-serializer';
@@ -7527,9 +7531,45 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // only persists when the variable's scripted ask was DELIVERED and the
     // captured value is grounded in the lead's direct reply to it — the same
     // single anchoring rule the resolver uses ("code owns state").
+    // Key whitelist (2026-07-26, Tega trace review): the model invented
+    // storage keys no reader or script token consumes ("inconsistency",
+    // "bottleneck", "goal_amount"). A capture key must be a canonical data
+    // point, a script {{variable}} (ask anchor), or an explicit-only prose
+    // variable — anything else is dropped with a warn.
+    const allowedCaptureKeyNorms = new Set<string>();
+    const normCaptureKey = (k: string) =>
+      k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    CANONICAL_CAPTURED_DATA_KEYS.forEach((canonical) => {
+      allowedCaptureKeyNorms.add(normCaptureKey(canonical));
+    });
+    for (const anchor of scriptAskAnchorsForTurn ?? []) {
+      allowedCaptureKeyNorms.add(normCaptureKey(anchor.variableName));
+    }
+    for (const prose of [
+      'goal',
+      'deep_why',
+      'urgency',
+      'life_impact',
+      'life_change',
+      'obstacle',
+      'mainObstacle',
+      'earlyObstacle',
+      'desiredOutcome',
+      'incomeGoal',
+      'painPoint'
+    ]) {
+      allowedCaptureKeyNorms.add(normCaptureKey(prose));
+    }
     const anchorFilteredCaptures: Record<string, string> = {};
     for (const [key, value] of Object.entries(totalCaptures)) {
       if (typeof value !== 'string') continue;
+      const canonicalCaptureKey = canonicalCapturedDataPointKey(key);
+      if (!allowedCaptureKeyNorms.has(normCaptureKey(canonicalCaptureKey))) {
+        console.warn(
+          `[ai-engine] blocked invented judgment-capture key "${key}" — not a script variable or canonical data point (conv ${activeConversationId})`
+        );
+        continue;
+      }
       const consistent = anchoredCaptureIsConsistent(
         key,
         value,
