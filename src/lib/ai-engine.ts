@@ -65,6 +65,7 @@ import {
   applyResolvedScriptVariables,
   anchoredCaptureIsConsistent,
   buildVariableAskAnchors,
+  scriptAskMatchesText,
   isValidTemplateVariableName,
   persistScriptVariableResolutions,
   resolveEmittedPlaceholders,
@@ -7551,6 +7552,47 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     `.catch((e: unknown) =>
       console.error('[ai-engine] capitalQAskedCount increment failed:', e)
     );
+  }
+
+  // ── N1b (2026-07-25, Run-B live): deterministic MESSAGE-step delivery ───
+  // Run B: at step 7 (a MESSAGE step — no asks) the model skipped the required
+  // payload ENTIRELY and improvised an off-script probe. With no ask on the
+  // step the off-script gate can't fire, and with no paraphrase there's no
+  // msg_verbatim_violation to trigger the required-MSG append — so nothing
+  // enforced the step's sends. Close: when the current step is a MESSAGE step
+  // (no ask actions) with resolvable required [MSG]s and the outbound contains
+  // NO bubble matching ANY of them (the model skipped the step wholesale),
+  // code drives the first resolvable required MSG (+ its distinct follow-up,
+  // e.g. step 7's personalization + bridge). Partial-delivery/paraphrase cases
+  // stay with the verbatim-violation append — this fires only on total skips.
+  {
+    const stepHasAsk = currentStepShape?.hasAnyAskAction ?? false;
+    const requiredResolved = currentStepRequiredMessagesForGate
+      .map((m) => (m ?? '').trim())
+      .filter((m) => m.length > 0 && !/\{\{[^}]+\}\}/.test(m));
+    if (!stepHasAsk && requiredResolved.length > 0) {
+      const bubbles = Array.isArray(parsed.messages)
+        ? [...parsed.messages]
+        : [parsed.message];
+      const anyRequiredPresent = requiredResolved.some((req) =>
+        bubbles.some((b) => scriptAskMatchesText(req, b ?? ''))
+      );
+      if (!anyRequiredPresent) {
+        const injected: string[] = [];
+        for (const req of requiredResolved) {
+          if (injected.length >= 2) break;
+          if (injected.some((j) => scriptAskMatchesText(req, j))) continue; // variant dedupe
+          injected.push(req);
+        }
+        if (injected.length > 0) {
+          parsed.messages = [...bubbles, ...injected];
+          parsed.message = parsed.messages[0];
+          console.warn(
+            `[ai-engine] N1b message-step enforcement — model skipped the step's required [MSG]s entirely; injected ${injected.length} scripted message(s) (conv ${activeConversationId})`
+          );
+        }
+      }
+    }
   }
 
   // ── N1 (2026-07-25): deterministic funnel-link delivery ─────────────────
