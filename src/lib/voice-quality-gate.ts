@@ -844,6 +844,13 @@ export interface VoiceQualityOptions {
    */
   currentScriptStepNumber?: number | null;
   /**
+   * Highest stepNumber in the ACTIVE script. STEP_PATTERN_MAP hardcodes the
+   * DAE high-ticket numbering (Steps 9-18); when the active script's max step
+   * is below an inferred step, the inference refers to a DIFFERENT script and
+   * must be skipped (cross-script trace contamination — Tega, 2026-07-26).
+   */
+  scriptMaxStepNumber?: number | null;
+  /**
    * True when the tracked position legitimately advanced more than one step
    * this turn (the F5.1 provable-catch-up path). When set, the
    * step_distance_violation check is suppressed for this turn: a catch-up to
@@ -2006,7 +2013,9 @@ export function scoreVoiceQuality(
   ) {
     const violatedStep = detectStepDistanceViolation(
       reply,
-      options.currentScriptStepNumber
+      options.currentScriptStepNumber,
+      3,
+      options?.scriptMaxStepNumber ?? null
     );
     console.warn(
       `[voice-quality-gate] step_distance_violation CHECK: currentStep=${options.currentScriptStepNumber}, violatedStep=${violatedStep ?? 'null'}`

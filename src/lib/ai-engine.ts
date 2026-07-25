@@ -3051,6 +3051,18 @@ export async function generateReply(
   const scriptAskAnchorsForTurn = buildVariableAskAnchors(
     scriptStateSnapshot?.script?.steps ?? null
   );
+  // Cross-script clamp (2026-07-26): highest step number in the ACTIVE
+  // script, for the step-distance detector. Low-ticket funnel = 8 steps;
+  // an inferred "Step 10"/"Step 16" (hardcoded high-ticket patterns) can
+  // never refer to it.
+  const scriptMaxStepNumberForGate = (() => {
+    const steps = scriptStateSnapshot?.script?.steps;
+    if (!Array.isArray(steps) || steps.length === 0) return undefined;
+    const max = Math.max(
+      ...steps.map((s) => (typeof s.stepNumber === 'number' ? s.stepNumber : 0))
+    );
+    return max > 0 ? max : undefined;
+  })();
   const gateVariableResolutionMap = gateVariableResolutionTexts.some((text) =>
     /\{\{\s*[^}]+\s*\}\}/.test(text)
   )
@@ -3980,6 +3992,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepActiveBranchIsJudgeOnly,
     currentStepActiveBranchLabel,
     currentScriptStepNumber: currentStepNumberForGate ?? undefined,
+    // Cross-script clamp (2026-07-26): STEP_PATTERN_MAP hardcodes high-ticket
+    // numbering — never attribute an inferred step the ACTIVE script doesn't have.
+    scriptMaxStepNumber: scriptMaxStepNumberForGate,
     // F5.1 [4]: suppress step_distance_violation on a legit catch-up turn.
     positionJumpedThisTurn:
       scriptStateSnapshot?.positionJumpedThisTurn ?? false,

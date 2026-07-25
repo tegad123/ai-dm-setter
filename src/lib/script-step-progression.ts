@@ -1472,13 +1472,29 @@ export function inferStepLabelFromReply(reply: string): string | null {
 export function detectStepDistanceViolation(
   reply: string,
   currentStepNumber: number | null | undefined,
-  maxLookahead = 3
+  maxLookahead = 3,
+  scriptMaxStepNumber?: number | null
 ): number | null {
   if (typeof currentStepNumber !== 'number' || currentStepNumber <= 0) {
     return null;
   }
   const inferred = inferStepFromReply(reply);
   if (inferred === null) return null;
+  // Cross-script clamp (2026-07-26, Tega trace review): STEP_PATTERN_MAP
+  // hardcodes the DAE HIGH-TICKET script's numbering (Steps 9-18). On a
+  // script whose max step is lower (the low-ticket funnel has 8), an
+  // inferred "Step 10"/"Step 16" cannot refer to THIS script — attributing
+  // it is cross-contamination in traces and regen directives. Skip the
+  // inference; script-specific gates (suppressBookingLanguage, the
+  // ask-anchor regression guards) own those violations with correct
+  // attribution.
+  if (
+    typeof scriptMaxStepNumber === 'number' &&
+    scriptMaxStepNumber > 0 &&
+    inferred > scriptMaxStepNumber
+  ) {
+    return null;
+  }
   if (inferred > currentStepNumber + maxLookahead) return inferred;
   return null;
 }

@@ -16,6 +16,7 @@ import {
   validateSoftPitchPrerequisites
 } from '@/lib/script-state-recovery';
 import { scoreVoiceQualityGroup } from '@/lib/voice-quality-gate';
+import { detectStepDistanceViolation } from '@/lib/script-step-progression';
 import { buildContextualSilentStopReEngagementForTest } from '@/lib/silent-stop-recovery';
 
 function point<T = unknown>(points: Record<string, any>, key: string) {
@@ -1142,6 +1143,34 @@ function run() {
     spendTime.verifiedCapitalUsd,
     undefined,
     'capital-P0: "spend more time" is not a capital signal'
+  );
+
+  // ── Step-map cross-contamination clamp (2026-07-26, Tega trace review) ──
+  // STEP_PATTERN_MAP hardcodes DAE high-ticket numbering (Steps 9-18). On the
+  // 8-step low-ticket script an inferred "Step 16" can't refer to the active
+  // script — the detector must stay silent (booking language is owned by the
+  // suppressBookingLanguage hard-fail with correct attribution).
+  const callProposal =
+    "let's set up a quick call with my right hand Anthony to break it down";
+  assert.equal(
+    detectStepDistanceViolation(callProposal, 3, 3, 8),
+    null,
+    'step-clamp: inferred Step 16 > script max 8 → no cross-script attribution'
+  );
+  assert.equal(
+    detectStepDistanceViolation(callProposal, 3, 3, null),
+    16,
+    'step-clamp: without a script max the detector still fires (high-ticket unchanged)'
+  );
+  assert.equal(
+    detectStepDistanceViolation(callProposal, 3, 3, 18),
+    16,
+    'step-clamp: high-ticket script (max 18) keeps the violation'
+  );
+  assert.equal(
+    detectStepDistanceViolation(callProposal, 14, 3, 18),
+    null,
+    'step-clamp: within lookahead stays allowed'
   );
 
   console.log('script-state recovery tests passed');
