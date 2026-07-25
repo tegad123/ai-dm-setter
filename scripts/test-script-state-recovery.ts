@@ -888,6 +888,119 @@ function run() {
   assert.equal(replyAnswersAsk('   '), false, 'F4 whitespace reply');
   assert.equal(replyAnswersAsk(null), false, 'F4 null reply');
 
+  // ---------------------------------------------------------------------------
+  // F5 backward-content guards (2026-07-25, Tega run-2). The persisted step
+  // stayed monotonic on run-2 while the delivered CONTENT regressed. Three
+  // deterministic guards in the voice gate:
+  // ---------------------------------------------------------------------------
+  const F5_ANCHORS = [
+    {
+      variableName: 'goal',
+      stepNumber: 3,
+      askContents: [
+        "So what's the main goal you're chasing with trading right now?"
+      ]
+    },
+    {
+      variableName: 'deepWhy',
+      stepNumber: 4,
+      askContents: ['But why is {{goal}} so important to you though?']
+    }
+  ];
+  // 1. earlier_step_ask_regression: step-3 goal ask fired while on step 6.
+  const regression = scoreVoiceQualityGroup(
+    ["so what's the main goal you're chasing with trading right now?"],
+    {
+      aiMessageCount: 10,
+      skipLegacyPacingGates: true,
+      currentScriptStepNumber: 6,
+      scriptAskAnchors: F5_ANCHORS,
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    regression.hardFails.some((f) =>
+      f.includes('earlier_step_ask_regression:')
+    ),
+    'F5: earlier-step scripted ask from a later step hard-fails'
+  );
+  // 2. reasks_captured_variable: deep-why ask re-fired when deepWhy captured.
+  const reask = scoreVoiceQualityGroup(
+    ['but why is 10k a month so important to you though?'],
+    {
+      aiMessageCount: 10,
+      skipLegacyPacingGates: true,
+      currentScriptStepNumber: 4,
+      scriptAskAnchors: F5_ANCHORS,
+      capturedDataPoints: { deepWhy: { value: 'freedom', confidence: 'HIGH' } }
+    }
+  );
+  assert.ok(
+    reask.hardFails.some((f) => f.includes('reasks_captured_variable:')),
+    'F5: re-asking a captured variable hard-fails'
+  );
+  // 3. legit RE-DRIVE does NOT fail: same ask, same step, variable NOT captured
+  // (the F4-correct re-ask after a non-answer — Tega scored this as a PASS).
+  const redrive = scoreVoiceQualityGroup(
+    ['but why is 10k a month so important to you though?'],
+    {
+      aiMessageCount: 10,
+      skipLegacyPacingGates: true,
+      currentScriptStepNumber: 4,
+      scriptAskAnchors: F5_ANCHORS,
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    !redrive.hardFails.some(
+      (f) =>
+        f.includes('earlier_step_ask_regression:') ||
+        f.includes('reasks_captured_variable:')
+    ),
+    'F5: legitimate re-drive of the current unanswered ask must NOT fail'
+  );
+  // 4. offscript_question_on_lowticket: improvised question (matches no
+  // scripted ask — run-2 turn 17/21 class) hard-fails on low-ticket…
+  const offscript = scoreVoiceQualityGroup(
+    ["what's been the biggest thing keeping you stuck these 2 years?"],
+    {
+      aiMessageCount: 10,
+      skipLegacyPacingGates: true,
+      suppressBookingLanguage: true,
+      currentStepHasAnyAskAction: true,
+      currentStepScriptedQuestions: [
+        "Why does that matter to you right now specifically though like why is this the time you're actually doing something about it"
+      ],
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    offscript.hardFails.some((f) =>
+      f.includes('offscript_question_on_lowticket:')
+    ),
+    'F5: improvised off-script question hard-fails on low-ticket'
+  );
+  // …but stays a soft signal on qualification personas.
+  const offscriptQual = scoreVoiceQualityGroup(
+    ["what's been the biggest thing keeping you stuck these 2 years?"],
+    {
+      aiMessageCount: 10,
+      skipLegacyPacingGates: true,
+      suppressBookingLanguage: false,
+      currentStepHasAnyAskAction: true,
+      currentStepScriptedQuestions: [
+        "Why does that matter to you right now specifically though like why is this the time you're actually doing something about it"
+      ],
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    !offscriptQual.hardFails.some((f) =>
+      f.includes('offscript_question_on_lowticket:')
+    ),
+    'F5: off-script question stays soft on qualification personas'
+  );
+
   console.log('script-state recovery tests passed');
 }
 

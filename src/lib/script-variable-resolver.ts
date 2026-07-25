@@ -263,6 +263,16 @@ function askMatchTokens(text: string): string[] {
     .filter((t) => t.length > 2 && !ASK_MATCH_STOPWORDS.has(t));
 }
 
+// Exported for the F5 backward-content guard in voice-quality-gate — the gate
+// and the resolver must agree on what "this delivered text IS that scripted
+// ask" means, so there is exactly one matcher.
+export function scriptAskMatchesText(
+  askContent: string,
+  text: string
+): boolean {
+  return askMatchesMessage(askContent, text);
+}
+
 // Does a delivered AI message match a scripted ask? Token-overlap on the
 // scripted ask's significant tokens — asks get lightly paraphrased in
 // delivery ("but why is 10k a month so important to you though?" vs the

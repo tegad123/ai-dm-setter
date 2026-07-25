@@ -20,6 +20,7 @@ import {
   maxQuestionSimilarityToScript,
   type CallProposalPrereq
 } from '@/lib/script-step-progression';
+import { scriptAskMatchesText } from '@/lib/script-variable-resolver';
 import { equivalentCapturedDataPointKeys } from '@/lib/captured-data-keys';
 import { extractUrlsFromText, isUrlAllowed } from '@/lib/url-allowlist';
 import { findVerbatimRepeat } from '@/lib/verbatim-normalize';
@@ -850,6 +851,20 @@ export interface VoiceQualityOptions {
    * spurious violation against a correctly-advancing conversation.
    */
   positionJumpedThisTurn?: boolean;
+  /**
+   * F5 (2026-07-25, Tega run-2). Script ask-anchors (variable → its step's
+   * scripted ask texts), built by buildVariableAskAnchors. Powers the
+   * BACKWARD content guards: step_distance_violation only looks FORWARD, so
+   * on run-2 the state stayed monotonic while the delivered CONTENT regressed
+   * (an obstacle-discovery ask fired from step 6). With anchors the gate can
+   * hard-fail a draft question that belongs to an earlier step or re-asks a
+   * variable that is already captured.
+   */
+  scriptAskAnchors?: Array<{
+    variableName: string;
+    stepNumber: number | null;
+    askContents: string[];
+  }> | null;
   /**
    * Full content list of all prior AI messages on this conversation.
    * Used by the mandatory-ask-skipped guard to verify that scripted
@@ -2011,6 +2026,54 @@ export function scoreVoiceQuality(
     );
   }
 
+  // ── F5 backward-content guards (2026-07-25, Tega run-2) ────────────────
+  // step_distance_violation only looks FORWARD. On run-2 the persisted step
+  // stayed monotonic (the state floor worked) while the delivered CONTENT
+  // regressed — an obstacle-discovery ask fired from step 6, and a question
+  // the lead had just answered was re-asked. Two deterministic guards, both
+  // driven by the script's own ask-anchors (one matcher shared with the F3
+  // binding fix so "this text IS that scripted ask" means one thing):
+  //   • earlier_step_ask_regression — the draft's question is an EARLIER
+  //     step's scripted ask. The walker never moves backward, so the content
+  //     must not either.
+  //   • reasks_captured_variable — the draft's question is the scripted ask
+  //     for a variable that is ALREADY captured; re-asking reads as not
+  //     listening.
+  if (
+    reply.includes('?') &&
+    Array.isArray(options?.scriptAskAnchors) &&
+    options.scriptAskAnchors.length > 0
+  ) {
+    for (const anchor of options.scriptAskAnchors) {
+      const matchedAsk = anchor.askContents.find((ask) =>
+        scriptAskMatchesText(ask, reply)
+      );
+      if (!matchedAsk) continue;
+      const currentStep = options?.currentScriptStepNumber;
+      if (
+        typeof anchor.stepNumber === 'number' &&
+        typeof currentStep === 'number' &&
+        anchor.stepNumber < currentStep
+      ) {
+        hardFails.push(
+          `earlier_step_ask_regression: this question belongs to Step ${anchor.stepNumber} (${anchor.variableName}) which is already behind you — the conversation is on Step ${currentStep}. Do not re-open earlier discovery; continue the CURRENT step's content.`
+        );
+        break;
+      }
+      if (
+        capturedDataPointHasValue(
+          options?.capturedDataPoints,
+          anchor.variableName
+        )
+      ) {
+        hardFails.push(
+          `reasks_captured_variable: the lead already answered this — ${anchor.variableName} is captured. Do not re-ask; acknowledge what they said and continue the CURRENT step.`
+        );
+        break;
+      }
+    }
+  }
+
   // Off-script question soft signal: when the current step DOES define
   // [ASK] content but the reply's question shares < 0.2 Jaccard overlap
   // with any scripted ask, the LLM is improvising a different question
@@ -2029,7 +2092,21 @@ export function scoreVoiceQuality(
       options.currentStepScriptedQuestions
     );
     if (sim < 0.2) {
-      softSignals.improvised_question_off_script = -0.4;
+      // F5 (2026-07-25, Tega run-2): on a LOW-TICKET persona the script IS the
+      // funnel — improvised discovery questions are exactly the content
+      // regression run-2 caught twice (an obstacle probe fired from step 6,
+      // then a just-answered question was re-probed; NEITHER matched any
+      // scripted ask — this script has no obstacle step at all). Hard-fail on
+      // low-ticket so the regen re-drives the CURRENT step's scripted ask.
+      // Qualification personas keep the soft signal (their judgment steps
+      // legitimately probe adaptively).
+      if (options?.suppressBookingLanguage === true) {
+        hardFails.push(
+          `offscript_question_on_lowticket: this question matches none of the current step's scripted asks — on this funnel the script is the product; do not improvise discovery questions. Ask the CURRENT step's scripted question (paraphrase lightly if needed), nothing else.`
+        );
+      } else {
+        softSignals.improvised_question_off_script = -0.4;
+      }
     }
   }
 

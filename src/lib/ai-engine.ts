@@ -3043,6 +3043,12 @@ export async function generateReply(
   const gateVariableResolutionTexts = collectCurrentStepVariableTexts(
     scriptStateSnapshot?.currentStep ?? null
   );
+  // F3/F5 (2026-07-25): question anchors from the script — used by BOTH the
+  // variable resolver (bind only from a variable's own ask) and the voice gate
+  // (backward-content guards).
+  const scriptAskAnchorsForTurn = buildVariableAskAnchors(
+    scriptStateSnapshot?.script?.steps ?? null
+  );
   const gateVariableResolutionMap = gateVariableResolutionTexts.some((text) =>
     /\{\{\s*[^}]+\s*\}\}/.test(text)
   )
@@ -3050,11 +3056,7 @@ export async function generateReply(
         accountId,
         context: {
           ...scriptVariableResolutionContext,
-          // F3 (2026-07-25): question anchors from the script — explicit-only
-          // prose vars may only persist from their OWN ask's reply.
-          askAnchors: buildVariableAskAnchors(
-            scriptStateSnapshot?.script?.steps ?? null
-          )
+          askAnchors: scriptAskAnchorsForTurn
         }
       })
     : null;
@@ -3980,6 +3982,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     suppressBookingLanguage: personaConfigDisablesStageProgression(
       personaForGate?.promptConfig
     ),
+    // F5 (2026-07-25): script ask-anchors for the backward-content guards
+    // (earlier_step_ask_regression / reasks_captured_variable).
+    scriptAskAnchors: scriptAskAnchorsForTurn,
     // Low-ticket personas: hard-fail verbatim self-repeats (Ahsan Ali
     // 2026-07-19 — CTA re-sent word-for-word after lead engagement).
     verbatimRepeatGuard: personaConfigDisablesStageProgression(
@@ -4976,6 +4981,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // booking_language_on_lowticket hard-failing. This flag lets the
     // best-effort branches refuse to ship such a draft so it falls through to
     // the hard-unshippable escalate path.
+    // F5 (2026-07-25): backward-content / off-script-question regression —
+    // exhaustion must re-drive the CURRENT step's scripted ask, never ship the
+    // regressed question and never go silent.
+    const contentRegressionFailed = quality.hardFails.some(
+      (f) =>
+        f.includes('earlier_step_ask_regression:') ||
+        f.includes('reasks_captured_variable:') ||
+        f.includes('offscript_question_on_lowticket:')
+    );
     const lowTicketHardHarmFailed = quality.hardFails.some(
       (f) =>
         f.includes('booking_language_on_lowticket:') ||
@@ -6417,6 +6431,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             auditErr
           );
         }
+      } else if (
+        contentRegressionFailed &&
+        currentStepScriptedQuestionsForGate.some(
+          (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
+        )
+      ) {
+        // F5 exhaustion (2026-07-25): the model kept producing a regressed /
+        // off-script question through every retry. The system HAS the current
+        // step's scripted ask — drive it deterministically instead of shipping
+        // the regression or going silent.
+        const scriptedAsk = currentStepScriptedQuestionsForGate.find(
+          (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
+        )!;
+        parsed.message = scriptedAsk.trim();
+        parsed.messages = [scriptedAsk.trim()];
+        parsed.escalateToHuman = false;
+        parsed.voiceNoteAction = null;
+        console.warn(
+          `[ai-engine] F5 content regression exhausted — deterministically re-driving the current step's scripted ask (conv ${activeConversationId})`
+        );
       } else if (
         (unnecessarySchedulingQuestionFailed ||
           logisticsBeforeQualificationFailed ||
