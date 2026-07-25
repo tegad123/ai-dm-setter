@@ -49,6 +49,7 @@ import { getMessages as getFacebookMessages } from '@/lib/facebook';
 import { getUnifiedAvailability } from '@/lib/calendar-adapter';
 import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
+import { replyAnswersAsk } from '@/lib/answer-satisfaction';
 import {
   transitionLeadStage,
   isStageProgressionDisabledForLead,
@@ -5086,25 +5087,59 @@ async function sendAIReply(
     result.reply
   );
   if (dedup.isDuplicate) {
-    console.warn(
-      `[webhook-processor] duplicate_suppressed ${conversationId} — sim=${dedup.maxSimilarity.toFixed(2)} vs prior AI msg. Not sending: "${result.reply.slice(0, 80)}"`
-    );
-    // Mark the suggestion as rejected-by-dedup so analytics can track it
-    if (result.suggestionId) {
-      await prisma.aISuggestion
-        .update({
-          where: { id: result.suggestionId },
-          data: { wasRejected: true, finalSentText: null }
-        })
-        .catch(() => {});
-    }
-    await prisma.conversation
-      .update({
-        where: { id: conversationId },
-        data: { awaitingAiResponse: false, awaitingSince: null }
+    // N3 (2026-07-25, Tega run-2 + our own post-deploy verification): this
+    // guard was an unconditional silent dead-end (return + awaitingAiResponse
+    // =false → heartbeat-invisible). Live storm anatomy: the lead asks a
+    // NON-answer ("how much is it"), the model's only viable reply is the
+    // ack + RE-ASK of the current step's question — which is, by definition,
+    // near-identical to the previous turn — dedup kills it, the scheduledReply
+    // burns its attempts and dies FAILED, the lead gets silence at their
+    // highest-intent moment. But a re-drive after a NON-answer is CORRECT
+    // behavior (Tega scored exactly this re-ask as an F4 pass). So:
+    //   • lead's latest message did NOT answer → ship the near-duplicate
+    //     re-drive anyway;
+    //   • lead answered and we are still repeating ourselves → genuine dupe,
+    //     suppress — but stay heartbeat-visible instead of dead-ending.
+    const latestLeadMsg = await prisma.message
+      .findFirst({
+        where: { conversationId, sender: 'LEAD' },
+        orderBy: { timestamp: 'desc' },
+        select: { content: true }
       })
       .catch(() => null);
-    return;
+    const leadDidNotAnswer = latestLeadMsg
+      ? !replyAnswersAsk(latestLeadMsg.content)
+      : false;
+    if (leadDidNotAnswer) {
+      console.warn(
+        `[webhook-processor] duplicate ALLOWED as re-drive on ${conversationId} — sim=${dedup.maxSimilarity.toFixed(2)}, lead's last message was a non-answer; re-asking is correct (N3)`
+      );
+      // fall through to ship
+    } else {
+      console.warn(
+        `[webhook-processor] duplicate_suppressed ${conversationId} — sim=${dedup.maxSimilarity.toFixed(2)} vs prior AI msg. Not sending: "${result.reply.slice(0, 80)}"`
+      );
+      // Mark the suggestion as rejected-by-dedup so analytics can track it
+      if (result.suggestionId) {
+        await prisma.aISuggestion
+          .update({
+            where: { id: result.suggestionId },
+            data: { wasRejected: true, finalSentText: null }
+          })
+          .catch(() => {});
+      }
+      await prisma.conversation
+        .update({
+          where: { id: conversationId },
+          data: {
+            awaitingAiResponse: true,
+            awaitingSince: new Date(),
+            lastSilentStopAt: new Date()
+          }
+        })
+        .catch(() => null);
+      return;
+    }
   }
 
   // ── Decide single-send vs multi-bubble path ──────────────────
