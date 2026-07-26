@@ -159,8 +159,20 @@ async function main() {
     for (const l of leads) {
       const cs = await prisma.conversation.findMany({
         where: { leadId: l.id },
-        select: { id: true }
+        select: { id: true, capturedDataPoints: true }
       });
+      // Standing rule (2026-07-26): verification baselines are never deleted.
+      const baseline = cs.find(
+        (c) =>
+          ((c.capturedDataPoints ?? {}) as Record<string, unknown>)
+            .verificationBaseline === true
+      );
+      if (baseline) {
+        console.log(
+          `REFUSED: conversation ${baseline.id} is a verification baseline — use the reset script (clears messages, keeps the conversation row) instead of --cleanup.`
+        );
+        continue;
+      }
       for (const c of cs) {
         await prisma.message.deleteMany({ where: { conversationId: c.id } });
         await prisma.scheduledReply.deleteMany({

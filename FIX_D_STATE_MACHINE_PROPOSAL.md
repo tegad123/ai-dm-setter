@@ -82,7 +82,7 @@ Same standard as F1–F6: **independent verification, not the author's.** Each p
 
 | Phase | Scope | Standalone? | Depends on | Est. | Exit criterion (verified by) |
 |---|---|---|---|---|---|
-| **0 — Egress + holds** (the F1 architectural fix, first) | `State`/`Event`/`transition` skeleton; `canSend` as the single send path incl. unset-variable block (Q2) + terminal-state protection (Q3) | Yes | — | ~3–4 d | Shadow diff vs current send paths clean on live traffic; F1/F2 re-verified (Ali/Tega) |
+| **0 — Egress + holds** (the F1 architectural fix, first) | `State`/`Event`/`transition` skeleton; `canSend` as the single send path incl. unset-variable block (Q2) + terminal-state protection (Q3); **typed hold states** — `HELD_DISTRESS`, `HELD_SCHEDULING_CONFLICT`, `HELD_OPERATOR_REVIEW`, `HELD_GATE_EXHAUSTED` replace the generic `awaitingHumanReview` boolean, each with its own entry event and release condition, so an operator always knows WHY a conversation is held (Tega 2026-07-26: explicit in the phase plan, not implied) | Yes | — | ~3–4 d | Shadow diff vs current send paths clean on live traffic; F1/F2 re-verified (Ali/Tega); every held conversation shows a typed reason |
 | **1 — Step completion** | Route all ~7 completion paths through `transition`; rejection path (Q1) | No | Phase 0 | ~4–5 d | Shadow diff vs `computeSystemStage`; F4/F5 hold (independent) |
 | **2 — Variable binding** | All ~7 writers → validated `extracted` events | No | Phase 1 | ~4–5 d | Shadow diff vs current binding; F3/F6 hold (independent) |
 | **3 — Retire redundant guards** | Delete the guards the machine now makes unrepresentable | No | Phases 0–2 all cut over | ~2–3 d | No behavior change; full regression + persona-harness green |
