@@ -72,6 +72,7 @@ import {
   scriptAskMatchesText,
   isValidTemplateVariableName,
   persistScriptVariableResolutions,
+  renderScriptedAskWithNeutralFallbacks,
   resolveEmittedPlaceholders,
   resolveScriptVariablesForTexts,
   type ScriptVariableResolutionContext,
@@ -5021,7 +5022,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       (f) =>
         f.includes('earlier_step_ask_regression:') ||
         f.includes('reasks_captured_variable:') ||
-        f.includes('offscript_question_on_lowticket:')
+        f.includes('offscript_question_on_lowticket:') ||
+        f.includes('lead_fragment_echo_in_question:')
     );
     const lowTicketHardHarmFailed = quality.hardFails.some(
       (f) =>
@@ -6467,17 +6469,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       } else if (
         contentRegressionFailed &&
-        currentStepScriptedQuestionsForGate.some(
-          (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
-        )
+        currentStepScriptedQuestionsForGate.some((q) => q.trim().length > 0)
       ) {
         // F5 exhaustion (2026-07-25): the model kept producing a regressed /
         // off-script question through every retry. The system HAS the current
         // step's scripted ask — drive it deterministically instead of shipping
         // the regression or going silent.
-        const scriptedAsk = currentStepScriptedQuestionsForGate.find(
-          (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
-        )!;
+        // 2026-07-26 (Ali QA): tokenized asks no longer skip this branch — a
+        // {{goal}}-carrying ask is rendered with neutral slot fallbacks
+        // ("that goal"), because the alternative was shipping a model-mangled
+        // bubble via best-effort (the dragged-fragment question that shipped
+        // on cms1omte60003l804es8z1g3t).
+        const rawScriptedAsk =
+          currentStepScriptedQuestionsForGate.find(
+            (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
+          ) ??
+          currentStepScriptedQuestionsForGate.find((q) => q.trim().length > 0)!;
+        const scriptedAsk =
+          renderScriptedAskWithNeutralFallbacks(rawScriptedAsk);
         parsed.message = scriptedAsk.trim();
         parsed.messages = [scriptedAsk.trim()];
         parsed.escalateToHuman = false;

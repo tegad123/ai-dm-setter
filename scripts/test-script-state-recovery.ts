@@ -1173,6 +1173,102 @@ function run() {
     'step-clamp: within lookahead stays allowed'
   );
 
+  // ── Duration rate guard (2026-07-26, Ali QA conv cms1omte60003l804es8z1g3t) ──
+  // "$10,000 a month" bound tradingExperienceDuration="a month" — a duration
+  // phrase immediately preceded by a money amount is a RATE, never experience.
+  const aliTurn2 = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'ai_exp_q',
+        sender: 'AI' as const,
+        content:
+          'so are you new in the markets or have you been trading for a while?',
+        timestamp: new Date('2026-07-26T10:56:29Z')
+      },
+      {
+        id: 'lead_ali_t2',
+        sender: 'LEAD' as const,
+        content:
+          "my income goal is around $10,000 a month, my main obstacle is i've got no consistency in my system, and honestly i want financial freedom so i can spend more time with my family",
+        timestamp: new Date('2026-07-26T11:03:05Z')
+      }
+    ]
+  });
+  assert.equal(
+    aliTurn2.tradingExperienceDuration,
+    undefined,
+    'duration-rate-guard: "a month" from "$10,000 a month" never binds as experience'
+  );
+  assertHigh(
+    aliTurn2,
+    'incomeGoal',
+    10000,
+    'duration-rate-guard: incomeGoal still binds correctly'
+  );
+
+  // Positive control: a real duration answer still binds.
+  const realDuration = extractCapturedDataPointsForTest({
+    minimumCapitalRequired: 1000,
+    history: [
+      {
+        id: 'ai_exp_q2',
+        sender: 'AI' as const,
+        content:
+          'so are you new in the markets or have you been trading for a while?',
+        timestamp: new Date('2026-07-26T10:56:29Z')
+      },
+      {
+        id: 'lead_dur',
+        sender: 'LEAD' as const,
+        content: 'been trading for about 2 years but still not consistent',
+        timestamp: new Date('2026-07-26T10:57:00Z')
+      }
+    ]
+  });
+  assert.ok(
+    typeof point(realDuration, 'tradingExperienceDuration')?.value ===
+      'string' &&
+      String(point(realDuration, 'tradingExperienceDuration')?.value).includes(
+        '2 years'
+      ),
+    'duration-rate-guard: genuine "2 years" answer still binds'
+  );
+
+  // ── Lead-fragment echo guard (same Ali QA turn) ──
+  const echoGate = scoreVoiceQualityGroup(
+    [
+      'But why is my income goal is around $10,000 a month, my main obstacle so important to you though?'
+    ],
+    {
+      suppressBookingLanguage: true,
+      previousLeadMessage:
+        "my income goal is around $10,000 a month, my main obstacle is i've got no consistency in my system, and honestly i want financial freedom so i can spend more time with my family",
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    echoGate.hardFails.some((f) =>
+      f.includes('lead_fragment_echo_in_question:')
+    ),
+    'echo-guard: verbatim lead sentence pasted into a question hard-fails'
+  );
+  const cleanAsk = scoreVoiceQualityGroup(
+    ['but why is 10k a month so important to you though?'],
+    {
+      suppressBookingLanguage: true,
+      previousLeadMessage:
+        "my income goal is around $10,000 a month, my main obstacle is i've got no consistency in my system, and honestly i want financial freedom so i can spend more time with my family",
+      capturedDataPoints: {}
+    }
+  );
+  assert.ok(
+    !cleanAsk.hardFails.some((f) =>
+      f.includes('lead_fragment_echo_in_question:')
+    ),
+    'echo-guard: paraphrased value reference passes'
+  );
+
   console.log('script-state recovery tests passed');
 }
 

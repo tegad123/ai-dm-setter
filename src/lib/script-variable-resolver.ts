@@ -985,6 +985,20 @@ function fallbackForVariable(variableName: string): string {
   return 'what you shared earlier';
 }
 
+/**
+ * Render a scripted ask deterministically by replacing every {{token}} with
+ * its neutral fallback phrase ("that goal", "what you mentioned earlier").
+ * Used by the gate-exhaustion re-drive so a tokenized scripted ask can still
+ * be driven by CODE instead of shipping a model-mangled bubble (Ali QA
+ * 2026-07-26: step-4 ask carries {{goal}}, so the brace-free-only re-drive
+ * skipped and a dragged-fragment question shipped best-effort).
+ */
+export function renderScriptedAskWithNeutralFallbacks(text: string): string {
+  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_m, name: string) =>
+    fallbackForVariable(name)
+  );
+}
+
 function cleanExtractorValue(
   value: string | null,
   variableName = 'generic'

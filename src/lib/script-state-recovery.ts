@@ -2650,6 +2650,20 @@ function extractDurationPhrase(text: string): string | null {
   );
   if (!durationMatch?.[1]) return null;
 
+  // Rate guard (2026-07-26, Ali QA re-run, conv cms1omte60003l804es8z1g3t):
+  // "$10,000 a month" / "10k a month" is an income RATE — the "a month" tail
+  // must never bind as trading-experience duration. Same defect class as the
+  // capital rate guard: a duration phrase immediately preceded by a money
+  // amount is describing money-per-period, not time spent trading.
+  const beforeDuration = normalized.slice(0, durationMatch.index ?? 0);
+  if (
+    /(\$\s*[\d,.]+\s*[km]?|\b\d[\d,.]*\s*[km]?)\s*(usd|dollars?)?\s*$/i.test(
+      beforeDuration
+    )
+  ) {
+    return null;
+  }
+
   return durationMatch[1].replace(/\s+/g, ' ').trim();
 }
 

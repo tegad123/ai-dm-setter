@@ -2083,6 +2083,41 @@ export function scoreVoiceQuality(
     }
   }
 
+  // Lead-fragment echo guard (2026-07-26, Ali QA re-run, conv
+  // cms1omte60003l804es8z1g3t): the model rendered a scripted ask by pasting
+  // the lead's OWN sentence into the slot — "But why is my income goal is
+  // around $10,000 a month, my main obstacle so important to you though?".
+  // A question bubble that contains a verbatim ≥6-word first-person run from
+  // the lead's latest message is echoing their sentence, not referencing the
+  // value. Hard-fail; exhaustion re-drives the scripted ask with neutral
+  // slot fallbacks (code-owned copy).
+  if (reply.includes('?') && options?.previousLeadMessage) {
+    const normalizeForEcho = (t: string) =>
+      t
+        .toLowerCase()
+        .replace(/[^a-z0-9$\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const replyNorm = normalizeForEcho(reply);
+    const leadWords = normalizeForEcho(options.previousLeadMessage).split(' ');
+    const FIRST_PERSON = /^(my|i|im|ive|id|ill|me)$/;
+    let echoed: string | null = null;
+    for (let i = 0; i + 6 <= leadWords.length; i++) {
+      const shingle = leadWords.slice(i, i + 6);
+      if (!shingle.some((w) => FIRST_PERSON.test(w))) continue;
+      const phrase = shingle.join(' ');
+      if (replyNorm.includes(phrase)) {
+        echoed = phrase;
+        break;
+      }
+    }
+    if (echoed) {
+      hardFails.push(
+        `lead_fragment_echo_in_question: this question copies the lead's own sentence verbatim ("${echoed}…"). Reference the VALUE in your own words (e.g. "10k a month"), then ask the scripted question cleanly — never paste their sentence into the slot.`
+      );
+    }
+  }
+
   // Off-script question soft signal: when the current step DOES define
   // [ASK] content but the reply's question shares < 0.2 Jaccard overlap
   // with any scripted ask, the LLM is improvising a different question
