@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import {
   anchoredCaptureIsConsistent,
   buildVariableAskAnchors,
+  parseScriptVariableExtractorValue,
+  renderScriptedAskWithNeutralFallbacks,
   resolveScriptVariablesForTexts
 } from '@/lib/script-variable-resolver';
 
@@ -410,6 +412,35 @@ async function run() {
     ),
     true,
     'capture gate: non-explicit-only keys keep legacy behavior'
+  );
+
+  // ── Lead-echo value hygiene (2026-07-26, Ali QA cms1qk0nx0003ld04jrv2yfgk) ──
+  // The extractor returned the lead's raw clause as {{goal}}; the renderer
+  // then produced "But why is my income goal is around $10,000 a month, my
+  // main obstacle so important to you though?". Hygiene must reduce the
+  // value to the actual goal.
+  assert.equal(
+    parseScriptVariableExtractorValue(
+      'my income goal is around $10,000 a month, my main obstacle',
+      'goal'
+    ),
+    '$10,000 a month',
+    'echo hygiene: strips self-referential prefix + bundled next-slot clause'
+  );
+  assert.equal(
+    parseScriptVariableExtractorValue(
+      'financial freedom for my family',
+      'deep_why'
+    ),
+    'financial freedom for my family',
+    'echo hygiene: benign value containing "my" untouched'
+  );
+  assert.equal(
+    renderScriptedAskWithNeutralFallbacks(
+      'But why is {{goal}} so important to you though?'
+    ),
+    'But why is that goal so important to you though?',
+    'neutral render: {{goal}} -> "that goal"'
   );
 
   console.log('variable-resolver F3 anchor tests passed');

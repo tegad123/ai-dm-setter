@@ -722,6 +722,25 @@ function normalizeResolvedVariableValue(
         ''
       )
       .trim();
+
+    // Lead-echo hygiene (2026-07-26, Ali QA conv cms1qk0nx0003ld04jrv2yfgk):
+    // the extractor returned the lead's raw clause — "my income goal is
+    // around $10,000 a month, my main obstacle" — as {{goal}}, and the slot
+    // machinery rendered that fragment straight into the scripted ask ("But
+    // why is my income goal is around $10,000 a month, my main obstacle so
+    // important to you though?"). Strip the self-referential template prefix
+    // and truncate any trailing bundled next-slot clause so only the VALUE
+    // survives interpolation.
+    value = value
+      .replace(
+        /^(?:my|our)\s+(?:current\s+)?(?:income\s+goal|goal|main\s+obstacle|obstacle|deep\s+why|why|dream|target)\s+(?:is|would\s+be)\s*(?:around|about|roughly|like)?\s*/i,
+        ''
+      )
+      .trim();
+    const bundledCut = value.search(
+      /,\s*(?:and\s+|but\s+)?(?:my|our)\s+(?:current\s+)?(?:main\s+)?(?:obstacle|problem|issue|struggle|deep\s+why|income\s+goal|goal|why)\b/i
+    );
+    if (bundledCut > 0) value = value.slice(0, bundledCut).trim();
   }
 
   value = value.replace(/[.。!?]+$/g, '').trim();

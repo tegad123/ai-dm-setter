@@ -6469,24 +6469,80 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         }
       } else if (
         contentRegressionFailed &&
-        currentStepScriptedQuestionsForGate.some((q) => q.trim().length > 0)
+        (currentStepScriptedQuestionsForGate.some((q) => q.trim().length > 0) ||
+          [
+            ...(scriptStateSnapshot?.currentStep?.actions ?? []),
+            ...(scriptStateSnapshot?.currentStep?.branches ?? []).flatMap(
+              (b: { actions?: Array<{ actionType?: string }> }) =>
+                b?.actions ?? []
+            )
+          ].some(
+            (a: { actionType?: string; content?: string | null }) =>
+              a?.actionType === 'ask_question' &&
+              typeof a?.content === 'string' &&
+              a.content.trim().length > 0
+          ))
       ) {
         // F5 exhaustion (2026-07-25): the model kept producing a regressed /
         // off-script question through every retry. The system HAS the current
         // step's scripted ask — drive it deterministically instead of shipping
         // the regression or going silent.
-        // 2026-07-26 (Ali QA): tokenized asks no longer skip this branch — a
-        // {{goal}}-carrying ask is rendered with neutral slot fallbacks
-        // ("that goal"), because the alternative was shipping a model-mangled
-        // bubble via best-effort (the dragged-fragment question that shipped
-        // on cms1omte60003l804es8z1g3t).
-        const rawScriptedAsk =
+        // 2026-07-26 round 2 (Ali QA, conv cms1qk0nx0003ld04jrv2yfgk): the
+        // RESOLVED candidate list can itself be poisoned — a mangled
+        // turn-local {{goal}} value renders the lead's raw sentence into the
+        // "scripted" ask, so re-driving the resolved text re-shipped the very
+        // bubble the gate had just rejected. The re-drive now (a) prefers the
+        // RAW template rendered with neutral slot fallbacks whenever the echo
+        // guard fired, and (b) NEVER ships text that normalized-equals a
+        // rejected draft bubble.
+        const echoFailed = quality.hardFails.some((f) =>
+          f.includes('lead_fragment_echo_in_question:')
+        );
+        const normForCompare = (t: string) =>
+          t
+            .toLowerCase()
+            .replace(/[^a-z0-9$\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const rejectedNorms = new Set(
+          (Array.isArray(parsed.messages)
+            ? parsed.messages
+            : [parsed.message]
+          ).map(normForCompare)
+        );
+        const rawStepAskCandidates = [
+          ...(scriptStateSnapshot?.currentStep?.actions ?? []),
+          ...(scriptStateSnapshot?.currentStep?.branches ?? []).flatMap(
+            (b: {
+              actions?: Array<{ actionType?: string; content?: string | null }>;
+            }) => b?.actions ?? []
+          )
+        ]
+          .filter(
+            (a: { actionType?: string; content?: string | null }) =>
+              a?.actionType === 'ask_question' &&
+              typeof a?.content === 'string' &&
+              a.content.trim().length > 0
+          )
+          .map((a: { content?: string | null }) => a.content!.trim());
+        const resolvedCandidate =
           currentStepScriptedQuestionsForGate.find(
             (q) => q.trim().length > 0 && !/\{\{[^}]+\}\}/.test(q)
           ) ??
-          currentStepScriptedQuestionsForGate.find((q) => q.trim().length > 0)!;
-        const scriptedAsk =
-          renderScriptedAskWithNeutralFallbacks(rawScriptedAsk);
+          currentStepScriptedQuestionsForGate.find(
+            (q) => q.trim().length > 0
+          ) ??
+          null;
+        const rawCandidate = rawStepAskCandidates[0] ?? null;
+        let scriptedAsk =
+          echoFailed && rawCandidate
+            ? renderScriptedAskWithNeutralFallbacks(rawCandidate)
+            : renderScriptedAskWithNeutralFallbacks(
+                (resolvedCandidate ?? rawCandidate)!
+              );
+        if (rejectedNorms.has(normForCompare(scriptedAsk)) && rawCandidate) {
+          scriptedAsk = renderScriptedAskWithNeutralFallbacks(rawCandidate);
+        }
         parsed.message = scriptedAsk.trim();
         parsed.messages = [scriptedAsk.trim()];
         parsed.escalateToHuman = false;
