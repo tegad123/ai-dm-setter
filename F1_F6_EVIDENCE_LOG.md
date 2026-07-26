@@ -243,3 +243,61 @@ Three clean-slate runs of Tega's exact repro sequence, trace-checked. Four addit
 1. `{{goal}}` renders the neutral fallback "that goal" in some turns instead of "10k a month" (tier-1 freshness timing) — cosmetic, never wrong-valued.
 2. Run B captured `urgency="inconsistency…"` via a model judgment-capture that passed the GROUNDING gate (value is verbatim the reply to the delivered urgency ask) but is semantically obstacle content; it never reached lead-facing copy (goal-only variant selected). Full semantic gating of judgment captures = route them through the anchored extractor — noted for Fix D scope.
 3. Step-8's real funnel URL still unconfigured (placeholder) — engine refuses dead links + alerts; **needs Daniel's URL** (config, their side).
+
+---
+
+# TEGA TRACE-REVIEW RESPONSE (2026-07-26)
+
+Tega's post-run-2 trace review filed 4 findings. Capital was declared the blocker ("Capital binding is the blocker. The rest can queue behind it. Need the mechanism before the fix.").
+
+## 1. CAPITAL P0 — false capital binding on low-ticket (commit `20c714c`)
+
+**Live incident:** Ahmed Shah (SQA test lead, conv `cmrz6atll000ml70470dpk5dv`, since removed by test-lead cleanup) said:
+
+> "Yeah, my current income goal is around $10,000 a month, my main obstacle right now is just not having a predictable client acquisition system, and honestly, the deep why behind all of this is that I want financial freedom so I can spend more time with my family without stressing about cash flow"
+
+→ engine minted `verifiedCapitalUsd=10000` + `capitalThresholdMet=true` at HIGH confidence, on a persona whose 8-step website-funnel script has NO capital step.
+
+**Mechanism (pinned by regex trace, before any fix):**
+1. `PASSIVE_CAPITAL_SIGNAL_PHRASES`'s verb branch `i can/will (invest|put|commit|spend)` matched **"I can spend"** from "…so I can spend more **time** with my family" — spending TIME, not money.
+2. The clause-scoping guard was defeated by its own fallback: `extractAmountUSD(capitalClause) ?? extractAmountUSD(content)` — the capital clause ("I can spend more time…") has no number, so it fell back to the WHOLE message and grabbed **$10,000 — the income-goal RATE**.
+3. `PASSIVE_NEGATIVE_CONTEXT` knows `my income` but not `my current income goal` (intervening word broke the match).
+4. Arming condition: the capital machinery keys off `persona.minimumCapitalRequired > 0`, which the dae persona has set — nothing checked whether the ACTIVE SCRIPT has a capital step.
+
+**Fix (layered, `20c714c`):**
+- **Structural disarm** — low-ticket personas (`disableLeadStageProgression=true`) now null `capitalThreshold` at its single source in ai-engine (disarms R24 gate, passive listener, semantic classification persists, EARLY CAPITAL GATE / NEXT SLOT directives), skip both capital extractors in `extractDataPoints`, and `scanForPassiveCapitalQualification` self-gates on the persona. Zero capital writers reachable on low-ticket.
+- **All-persona hardening** — verb branch refuses time/energy/effort objects; the whole-content fallback is REMOVED (no amount in the capital clause = no capital); amount-adjacent rate guard ("$X a month/week/year" never parses as capital, while "5k saved and want 10k a month" still binds the 5k); NEG context adds `(income|revenue) goal`.
+- **Tests** — 6 new cases incl. Ahmed's verbatim message (must not bind on ANY persona), low-ticket full disarm, positive control, bundled clause, pure rate, spend-time phrasing. Suites: recovery ✅, resolver-gate ✅, low-ticket harm 36/36 ✅.
+
+**Live 3× verification (2026-07-26, Shazim repro lead, conv `cms0ic2xg0003kt04wsbri1qg`, reset to step 1 before each run):** drove the funnel to the Goal Discovery ask and sent Ahmed's VERBATIM message.
+
+| Check | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| capitalVerificationStatus | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| capitalVerifiedAmount | null | null | null |
+| capital keys in CDP | NONE | NONE | NONE |
+| incomeGoal (correct binding) | 10000 | 10000 | 10000 |
+
+The exact sentence that minted false capital on Ahmed Shah now binds ONLY `incomeGoal=10000`.
+
+**Honest caveat on the earlier 3 verification runs (A/B/C):** they show zero capital keys, but their scripts never uttered a capital-shaped phrase — that's "unexercised", not "proven". The 3× repro above exercises the exact trigger.
+
+## 2. Step-map cross-contamination (commit `6f402be`)
+
+`STEP_PATTERN_MAP` hardcodes DAE HIGH-TICKET numbering (Steps 9–18). On the 8-step low-ticket script, `detectStepDistanceViolation` attributed "Step 10"/"Step 16" in traces/regen directives — steps that don't exist in the active script. Fix: the detector now takes the active script's max step and stays silent when the inferred step exceeds it (the inference can only be about a different script); low-ticket booking language remains owned by `suppressBookingLanguage` with correct attribution; high-ticket behavior unchanged (regression test: max-18 script keeps firing). Honest note: the earlier dedup fix routed AROUND the misattribution; this fixes the misattribution itself.
+
+## 3. Invented variable names + no-source writers (commit `2559712`)
+
+Model judgment captures could invent storage keys ("inconsistency", "bottleneck", "goal_amount"-style) and persisted raw strings with no provenance. Fix: capture keys must canonicalize to a canonical data point, a script `{{variable}}` ask-anchor, or an explicit-only prose variable — anything else dropped with a warn; `mergeCapturedDataPoints` now writes `{value, confidence:'MEDIUM', extractionMethod:'model_judgment_capture', extractedAt}` (the shape every other writer uses). **Live-verified 2026-07-26:** run-1 CDP shows `goal = "$10,000 a month" [model_judgment_capture/MEDIUM]` — provenance visible in traces.
+
+## 4. Persona-level funnel URL (commit `baf3a5e`)
+
+Per Tega's decision: `promptConfig.funnelLink` (additive JSON field, no migration). N1 resolution order: script send_link action → persona funnelLink → strip + throttled alert (copy names both config points). `getAllowedUrls` admits the field so the egress sanitizer can't rewrite the injected link. `freeValueLink` remains the free-value YouTube asset, never substituted. **Still needs the real funnel URL from Daniel** — one-line config once provided.
+
+## 5. Fix D doc — step/stage decoupling evidence added
+
+Ali Hassan's ALi Raza observation (step=1 across 14 messages while stage advanced OPENING → SITUATION_DISCOVERY → GOAL_EMOTIONAL_WHY) added to FIX_D_STATE_MACHINE_PROPOSAL.md with attribution; original conv since deleted by test-lead cleanup, so two still-queryable live corroborations cited: `cmruf7wk4004gju04d3clr2wc` (step 8/8, systemStage="Funnel to Website" correct, but `llmEmittedStage=BOOKING` — a stage that doesn't exist in the funnel) and `cmruemj6a0003ju0484k0r09a` (systemStage="Life Impact" at step 5, `llmEmittedStage=GOAL_EMOTIONAL_WHY`).
+
+## Accepted corrections (Tega)
+- **Retry count: 10, not 5** — accepted; recovery ~4 min after the nudge; N3b now ships the re-drive on attempt 1.
+- **awaitingHuman is a generic hold** — acknowledged. Hold REASONS currently live in cdp.reviewEvents + notifications; typed hold states are Fix D scope.
