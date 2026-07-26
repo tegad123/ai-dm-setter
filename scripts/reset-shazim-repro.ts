@@ -75,12 +75,21 @@ async function main() {
     `cleared messages=${delMsgs.count} scheduledReplies=${delSched.count}`
   );
 
+  // 2026-07-26 (Tega #3): also hard-reset the capital columns. The original
+  // reset cleared CDP + messages but left capitalVerificationStatus /
+  // capitalVerifiedAt / capitalVerifiedAmount / capitalQAskedCount untouched —
+  // a conversation with prior VERIFIED_* state would make a "zero capital
+  // keys" readout unreadable (durable state short-circuits new writes).
   await prisma.$executeRaw`
     UPDATE "Conversation"
-    SET "capturedDataPoints" = '{}'::jsonb,
+    SET "capturedDataPoints" = '{"verificationBaseline": true}'::jsonb,
         "systemStage" = 'Intro — Experience Level',
         "currentScriptStep" = 1,
         "stageMismatchCount" = 0,
+        "capitalVerificationStatus" = 'UNVERIFIED',
+        "capitalVerifiedAt" = NULL,
+        "capitalVerifiedAmount" = NULL,
+        "capitalQAskedCount" = 0,
         "aiActive" = true,
         "awaitingHumanReview" = false,
         "distressDetected" = false,

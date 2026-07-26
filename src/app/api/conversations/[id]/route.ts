@@ -64,7 +64,13 @@ export async function DELETE(
           ? {}
           : { lead: { accountId: auth.accountId } })
       },
-      select: { id: true, leadId: true }
+      select: {
+        id: true,
+        leadId: true,
+        capturedDataPoints: true,
+        lead: { select: { name: true, accountId: true } },
+        _count: { select: { messages: true } }
+      }
     });
 
     if (!conversation) {
@@ -74,11 +80,45 @@ export async function DELETE(
       );
     }
 
+    // Verification-baseline hold (2026-07-26, standing rule after four test
+    // conversations — three SQA + one verification run — were deleted
+    // mid-review with no audit trail): a conversation flagged as a
+    // verification baseline must never be deleted. Replays happen on a copy.
+    const cdpForDelete = conversation.capturedDataPoints as Record<
+      string,
+      unknown
+    > | null;
+    if (cdpForDelete?.verificationBaseline === true) {
+      return NextResponse.json(
+        {
+          error:
+            'This conversation is a verification baseline and cannot be deleted while the flag is set. Standing rule: replay on a copy, never delete evidence.'
+        },
+        { status: 409 }
+      );
+    }
+
     // ScheduledReply stores conversationId as a bare field (no Prisma-level
     // relation) so it does not cascade — delete it manually first.
     await prisma.scheduledReply.deleteMany({
       where: { conversationId: id }
     });
+
+    // Deletion audit (2026-07-26): deletions were previously untraceable —
+    // record WHO deleted WHAT, durably, before the cascade wipes it.
+    console.warn(
+      `[audit] conversation DELETE by ${auth.email} (${auth.role}): conv=${id} lead="${conversation.lead?.name}" messages=${conversation._count.messages}`
+    );
+    await prisma.notification
+      .create({
+        data: {
+          accountId: conversation.lead?.accountId ?? auth.accountId,
+          type: 'SYSTEM',
+          title: 'Conversation deleted',
+          body: `Conversation ${id} (lead "${conversation.lead?.name}", ${conversation._count.messages} messages) was permanently deleted by ${auth.name} <${auth.email}>.`
+        }
+      })
+      .catch(() => {});
 
     // Deleting the Lead cascades to the Conversation and all its children
     // (Message, AISuggestion, ScheduledMessage, InboundQualification, etc.)

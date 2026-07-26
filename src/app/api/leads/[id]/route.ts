@@ -139,11 +139,56 @@ export async function DELETE(
 
     // Verify the lead belongs to this account
     const existing = await prisma.lead.findFirst({
-      where: { id, accountId: auth.accountId }
+      where: { id, accountId: auth.accountId },
+      select: {
+        id: true,
+        name: true,
+        accountId: true,
+        conversation: {
+          select: {
+            id: true,
+            capturedDataPoints: true,
+            _count: { select: { messages: true } }
+          }
+        }
+      }
     });
     if (!existing) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
+
+    // Verification-baseline hold (2026-07-26, standing rule after four test
+    // conversations were deleted mid-review with no audit trail): a lead whose
+    // conversation is flagged as a verification baseline cannot be deleted.
+    const cdpForDelete = existing.conversation?.capturedDataPoints as Record<
+      string,
+      unknown
+    > | null;
+    if (cdpForDelete?.verificationBaseline === true) {
+      return NextResponse.json(
+        {
+          error:
+            "This lead's conversation is a verification baseline and cannot be deleted while the flag is set. Standing rule: replay on a copy, never delete evidence."
+        },
+        { status: 409 }
+      );
+    }
+
+    // Deletion audit (2026-07-26): deletions were previously untraceable —
+    // record WHO deleted WHAT, durably, before the cascade wipes it.
+    console.warn(
+      `[audit] lead DELETE by ${auth.email} (${auth.role}): lead=${id} "${existing.name}" conv=${existing.conversation?.id ?? 'none'} messages=${existing.conversation?._count.messages ?? 0}`
+    );
+    await prisma.notification
+      .create({
+        data: {
+          accountId: existing.accountId,
+          type: 'SYSTEM',
+          title: 'Lead deleted',
+          body: `Lead "${existing.name}" (${id}${existing.conversation ? `, conversation ${existing.conversation.id} with ${existing.conversation._count.messages} messages` : ''}) was permanently deleted by ${auth.name} <${auth.email}>.`
+        }
+      })
+      .catch(() => {});
 
     await prisma.lead.delete({ where: { id } });
 
