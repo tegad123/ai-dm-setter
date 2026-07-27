@@ -2488,7 +2488,32 @@ export async function scheduleAIReply(
     }
   }
 
-  // ── Step 0a-iii: Rapid-fire debounce — yield to a newer inbound ────
+  // ── Step 0b: Cancel any existing PENDING scheduled replies ────
+  // When the lead sends multiple messages in quick succession, each
+  // webhook lands here. The previous in-flight ScheduledReply is now
+  // stale (based on older context) — cancel it so only the newest
+  // reply ships. Skip this when the cron is processing a specific row
+  // (that row is in PROCESSING state, not PENDING, so it wouldn't be
+  // touched by this updateMany anyway; we skip for clarity).
+  if (!options?.skipDelayQueue) {
+    const cancelled = await prisma.scheduledReply.updateMany({
+      where: { conversationId, status: 'PENDING' },
+      data: { status: 'CANCELLED' }
+    });
+    if (cancelled.count > 0) {
+      log(
+        'sched.step0b.cancelledStale',
+        `cancelled ${cancelled.count} stale PENDING scheduled reply(ies)`
+      );
+    }
+  }
+
+  // ── Step 0c: Rapid-fire debounce — yield to a newer inbound ────
+  // ORDERING (2026-07-28 live repro): the stale-PENDING cancel above must
+  // run BEFORE this sleep — sleeping first left msg1's stale reply PENDING
+  // for 8 extra seconds, and the per-minute cron claimed and shipped it
+  // mid-debounce, producing exactly the double-generation this guard
+  // exists to prevent.
   // (2026-07-27, Tega item 2, repro'd: experience answer + price question
   // sent 7s apart produced TWO racing generations; the second one's reply
   // never shipped and its intent was silently dropped.) On the realtime
@@ -2523,26 +2548,6 @@ export async function scheduleAIReply(
         // heartbeat visibility here; the newer run owns the turn.
         return;
       }
-    }
-  }
-
-  // ── Step 0b: Cancel any existing PENDING scheduled replies ────
-  // When the lead sends multiple messages in quick succession, each
-  // webhook lands here. The previous in-flight ScheduledReply is now
-  // stale (based on older context) — cancel it so only the newest
-  // reply ships. Skip this when the cron is processing a specific row
-  // (that row is in PROCESSING state, not PENDING, so it wouldn't be
-  // touched by this updateMany anyway; we skip for clarity).
-  if (!options?.skipDelayQueue) {
-    const cancelled = await prisma.scheduledReply.updateMany({
-      where: { conversationId, status: 'PENDING' },
-      data: { status: 'CANCELLED' }
-    });
-    if (cancelled.count > 0) {
-      log(
-        'sched.step0b.cancelledStale',
-        `cancelled ${cancelled.count} stale PENDING scheduled reply(ies)`
-      );
     }
   }
 

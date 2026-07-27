@@ -343,13 +343,20 @@ function findAnchoredReply(
     if (sender !== 'AI' && sender !== 'HUMAN') continue;
     const content = msg.content ?? '';
     if (!askContents.some((ask) => askMatchesMessage(ask, content))) continue;
-    // direct reply = next LEAD message after the ask
+    // Direct reply = the next LEAD message after the ask that actually
+    // ANSWERS it. 2026-07-28 (live: {{goal}} rendered "u there"): the lead
+    // replied "you there?" to the goal ask, the AI re-asked in different
+    // words, and the real answer ("want to make like 5k a month") came two
+    // messages later — taking the first LEAD message blindly bound the
+    // non-answer. Skip non-answers; bind the first subsequent lead message
+    // that satisfies the ask.
     let reply: string | null = null;
     for (let j = i + 1; j < history.length; j++) {
-      if ((history[j].sender ?? '').toUpperCase() === 'LEAD') {
-        reply = history[j].content ?? null;
-        break;
-      }
+      if ((history[j].sender ?? '').toUpperCase() !== 'LEAD') continue;
+      const candidate = history[j].content ?? '';
+      if (!replyAnswersAskShared(candidate)) continue;
+      reply = candidate;
+      break;
     }
     return { ask: content, reply };
   }
