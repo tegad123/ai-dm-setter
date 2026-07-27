@@ -80,6 +80,13 @@ export const navItems: NavItem[] = [
     ]
   },
   {
+    title: 'Traces',
+    url: '/dashboard/traces',
+    icon: 'analytics',
+    isActive: false,
+    items: []
+  },
+  {
     title: 'Team',
     url: '/dashboard/team',
     icon: 'teams',

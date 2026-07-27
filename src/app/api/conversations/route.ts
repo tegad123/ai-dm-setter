@@ -3,6 +3,7 @@ import { requireAuth, AuthError, scopedAccountId } from '@/lib/auth-guard';
 import { QUALIFIED_LEAD_STAGES_ARR } from '@/lib/lead-state-sets';
 import { leadDisplayName } from '@/lib/lead-name';
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 
 export async function GET(request: NextRequest) {
   try {
@@ -56,6 +57,17 @@ export async function GET(request: NextRequest) {
     }
 
     const where: Record<string, unknown> = { lead: leadFilter };
+
+    // Archive filter (2026-07-27, Tega): archived test conversations are
+    // hidden from the dashboard by default — nothing is deleted, ?archived=1
+    // shows only the archived bucket. archivedAt lives in capturedDataPoints
+    // (additive, no migration); a missing key resolves to SQL NULL so
+    // DbNull matches unarchived rows.
+    const archivedParam = searchParams.get('archived'); // "1" to show archived only
+    where.capturedDataPoints =
+      archivedParam === '1'
+        ? { path: ['archivedAt'], not: Prisma.DbNull }
+        : { path: ['archivedAt'], equals: Prisma.DbNull };
 
     if (priority === 'true') {
       where.priorityScore = { gte: 50 };

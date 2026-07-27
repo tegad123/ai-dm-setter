@@ -29,7 +29,9 @@ import {
   IconUserCheck,
   IconBolt,
   IconPencil,
-  IconTrash
+  IconTrash,
+  IconRefresh,
+  IconArchive
 } from '@tabler/icons-react';
 import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
@@ -337,6 +339,8 @@ export function ConversationThread({
   });
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   // Tracks which messages have an unsend in flight so we can disable the
   // button + show a toast without lifting state up.
   const [unsendingIds, setUnsendingIds] = useState<Set<string>>(new Set());
@@ -452,6 +456,51 @@ export function ConversationThread({
     }
   };
 
+  // Reset-to-step-1 (Tega, 2026-07-27): clears messages + step state +
+  // variables for a clean verification re-run; keeps the conversation, the
+  // lead, and the baseline flag. Audited server-side.
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      await apiFetch(`/api/conversations/${conversation.id}/reset`, {
+        method: 'POST'
+      });
+      toast.success('Conversation reset to step 1');
+      window.location.reload();
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to reset conversation';
+      toast.error(msg);
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  // Archive (Tega, 2026-07-27): hides the conversation from the dashboard
+  // list without deleting anything — messages and traces stay intact.
+  const handleArchive = async () => {
+    setArchiving(true);
+    try {
+      await apiFetch(`/api/conversations/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [conversation.id], archived: true })
+      });
+      toast.success('Conversation archived (nothing deleted)');
+      onDelete?.();
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to archive conversation';
+      toast.error(msg);
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   const handleSend = async () => {
     if (!message.trim() || !onSendMessage) return;
     setSending(true);
@@ -552,6 +601,48 @@ export function ConversationThread({
               className='data-[state=checked]:bg-blue-500 data-[state=unchecked]:bg-green-500'
             />
           </div>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant='ghost'
+                size='icon'
+                className='text-muted-foreground h-8 w-8 hover:text-blue-600'
+                title='Reset conversation to step 1'
+                aria-label='Reset conversation to step 1'
+                disabled={resetting}
+              >
+                <IconRefresh className='h-4 w-4' />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Reset to step 1?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This clears all messages, captured variables and step state
+                  for <strong>{conversation.leadName}</strong> so the next
+                  inbound starts a clean run. The conversation and lead are
+                  kept. This action is audited.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleReset}>
+                  {resetting ? 'Resetting...' : 'Reset'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button
+            variant='ghost'
+            size='icon'
+            className='text-muted-foreground h-8 w-8 hover:text-amber-600'
+            title='Archive conversation (hide from list, delete nothing)'
+            aria-label='Archive conversation'
+            disabled={archiving}
+            onClick={handleArchive}
+          >
+            <IconArchive className='h-4 w-4' />
+          </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
