@@ -690,6 +690,52 @@ function scoreJudgeBranch(
   return score;
 }
 
+// Required-MSG delivered-dedup (2026-07-27, Tega item 1 collateral): a
+// scripted required MSG that has ALREADY been delivered in this conversation
+// is satisfied — re-injecting it (N1b, msg_verbatim append, re-drive prepend)
+// re-sends operator copy the lead already received, which the verbatim gate
+// then rightly blocks, killing otherwise-correct replies ("yeah bro, im here"
+// died because the already-sent price line was attached to its group).
+export function requiredMsgAlreadyDeliveredInHistory(
+  content: string,
+  deliveredAiContents: Array<string | null | undefined>
+): boolean {
+  const norm = (t: string) =>
+    t
+      .toLowerCase()
+      .replace(/[^a-z0-9$\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const target = norm(content);
+  if (!target) return true;
+  return deliveredAiContents.some(
+    (c) => typeof c === 'string' && norm(c) === target
+  );
+}
+
+// Routing text must be CONDITION-ONLY (2026-07-27, Tega item 1): operator
+// judgment blocks mix the trigger condition with response instructions —
+// "They asked about price. Answer it directly and honestly — the link's
+// free to check out..." — and the response phrasing then acts as its own
+// trigger ("honestly", "check out" matched unrelated lead messages, so the
+// Price Question branch kept re-selecting after it had already fired).
+// Keep leading sentences up to the first imperative instruction.
+const JUDGMENT_INSTRUCTION_OPENER_RE =
+  /^(answer|respond|reply|send|say|tell|ask|re-?ask|store|acknowledge|now|then|do\s+not|don'?t|use|keep|include|add|emit|write)\b/i;
+
+function judgmentConditionText(content: string): string {
+  const sentences = content
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    if (JUDGMENT_INSTRUCTION_OPENER_RE.test(sentence)) break;
+    kept.push(sentence);
+  }
+  return kept.join(' ');
+}
+
 function judgeBranchRoutingText(branch: JudgeBranchLike): string {
   const runtimeJudgmentText = branch.actions
     .filter(
@@ -698,7 +744,8 @@ function judgeBranchRoutingText(branch: JudgeBranchLike): string {
         typeof action.content === 'string' &&
         action.content.trim().length > 0
     )
-    .map((action) => String(action.content).trim());
+    .map((action) => judgmentConditionText(String(action.content).trim()))
+    .filter((text) => text.length > 0);
 
   return [
     branch.branchLabel,
@@ -808,16 +855,24 @@ function buildJudgeBranchSelectionCacheKey(
 function normalizeJudgeClassifierResult(
   result: JudgeBranchClassifierResult
 ): JudgeBranchClassifierOutcome {
+  // 2026-07-27: NONE is a first-class classifier answer (no branch matches
+  // — check-ins, small talk). Normalize it to null selection WITHOUT an
+  // error so the router falls back to token confidence / smart mode instead
+  // of logging invalid_branch_label.
+  const normalizeLabel = (label: string | null | undefined): string | null => {
+    const trimmed = (label ?? '').trim();
+    if (!trimmed || /^none$/i.test(trimmed)) return null;
+    return trimmed;
+  };
   if (result && typeof result === 'object') {
     return {
-      selectedLabel: result.selectedLabel ?? null,
+      selectedLabel: normalizeLabel(result.selectedLabel),
       error: result.error ?? null,
       timedOut: result.timedOut === true
     };
   }
   return {
-    selectedLabel:
-      typeof result === 'string' && result.trim() ? result.trim() : null,
+    selectedLabel: normalizeLabel(typeof result === 'string' ? result : null),
     error: null,
     timedOut: false
   };
@@ -1100,7 +1155,9 @@ ${branchLines}
 
 Use the operator's runtime judgment criteria in the branch text as the source of truth. When branches distinguish clear conviction from lukewarm interest, emphatic language, specific stakes, and strong personal importance should match the clear/committed branch; hedging language such as "maybe", "could", "possibly", or "I guess" should match the lukewarm/uncertain branch.
 
-Respond with ONLY the exact branchLabel of the best match. No explanation. No punctuation. Just the label.`;
+If NO branch condition genuinely matches the lead's message (e.g. a check-in like "you there?", small talk, or an answer that none of the conditions describe), respond with exactly NONE — do NOT force the closest branch.
+
+Respond with ONLY the exact branchLabel of the best match, or NONE. No explanation. No punctuation.`;
 }
 
 async function classifyJudgeBranchWithAnthropic(params: {
@@ -6570,7 +6627,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
                 !m.isPlaceholder &&
                 m.content.trim().length > 0 &&
                 !/\{\{[^}]+\}\}/.test(m.content) &&
-                !rejectedNorms.has(normForCompare(m.content))
+                !rejectedNorms.has(normForCompare(m.content)) &&
+                !requiredMsgAlreadyDeliveredInHistory(
+                  m.content,
+                  priorAIMessages.map((p) => p.content)
+                )
             )
             .map((m) => m.content.trim()),
           scriptedAsk.trim()
@@ -6650,7 +6711,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               .filter((m) => m.length > 0)
           ]
             // never ship unresolved template braces
-            .filter((m) => !/\{\{[^}]+\}\}/.test(m));
+            .filter((m) => !/\{\{[^}]+\}\}/.test(m))
+            // never re-ship a MSG the lead already received (2026-07-27)
+            .filter(
+              (m) =>
+                !requiredMsgAlreadyDeliveredInHistory(
+                  m,
+                  priorAIMessages.map((p) => p.content)
+                )
+            );
           const bubbles = Array.isArray(parsed.messages)
             ? [...parsed.messages]
             : [parsed.message];
@@ -6924,12 +6993,25 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             (m) =>
               !m.isPlaceholder &&
               typeof m.content === 'string' &&
-              m.content.trim().length > 0
+              m.content.trim().length > 0 &&
+              // never re-ship a MSG the lead already received (2026-07-27)
+              !requiredMsgAlreadyDeliveredInHistory(
+                m.content,
+                priorAIMessages.map((p) => p.content)
+              )
           )
           .map((m) => m.content.trim());
         if (literalInjectMsgs.length === 0) {
           const fb = currentStepRequiredMessagesForGate[0]?.trim();
-          if (fb) literalInjectMsgs.push(fb);
+          if (
+            fb &&
+            !requiredMsgAlreadyDeliveredInHistory(
+              fb,
+              priorAIMessages.map((p) => p.content)
+            )
+          ) {
+            literalInjectMsgs.push(fb);
+          }
         }
         const verbatimRecoverable =
           verbatimViolation &&

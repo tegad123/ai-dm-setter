@@ -2488,6 +2488,44 @@ export async function scheduleAIReply(
     }
   }
 
+  // ── Step 0a-iii: Rapid-fire debounce — yield to a newer inbound ────
+  // (2026-07-27, Tega item 2, repro'd: experience answer + price question
+  // sent 7s apart produced TWO racing generations; the second one's reply
+  // never shipped and its intent was silently dropped.) On the realtime
+  // path, wait a short window; if a NEWER lead message arrives during it,
+  // this invocation bails and the newer message's invocation generates
+  // ONCE with the full bundle in history. The pending-reply cancel in
+  // Step 0b plus the ship-time supersede checks cover the delayed path.
+  if (!options?.skipDelayQueue) {
+    const DEBOUNCE_MS = 8000;
+    const triggerLatestLead = await prisma.message.findFirst({
+      where: { conversationId, sender: 'LEAD', deletedAt: null },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, timestamp: true }
+    });
+    if (triggerLatestLead) {
+      await new Promise((r) => setTimeout(r, DEBOUNCE_MS));
+      const newerLead = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          sender: 'LEAD',
+          deletedAt: null,
+          timestamp: { gt: triggerLatestLead.timestamp }
+        },
+        select: { id: true }
+      });
+      if (newerLead) {
+        log(
+          'sched.step0a.debounceYield',
+          `newer lead message ${newerLead.id} arrived during the ${DEBOUNCE_MS}ms debounce — yielding; its invocation generates once with the full bundle`
+        );
+        // Leave awaitingAiResponse to the newer invocation — do NOT clear
+        // heartbeat visibility here; the newer run owns the turn.
+        return;
+      }
+    }
+  }
+
   // ── Step 0b: Cancel any existing PENDING scheduled replies ────
   // When the lead sends multiple messages in quick succession, each
   // webhook lands here. The previous in-flight ScheduledReply is now

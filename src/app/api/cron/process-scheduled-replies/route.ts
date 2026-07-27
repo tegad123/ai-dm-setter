@@ -389,7 +389,12 @@ export async function GET(req: NextRequest) {
             where: { id: reply.id },
             data: {
               status: FAILED_QUALITY_GATE_STATUS,
-              attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+              // 2026-07-27 (Tega): record the REAL attempt count — the
+              // terminal status already prevents retries (the picker only
+              // claims PENDING rows). Stamping MAX here made a first-attempt
+              // gate failure read as "5 attempts" in Needs Attention, which
+              // misread as minutes of silent retries.
+              attempts: reply.attempts + 1,
               scheduledFor: failedAt,
               processedAt: failedAt,
               lastError: err.message.slice(0, 2000),
@@ -477,6 +482,34 @@ export async function GET(req: NextRequest) {
           console.warn(
             `[cron] scheduled retry ${failedAttempt + 1}/${SCHEDULED_REPLY_MAX_ATTEMPTS} for reply ${reply.id} at ${retryAt.toISOString()} (${errorInfo.meaning})`
           );
+          // 2026-07-27 (Tega): retries used to be invisible until all 5
+          // attempts burned (~5 min of apparent silence). From the SECOND
+          // failed attempt, surface a throttled SYSTEM notification so the
+          // operator can see the reply is struggling while retries continue.
+          if (failedAttempt >= 2) {
+            const existing = await prisma.notification
+              .findFirst({
+                where: {
+                  accountId: reply.accountId,
+                  type: 'SYSTEM',
+                  title: { contains: `retrying — reply ${reply.id.slice(-8)}` }
+                },
+                select: { id: true }
+              })
+              .catch(() => null);
+            if (!existing) {
+              await prisma.notification
+                .create({
+                  data: {
+                    accountId: reply.accountId,
+                    type: 'SYSTEM',
+                    title: `AI reply retrying — reply ${reply.id.slice(-8)}`,
+                    body: `A reply in conversation ${reply.conversationId} has failed ${failedAttempt} of ${SCHEDULED_REPLY_MAX_ATTEMPTS} attempts (${errorInfo.meaning}). Retries continue; if all attempts fail it will escalate for manual handling.`
+                  }
+                })
+                .catch(() => {});
+            }
+          }
         }
 
         await prisma.conversation
