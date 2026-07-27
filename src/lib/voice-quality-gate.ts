@@ -851,6 +851,14 @@ export interface VoiceQualityOptions {
    */
   scriptMaxStepNumber?: number | null;
   /**
+   * True when the ACTIVE branch's own actions instruct a rephrased re-ask
+   * ("re-ask the current question in your own words"). Operator-authored
+   * interrupt branches (price objection etc.) deliberately rephrase — the
+   * offscript hard-fail must not treat the script's own instruction as
+   * improvisation.
+   */
+  activeBranchInstructsRephrase?: boolean;
+  /**
    * True when the tracked position legitimately advanced more than one step
    * this turn (the F5.1 provable-catch-up path). When set, the
    * step_distance_violation check is suppressed for this turn: a catch-up to
@@ -2144,7 +2152,18 @@ export function scoreVoiceQuality(
       // low-ticket so the regen re-drives the CURRENT step's scripted ask.
       // Qualification personas keep the soft signal (their judgment steps
       // legitimately probe adaptively).
-      if (options?.suppressBookingLanguage === true) {
+      if (
+        options?.suppressBookingLanguage === true &&
+        // Interrupt-branch exemption (2026-07-27): operator-authored
+        // objection branches (e.g. the price-question branch) explicitly
+        // instruct "re-ask the current question IN YOUR OWN WORDS so it
+        // doesn't read as a repeat" — a deliberate rephrase is the SCRIPT'S
+        // OWN instruction, not improvisation. Hard-failing it strips the
+        // branch's required answer bubble and re-drives the verbatim ask,
+        // defeating the operator's design (live: "how much is it" on
+        // cms0ic2xg — Price Question branch selected, price answer dropped).
+        options?.activeBranchInstructsRephrase !== true
+      ) {
         hardFails.push(
           `offscript_question_on_lowticket: this question matches none of the current step's scripted asks — on this funnel the script is the product; do not improvise discovery questions. Ask the CURRENT step's scripted question (paraphrase lightly if needed), nothing else.`
         );

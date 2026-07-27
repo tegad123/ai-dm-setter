@@ -3886,6 +3886,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         gateVariableResolutionMap
       )
     : undefined;
+  // Interrupt-branch rephrase detection (2026-07-27): operator objection
+  // branches instruct "re-ask the current question in your own words so it
+  // doesn't read as a repeat" — the offscript gate must treat that rephrase
+  // as scripted, not improvised.
+  const activeBranchInstructsRephrase = (
+    selectedCurrentJudgeBranch?.actions ?? []
+  ).some(
+    (a: { content?: string | null }) =>
+      typeof a?.content === 'string' &&
+      /\b(?:in\s+your\s+own\s+words|different\s+words|doesn'?t\s+(?:read|sound|feel)\s+(?:as|like)\s+a\s+repeat|re-?ask.{0,60}\b(?:own\s+words|differently)\b)/i.test(
+        a.content
+      )
+  );
   const activeBranchScriptedQuestions = selectedCurrentJudgeBranch
     ? getActiveBranchScriptedQuestions(
         selectedCurrentJudgeBranch,
@@ -4000,6 +4013,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // Cross-script clamp (2026-07-26): STEP_PATTERN_MAP hardcodes high-ticket
     // numbering — never attribute an inferred step the ACTIVE script doesn't have.
     scriptMaxStepNumber: scriptMaxStepNumberForGate,
+    // Interrupt-branch rephrase exemption (2026-07-27): the active branch's
+    // own "re-ask in your own words" instruction is scripted, not improvised.
+    activeBranchInstructsRephrase,
     // F5.1 [4]: suppress step_distance_violation on a legit catch-up turn.
     positionJumpedThisTurn:
       scriptStateSnapshot?.positionJumpedThisTurn ?? false,
@@ -6543,8 +6559,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         if (rejectedNorms.has(normForCompare(scriptedAsk)) && rawCandidate) {
           scriptedAsk = renderScriptedAskWithNeutralFallbacks(rawCandidate);
         }
-        parsed.message = scriptedAsk.trim();
-        parsed.messages = [scriptedAsk.trim()];
+        // 2026-07-27: the re-drive must not strip the ACTIVE branch's
+        // required MSGs — on the Price Question interrupt branch that bubble
+        // IS the answer ("nothing bro, the link's free..."); re-driving only
+        // the ask silently swallowed the operator's scripted response.
+        const redriveBubbles = [
+          ...(activeBranchRequiredMessages ?? [])
+            .filter(
+              (m) =>
+                !m.isPlaceholder &&
+                m.content.trim().length > 0 &&
+                !/\{\{[^}]+\}\}/.test(m.content) &&
+                !rejectedNorms.has(normForCompare(m.content))
+            )
+            .map((m) => m.content.trim()),
+          scriptedAsk.trim()
+        ];
+        parsed.message = redriveBubbles[0];
+        parsed.messages = redriveBubbles;
         parsed.escalateToHuman = false;
         parsed.voiceNoteAction = null;
         console.warn(
