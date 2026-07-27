@@ -74,6 +74,28 @@ export async function GET(
       }
     });
 
+    // Reset markers (2026-07-27, Tega + Ali both misread pre-reset trace
+    // rows as current behavior): interleave the audited reset events so the
+    // timeline shows exactly where history was cleared and by whom. Turns
+    // ABOVE a reset marker ran before the reset (and possibly on an older
+    // build).
+    const resetEvents = await prisma.notification
+      .findMany({
+        where: {
+          accountId: conversation.lead?.accountId ?? auth.accountId,
+          type: 'SYSTEM',
+          title: { contains: 'reset to step 1' },
+          body: { contains: id }
+        },
+        select: { createdAt: true, body: true },
+        orderBy: { createdAt: 'asc' }
+      })
+      .catch(() => [] as Array<{ createdAt: Date; body: string | null }>);
+    const resets = resetEvents.map((r) => ({
+      at: r.createdAt,
+      by: r.body?.match(/by\s+(.+?)\s*—/)?.[1] ?? 'unknown'
+    }));
+
     // Strip prompts unless requested — they are 100k+ chars each.
     const turns = traces.map((t, i) => ({
       turn: i,
@@ -128,6 +150,7 @@ export async function GET(
       },
       capturedVariables: captured,
       turnCount: turns.length,
+      resets,
       turns
     });
   } catch (error) {

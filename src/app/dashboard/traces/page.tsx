@@ -42,6 +42,7 @@ interface TraceResponse {
     { value: unknown; method: string | null; confidence: string | null }
   >;
   turnCount: number;
+  resets?: Array<{ at: string; by: string }>;
   turns: TraceTurn[];
 }
 
@@ -170,86 +171,109 @@ export default function TracesPage() {
 
           <div className='space-y-4'>
             {data.turns.map((t) => (
-              <div key={t.turn} className='rounded-md border p-4 text-sm'>
-                <div className='flex flex-wrap items-baseline gap-x-3 gap-y-1'>
-                  <span className='font-semibold'>Turn {t.turn}</span>
-                  <span className='text-muted-foreground text-xs'>
-                    {new Date(t.createdAt).toLocaleString()}
-                  </span>
-                  <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                    step {t.step ?? '—'}
-                  </span>
-                  <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                    system: {t.system_stage ?? '—'}
-                  </span>
-                  <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                    emitted: {t.stage_emitted ?? '—'}
-                    {t.sub_stage_emitted ? `/${t.sub_stage_emitted}` : ''}
-                  </span>
-                  <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
-                    branch: {t.branch_selected ?? '—'}
-                  </span>
-                </div>
-
-                {t.reply_preview && (
-                  <p className='mt-2 text-sm'>
-                    <span className='text-muted-foreground'>reply:</span>{' '}
-                    {t.reply_preview}
-                  </p>
-                )}
-
-                {Array.isArray(t.variables_state) &&
-                  t.variables_state.length > 0 && (
-                    <div className='mt-2'>
-                      <div className='text-muted-foreground text-xs font-medium'>
-                        variables_state
-                      </div>
-                      <ul className='mt-1 space-y-0.5 text-xs'>
-                        {t.variables_state.map((v, i) => (
-                          <li key={i} className='font-mono'>
-                            {v.name} = {JSON.stringify(v.value)?.slice(0, 80)}{' '}
-                            <span className='text-muted-foreground'>
-                              [{v.source}
-                              {v.confidence ? `/${v.confidence}` : ''}]
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                {Array.isArray(t.quality_hard_fails) &&
-                  t.quality_hard_fails.length > 0 && (
-                    <div className='mt-2'>
-                      <div className='text-xs font-medium text-red-600'>
-                        quality hard fails
-                      </div>
-                      <ul className='mt-1 space-y-0.5 text-xs text-red-700'>
-                        {t.quality_hard_fails.map((f, i) => (
-                          <li key={i}>{String(f).slice(0, 220)}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                <div className='mt-2'>
-                  {promptOpen[t.turn] !== undefined ? (
-                    <details open>
-                      <summary className='text-muted-foreground cursor-pointer text-xs'>
-                        prompt_sent ({t.prompt_chars ?? '?'} chars)
-                      </summary>
-                      <pre className='bg-muted mt-2 max-h-96 overflow-auto rounded p-2 text-[11px] whitespace-pre-wrap'>
-                        {promptOpen[t.turn]}
-                      </pre>
-                    </details>
-                  ) : (
-                    <button
-                      onClick={() => loadPrompt(t.turn)}
-                      className='text-xs text-blue-600 underline'
+              <div key={t.turn} className='space-y-4'>
+                {(data.resets ?? [])
+                  .filter((r) => {
+                    const resetAt = new Date(r.at).getTime();
+                    const turnAt = new Date(t.createdAt).getTime();
+                    const prev = data.turns[t.turn - 1];
+                    const prevAt = prev
+                      ? new Date(prev.createdAt).getTime()
+                      : -Infinity;
+                    return resetAt <= turnAt && resetAt > prevAt;
+                  })
+                  .map((r) => (
+                    <div
+                      key={`reset-${r.at}`}
+                      className='rounded-md border border-amber-400 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200'
                     >
-                      show prompt_sent ({t.prompt_chars ?? '?'} chars)
-                    </button>
+                      ⟲ CONVERSATION RESET to step 1 by {r.by} at{' '}
+                      {new Date(r.at).toLocaleString()} — turns above ran BEFORE
+                      this reset (possibly on an older build); history was
+                      cleared here.
+                    </div>
+                  ))}
+                <div className='rounded-md border p-4 text-sm'>
+                  <div className='flex flex-wrap items-baseline gap-x-3 gap-y-1'>
+                    <span className='font-semibold'>Turn {t.turn}</span>
+                    <span className='text-muted-foreground text-xs'>
+                      {new Date(t.createdAt).toLocaleString()}
+                    </span>
+                    <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
+                      step {t.step ?? '—'}
+                    </span>
+                    <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
+                      system: {t.system_stage ?? '—'}
+                    </span>
+                    <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
+                      emitted: {t.stage_emitted ?? '—'}
+                      {t.sub_stage_emitted ? `/${t.sub_stage_emitted}` : ''}
+                    </span>
+                    <span className='bg-muted rounded px-1.5 py-0.5 text-xs'>
+                      branch: {t.branch_selected ?? '—'}
+                    </span>
+                  </div>
+
+                  {t.reply_preview && (
+                    <p className='mt-2 text-sm'>
+                      <span className='text-muted-foreground'>reply:</span>{' '}
+                      {t.reply_preview}
+                    </p>
                   )}
+
+                  {Array.isArray(t.variables_state) &&
+                    t.variables_state.length > 0 && (
+                      <div className='mt-2'>
+                        <div className='text-muted-foreground text-xs font-medium'>
+                          variables_state
+                        </div>
+                        <ul className='mt-1 space-y-0.5 text-xs'>
+                          {t.variables_state.map((v, i) => (
+                            <li key={i} className='font-mono'>
+                              {v.name} = {JSON.stringify(v.value)?.slice(0, 80)}{' '}
+                              <span className='text-muted-foreground'>
+                                [{v.source}
+                                {v.confidence ? `/${v.confidence}` : ''}]
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                  {Array.isArray(t.quality_hard_fails) &&
+                    t.quality_hard_fails.length > 0 && (
+                      <div className='mt-2'>
+                        <div className='text-xs font-medium text-red-600'>
+                          quality hard fails
+                        </div>
+                        <ul className='mt-1 space-y-0.5 text-xs text-red-700'>
+                          {t.quality_hard_fails.map((f, i) => (
+                            <li key={i}>{String(f).slice(0, 220)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                  <div className='mt-2'>
+                    {promptOpen[t.turn] !== undefined ? (
+                      <details open>
+                        <summary className='text-muted-foreground cursor-pointer text-xs'>
+                          prompt_sent ({t.prompt_chars ?? '?'} chars)
+                        </summary>
+                        <pre className='bg-muted mt-2 max-h-96 overflow-auto rounded p-2 text-[11px] whitespace-pre-wrap'>
+                          {promptOpen[t.turn]}
+                        </pre>
+                      </details>
+                    ) : (
+                      <button
+                        onClick={() => loadPrompt(t.turn)}
+                        className='text-xs text-blue-600 underline'
+                      >
+                        show prompt_sent ({t.prompt_chars ?? '?'} chars)
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
