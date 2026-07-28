@@ -3217,14 +3217,34 @@ export async function scheduleAIReply(
       const fireAt = Math.max(now + 1000, debouncedFireAt, responseDelayFireAt);
       const scheduledFor = new Date(fireAt);
 
-      await prisma.scheduledReply.create({
-        data: {
-          conversationId,
-          accountId,
-          scheduledFor,
-          status: 'PENDING'
-        }
-      });
+      try {
+        await prisma.scheduledReply.create({
+          data: {
+            conversationId,
+            accountId,
+            scheduledFor,
+            status: 'PENDING'
+          }
+        });
+      } catch (createErr: unknown) {
+        // ≤1 PENDING per conversation is now DB-enforced (partial unique
+        // index, 2026-07-28). A concurrent rapid-fire invocation already
+        // holds the pending slot — merge instead of racing: push the
+        // surviving row's fire time out to THIS batch's window so the
+        // eventual single generation reads the full bundle from history.
+        const isUniqueViolation =
+          typeof createErr === 'object' &&
+          createErr !== null &&
+          (createErr as { code?: string }).code === 'P2002';
+        if (!isUniqueViolation) throw createErr;
+        const merged = await prisma.scheduledReply.updateMany({
+          where: { conversationId, status: 'PENDING' },
+          data: { scheduledFor }
+        });
+        console.warn(
+          `[webhook-processor] pending-reply slot already claimed for ${conversationId} — merged into surviving row (updated=${merged.count}), no second generation`
+        );
+      }
       const secFromNow = Math.round((fireAt - now) / 1000);
       const batchAgeSec = earliestLeadInBatch
         ? Math.round((now - earliestLeadInBatch.timestamp.getTime()) / 1000)
