@@ -7,7 +7,17 @@ import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
+  // Temporary: ?classify=<text> runs the live classifier and returns its raw
+  // verdict, so we can see exactly what prod's Haiku call returns for Tega's
+  // phrase (2026-07-28 distress debug). Removed once the fix is confirmed.
+  const probe = new URL(request.url).searchParams.get('classify');
+  if (probe) {
+    const { classifyDistress } = await import('@/lib/distress-classifier');
+    const std = await classifyDistress(probe, { lowTicketFunnel: false });
+    const lt = await classifyDistress(probe, { lowTicketFunnel: true });
+    return NextResponse.json({ probe, std, lt });
+  }
   return NextResponse.json({
     commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'unknown',
     fullCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,

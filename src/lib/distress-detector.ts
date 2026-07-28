@@ -210,12 +210,18 @@ export interface DistressDetectionResult {
 // here: those are the false-positive-prone ones (the "tired of living
 // paycheck to paycheck" class), so a classifier outage must NOT resurrect
 // them as authoritative.
+// Fail-closed ONLY on UNAMBIGUOUS ideation — labels whose regex cannot match
+// benign phrasing. 2026-07-28: indirect_ideation and giving_up were removed
+// after the fix itself resurrected the false positive — indirect_ideation's
+// regex includes `tired of living`, which matches "tired of living paycheck to
+// paycheck", so failing closed on it on a classifier blip re-fired the exact
+// 988 message we were killing. direct_ideation ("kill myself", "want to die"),
+// suicide_mention ("suicide"/"suicidal"), and self_harm ("cutting myself")
+// have no benign continuation — those still hold on a classifier outage.
 const IDEATION_FAILCLOSED_LABELS = new Set<string>([
   'direct_ideation',
   'suicide_mention',
-  'self_harm',
-  'indirect_ideation',
-  'giving_up'
+  'self_harm'
 ]);
 
 /**
