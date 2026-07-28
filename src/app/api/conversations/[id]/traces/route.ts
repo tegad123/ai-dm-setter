@@ -116,6 +116,7 @@ export async function GET(
 
     // Final captured variables, bookkeeping keys stripped.
     const skip = new Set([
+      'lastGenerationClaim',
       'branchHistory',
       'generateReplyTrace',
       'lastClassifierTrace',

@@ -7841,6 +7841,53 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
   }
 
+  // ── Bundled price-question interrupt (2026-07-28, Tega item 2) ──────────
+  // Branch selection picks ONE branch per turn. When a rapid bundle carries
+  // BOTH an answer and a price question, the winning branch swallows the
+  // price intent. Deterministic mitigation until the interrupt layer lands:
+  // if the latest lead text asks about price, the current step HAS a price
+  // branch with scripted answer copy, and that copy is neither already
+  // delivered nor already in this outbound — prepend it as its own bubble.
+  {
+    const PRICE_CUE_RE =
+      /\b(how\s+much|price|cost|do\s+i\s+(have\s+to\s+)?pay|is\s+(it|the\s+link|this)\s+(actually\s+|really\s+)?free|any\s+catch)\b/i;
+    if (
+      personaConfigDisablesStageProgression(personaForGate?.promptConfig) &&
+      lastLeadMsg?.content &&
+      PRICE_CUE_RE.test(lastLeadMsg.content)
+    ) {
+      const priceBranch = (
+        scriptStateSnapshot?.currentStep?.branches ?? []
+      ).find((b: { branchLabel?: string | null }) =>
+        /price/i.test(b?.branchLabel ?? '')
+      );
+      const priceMsg = (priceBranch?.actions ?? [])
+        .find(
+          (a: { actionType?: string; content?: string | null }) =>
+            a?.actionType === 'send_message' &&
+            typeof a?.content === 'string' &&
+            a.content.trim().length > 0
+        )
+        ?.content?.trim();
+      if (priceMsg && !/\{\{[^}]+\}\}/.test(priceMsg)) {
+        const bubblesNow = Array.isArray(parsed.messages)
+          ? parsed.messages
+          : [parsed.message];
+        const alreadyCovered = requiredMsgAlreadyDeliveredInHistory(priceMsg, [
+          ...priorAIMessages.map((p) => p.content),
+          ...bubblesNow
+        ]);
+        if (!alreadyCovered) {
+          parsed.messages = [priceMsg, ...bubblesNow];
+          parsed.message = parsed.messages[0];
+          console.warn(
+            `[ai-engine] bundled price question — prepending the step's scripted price answer so the intent is not swallowed by the ${'selected branch'} (conv ${activeConversationId})`
+          );
+        }
+      }
+    }
+  }
+
   // ── N1 (2026-07-25): deterministic funnel-link delivery ─────────────────
   // The funnel's ONE conversion asset must be delivered by CODE, not model
   // compliance. When the CURRENT step carries a send_link action:

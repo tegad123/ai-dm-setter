@@ -2537,7 +2537,7 @@ export async function scheduleAIReply(
           deletedAt: null,
           timestamp: { gt: triggerLatestLead.timestamp }
         },
-        select: { id: true }
+        select: { id: true, timestamp: true }
       });
       if (newerLead) {
         log(
@@ -2546,6 +2546,34 @@ export async function scheduleAIReply(
         );
         // Leave awaitingAiResponse to the newer invocation — do NOT clear
         // heartbeat visibility here; the newer run owns the turn.
+        return;
+      }
+
+      // Atomic turn claim (2026-07-28, live bundle repro round 2): the
+      // sleep-and-check alone is NOT a mutex — when invocation A starts late
+      // enough to already see msg2, A and B both compute the same "latest
+      // lead message" and both proceed. Claim the turn keyed on the newest
+      // inbound id via an atomic conditional jsonb write; exactly one
+      // invocation wins per message id. Claims older than 3 minutes are
+      // stale (so silent-stop/heartbeat regeneration is never deadlocked).
+      const claimed: number = await prisma.$executeRaw`
+        UPDATE "Conversation"
+        SET "capturedDataPoints" = jsonb_set(
+          COALESCE("capturedDataPoints", '{}'::jsonb),
+          '{lastGenerationClaim}',
+          jsonb_build_object('id', ${triggerLatestLead.id}::text, 'at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+        )
+        WHERE id = ${conversationId}
+          AND (
+            COALESCE("capturedDataPoints"->'lastGenerationClaim'->>'id', '') <> ${triggerLatestLead.id}::text
+            OR COALESCE(("capturedDataPoints"->'lastGenerationClaim'->>'at')::timestamptz, 'epoch'::timestamptz) < now() - interval '3 minutes'
+          )
+      `;
+      if (claimed === 0) {
+        log(
+          'sched.step0a.claimLost',
+          `another invocation already claimed the turn for lead message ${triggerLatestLead.id} — yielding`
+        );
         return;
       }
     }
