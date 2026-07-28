@@ -7,6 +7,9 @@ const isPublicRoute = createRouteMatcher([
   '/terms',
   '/glass-preview',
   '/api/webhooks(.*)',
+  // Deployed-build identity — public by design (SHA only), used by
+  // verification runs to confirm which build is live (2026-07-28).
+  '/api/version',
   '/api/auth/meta(.*)',
   '/api/auth/instagram(.*)',
   '/api/meta/(.*)',
