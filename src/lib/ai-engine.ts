@@ -2566,8 +2566,13 @@ export async function generateReply(
         .then((p) => personaConfigDisablesStageProgression(p?.promptConfig))
         .catch(() => false);
       const distress = await detectDistress(lastLeadMsg.content, {
+        // On by default (2026-07-28): the classifier is authoritative unless
+        // explicitly disabled with DISTRESS_CLASSIFIER_AUTHORITATIVE=false. A
+        // missing/unset env var now means the SAFE new behavior, not a silent
+        // fallback to the regex that fired 988 on "tired of living paycheck to
+        // paycheck". Kill switch is still one env var away.
         classifierAuthoritative:
-          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE === 'true',
+          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE !== 'false',
         lowTicketFunnel: lowTicketForDistress
       });
       if (distress.detected) {

@@ -1662,8 +1662,10 @@ export async function processIncomingMessage(
       // low-ticket funnel). DISTRESS_CLASSIFIER_AUTHORITATIVE gates the flip;
       // shadow logging still runs so the ledger keeps accumulating.
       const distress = await detectDistress(messageText, {
+        // On by default (2026-07-28) — classifier authoritative unless
+        // DISTRESS_CLASSIFIER_AUTHORITATIVE=false. Unset = safe new behavior.
         classifierAuthoritative:
-          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE === 'true',
+          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE !== 'false',
         lowTicketFunnel,
         shadowClassifier: process.env.DISTRESS_SHADOW_MODE === 'true',
         conversationId,
