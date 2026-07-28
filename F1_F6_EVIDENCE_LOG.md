@@ -301,3 +301,40 @@ Ali Hassan's ALi Raza observation (step=1 across 14 messages while stage advance
 ## Accepted corrections (Tega)
 - **Retry count: 10, not 5** — accepted; recovery ~4 min after the nudge; N3b now ships the re-drive on attempt 1.
 - **awaitingHuman is a generic hold** — acknowledged. Hold REASONS currently live in cdp.reviewEvents + notifications; typed hold states are Fix D scope.
+
+---
+
+# TEGA ITEMS 1+2 CLOSURE (2026-07-28)
+
+Build identity for every run below verified via the new public `/api/version` endpoint (deploy-race blindness eliminated — two earlier bundle repros had raced stale builds).
+
+## Item 1 — price-branch jam: root causes fixed + live-verified
+
+Commits: `2323a68` (condition-only routing, NONE option, delivered-MSG dedup, retry visibility), `84f0774` (anchored replies skip non-answers).
+
+Live sequence on baseline `cms0ic2xg0003kt04wsbri1qg`:
+| Turn | Result |
+|---|---|
+| "how much does it cost though" | price answer + rephrased re-ask, step HELD (no advance) ✅ |
+| "honestly not sure yet, just checking things out" (the exact jam trigger) | routed **Vague goal**, NO price repeat, no exhaustion ✅ |
+| "you there?" | "yo bro i'm here" — natural, no forced branch ✅ |
+| goal ask → answer after an intervening non-answer | `{{goal}}` renders the real value — "but why is **freedom for your family** so important to you though?" ✅ |
+
+## Item 2 — rapid-fire bundle: four-round iteration, honest record
+
+- **R1** (sleep+check debounce): failed — late-entering invocations both saw the same latest message.
+- **R2** (cancel-before-sleep): failed — same race, but the winner's output was correct (price + why shipped together) and the loser was blocked at egress + surfaced immediately.
+- **R3** (atomic cdp claim): failed — generation's own capturedDataPoints read-modify-writes erase the claim.
+- **R4 (`73e076f`)**: **DB-enforced invariant** — partial unique index, ≤1 PENDING reply per conversation; concurrent creator catches P2002 and merges into the surviving row. **Live result: bundle of 2 messages 4s apart → exactly ONE generation trace, one merged CANCELLED row, no hold.** ✅
+
+Lesson on the record (Fix D thesis, again): three code-level guards each lost some interleaving; the invariant became real only when the DATABASE enforced it. Same shape as every P0 this month.
+
+## Also shipped
+- Reset markers in the trace timeline (`e581cac`) — who reset, when; pre-reset turns visibly separated (Tega + Ali both misread pre-reset rows this week).
+- `/api/version` (`59b35b1`) — deployed commit SHA, public.
+- Retry honesty: real attempt counts on quality-gate rows + "retrying (N of 5)" notification from attempt 2.
+
+## Residuals (flagged, not hidden)
+1. A third identical price ask in one conversation gets no re-answer (delivered-dedup by design; model may address it conversationally or not). Minor.
+2. `offscript_question_on_lowticket` still hard-fires on legitimate branch-ack paraphrases from non-rephrase branches; ships via best-effort — noisy trace entries, correct outcomes. Queue.
+3. The cdp `lastGenerationClaim` writes are now redundant (DB index is the enforcement); left in place, hidden from traces. Cleanup with Fix D Phase 0.
