@@ -13,6 +13,16 @@ export async function GET() {
     fullCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
     message: process.env.VERCEL_GIT_COMMIT_MESSAGE?.slice(0, 100) ?? null,
     deployedAt: process.env.VERCEL_DEPLOYMENT_COMPLETED_AT ?? null,
-    env: process.env.VERCEL_ENV ?? null
+    env: process.env.VERCEL_ENV ?? null,
+    // Temporary distress-flag diagnostic (2026-07-28): the classifier-
+    // authoritative flip fired anyway in prod; this reports how the RUNNING
+    // process resolves the gate so we stop guessing. Booleans only, no secrets.
+    distress: {
+      authoritativeVar: process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE ?? null,
+      authoritativeResolved:
+        process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE !== 'false',
+      classifierEnabled: process.env.DISTRESS_CLASSIFIER_ENABLED ?? null,
+      hasAnthropicKey: Boolean(process.env.ANTHROPIC_API_KEY)
+    }
   });
 }
