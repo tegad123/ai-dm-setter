@@ -132,6 +132,13 @@ Response format:
 // up to ~10 minutes with retries. We bound it hard.
 const CLASSIFIER_TIMEOUT_MS = 1200;
 const CLASSIFIER_MAX_RETRIES = 1;
+// Classifier-authoritative safety net (2026-07-28): when the classifier is the
+// PRIMARY detector, a transient error (timeout / parse) means a genuine crisis
+// the regex CANNOT see — caregiving, bereavement — could slip through, because
+// fail-closed only covers regex-visible ideation. So the authoritative path
+// retries the whole call once more on a non-verdict before giving up. Bounded:
+// 2 attempts × 1200ms worst case, still well under any webhook budget.
+export const CLASSIFIER_AUTH_ATTEMPTS = 2;
 
 export async function classifyDistressIntent(
   text: string
@@ -213,11 +220,35 @@ DO NOT fire (detected=false, category null):
 - Sales-assistance requests ("please help me bro", "i need this").
 - Mild everyday stress common in sales DMs.`;
 
+// Appended for low-ticket funnel personas whose audience is broke/aspirational
+// by definition. Financial frustration is the EXPECTED register here — it is
+// the reason they DM'd — and must not be read as severe hardship. The genuine
+// crisis categories above still fire exactly as written.
+const LOW_TICKET_FUNNEL_ADDENDUM = `
+
+CONTEXT — this lead is on a low-ticket program whose audience is people trying to escape a paycheck-to-paycheck life. Financial frustration is the NORMAL, EXPECTED reason they reached out. These must be detected=false (money ambition, not crisis):
+- "tired of living paycheck to paycheck", "sick of being broke", "want some breathing room"
+- "need to escape the 9-5", "want financial freedom", "struggling to make ends meet"
+- "money's tight right now", "can't get ahead", "living paycheck to paycheck"
+Only fire when the message crosses into GENUINE crisis from the categories above (suicidal_ideation, caregiving_crisis, bereavement, abuse_or_unsafe, or severe_hardship like literal homelessness / can't afford food or medical). Ordinary money stress on its own is NEVER a fire here.`;
+
 // Classifier-first detection. Returns a rich verdict with `ok` distinct from
 // `detected` so the caller can fail CLOSED. Kill-switchable, cached, hard
 // timeout. Never throws.
+export interface ClassifyDistressOptions {
+  /**
+   * Low-ticket funnel audience (2026-07-28): financial frustration —
+   * "tired of living paycheck to paycheck", "sick of being broke", "need to
+   * escape the 9-5" — is the NORMAL, expected register here and must NOT be
+   * read as severe hardship. Genuine crisis (ideation, caregiving,
+   * bereavement, abuse, homelessness) still fires.
+   */
+  lowTicketFunnel?: boolean;
+}
+
 export async function classifyDistress(
-  text: string
+  text: string,
+  opts: ClassifyDistressOptions = {}
 ): Promise<DistressClassification> {
   const trimmed = (text ?? '').trim();
   if (trimmed.length === 0) {
@@ -238,7 +269,10 @@ export async function classifyDistress(
       reason: 'classifier_disabled'
     };
   }
-  const cached = cacheGet(trimmed);
+  // Cache key includes the funnel flag — a low-ticket verdict ("broke is
+  // normal, not distress") must never be served to a non-low-ticket call.
+  const cacheScope = opts.lowTicketFunnel ? 'lt' : 'std';
+  const cached = cacheGet(cacheScope + ' ' + trimmed);
   if (cached) return cached;
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -251,6 +285,10 @@ export async function classifyDistress(
       reason: 'no_api_key'
     };
   }
+
+  const systemPrompt = opts.lowTicketFunnel
+    ? CLASSIFIER_FIRST_SYSTEM_PROMPT + LOW_TICKET_FUNNEL_ADDENDUM
+    : CLASSIFIER_FIRST_SYSTEM_PROMPT;
 
   try {
     const client = new Anthropic({
@@ -268,7 +306,7 @@ export async function classifyDistress(
         // outage risk if left small.
         max_tokens: 300,
         temperature: 0,
-        system: CLASSIFIER_FIRST_SYSTEM_PROMPT,
+        system: systemPrompt,
         messages: [{ role: 'user', content: `Message: "${trimmed}"` }]
       },
       { timeout: CLASSIFIER_TIMEOUT_MS }
@@ -290,7 +328,7 @@ export async function classifyDistress(
       span: typeof parsed.span === 'string' ? parsed.span : null,
       reason: typeof parsed.reason === 'string' ? parsed.reason : 'classified'
     };
-    cacheSet(trimmed, value);
+    cacheSet(cacheScope + ' ' + trimmed, value);
     return value;
   } catch (err) {
     const kind =

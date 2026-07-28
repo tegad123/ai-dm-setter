@@ -199,7 +199,24 @@ export interface DistressDetectionResult {
   helpPleaMatch?: string | null;
   /** Set when MEDIUM tier fired and classifier was called */
   classifierReason?: string;
+  /** Which authority decided this turn — for the trace/review log. */
+  decidedBy?: 'classifier' | 'regex_failclosed' | 'regex_legacy';
 }
+
+// HARD ideation-class labels. When the classifier can't produce a verdict
+// (API down / no key / parse error) AND the regex saw one of these, we fail
+// CLOSED and hold — a missed ideation disclosure is the one failure mode that
+// is never acceptable. Financial/ambiguous HARD labels are deliberately NOT
+// here: those are the false-positive-prone ones (the "tired of living
+// paycheck to paycheck" class), so a classifier outage must NOT resurrect
+// them as authoritative.
+const IDEATION_FAILCLOSED_LABELS = new Set<string>([
+  'direct_ideation',
+  'suicide_mention',
+  'self_harm',
+  'indirect_ideation',
+  'giving_up'
+]);
 
 /**
  * Sync scan — HARD and SOFT+HELP_PLEA tiers only. No LLM call.
@@ -255,6 +272,21 @@ export interface DetectDistressOptions {
   shadowClassifier?: boolean;
   conversationId?: string | null;
   accountId?: string | null;
+  /**
+   * Classifier-authoritative mode (2026-07-28). When true, the LLM classifier
+   * (`classifyDistress`) DECIDES; regex is demoted to an advisory pre-filter
+   * that can never fire alone. On a classifier outage we fail CLOSED only when
+   * the regex saw an ideation-class signal. This is the fix for the
+   * false-positive class (e.g. "tired of living paycheck to paycheck" firing
+   * the crisis response on a funnel whose audience is broke by definition).
+   */
+  classifierAuthoritative?: boolean;
+  /**
+   * True for low-ticket funnel personas (disableLeadStageProgression). Passed
+   * into the classifier so it knows financial frustration is the NORMAL
+   * register for this audience and must not be read as severe hardship.
+   */
+  lowTicketFunnel?: boolean;
 }
 
 // Best-effort shadow log — records the regex-vs-classifier comparison. Never
@@ -314,7 +346,99 @@ export async function detectDistress(
   text: string,
   opts: DetectDistressOptions = {}
 ): Promise<DistressDetectionResult> {
+  // ── Classifier-authoritative path (2026-07-28) ────────────────────────────
+  // The LLM decides. Regex is an ADVISORY pre-filter only — it can prompt a
+  // fail-closed hold on a classifier outage, but it can never fire on its own.
+  // This is what kills the "tired of living paycheck to paycheck" false
+  // positive: that phrase matches the regex's indirect_ideation pattern, but
+  // classifyDistress reads it as money-ambition and returns detected=false,
+  // and the classifier's verdict is the one that ships.
+  if (opts.classifierAuthoritative) {
+    const { classifyDistress, CLASSIFIER_AUTH_ATTEMPTS } = await import(
+      '@/lib/distress-classifier'
+    );
+    const regexPrefilter = detectDistressSync(text);
+    // Retry the whole classifier call on a non-verdict (ok:false) — a
+    // transient error would otherwise drop a regex-invisible crisis
+    // (caregiving / bereavement) to the fail-closed path, which only catches
+    // ideation. Kill-switch / no-key return ok:false immediately and don't
+    // benefit from retry, but a timeout/parse blip does.
+    let c = await classifyDistress(text, {
+      lowTicketFunnel: opts.lowTicketFunnel === true
+    });
+    for (
+      let attempt = 1;
+      attempt < CLASSIFIER_AUTH_ATTEMPTS &&
+      !c.ok &&
+      /timeout|parse/i.test(c.reason);
+      attempt++
+    ) {
+      c = await classifyDistress(text, {
+        lowTicketFunnel: opts.lowTicketFunnel === true
+      });
+    }
+
+    if (c.ok) {
+      // Classifier produced a verdict — it is authoritative, full stop.
+      const result: DistressDetectionResult = c.detected
+        ? {
+            detected: true,
+            label: c.category ?? 'classifier_distress',
+            match: c.span ?? null,
+            classifierReason: c.reason,
+            decidedBy: 'classifier'
+          }
+        : {
+            detected: false,
+            label: null,
+            match: null,
+            classifierReason: c.reason,
+            decidedBy: 'classifier'
+          };
+      // Still log the regex-vs-classifier comparison for the review ledger.
+      if (opts.shadowClassifier) {
+        void logDistressShadow({
+          text,
+          regex: regexPrefilter,
+          conversationId: opts.conversationId,
+          accountId: opts.accountId
+        });
+      }
+      return result;
+    }
+
+    // Classifier could NOT produce a verdict (API down / no key / parse error).
+    // Fail CLOSED only when the regex pre-filter saw an ideation-class signal —
+    // a missed ideation disclosure is never acceptable. Financial/ambiguous
+    // regex hits do NOT resurrect here (that would reinstate the exact false
+    // positive we are fixing).
+    const failClosed =
+      regexPrefilter.detected &&
+      typeof regexPrefilter.label === 'string' &&
+      IDEATION_FAILCLOSED_LABELS.has(regexPrefilter.label);
+    console.warn(
+      `[distress] classifier unavailable (${c.reason}) — ${failClosed ? 'FAIL-CLOSED (regex saw ideation)' : 'not firing (regex saw no ideation)'} :: "${(text ?? '').slice(0, 80)}"`
+    );
+    return failClosed
+      ? {
+          detected: true,
+          label: regexPrefilter.label,
+          match: regexPrefilter.match,
+          classifierReason: c.reason,
+          decidedBy: 'regex_failclosed'
+        }
+      : {
+          detected: false,
+          label: null,
+          match: null,
+          classifierReason: c.reason,
+          decidedBy: 'regex_failclosed'
+        };
+  }
+
+  // ── Legacy regex-authoritative path (unchanged) ───────────────────────────
   const regexResult = await detectDistressRegexTiers(text);
+  regexResult.decidedBy = 'regex_legacy';
   // Shadow mode: run the classifier-first detector alongside and log the
   // comparison, but return the AUTHORITATIVE regex verdict. Fire-and-forget.
   if (opts.shadowClassifier) {

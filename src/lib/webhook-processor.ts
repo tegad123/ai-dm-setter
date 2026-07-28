@@ -1639,14 +1639,32 @@ export async function processIncomingMessage(
   try {
     const account = await prisma.account.findUnique({
       where: { id: accountId },
-      select: { distressDetectionEnabled: true }
+      select: {
+        distressDetectionEnabled: true,
+        personas: {
+          where: { isActive: true },
+          select: { promptConfig: true },
+          take: 1
+        }
+      }
     });
     if (account?.distressDetectionEnabled) {
       const { detectDistress } = await import('@/lib/distress-detector');
-      // Shadow mode (2026-07-24): when DISTRESS_SHADOW_MODE=true, the classifier
-      // runs alongside regex and the comparison is logged for joint review —
-      // regex stays authoritative until the flip. Off = current behavior.
+      const { personaConfigDisablesStageProgression } = await import(
+        '@/lib/lead-stage'
+      );
+      const lowTicketFunnel = personaConfigDisablesStageProgression(
+        account.personas?.[0]?.promptConfig
+      );
+      // Classifier-authoritative (2026-07-28): the LLM decides; regex is an
+      // advisory pre-filter that can never fire alone. Fixes the false-positive
+      // class (e.g. "tired of living paycheck to paycheck" firing crisis on a
+      // low-ticket funnel). DISTRESS_CLASSIFIER_AUTHORITATIVE gates the flip;
+      // shadow logging still runs so the ledger keeps accumulating.
       const distress = await detectDistress(messageText, {
+        classifierAuthoritative:
+          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE === 'true',
+        lowTicketFunnel,
         shadowClassifier: process.env.DISTRESS_SHADOW_MODE === 'true',
         conversationId,
         accountId

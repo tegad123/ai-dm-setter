@@ -2558,7 +2558,18 @@ export async function generateReply(
   if (lastLeadMsg) {
     try {
       const { detectDistress } = await import('@/lib/distress-detector');
-      const distress = await detectDistress(lastLeadMsg.content);
+      const lowTicketForDistress = await prisma.aIPersona
+        .findUnique({
+          where: { id: personaId },
+          select: { promptConfig: true }
+        })
+        .then((p) => personaConfigDisablesStageProgression(p?.promptConfig))
+        .catch(() => false);
+      const distress = await detectDistress(lastLeadMsg.content, {
+        classifierAuthoritative:
+          process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE === 'true',
+        lowTicketFunnel: lowTicketForDistress
+      });
       if (distress.detected) {
         console.warn(
           `[ai-engine] LAYER 2 distress detected — aborting generation. label=${distress.label} match="${distress.match}"`
