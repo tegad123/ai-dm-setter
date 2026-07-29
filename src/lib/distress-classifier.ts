@@ -331,13 +331,29 @@ export async function classifyDistress(
     cacheSet(cacheScope + ' ' + trimmed, value);
     return value;
   } catch (err) {
+    const status = (err as { status?: number })?.status ?? null;
+    const message = err instanceof Error ? err.message : String(err);
     const kind =
       err instanceof Error &&
       (err.name === 'APIConnectionTimeoutError' || /timeout/i.test(err.message))
         ? 'classifier_timeout'
         : err instanceof SyntaxError
           ? 'classifier_parse_error'
-          : 'classifier_error';
+          : status === 400 && /credit balance|billing/i.test(message)
+            ? 'classifier_no_credit'
+            : status === 401 || status === 403
+              ? 'classifier_auth_error'
+              : 'classifier_error';
+    // A safety classifier that is DOWN for a persistent reason (no credit /
+    // bad key) must be LOUD — a silent degradation is how "tired of living
+    // paycheck to paycheck" fired 988 in prod on 2026-07-28 (the API account
+    // was out of credits, so every call errored and fail-closed on the regex).
+    // Timeouts/parse blips are transient and stay quiet (they retry).
+    if (kind === 'classifier_no_credit' || kind === 'classifier_auth_error') {
+      console.error(
+        `[distress-classifier] SAFETY DEGRADED (${kind}, status=${status}): ${message.slice(0, 200)} — distress detection is running on the regex fallback until this is resolved.`
+      );
+    }
     // ok=false — the caller decides fail-closed vs fail-open per its mode.
     return {
       ok: false,
