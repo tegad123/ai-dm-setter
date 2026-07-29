@@ -13,10 +13,35 @@ export async function GET(request: Request) {
   // phrase (2026-07-28 distress debug). Removed once the fix is confirmed.
   const probe = new URL(request.url).searchParams.get('classify');
   if (probe) {
-    const { classifyDistress } = await import('@/lib/distress-classifier');
-    const std = await classifyDistress(probe, { lowTicketFunnel: false });
-    const lt = await classifyDistress(probe, { lowTicketFunnel: true });
-    return NextResponse.json({ probe, std, lt });
+    // Raw Haiku call so the ACTUAL exception surfaces (classifyDistress
+    // swallows it into 'classifier_error'). Temporary distress debug.
+    const key = process.env.ANTHROPIC_API_KEY ?? '';
+    let rawResult: unknown;
+    try {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const client = new Anthropic({ apiKey: key, maxRetries: 0 });
+      const r = await client.messages.create(
+        {
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 50,
+          messages: [{ role: 'user', content: 'reply with the word ok' }]
+        },
+        { timeout: 8000 }
+      );
+      rawResult = { ok: true, content: r.content };
+    } catch (e) {
+      rawResult = {
+        ok: false,
+        name: e instanceof Error ? e.name : 'unknown',
+        message: e instanceof Error ? e.message.slice(0, 300) : String(e),
+        status: (e as { status?: number })?.status ?? null
+      };
+    }
+    return NextResponse.json({
+      keyLen: key.length,
+      keyPrefix: key.slice(0, 7),
+      rawResult
+    });
   }
   return NextResponse.json({
     commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'unknown',
