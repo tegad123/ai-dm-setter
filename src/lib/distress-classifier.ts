@@ -244,6 +244,16 @@ export interface ClassifyDistressOptions {
    * bereavement, abuse, homelessness) still fires.
    */
   lowTicketFunnel?: boolean;
+  /**
+   * Account whose BYOK Anthropic key should be used (2026-07-30). Previously
+   * the classifier read process.env.ANTHROPIC_API_KEY directly — a DIFFERENT
+   * account than the per-workspace BYOK key the rest of the app uses. That
+   * env key's account ran out of credits, so distress errored on every call
+   * (fail-closed → fired 988) even after the workspace key was funded. Now it
+   * resolves the same per-account key as generation via
+   * resolveAnthropicApiKeyWithSource, with env as fallback.
+   */
+  accountId?: string | null;
 }
 
 export async function classifyDistress(
@@ -275,7 +285,10 @@ export async function classifyDistress(
   const cached = cacheGet(cacheScope + ' ' + trimmed);
   if (cached) return cached;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Resolve the SAME per-account BYOK key generation uses — not the raw env
+  // key (2026-07-30 fix). env stays as fallback for accountless callers.
+  const { resolveAnthropicApiKeyWithSource } = await import('@/lib/haiku-text');
+  const { apiKey } = await resolveAnthropicApiKeyWithSource(opts.accountId);
   if (!apiKey) {
     return {
       ok: false,

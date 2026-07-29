@@ -307,7 +307,9 @@ async function logDistressShadow(params: {
   try {
     const started = Date.now();
     const { classifyDistress } = await import('@/lib/distress-classifier');
-    const c = await classifyDistress(params.text);
+    const c = await classifyDistress(params.text, {
+      accountId: params.accountId ?? null
+    });
     const latencyMs = Date.now() - started;
     const agreed = params.regex.detected === c.detected;
     const { default: prisma } = await import('@/lib/prisma');
@@ -370,7 +372,8 @@ export async function detectDistress(
     // ideation. Kill-switch / no-key return ok:false immediately and don't
     // benefit from retry, but a timeout/parse blip does.
     let c = await classifyDistress(text, {
-      lowTicketFunnel: opts.lowTicketFunnel === true
+      lowTicketFunnel: opts.lowTicketFunnel === true,
+      accountId: opts.accountId ?? null
     });
     for (
       let attempt = 1;
@@ -380,7 +383,8 @@ export async function detectDistress(
       attempt++
     ) {
       c = await classifyDistress(text, {
-        lowTicketFunnel: opts.lowTicketFunnel === true
+        lowTicketFunnel: opts.lowTicketFunnel === true,
+        accountId: opts.accountId ?? null
       });
     }
 

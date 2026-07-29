@@ -11,37 +11,24 @@ export async function GET(request: Request) {
   // Temporary: ?classify=<text> runs the live classifier and returns its raw
   // verdict, so we can see exactly what prod's Haiku call returns for Tega's
   // phrase (2026-07-28 distress debug). Removed once the fix is confirmed.
-  const probe = new URL(request.url).searchParams.get('classify');
+  const url = new URL(request.url);
+  const probe = url.searchParams.get('classify');
   if (probe) {
-    // Raw Haiku call so the ACTUAL exception surfaces (classifyDistress
-    // swallows it into 'classifier_error'). Temporary distress debug.
-    const key = process.env.ANTHROPIC_API_KEY ?? '';
-    let rawResult: unknown;
-    try {
-      const Anthropic = (await import('@anthropic-ai/sdk')).default;
-      const client = new Anthropic({ apiKey: key, maxRetries: 0 });
-      const r = await client.messages.create(
-        {
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 50,
-          messages: [{ role: 'user', content: 'reply with the word ok' }]
-        },
-        { timeout: 8000 }
-      );
-      rawResult = { ok: true, content: r.content };
-    } catch (e) {
-      rawResult = {
-        ok: false,
-        name: e instanceof Error ? e.name : 'unknown',
-        message: e instanceof Error ? e.message.slice(0, 300) : String(e),
-        status: (e as { status?: number })?.status ?? null
-      };
-    }
-    return NextResponse.json({
-      keyLen: key.length,
-      keyPrefix: key.slice(0, 7),
-      rawResult
+    // Runs the REAL classifyDistress path (BYOK key resolution + logic), so
+    // this verifies the actual prod behavior — not a raw env-key call. Pass
+    // ?account=<id> to resolve that account's BYOK key (the daetradez funded
+    // workspace key). Temporary distress debug; removed once confirmed.
+    const accountId = url.searchParams.get('account');
+    const { classifyDistress } = await import('@/lib/distress-classifier');
+    const std = await classifyDistress(probe, {
+      accountId,
+      lowTicketFunnel: false
     });
+    const lt = await classifyDistress(probe, {
+      accountId,
+      lowTicketFunnel: true
+    });
+    return NextResponse.json({ probe, accountId, std, lt });
   }
   return NextResponse.json({
     commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'unknown',
