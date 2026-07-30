@@ -1019,6 +1019,13 @@ model Conversation {
   manyChatTriggerType   String?
   manyChatCommentText   String?            @db.Text
   manyChatFiredAt       DateTime?
+  // The question ManyChat's own automation asked the lead BEFORE handing off
+  // (e.g. "how long have you been in the markets?"). Stored so the AI does not
+  // re-ask it on its first turn (the CTA-branch redundant re-ask, Tega B5,
+  // 2026-07-30). Additive/optional — populated only when the ManyChat
+  // automation includes it in the handoff payload; mirrors Typeform's
+  // application-context dedup.
+  manyChatNativeQuestion String?           @db.Text
 
   // ── Typeform application / booking handoff ─────────────────────
   // Populated by POST /api/webhooks/typeform after signature

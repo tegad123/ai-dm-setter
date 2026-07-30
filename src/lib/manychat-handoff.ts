@@ -37,6 +37,10 @@ export const manyChatHandoffSchema = z.object({
   openerMessage: z.string().min(1).max(2000),
   triggerType: z.enum(MANYCHAT_TRIGGER_TYPES),
   commentText: z.string().max(2000).optional(),
+  // The native question ManyChat's automation asked before handing off
+  // (Tega B5, 2026-07-30). Optional — only present when the automation is
+  // configured to send it. Stored so the AI won't re-ask it.
+  nativeQuestion: z.string().max(2000).optional(),
   postUrl: z.string().max(2000).optional(),
   manyChatSubscriberId: z.coerce.string().min(1),
   // Optional in the wire format — ManyChat doesn't always expose a ready
@@ -219,6 +223,7 @@ export async function processManyChatHandoff(params: {
         manyChatOpenerMessage: payload.openerMessage,
         manyChatTriggerType: payload.triggerType,
         manyChatCommentText: payload.commentText ?? null,
+        manyChatNativeQuestion: payload.nativeQuestion ?? null,
         manyChatFiredAt: firedAt
       },
       select: { id: true, aiActive: true }
@@ -265,6 +270,7 @@ export async function processManyChatHandoff(params: {
         manyChatOpenerMessage: payload.openerMessage,
         manyChatTriggerType: payload.triggerType,
         manyChatCommentText: payload.commentText ?? null,
+        manyChatNativeQuestion: payload.nativeQuestion ?? null,
         manyChatFiredAt: firedAt
       },
       select: { id: true, aiActive: true }
@@ -304,6 +310,7 @@ export async function processManyChatHandoff(params: {
             manyChatOpenerMessage: payload.openerMessage,
             manyChatTriggerType: payload.triggerType,
             manyChatCommentText: payload.commentText ?? null,
+            manyChatNativeQuestion: payload.nativeQuestion ?? null,
             manyChatFiredAt: firedAt
           }
         }

@@ -2925,6 +2925,7 @@ export async function generateReply(
           manyChatOpenerMessage: true,
           manyChatTriggerType: true,
           manyChatCommentText: true,
+          manyChatNativeQuestion: true,
           manyChatFiredAt: true,
           typeformSubmittedAt: true,
           typeformCapitalConfirmed: true,
@@ -3490,6 +3491,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         conversationCallState?.manyChatTriggerType || 'new_follower';
       const commentText =
         conversationCallState?.manyChatCommentText?.trim() || '';
+      // B5 (2026-07-30): the question ManyChat's own automation already asked
+      // the lead before handoff. When present, tell the model NOT to re-ask
+      // it (the CTA-branch redundant re-ask Tega flagged). Mirrors Typeform's
+      // application-context dedup.
+      const manyChatNativeQuestion =
+        conversationCallState?.manyChatNativeQuestion?.trim() || '';
       const entryStep =
         typeof mcCreds?.entryStep === 'number' && mcCreds.entryStep >= 1
           ? mcCreds.entryStep
@@ -3516,7 +3523,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       const outboundBridgeReference = opener
         ? 'that outbound content'
         : `the ${downsellProductName}`;
-      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted via outbound automation.\n\nTrigger type: ${triggerType}\n${triggerLine}\nOutbound hook to reference: ${outboundHookLabel}\n\nThe outbound opener has already fired.\nThe lead accepting, asking for, or showing interest in the outbound content is NOT soft-pitch acceptance. It is opening engagement.\nRequired stage order: discovery -> goal -> urgency -> soft pitch -> capital.\nDo NOT jump to financial screening. Do NOT ask about capital until discovery/work background and income goal have happened.\nNatural bridge: since they expressed interest in ${outboundHookLabel}, open with a question that connects their interest to their current situation. Start with trading background/current experience/how long they have been trading, then move through goal, urgency, soft pitch, and only then capital.\nReference ${outboundBridgeReference} so the reply does not read as a fresh start.\n\nDo NOT send another opener or greeting.\nThe lead is responding to outreach.\nThey already know who you are.\nConfigured entry-step hint: ${stepDescriptor}. Use this only if it does not skip the required stage order above.\n</outbound_context>`;
+      const outboundBlock = `\n\n<outbound_context>\nThis lead was contacted via outbound automation.\n\nTrigger type: ${triggerType}\n${triggerLine}\nOutbound hook to reference: ${outboundHookLabel}\n\nThe outbound opener has already fired.\nThe lead accepting, asking for, or showing interest in the outbound content is NOT soft-pitch acceptance. It is opening engagement.\nRequired stage order: discovery -> goal -> urgency -> soft pitch -> capital.\nDo NOT jump to financial screening. Do NOT ask about capital until discovery/work background and income goal have happened.\nNatural bridge: since they expressed interest in ${outboundHookLabel}, open with a question that connects their interest to their current situation. Start with trading background/current experience/how long they have been trading, then move through goal, urgency, soft pitch, and only then capital.\nReference ${outboundBridgeReference} so the reply does not read as a fresh start.\n\nDo NOT send another opener or greeting.\nThe lead is responding to outreach.\nThey already know who you are.${manyChatNativeQuestion ? `\n\nIMPORTANT — ManyChat's automation ALREADY asked this lead: "${manyChatNativeQuestion}". The lead's latest message is very likely their ANSWER to it. Do NOT re-ask that question or any paraphrase of it — read their message as the answer and continue from there.` : ''}\nConfigured entry-step hint: ${stepDescriptor}. Use this only if it does not skip the required stage order above.\n</outbound_context>`;
       systemPrompt = outboundBlock + '\n' + systemPrompt;
     } catch (mcErr) {
       console.warn(
