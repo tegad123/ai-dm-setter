@@ -826,7 +826,14 @@ function serializeActionSequence(
       action.actionType === 'ask_question' &&
       manyChatNativeQuestion &&
       typeof action.content === 'string' &&
-      scriptAskMatchesText(action.content, manyChatNativeQuestion)
+      // scriptAskMatchesText is directional (first arg = the "ask", second =
+      // text to test) — match in EITHER orientation so a scripted ASK and the
+      // ManyChat native question are recognized as the same question even when
+      // phrased differently ("are you new in the markets..." vs "how long have
+      // you been in the markets?"). Verified live: the one-direction call
+      // returned false and the re-ask slipped through.
+      (scriptAskMatchesText(action.content, manyChatNativeQuestion) ||
+        scriptAskMatchesText(manyChatNativeQuestion, action.content))
     ) {
       lines.push(
         `${indent}[ASK-SKIPPED] ManyChat already asked this ("${manyChatNativeQuestion}") and the lead answered — do NOT re-ask. Acknowledge their answer and continue to the next step's content.`
