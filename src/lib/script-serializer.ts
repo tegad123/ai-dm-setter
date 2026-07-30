@@ -746,8 +746,57 @@ export function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
     });
   }
 
-  if (step.stepNumber !== 1) return step.branches;
-  return selectStep1BranchesForPrompt(step.branches, routingContext);
+  // No branch locked. 2026-07-30 fix (Tega ManyChat dual-opener / branch-lock
+  // gap): NEVER return "all branches" — that dumps every branch's [MSG]/[ASK]
+  // into the prompt, and since the condition is only prose (not a runtime
+  // gate) the model emits multiple branches' copy regardless of whether their
+  // conditions held (the CTA opener shipped though manyChatFiredAt was null).
+  // Requirement: emit AT MOST ONE branch. Step 1 has a source-based selector
+  // that can resolve a single branch deterministically; take it only if it
+  // yields exactly one. Otherwise emit ZERO scripted branches — the caller's
+  // smart-mode path (branch themes only, no literal [MSG]/[ASK]) handles the
+  // unresolved case safely. This is the minimal single-source-of-truth patch,
+  // not a new abstraction (Fix D owns the full runtime-condition model).
+  if (step.stepNumber === 1) {
+    const step1 = selectStep1BranchesForPrompt(step.branches, routingContext);
+    if (step1.length === 1) return step1;
+    // Step 1 has NO runtime_judgment actions, so smart-mode never engages
+    // here — returning none would leave the opener turn with zero scripted
+    // content (no greeting at all). Instead collapse to a SINGLE deterministic
+    // default: the warm/DM branch (the safe generic greeting), else the first
+    // branch. Exactly one opener always ships — never two, never zero.
+    const warm = step.branches.find((b) => {
+      const l = b.branchLabel.toLowerCase();
+      return (
+        l.includes('warm') ||
+        l.includes('dm') ||
+        l.includes('direct') ||
+        l.includes('reached out')
+      );
+    });
+    const fallback = warm ?? step.branches[0];
+    console.warn(
+      '[branch-debug] step-1 unresolved to a single branch — collapsing to ONE default, NOT all:',
+      {
+        stepNumber: step.stepNumber,
+        candidateCount: step1.length,
+        chosen: fallback?.branchLabel ?? null
+      }
+    );
+    return (fallback ? [fallback] : []) as T['branches'];
+  }
+  // Steps 2–8 with no lock: emit none rather than all. These steps DO have
+  // runtime_judgment actions, so smart-mode (branch themes only, no literal
+  // [MSG]/[ASK]) engages and drives the turn — the model responds from the
+  // step objective without any single branch's copy being force-shipped.
+  console.warn(
+    '[branch-debug] step unresolved (no lock) — emitting none (smart-mode drives), NOT all:',
+    {
+      stepNumber: step.stepNumber,
+      availableBranches: step.branches.map((b) => b.branchLabel).join(' | ')
+    }
+  );
+  return [] as T['branches'];
 }
 
 function serializeActionSequence(
