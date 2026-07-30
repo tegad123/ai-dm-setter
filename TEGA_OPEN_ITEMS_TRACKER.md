@@ -38,9 +38,9 @@ Distress commits: `cca827e`, `c30dc0f`, `0a5c496` (+ diagnostics `6596ae5`, `3a8
 | B3 | Serializer emits at most one branch per step | ✅ COMPLETE | Same commit; step-1 collapses to one default, steps 2-8 → smart-mode. |
 | B4 | Live-verify single opener (dual-opener gone) | ✅ COMPLETE | Full run 07-30: step 1 shipped exactly ONE opener (warm=1, cta=0). |
 | B5a | Store the ManyChat native question | ✅ COMPLETE | Schema column `manyChatNativeQuestion` + migration `20260730000000` + payload field + all 3 handoff write paths. Verified: column reads in prod. `ebe6e3b`. |
-| B5b | **Dedup the CTA re-ask (AI must not re-ask what ManyChat asked)** | ⬜ **PARTIAL — NOT PASSING** | 6 commits (`ebe6e3b`→`ad4e133`): prompt note → drop scripted [ASK] → override bridge → suppress dangling [MSG] lead-in. Each removed one source; the AI STILL regenerates the experience question from the prompt's few-shot examples + discovery-bridge scaffolding. **Live test still FAILS** (re-asks "are you new in the markets..."). Verified the scripted [ASK]/[MSG] ARE removed from the prompt (`[ASK-SKIPPED]` present, literal ASK absent) — the re-ask comes from the examples/bridge framing, not the script. **This is a prose-guidance-vs-model-behavior problem a minimal patch can't cleanly win — it is itself Fix D evidence (guidance loses to scaffolding).** DECISION NEEDED: (a) strip experience from the few-shot examples too, (b) accept as known-limitation + Fix D, or (c) escalate to Tega that the dedup needs the ManyChat automation to hand off at step 2 instead of step 1. Do NOT mark complete. |
+| B5b | Dedup the CTA re-ask (AI must not re-ask what ManyChat asked) | ⚠️ RESOLVED AS FIX-D SCOPE + CONFIG (decision 07-31) | 6 commits removed every scripted source; the model still regenerates the question from few-shot examples + discovery-bridge scaffolding. Prose can't beat prose. **Decision (option 2+3):** (a) the clean fix is CONFIG — Daniel's ManyChat automation should hand off at step 2 (goal), not step 1, so there's no step-1 experience question to re-ask; (b) the code-level behavioral dedup is Fix D scope (a machine that knows which question is answered) — now written as Fix D's 3rd case (`d829d42`). The storage half (B5a) is done and correct; the dedup instruction is deployed (harmless, helps once handoff is at step 2). NOT chasing patch #7. |
 | B6 | Single-wrong-branch case (confident lock on wrong branch, condition is prose not gate) | ✅ ANSWERED | Out of scope for minimal patch → Fix D runtime-condition model. Tega agreed. |
-| B7 | **Add branch-lock/serializer as 3rd Fix D case in the proposal doc** | ⬜ OPEN | Said I would; FIX_D_STATE_MACHINE_PROPOSAL.md not yet edited. |
+| B7 | Add branch-lock/serializer as 3rd Fix D case | ✅ COMPLETE | FIX_D_STATE_MACHINE_PROPOSAL.md updated, `d829d42`. |
 | B8 | Step 8 delivers Daniel's real URL, not placeholder | ✅ COMPLETE | Full run 07-30: shipped `daetradingaccelerator.com/landing-page`, placeholder=false. |
 | B9 | "3 months" divider | ✅ CLOSED | Cosmetic `Math.floor(days/30)` (pipeline-view.tsx:78, lead-detail.tsx:77). Tega: no action needed. |
 
@@ -63,7 +63,7 @@ Branch-lock commit: `0b19ce8`.
 
 | # | Item | Status | Evidence / Notes |
 |---|------|--------|------------------|
-| D1 | Remove temporary `/api/version` debug probe (`?classify`, distress diag block) | ⬜ OPEN | Added during distress debugging; must strip before calling distress fully closed. |
+| D1 | Remove temporary `/api/version` debug probe | ✅ COMPLETE | Stripped, endpoint returns build identity only. `d829d42`. |
 | D2 | Step-7 personalization variable-render gap ("breathing room, wanting ,") | ⬜ OPEN (flagged) | Seen in full run 07-30. Same class as F3 variable binding. Queued, not blocking. |
 | D3 | Vercel env-var / redeploy gotcha documented | ✅ NOTED | Env changes only apply to NEW deploys; env-var save redeploys the OLD commit. |
 
