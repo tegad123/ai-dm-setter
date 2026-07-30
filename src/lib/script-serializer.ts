@@ -21,6 +21,7 @@ import {
   buildVariableAskAnchors,
   persistScriptVariableResolutions,
   resolveScriptVariablesForTexts,
+  scriptAskMatchesText,
   type ScriptVariableResolutionContext,
   type ScriptVariableResolutionMap
 } from '@/lib/script-variable-resolver';
@@ -305,7 +306,8 @@ export async function serializeScriptForPrompt(
           ...serializeActionSequence(
             branch.actions,
             '    ',
-            variableResolutionMap
+            variableResolutionMap,
+            routingContext?.manyChatNativeQuestion ?? null
           )
         );
       }
@@ -564,6 +566,9 @@ export interface ScriptRoutingContext {
   selectedBranchStepNumber?: number | null;
   smartMode?: boolean;
   smartModeStepNumber?: number | null;
+  /** B5: the question ManyChat's automation already asked — matching scripted
+   * [ASK] actions are dropped from the prompt so the AI never re-asks it. */
+  manyChatNativeQuestion?: string | null;
   variableResolutionContext?:
     | (ScriptVariableResolutionContext & {
         disabled?: boolean;
@@ -802,7 +807,13 @@ export function selectBranchesForPrompt<T extends SerializableStepWithBranches>(
 function serializeActionSequence(
   actions: SerializableAction[],
   indent: string,
-  variableResolutionMap?: ScriptVariableResolutionMap | null
+  variableResolutionMap?: ScriptVariableResolutionMap | null,
+  // B5 (2026-07-30): when ManyChat's automation already asked a question, DROP
+  // any scripted [ASK] that matches it — code-level dedup. A prompt note asking
+  // the model "don't re-ask" loses to the literal scripted [ASK] directive
+  // (verified live: the CTA branch's ASK still fired despite the note). Removing
+  // the ASK from the prompt entirely is the only reliable suppression.
+  manyChatNativeQuestion?: string | null
 ): string[] {
   const lines: string[] = [];
 
@@ -810,6 +821,18 @@ function serializeActionSequence(
     const action = actions[i];
     const previousAction = actions[i - 1] || null;
     const nextAction = actions[i + 1] || null;
+
+    if (
+      action.actionType === 'ask_question' &&
+      manyChatNativeQuestion &&
+      typeof action.content === 'string' &&
+      scriptAskMatchesText(action.content, manyChatNativeQuestion)
+    ) {
+      lines.push(
+        `${indent}[ASK-SKIPPED] ManyChat already asked this ("${manyChatNativeQuestion}") and the lead answered — do NOT re-ask. Acknowledge their answer and continue to the next step's content.`
+      );
+      continue;
+    }
 
     if (
       action.actionType === 'send_message' &&

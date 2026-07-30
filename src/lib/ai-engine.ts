@@ -3188,6 +3188,11 @@ export async function generateReply(
         smartModeActive && currentStepNumberForGate
           ? currentStepNumberForGate
           : null,
+      // B5: drop any scripted [ASK] that matches ManyChat's already-asked
+      // native question so the AI can't re-ask it (code-level, not a prompt
+      // note — the note loses to the literal scripted [ASK]).
+      manyChatNativeQuestion:
+        conversationCallState?.manyChatNativeQuestion ?? null,
       variableResolutionContext: scriptVariableResolutionContext
     },
     scriptStateSnapshot?.currentScriptStep ?? null
