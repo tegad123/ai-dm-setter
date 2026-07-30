@@ -817,27 +817,39 @@ function serializeActionSequence(
 ): string[] {
   const lines: string[] = [];
 
+  const asksMatchNative = (content: unknown): boolean =>
+    !!manyChatNativeQuestion &&
+    typeof content === 'string' &&
+    (scriptAskMatchesText(content, manyChatNativeQuestion) ||
+      scriptAskMatchesText(manyChatNativeQuestion, content));
+
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i];
     const previousAction = actions[i - 1] || null;
     const nextAction = actions[i + 1] || null;
 
+    // B5: drop a scripted [ASK] that duplicates ManyChat's already-asked
+    // native question. scriptAskMatchesText is directional, so check both.
     if (
       action.actionType === 'ask_question' &&
-      manyChatNativeQuestion &&
-      typeof action.content === 'string' &&
-      // scriptAskMatchesText is directional (first arg = the "ask", second =
-      // text to test) — match in EITHER orientation so a scripted ASK and the
-      // ManyChat native question are recognized as the same question even when
-      // phrased differently ("are you new in the markets..." vs "how long have
-      // you been in the markets?"). Verified live: the one-direction call
-      // returned false and the re-ask slipped through.
-      (scriptAskMatchesText(action.content, manyChatNativeQuestion) ||
-        scriptAskMatchesText(manyChatNativeQuestion, action.content))
+      asksMatchNative(action.content)
     ) {
       lines.push(
         `${indent}[ASK-SKIPPED] ManyChat already asked this ("${manyChatNativeQuestion}") and the lead answered — do NOT re-ask. Acknowledge their answer and continue to the next step's content.`
       );
+      continue;
+    }
+
+    // B5: also drop the [MSG] LEAD-IN whose paired next [ASK] is being skipped.
+    // The CTA branch is "[MSG] Btw bro... I did want to ask" + "[ASK] are you
+    // new in the markets?" — dropping only the ASK left a dangling "I did want
+    // to ask" that the model completed by re-inventing the question (verified
+    // live). Suppressing the setup MSG too removes the whole redundant probe.
+    if (
+      action.actionType === 'send_message' &&
+      nextAction?.actionType === 'ask_question' &&
+      asksMatchNative(nextAction.content)
+    ) {
       continue;
     }
 
