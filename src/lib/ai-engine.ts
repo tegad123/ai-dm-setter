@@ -625,7 +625,36 @@ const JUDGE_MATCH_STOPWORDS = new Set([
   'to',
   'with',
   'you',
-  'your'
+  'your',
+  // Conversational fillers with no routing signal (2026-08-03). "about"
+  // misrouted a duration answer ("About 3 yrs now") to the Price Question
+  // branch because that branch's condition also contains "about" ("asks
+  // about cost") — a score-6 token-lock on a stopword-class word. These
+  // words collide across branches and must never drive selection.
+  'about',
+  'now',
+  'just',
+  'really',
+  'so',
+  'like',
+  'well',
+  'yeah',
+  'yea',
+  'yep',
+  'nah',
+  'ok',
+  'okay',
+  'bro',
+  'man',
+  'gonna',
+  'wanna',
+  'got',
+  'get',
+  'was',
+  'were',
+  'im',
+  'ive',
+  'i'
 ]);
 
 function hasRuntimeJudgmentAction(step: JudgeStepLike | null | undefined) {
