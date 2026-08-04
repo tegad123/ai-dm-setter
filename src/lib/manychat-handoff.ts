@@ -130,6 +130,7 @@ export async function processManyChatHandoff(params: {
     select: {
       id: true,
       awayModeInstagram: true,
+      awayModeFacebook: true,
       defaultAiActive: true
     }
   });
@@ -221,16 +222,20 @@ export async function processManyChatHandoff(params: {
   let aiActiveOnConversation = false;
 
   // AI-active decision for a NEWLY-CREATED ManyChat conversation (item 2a,
-  // Tega 2026-08-04). Single source of truth so both create branches agree
-  // and the policy is one line to flip. CURRENT policy (Tega, 2026-05-21):
-  // a new ManyChat lead gets AI ON only when the account's platform Away Mode
-  // is ON. That is exactly why brand-new inbound-automation leads got silence
-  // (awayModeInstagram=false -> aiActive=false). Tega is deciding whether new
-  // ManyChat leads should get AI ON regardless of Away Mode for launch. To
-  // flip: set `newManyChatLeadAiActive = account.defaultAiActive` (drop the
-  // away-mode factor). Left at current behavior until he confirms.
+  // Tega 2026-08-04, DECIDED: no ManyChat bypass — Away Mode applies to
+  // ManyChat leads IDENTICALLY to organic ones, per platform). This mirrors
+  // the organic new-lead gate in webhook-processor exactly:
+  //   organic:  awayModeForPlatform && (defaultAiActive ?? true)
+  // Two prior discrepancies fixed to make them truly identical:
+  //   (1) this used awayModeInstagram HARDCODED — a Facebook ManyChat lead
+  //       would have been gated on the Instagram away mode. Now per-platform.
+  //   (2) organic defaults defaultAiActive to true when null; match that.
+  const awayModeForPlatform =
+    payload.platform === 'FACEBOOK'
+      ? account.awayModeFacebook
+      : account.awayModeInstagram;
   const newManyChatLeadAiActive =
-    account.awayModeInstagram && account.defaultAiActive;
+    awayModeForPlatform && (account.defaultAiActive ?? true);
 
   if (existingLead?.conversation) {
     const platformUserId =
