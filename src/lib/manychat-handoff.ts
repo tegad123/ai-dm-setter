@@ -27,13 +27,30 @@ const manyChatBoolean = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-export const manyChatHandoffSchema = z.object({
+const manyChatHandoffFields = z.object({
   // Coerce to string because ManyChat's variable picker outputs numeric
   // IDs as JSON numbers (not strings) for `user.id` — Zod's z.string()
-  // would reject those without coercion. The schema validates min length
-  // after coercion so we still reject empty values.
-  instagramUserId: z.coerce.string().min(1),
-  instagramUsername: z.string().min(1),
+  // would reject those without coercion.
+  //
+  // 2026-08-04 (Effa Fouda, launch blocker root cause): these two fields were
+  // REQUIRED min(1). A Facebook contact has NO Instagram identity, so
+  // ManyChat's External Request sends them empty (or omits them) for every
+  // FB contact — and the schema 400'd EVERY real Facebook handoff, silently.
+  // That is why zero genuinely-new FB contacts ever landed: the handoff
+  // could never have succeeded regardless of ManyChat's wiring. They are now
+  // optional at the field level; the superRefine below still REQUIRES both
+  // for INSTAGRAM handoffs, so every existing IG config keeps its exact
+  // contract.
+  instagramUserId: z.coerce.string().optional().default(''),
+  instagramUsername: z.string().optional().default(''),
+  // Facebook contact identity (optional). For Messenger, ManyChat's
+  // subscriber id IS the page-scoped PSID, so when this is absent the
+  // handler falls back to manyChatSubscriberId — the same id Meta's FB
+  // webhook delivers, so a later organic DM merges into this lead instead
+  // of creating a duplicate.
+  facebookUserId: z.coerce.string().optional(),
+  // Display name for contacts without an IG username (FB contacts).
+  contactName: z.string().max(200).optional(),
   // Platform of the ManyChat contact (2026-08-04, Tega item 2b). ManyChat
   // runs Instagram AND Facebook automations; the handler was Instagram-only,
   // so a brand-new FACEBOOK contact from Daniel's live automation was created
@@ -80,6 +97,46 @@ export const manyChatHandoffSchema = z.object({
   // where this request is the final handoff point.
   scheduleAi: manyChatBoolean.optional().default(false)
 });
+
+// Platform inference (2026-08-04): when the External Request body doesn't set
+// `platform`, infer it — complete IG identity -> INSTAGRAM; facebookUserId
+// present -> FACEBOOK; otherwise leave INSTAGRAM so the superRefine below
+// produces a LOUD, specific error instead of a silent generic 400.
+export const manyChatHandoffSchema = z
+  .preprocess((raw) => {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const o = { ...(raw as Record<string, unknown>) };
+      const hasPlatform =
+        typeof o.platform === 'string' && o.platform.trim().length > 0;
+      if (!hasPlatform) {
+        const igId =
+          o.instagramUserId != null ? String(o.instagramUserId).trim() : '';
+        const igUser =
+          typeof o.instagramUsername === 'string'
+            ? o.instagramUsername.trim()
+            : '';
+        const fbId =
+          o.facebookUserId != null ? String(o.facebookUserId).trim() : '';
+        o.platform =
+          igId && igUser ? 'INSTAGRAM' : fbId ? 'FACEBOOK' : 'INSTAGRAM';
+      }
+      return o;
+    }
+    return raw;
+  }, manyChatHandoffFields)
+  .superRefine((data, ctx) => {
+    if (
+      data.platform === 'INSTAGRAM' &&
+      (!data.instagramUserId.trim() || !data.instagramUsername.trim())
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['instagramUserId'],
+        message:
+          'Instagram handoff requires instagramUserId and instagramUsername. For a FACEBOOK contact, add "platform": "facebook" to the External Request body (and optionally facebookUserId / contactName).'
+      });
+    }
+  });
 
 export type ManyChatHandoffPayload = z.infer<typeof manyChatHandoffSchema>;
 
@@ -140,7 +197,41 @@ export async function processManyChatHandoff(params: {
 
   const parsed = manyChatHandoffSchema.safeParse(params.payload);
   if (!parsed.success) {
-    throw new ManyChatHandoffError('Invalid ManyChat payload', 400);
+    // 2026-08-04: a rejected handoff used to 400 with a generic message and
+    // write NOTHING — a critical integration failing 100% invisibly (every
+    // real Facebook handoff was dropped this way; see schema comment). Now:
+    // field-level detail goes back to ManyChat's request log AND a throttled
+    // operator notification lands, so a config gap surfaces in minutes, not
+    // weeks.
+    const detail = parsed.error.issues
+      .map((i) => `${i.path.join('.') || 'payload'}: ${i.message}`)
+      .join('; ');
+    console.error(
+      `[manychat-handoff] payload REJECTED for account ${account.id}: ${detail}`
+    );
+    try {
+      const recent = await prisma.notification.findFirst({
+        where: {
+          accountId: account.id,
+          title: 'ManyChat handoff rejected',
+          createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) }
+        },
+        select: { id: true }
+      });
+      if (!recent) {
+        await prisma.notification.create({
+          data: {
+            accountId: account.id,
+            type: 'SYSTEM',
+            title: 'ManyChat handoff rejected',
+            body: `A ManyChat External Request reached Convlo but its payload was rejected, so the handoff was dropped and the lead will arrive as a plain inbound DM instead. Reason: ${detail.slice(0, 800)}. Fix the External Request body in ManyChat to match.`
+          }
+        });
+      }
+    } catch {
+      // notification is best-effort; the 400 detail below still surfaces
+    }
+    throw new ManyChatHandoffError(`Invalid ManyChat payload — ${detail}`, 400);
   }
   const payload = parsed.data;
   // ManyChat omits `firedAt` from many flow setups — see schema. Default
@@ -148,7 +239,19 @@ export async function processManyChatHandoff(params: {
   // milliseconds of the trigger event, which is true for ManyChat's
   // synchronous flow execution model.
   const firedAt = payload.firedAt ? new Date(payload.firedAt) : new Date();
-  let handle = cleanInstagramUsername(payload.instagramUsername);
+  // Contact identity, per platform (2026-08-04). FACEBOOK: prefer the explicit
+  // facebookUserId; fall back to the ManyChat subscriber id, which for
+  // Messenger IS the page-scoped PSID Meta's FB webhook delivers — so a later
+  // organic DM matches this same lead instead of duplicating it.
+  const isFacebookContact = payload.platform === 'FACEBOOK';
+  const contactUserId = isFacebookContact
+    ? payload.facebookUserId?.trim() || payload.manyChatSubscriberId
+    : payload.instagramUserId;
+  let handle = isFacebookContact
+    ? payload.contactName?.trim() ||
+      payload.instagramUsername.trim() ||
+      contactUserId
+    : cleanInstagramUsername(payload.instagramUsername);
 
   // When ManyChat's subscriber cache is degraded (typically right after an
   // Instagram re-auth), {{contact.ig_username}} resolves to the raw numeric
@@ -156,7 +259,7 @@ export async function processManyChatHandoff(params: {
   // handle via ManyChat's subscriber API before we write anything to the DB.
   // Without this guard the lead's handle AND display name both become the
   // 15-digit IGSID and are effectively unreadable in the dashboard.
-  if (NUMERIC_IGSID.test(handle)) {
+  if (!isFacebookContact && NUMERIC_IGSID.test(handle)) {
     console.warn(
       `[manychat-handoff] numeric instagramUsername "${handle}" received — ManyChat subscriber cache likely degraded. Resolving real username via subscriber ${payload.manyChatSubscriberId}.`
     );
@@ -186,11 +289,13 @@ export async function processManyChatHandoff(params: {
     }
   }
 
-  const leadName = handle || payload.instagramUserId;
-  let canSendViaInstagramApi = looksLikeInstagramRecipientId(
-    payload.instagramUserId,
-    payload.manyChatSubscriberId
-  );
+  const leadName = handle || contactUserId;
+  let canSendViaInstagramApi = isFacebookContact
+    ? /^\d{5,}$/.test(contactUserId)
+    : looksLikeInstagramRecipientId(
+        contactUserId,
+        payload.manyChatSubscriberId
+      );
   const triggerSource =
     payload.triggerType === 'comment'
       ? payload.postUrl || 'manychat:comment'
@@ -201,7 +306,7 @@ export async function processManyChatHandoff(params: {
       accountId: account.id,
       platform: payload.platform,
       OR: [
-        { platformUserId: payload.instagramUserId },
+        { platformUserId: contactUserId },
         { handle: { equals: handle, mode: 'insensitive' } }
       ]
     },
@@ -240,7 +345,7 @@ export async function processManyChatHandoff(params: {
   if (existingLead?.conversation) {
     const platformUserId =
       canSendViaInstagramApi || !existingLead.platformUserId
-        ? payload.instagramUserId
+        ? contactUserId
         : existingLead.platformUserId;
     canSendViaInstagramApi = looksLikeInstagramRecipientId(
       platformUserId || '',
@@ -280,7 +385,7 @@ export async function processManyChatHandoff(params: {
     aiActiveOnConversation = updated.aiActive;
   } else if (existingLead) {
     canSendViaInstagramApi = looksLikeInstagramRecipientId(
-      existingLead.platformUserId || payload.instagramUserId,
+      existingLead.platformUserId || contactUserId,
       payload.manyChatSubscriberId
     );
     const personaId = await resolveActivePersonaIdForCreate(account.id);
@@ -323,7 +428,7 @@ export async function processManyChatHandoff(params: {
         name: leadName,
         handle,
         platform: payload.platform,
-        platformUserId: payload.instagramUserId,
+        platformUserId: contactUserId,
         triggerType: payload.triggerType === 'comment' ? 'COMMENT' : 'DM',
         triggerSource,
         stage: 'NEW_LEAD',
