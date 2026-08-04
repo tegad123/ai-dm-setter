@@ -407,6 +407,27 @@ export async function processManyChatHandoff(params: {
     }
   }
 
+  // Item 1 (Tega 2026-08-04): reset-then-FIRST-fire needed a manual nudge
+  // while reset-then-second-fire proceeded on its own. Root cause is a
+  // read-after-write ordering gap: `aiActiveOnConversation` is captured at
+  // create time, and `canSendViaInstagramApi` can be flipped true only by the
+  // IG-id resolution that runs AFTER the create. On the first fire the
+  // conversation's AI-active state (freshly reset) and/or the upgraded
+  // recipient id haven't been observed by the values below, so the schedule
+  // gate fails and Convlo just sits until the lead types something (which
+  // fires the normal webhook). On the second fire the prior fire already
+  // upgraded the id, so it passes. Re-read the conversation's TRUE current
+  // aiActive right before the gate so a fresh conversation isn't judged on a
+  // stale snapshot — the resolution above already updated canSendViaInstagramApi.
+  const freshAiActive = await prisma.conversation
+    .findUnique({
+      where: { id: conversationId },
+      select: { aiActive: true }
+    })
+    .then((r) => r?.aiActive ?? aiActiveOnConversation)
+    .catch(() => aiActiveOnConversation);
+  aiActiveOnConversation = freshAiActive;
+
   // Schedule the AI reply when the lead actually engaged (button click
   // landed as a new LEAD message) and the conversation is AI-eligible.
   // Most flows should leave scheduleAi=false because ManyChat still has
