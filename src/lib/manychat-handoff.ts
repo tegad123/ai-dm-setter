@@ -34,6 +34,20 @@ export const manyChatHandoffSchema = z.object({
   // after coercion so we still reject empty values.
   instagramUserId: z.coerce.string().min(1),
   instagramUsername: z.string().min(1),
+  // Platform of the ManyChat contact (2026-08-04, Tega item 2b). ManyChat
+  // runs Instagram AND Facebook automations; the handler was Instagram-only,
+  // so a brand-new FACEBOOK contact from Daniel's live automation was created
+  // as an INSTAGRAM lead with an IG-shaped id the FB send path can't match —
+  // the launch-blocking "Convlo shows no sign of it" for new FB contacts.
+  // Optional + defaulted to INSTAGRAM so every existing ManyChat config keeps
+  // working unchanged; FB automations add platform:"facebook".
+  platform: z
+    .preprocess(
+      (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+      z.enum(['INSTAGRAM', 'FACEBOOK'])
+    )
+    .optional()
+    .default('INSTAGRAM'),
   openerMessage: z.string().min(1).max(2000),
   triggerType: z.enum(MANYCHAT_TRIGGER_TYPES),
   commentText: z.string().max(2000).optional(),
@@ -184,7 +198,7 @@ export async function processManyChatHandoff(params: {
   const existingLead = await prisma.lead.findFirst({
     where: {
       accountId: account.id,
-      platform: 'INSTAGRAM',
+      platform: payload.platform,
       OR: [
         { platformUserId: payload.instagramUserId },
         { handle: { equals: handle, mode: 'insensitive' } }
@@ -205,6 +219,18 @@ export async function processManyChatHandoff(params: {
   let leadId: string;
   let leadResponseInserted = false;
   let aiActiveOnConversation = false;
+
+  // AI-active decision for a NEWLY-CREATED ManyChat conversation (item 2a,
+  // Tega 2026-08-04). Single source of truth so both create branches agree
+  // and the policy is one line to flip. CURRENT policy (Tega, 2026-05-21):
+  // a new ManyChat lead gets AI ON only when the account's platform Away Mode
+  // is ON. That is exactly why brand-new inbound-automation leads got silence
+  // (awayModeInstagram=false -> aiActive=false). Tega is deciding whether new
+  // ManyChat leads should get AI ON regardless of Away Mode for launch. To
+  // flip: set `newManyChatLeadAiActive = account.defaultAiActive` (drop the
+  // away-mode factor). Left at current behavior until he confirms.
+  const newManyChatLeadAiActive =
+    account.awayModeInstagram && account.defaultAiActive;
 
   if (existingLead?.conversation) {
     const platformUserId =
@@ -262,7 +288,7 @@ export async function processManyChatHandoff(params: {
         // aiActive=false, no exceptions (ManyChat handoffs must NOT auto-enable
         // AI regardless of Away Mode). autoSendOverride stays false; only the
         // operator's explicit per-conversation toggle turns AI on otherwise.
-        aiActive: account.awayModeInstagram && account.defaultAiActive,
+        aiActive: newManyChatLeadAiActive,
         autoSendOverride: false,
         unreadCount: 0,
         source: 'MANYCHAT',
@@ -291,7 +317,7 @@ export async function processManyChatHandoff(params: {
         accountId: account.id,
         name: leadName,
         handle,
-        platform: 'INSTAGRAM',
+        platform: payload.platform,
         platformUserId: payload.instagramUserId,
         triggerType: payload.triggerType === 'comment' ? 'COMMENT' : 'DM',
         triggerSource,
@@ -302,7 +328,7 @@ export async function processManyChatHandoff(params: {
             // POLICY (2026-05-21, Tega): see sibling create at top of this
             // function. A new ManyChat lead gets AI ON only when Instagram
             // Away Mode is ON; otherwise aiActive=false (no exceptions).
-            aiActive: account.awayModeInstagram && account.defaultAiActive,
+            aiActive: newManyChatLeadAiActive,
             autoSendOverride: false,
             unreadCount: 0,
             source: 'MANYCHAT',
@@ -343,27 +369,37 @@ export async function processManyChatHandoff(params: {
   // scheduleAIReply branch below, every future heartbeat tick) see a
   // usable recipient. Only re-flips canSendViaInstagramApi when the
   // upgrade actually produced a numeric ID.
-  const resolvedIgNumeric = await resolveAndUpgradeInstagramNumericId({
-    accountId: account.id,
-    leadId,
-    existingPlatformUserId: payload.instagramUserId,
-    incomingInstagramUserId: payload.instagramUserId,
-    manyChatSubscriberId: payload.manyChatSubscriberId
-  }).catch((err) => {
-    console.warn(
-      `[manychat-handoff] ig_id resolve failed for lead ${leadId} (non-fatal):`,
-      err
-    );
-    return null;
-  });
-  if (
-    resolvedIgNumeric &&
-    looksLikeInstagramRecipientId(
-      resolvedIgNumeric,
-      payload.manyChatSubscriberId
-    )
-  ) {
+  // IG-numeric-id resolution is Instagram-specific (it upgrades the ManyChat
+  // subscriber id to the IG numeric id Meta's IG Send API needs). For a
+  // FACEBOOK contact (2026-08-04, item 2b) the platformUserId is already the
+  // page-scoped PSID the FB Send API uses — skip the IG resolver entirely and
+  // mark it sendable, otherwise a valid FB recipient would be treated as
+  // unsendable and the AI schedule below would never fire.
+  if (payload.platform === 'FACEBOOK') {
     canSendViaInstagramApi = true;
+  } else {
+    const resolvedIgNumeric = await resolveAndUpgradeInstagramNumericId({
+      accountId: account.id,
+      leadId,
+      existingPlatformUserId: payload.instagramUserId,
+      incomingInstagramUserId: payload.instagramUserId,
+      manyChatSubscriberId: payload.manyChatSubscriberId
+    }).catch((err) => {
+      console.warn(
+        `[manychat-handoff] ig_id resolve failed for lead ${leadId} (non-fatal):`,
+        err
+      );
+      return null;
+    });
+    if (
+      resolvedIgNumeric &&
+      looksLikeInstagramRecipientId(
+        resolvedIgNumeric,
+        payload.manyChatSubscriberId
+      )
+    ) {
+      canSendViaInstagramApi = true;
+    }
   }
 
   // Schedule the AI reply when the lead actually engaged (button click
