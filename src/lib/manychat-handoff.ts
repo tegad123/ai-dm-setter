@@ -102,10 +102,38 @@ const manyChatHandoffFields = z.object({
 // `platform`, infer it — complete IG identity -> INSTAGRAM; facebookUserId
 // present -> FACEBOOK; otherwise leave INSTAGRAM so the superRefine below
 // produces a LOUD, specific error instead of a silent generic 400.
+// Sentinel garbage ManyChat emits for unfilled variables. Proven live
+// 2026-08-05: a Test Request created a lead whose name, handle AND
+// platformUserId were the literal string "undefined" — and a second such
+// handoff would MATCH that lead by platformUserId and merge different
+// people together. Sentinels are treated as absent BEFORE validation.
+const MANYCHAT_SENTINEL_RE = /^(undefined|null|none|\(unknown\)|\{\{.*\}\})$/i;
+function stripSentinel(v: unknown): unknown {
+  if (v == null) return v;
+  const s = String(v).trim();
+  if (s.length === 0 || MANYCHAT_SENTINEL_RE.test(s)) return undefined;
+  return v;
+}
+
 export const manyChatHandoffSchema = z
   .preprocess((raw) => {
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const o = { ...(raw as Record<string, unknown>) };
+      // Sanitize identity-bearing fields first — "undefined"/"null"/"{{var}}"
+      // must never become a lead identity or a merge key.
+      for (const k of [
+        'instagramUserId',
+        'instagramUsername',
+        'facebookUserId',
+        'contactName'
+      ]) {
+        o[k] = stripSentinel(o[k]);
+      }
+      // subscriberId is REQUIRED and coerced — undefined would coerce back to
+      // the string "undefined" via String(undefined). Map sentinel to '' so
+      // min(1) rejects it loudly: a handoff with no usable subscriber id
+      // cannot identify a contact at all.
+      o.manyChatSubscriberId = stripSentinel(o.manyChatSubscriberId) ?? '';
       const hasPlatform =
         typeof o.platform === 'string' && o.platform.trim().length > 0;
       if (!hasPlatform) {
