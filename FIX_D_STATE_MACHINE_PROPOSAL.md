@@ -98,3 +98,20 @@ Same standard as F1–F6: **independent verification, not the author's.** Each p
 ## The ask
 
 The principle and pillars are approved. This v2 answers Q1–Q4 and re-sequences egress first. **Remaining input needed from you: a build-start date** (or Fix D's slot in the M4 sequence — see the master plan), after which I stamp a date on each phase. The remediation's F1–F6 fixes hold production today; Fix D is what stops this bug *class* from recurring.
+
+---
+
+## DATED SCHEDULE (v3, 2026-08-06 — build-start approved by Tega 2026-08-05)
+
+Everything absorbed into Fix D during the July–August testing cycle is now scoped INTO the phases below, not stacked on top: the interrupt layer (price/objection handlers as code), branch conditions as runtime predicates (the single-wrong-branch case), the ManyChat re-ask dedup (answered-question state), typed hold states, the backward-movement + fragment bug, silent branches with no forward question, and the `lastGenerationClaim` cleanup.
+
+| Phase | Scope (incl. absorbed items) | Working days | Dates (start Thu Aug 6) | Exit criterion / Ali verifies |
+|---|---|---|---|---|
+| **0 — Egress + typed holds** | `State`/`Event`/`transition` skeleton; `canSend` single send path; **typed holds** (HELD_DISTRESS / HELD_SCHEDULING_CONFLICT / HELD_OPERATOR_REVIEW / HELD_GATE_EXHAUSTED) replace the boolean; `lastGenerationClaim` cdp cleanup | 4 | Thu Aug 6 → Tue Aug 11 | Shadow diff vs current send paths clean on live traffic; every held conversation shows a typed reason. **Ali: independent shadow-compare sign-off before cutover** (his first packet). Cutover ~Aug 12. |
+| **1 — Transitions + interrupt layer** | All ~7 step-completion paths through `transition`; **no backward movement representable** (kills the Step-6-regression + "too young?" fragment + early-Step-8 class); **interrupt layer**: price/objection handlers fire from any step via runtime predicate, return to position, never advance — replaces the 7 pasted branches; branch conditions evaluated in code before selection (single-wrong-branch closed) | 6–7 | Wed Aug 12 → Thu Aug 20 | Shadow diff vs `computeSystemStage`; price/objection repro suite passes from every step; Tega's backward-movement repro can't reproduce. Ali shadow-compares before cutover. |
+| **2 — Variable binding + answered-state** | All ~7 writer classes → validated `extracted` events; **answered-question ledger** (which script question is answered, by which message) — this is what finally makes the ManyChat re-ask dedup and `reasks_captured_variable` structural instead of prompt-guidance; step-7 render gap fixed at the binding layer | 5–6 | Fri Aug 21 → Fri Aug 28 | Shadow diff vs current binding on live traffic; ManyChat handoff + native-question repro: no re-ask; F3/F6 hold. Ali shadow-compares before cutover. |
+| **3 — Guard retirement** | Delete the guards the machine makes unrepresentable (verbatim-repeat family stays; step_distance / earlier_step_ask / branch-lock guards retire) | 2–3 | Mon Aug 31 → Wed Sep 2 | No behavior change; full regression + persona harness green; trace noise drops (off-script hard-fails on legitimate paraphrases gone). |
+
+**Total: ~17–20 working days → M4-close adversarial run ready ~Thu Sep 3.** Each phase is flag-gated and shadow-compared before cutover — a bad diff means the current code stays authoritative, no big-bang. Production keeps running on today's verified guards throughout; value lands incrementally (typed holds + single egress in week 1, the whole interrupt/branch class in week 2).
+
+**Launch-volume input (Tega's call, per his framing):** nothing in Phases 1–3 blocks running daetradez at controlled volume now — the launch blockers (distress, dual-opener, FB handoff) are closed and verified, and remaining known issues are quality-of-conversation, not safety. A staged rollout that scales after Phase 1's cutover (~Aug 20) aligns risk with the biggest structural close (transitions + interrupts).
