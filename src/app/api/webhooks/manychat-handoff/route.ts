@@ -19,7 +19,15 @@ function getWebhookKey(request: NextRequest): string | null {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = await request.json();
+    // Empty/malformed body is a client error, not a server crash — the 500
+    // at 2026-08-04 20:22 was request.json() throwing on an empty body from
+    // a mid-wiring External Request test ("Unexpected end of JSON input").
+    const payload = await request.json().catch(() => {
+      throw new ManyChatHandoffError(
+        'Request body is not valid JSON (empty or malformed). The ManyChat External Request must send a JSON body.',
+        400
+      );
+    });
     const result = await processManyChatHandoff({
       webhookKey: getWebhookKey(request),
       payload
