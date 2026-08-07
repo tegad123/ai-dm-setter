@@ -1529,8 +1529,63 @@ export async function GET(request: NextRequest) {
         detectedAt: c.schedulingConflictAt?.toISOString() ?? null
       }));
 
+    // ── URGENT: conversations HELD for human review (2026-08-07, Tega P0).
+    // The realtime quality-gate escalation sets awaitingHumanReview on the
+    // CONVERSATION and cancels the pending reply row — so it never appears
+    // in the scheduledReply-based delivery-failure section above. Turns
+    // 70/80 on cmrzgulcs were held this way with a bell notification only;
+    // the Action Required panel (what the operator actually watches) showed
+    // nothing. Surface every held conversation directly, whatever set it.
+    let urgentAwaitingHuman: Array<{
+      type: 'awaiting_human_review';
+      conversationId: string;
+      leadId: string;
+      leadName: string;
+      leadHandle: string;
+      latestMessage: string | null;
+      latestSender: string | null;
+      heldSince: string | null;
+    }> = [];
+    try {
+      const held = await prisma.conversation.findMany({
+        where: {
+          ...accountConvFilter,
+          awaitingHumanReview: true,
+          // distress holds already surface as their own urgent item above
+          distressDetected: false,
+          lastMessageAt: { gte: new Date(now.getTime() - RECENT_ACTIVITY_MS) }
+        },
+        select: {
+          id: true,
+          lead: { select: { id: true, name: true, handle: true } },
+          messages: {
+            orderBy: { timestamp: 'desc' },
+            take: 1,
+            select: { sender: true, content: true, timestamp: true }
+          }
+        },
+        orderBy: { lastMessageAt: 'desc' },
+        take: 20
+      });
+      urgentAwaitingHuman = held
+        .filter((c) => !isDismissed(c.id, 'awaiting_human_review'))
+        .map((c) => ({
+          type: 'awaiting_human_review' as const,
+          conversationId: c.id,
+          leadId: c.lead.id,
+          leadName: c.lead.name,
+          leadHandle: c.lead.handle,
+          latestMessage: c.messages[0]?.content?.slice(0, 140) ?? null,
+          latestSender: c.messages[0]?.sender ?? null,
+          heldSince: c.messages[0]?.timestamp?.toISOString() ?? null
+        }));
+    } catch {
+      urgentAwaitingHuman = [];
+    }
+
     return NextResponse.json({
       urgent: [
+        ...urgentAwaitingHuman,
         ...urgentDistress,
         ...urgentSchedulingConflicts,
         ...urgentScheduledReplyFailures,

@@ -1932,6 +1932,29 @@ export function scoreVoiceQuality(
     );
   }
 
+  // ── Legacy-script adherence checks: DISABLED when the active script
+  // provides its own ask anchors (2026-08-07, Tega P0). The three checks
+  // below (capital_question_premature / mandatory_ask_skipped /
+  // step_distance_violation) hardcode the OLD high-ticket script's step map
+  // and phrasing. The Jul-26 scriptMaxStepNumber ceiling was NUMERIC — the
+  // Aug-6 script replacement (14 steps) put dead old-script steps 9-13 back
+  // under the ceiling, and the false re-prompts ("resume Step 13 — Belief
+  // Break", "step 7/8 asks have not fired") instructed the model to resume a
+  // script that no longer exists, driving the verbatim repeats that
+  // suppressed turns 70/80 on cmrzgulcs. Anchors are built FROM the active
+  // script, so gating on their presence is script-identity-based by
+  // construction: any account with a parsed script gets the anchor guards
+  // (earlier_step_ask_regression / reasks_captured_variable / offscript);
+  // the hardcoded map applies only to legacy accounts with no parsed script.
+  const activeScriptHasAnchors =
+    Array.isArray(options?.scriptAskAnchors) &&
+    options.scriptAskAnchors.length > 0;
+  if (activeScriptHasAnchors) {
+    console.warn(
+      '[voice-quality-gate] legacy adherence checks (capital_premature/mandatory_ask/step_distance) DISABLED — active script provides ask anchors'
+    );
+  }
+
   // Capital-question premature guard (Step 18 skip): capital question
   // is the daetradez script's Step 18 ("Qualification — DQ Check"). It
   // CANNOT fire during discovery — the prereq chain is deepWhy +
@@ -1940,7 +1963,8 @@ export function scoreVoiceQuality(
   // Production drift (@tegaumukoro_ 2026-05-08): AI fired
   // "real quick, what's your capital situation like..." right after the
   // lead's deep-why answer — Step 9 → Step 18, skipping 9 steps.
-  const hasCapitalQuestionPattern = detectCapitalQuestionAttempt(reply);
+  const hasCapitalQuestionPattern =
+    !activeScriptHasAnchors && detectCapitalQuestionAttempt(reply);
   if (hasCapitalQuestionPattern) {
     console.warn('[gate-debug] capital check reached:', {
       replyFirst100: reply.slice(0, 100),
@@ -1977,7 +2001,7 @@ export function scoreVoiceQuality(
   // (job, monthly income, replace-vs-supplement). When the reply
   // matches Step 9+ content but those asks haven't fired in history,
   // hard-fail and force a regen back to the first missing ask.
-  if (Array.isArray(options?.aiMessageHistoryFull)) {
+  if (!activeScriptHasAnchors && Array.isArray(options?.aiMessageHistoryFull)) {
     const skippedAsks = detectMandatoryAskSkipped(
       reply,
       options.aiMessageHistoryFull,
@@ -2016,6 +2040,7 @@ export function scoreVoiceQuality(
   // motivated this generic check — enumerating every future-step
   // pattern manually doesn't scale.
   if (
+    !activeScriptHasAnchors &&
     typeof options?.currentScriptStepNumber === 'number' &&
     !options?.positionJumpedThisTurn
   ) {

@@ -4752,6 +4752,49 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         );
       }
     }
+    // Partial-ship (2026-08-07, Tega P0, turns 70/80 on cmrzgulcs): when the
+    // model produces a correct advance bubble PLUS a bubble repeating an
+    // earlier message, the repeat hard-fails used to suppress the ENTIRE
+    // reply — retries exhausted reproducing the same pair, then a silent
+    // hold. A repeated bubble is BY DEFINITION content the lead already
+    // received, so stripping it cannot lose required copy. Strip-and-ship
+    // applies ONLY when: every hard-fail is bubble-scoped ([bubble=N], never
+    // [group]), every one is from the repeat family, and at least one clean
+    // bubble remains.
+    if (
+      !quality.passed &&
+      Array.isArray(parsed.messages) &&
+      parsed.messages.length > 1
+    ) {
+      const REPEAT_FAMILY = [
+        'verbatim_repeat:',
+        'verbatim_repeat_bubble:',
+        'repeated_question:'
+      ];
+      const failingBubbles = new Set<number>();
+      const allStrippable = quality.hardFails.every((f) => {
+        const m = /^\[bubble=(\d+)\]/.exec(f);
+        if (!m) return false;
+        if (!REPEAT_FAMILY.some((t) => f.includes(t))) return false;
+        failingBubbles.add(Number(m[1]));
+        return true;
+      });
+      if (
+        allStrippable &&
+        failingBubbles.size > 0 &&
+        failingBubbles.size < parsed.messages.length
+      ) {
+        const kept = parsed.messages.filter((_, i) => !failingBubbles.has(i));
+        console.warn(
+          `[ai-engine] partial-ship: stripped repeat bubble(s) [${Array.from(failingBubbles).join(',')}], shipping ${kept.length} clean bubble(s) instead of suppressing the reply (conv ${activeConversationId})`
+        );
+        parsed.messages = kept;
+        parsed.message = kept[0];
+        quality.hardFails = [];
+        quality.passed = true;
+      }
+    }
+
     finalQualityScore = quality.score;
     qualityGateHardFails = [...quality.hardFails];
     if (quality.passed) {

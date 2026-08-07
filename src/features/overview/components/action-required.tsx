@@ -43,6 +43,16 @@ interface UrgentDistress {
   leadHandle: string;
   detectedAt: string | null;
 }
+interface UrgentAwaitingHumanReview {
+  type: 'awaiting_human_review';
+  conversationId: string;
+  leadId: string;
+  leadName: string;
+  leadHandle: string;
+  latestMessage: string | null;
+  latestSender: string | null;
+  heldSince: string | null;
+}
 interface UrgentStuck {
   type: 'stuck';
   conversationId: string;
@@ -82,6 +92,7 @@ interface UrgentSchedulingConflict {
 }
 type UrgentItem =
   | UrgentDistress
+  | UrgentAwaitingHumanReview
   | UrgentStuck
   | UrgentDeliveryFailure
   | UrgentScheduledDeliveryFailure
@@ -366,6 +377,7 @@ function SectionLabel({ label, count }: SectionLabelProps) {
 
 type DismissibleActionType =
   | 'distress'
+  | 'awaiting_human_review'
   | 'stuck'
   | 'scheduled_delivery_failure'
   | 'scheduling_conflict'
@@ -587,6 +599,29 @@ function renderUrgent(
           }
           meta={relativeTime(item.detectedAt, now)}
           onDismiss={() => onDismiss(item.conversationId, 'distress')}
+        />
+      );
+    case 'awaiting_human_review':
+      return (
+        <ActionRow
+          key={`ahr-${item.conversationId}`}
+          href={`/dashboard/conversations?conversationId=${item.conversationId}`}
+          icon={IconAlertTriangle}
+          iconClassName='text-red-600'
+          primary={
+            <span>
+              <span className='font-medium'>{item.leadName}</span>
+              <span className='text-muted-foreground'>
+                {' '}
+                — AI held this conversation for manual response. The lead has
+                received no reply.
+              </span>
+            </span>
+          }
+          meta={item.latestMessage ? `"${item.latestMessage}"` : 'held'}
+          onDismiss={() =>
+            onDismiss(item.conversationId, 'awaiting_human_review')
+          }
         />
       );
     case 'stuck':
