@@ -27,7 +27,26 @@ const SECRET = process.env.META_APP_SECRET;
 const WEBHOOK = 'https://qualifydms.io/api/webhooks/facebook';
 const ENTRY_ID = '708196295710896'; // Daetradez FB page id
 const SENDER_ID = process.env.E2E_SENDER_ID || '27053194794302900'; // real FB id, open window
-const MAX_TURNS = 18;
+const MAX_TURNS = Number(process.env.E2E_MAX_TURNS || 18);
+
+// The Supabase pooler (:6543) intermittently closes idle connections mid-run.
+// Every DB read below goes through this retry wrapper so one dropped
+// connection doesn't kill a 20-minute funnel drive.
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      console.log(
+        `     (db retry ${attempt}/4 on ${label}: ${(err as Error).message.split('\n')[0].slice(0, 80)})`
+      );
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  throw lastErr;
+}
 
 // The lead persona Haiku plays — consistent facts so the funnel can qualify.
 const PERSONA = `You are a real Facebook lead replying to a trading-coach's DM setter. Stay in character as a casual prospect texting on messenger — short, lowercase, natural, ONE message. Never break character or mention you are an AI.
@@ -84,6 +103,10 @@ async function sendWebhook(text: string) {
 }
 
 async function getState() {
+  return withRetry(getStateInner, 'getState');
+}
+
+async function getStateInner() {
   const lead = await prisma.lead.findFirst({
     where: { platformUserId: SENDER_ID },
     orderBy: { createdAt: 'desc' },
@@ -116,15 +139,24 @@ async function getState() {
 // All AI reply texts so far (persisted Messages + any generatedResult fallback),
 // returned in time order so we can detect the newest reply for this turn.
 async function aiReplies(convoId: string): Promise<string[]> {
-  const rows = await prisma.message.findMany({
-    where: { conversationId: convoId, sender: 'AI' },
-    orderBy: { timestamp: 'asc' },
-    select: { content: true }
-  });
+  const rows = await withRetry(
+    () =>
+      prisma.message.findMany({
+        where: { conversationId: convoId, sender: 'AI' },
+        orderBy: { timestamp: 'asc' },
+        select: { content: true }
+      }),
+    'aiReplies'
+  );
   return rows.map((r) => r.content);
 }
 
 async function transcript(convoId: string): Promise<string> {
+  const msgs = await withRetry(() => transcriptInner(convoId), 'transcript');
+  return msgs;
+}
+
+async function transcriptInner(convoId: string): Promise<string> {
   const msgs = await prisma.message.findMany({
     where: { conversationId: convoId },
     orderBy: { timestamp: 'asc' },
@@ -274,6 +306,42 @@ async function main() {
   let prevStep: number | null = null;
   let totalFailures = 0;
 
+  // --resume: continue an in-flight conversation after a crashed run.
+  // Instead of the canned opener (which would inject a nonsense duplicate
+  // mid-conversation), generate the lead's next reply from the real
+  // transcript, and seed prev* trackers from live state.
+  if (process.argv.includes('--resume')) {
+    const st = await getState();
+    if (st?.convo) {
+      convoId = st.convo.id;
+      prevLeadStage = st.lead.stage;
+      prevStep = st.convo.currentScriptStep ?? null;
+      const convoText = await transcript(convoId);
+      const lastAi = (await aiReplies(convoId)).slice(-2).join(' ');
+      const leadPrompt = `${PERSONA}\n\nConversation so far:\n${convoText}\n\nThe coach just said:\n"${lastAi}"\n\nReply as the lead (one short natural message):`;
+      let replyText: string | null = null;
+      for (let attempt = 1; attempt <= 4 && !replyText; attempt++) {
+        const result = await callHaikuText({
+          accountId: null,
+          prompt: leadPrompt,
+          maxTokens: 120,
+          temperature: 0.7,
+          timeoutMs: 30000,
+          logPrefix: `[e2e-resume a${attempt}]`
+        });
+        replyText = result?.text ?? null;
+        if (!replyText) await sleep(2000);
+      }
+      if (!replyText) throw new Error('resume: lead-reply generation failed');
+      nextLeadMsg = replyText.trim().replace(/^"|"$/g, '');
+      console.log(
+        `(resuming conv ${convoId} at step ${prevStep}, stage ${prevLeadStage})`
+      );
+    } else {
+      console.log('(--resume: no existing conversation, starting fresh)');
+    }
+  }
+
   for (let turn = 1; turn <= MAX_TURNS; turn++) {
     const before = convoId ? await aiReplies(convoId) : [];
     const status = await sendWebhook(nextLeadMsg);
@@ -316,11 +384,15 @@ async function main() {
       break;
     }
     if (fresh.length === 0) {
-      const sr = await prisma.scheduledReply.findFirst({
-        where: convoId ? { conversationId: convoId } : {},
-        orderBy: { createdAt: 'desc' },
-        select: { status: true, lastError: true }
-      });
+      const sr = await withRetry(
+        () =>
+          prisma.scheduledReply.findFirst({
+            where: convoId ? { conversationId: convoId } : {},
+            orderBy: { createdAt: 'desc' },
+            select: { status: true, lastError: true }
+          }),
+        'scheduledReply'
+      );
       console.log(
         `     >>> NO AI REPLY in 90s — sr.status=${sr?.status} err=${(sr?.lastError ?? 'none').slice(0, 100)}. Stopping.`
       );
