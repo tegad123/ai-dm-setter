@@ -79,3 +79,18 @@ Branch-lock commit: `0b19ce8`.
 6. **D2** — step-7 variable-render gap (queued).
 
 **Do NOT report "all done" to Tega until B5, D1, B7 are complete and the ManyChat path is live-verified.**
+
+---
+
+## SESSION LOG 2026-08-06/07 (pre-interrupt state)
+
+DONE + deployed: 500 root-caused (empty JSON body mid-wiring) + hardened to 400 (`cd23753`); Fix D dated schedule v3 posted (start Aug 6, M4-ready ~Sep 3) (`cae2a1e`); sentinel sanitization (`79a7354`); FB handoff schema fix (`37e35ec`); loud rejection notifications (verified: 3×400 @21:15/21:21/21:25 → 1 notification by 30-min throttle design).
+
+INTERRUPTED BY NEW TEGA P0 (2026-08-07 00:53): dual "stall" on cmrzgulcs turns 70/80 —
+1. verbatim_repeat/repeated_question suppressed ENTIRE multi-bubble replies (one good bubble + one repeat) → retries exhausted → SILENT awaitingHumanReview (no notification).
+2. Legacy adherence checks (mandatory_ask_skipped / step_distance_violation / capital_question_premature) validating against OLD high-ticket script — my Jul-26 scriptMaxStepNumber clamp is NUMERIC; today's step-split grew active script 10→14 steps, putting dead steps 9-13 back under the ceiling. Gate re-prompts told model to resume dead script → drove the repeats.
+3. Step re-entry lands same-step Default (Fix D scope, noted).
+4. cmrzgulcs contaminated (81 turns/16 resets/2 script eras) — fresh leads only for verification.
+5. Addendum: disableLeadStageProgression overloaded (~30 sites), hard-modes verbatimRepeatGuard (~ai-engine:4162) = the actual suppressor.
+
+FIX PLAN (Tega's asks): (a) script-identity/anchor-based adherence checks, (b) partial-ship (strip failing bubble, ship siblings), (c) loud escalation on every gate-exhaustion hold. Phase 0 of Fix D pauses until this ships.
