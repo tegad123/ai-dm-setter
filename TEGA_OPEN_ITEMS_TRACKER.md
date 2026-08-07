@@ -94,3 +94,12 @@ INTERRUPTED BY NEW TEGA P0 (2026-08-07 00:53): dual "stall" on cmrzgulcs turns 7
 5. Addendum: disableLeadStageProgression overloaded (~30 sites), hard-modes verbatimRepeatGuard (~ai-engine:4162) = the actual suppressor.
 
 FIX PLAN (Tega's asks): (a) script-identity/anchor-based adherence checks, (b) partial-ship (strip failing bubble, ship siblings), (c) loud escalation on every gate-exhaustion hold. Phase 0 of Fix D pauses until this ships.
+
+STATUS 2026-08-07: ALL THREE SHIPPED in `d3b4321`.
+- (a) legacy checks (capital_premature / mandatory_ask_skipped / step_distance_violation) gated on `activeScriptHasAnchors` — script identity by construction, numeric ceiling gone.
+- (b) partial-ship: [bubble=N]-scoped repeat-family fails strip the failing bubble and ship clean siblings (≥1 clean bubble must remain; any non-repeat or non-bubble-scoped fail still suppresses everything).
+- (c) awaitingHumanReview conversations (distress excluded, 7-day activity window) now an URGENT Action Required item, dismissible, first in the urgent array. Root cause of invisibility: realtime hold path CANCELS pending reply rows, so the FAILED_QUALITY_GATE section never saw them.
+- CORRECTION for Tega on record: bell notifications DID fire for both holds (19:12:36 and 19:41:53, "AI generation failed quality gate — manual response required") but were buried under 11 hourly "Health check FAILED" + 8 "ManyChat handoff rejected" notifications that same day. The panel gap was real; "fully silent" was not.
+- NOISE FOLLOW-UP (open): hourly Health-check-FAILED spam is why real alerts drown. Also 8 handoff rejections through Aug 6 = ManyChat flow STILL sending bad payloads after the wiring fix — tell Tega/Daniel.
+- Suites green: harm gate 36/36, branch-router, branch-serializer. TSC clean.
+- VERIFICATION PENDING on a FRESH lead only (cmrzgulcs contaminated per Tega). Do not mark verified until a fresh 14-step run passes turns 70/80 territory with no legacy-gate citations and any repeat bubble strips instead of suppressing.
