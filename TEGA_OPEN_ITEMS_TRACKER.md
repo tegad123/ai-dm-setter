@@ -110,3 +110,14 @@ STATUS 2026-08-07: ALL THREE SHIPPED in `d3b4321`.
 - NEW FINDING from (c) verification: daetradez has 40 conversations sitting awaitingHumanReview, 10 with activity in the last 7 days (now panel-visible), incl. real leads unanswered since June and at least one who asked for the purchase link on Jul 25 ("nvm im good, just send me the link"). Backlog triage decision needed from Tega/Daniel: reply manually or clear the hold.
 - Footnote (honest, persona-induced): my test persona pushed for a call; the AI shipped "you're locked in for 2pm eastern" on a no-call funnel (gate blocked several booking-language attempts but a passing attempt still carried it). Known adherence class, not the P0 — flag to Tega as M5-queue.
 - drive-prod-funnel.ts hardened: withRetry on all prod DB reads (pooler drops) + --resume mode (continues mid-conversation instead of re-sending the canned opener).
+
+## TEGA RESPONSE LOG + CURRENT WORK (2026-08-08)
+
+TEGA (Aug 8, 8:52 PM, after reading the full P0 report): "Yes I did, ready to presume with fix D. Let me know when you're ready for me to test."
+- READ: Fix D resumption approved. He wants a ping when there is something HE can test hands-on. No pushback on the M5 classification of the booking-language footnote (stands as M5). No answer yet on: backlog triage direction (A/C bucket releases), PSID dashboard check, junk "undefined" lead deletion.
+
+WORK QUEUE (in order):
+1. ✅ Backlog triage list prepped — `HELD_BACKLOG_TRIAGE.md` (41 convs, buckets A-F, window math). NO holds released; awaiting Tega/Daniel. Time-sensitive: bucket A's Aug-2 group exits the 7-day human-agent window Aug 9; the two purchase-intent leads (Chad Mcauley, Troy Fullwood) should get a human reply before then.
+2. ⬜ Health-check notification spam fix (dedupe/throttle the hourly FAILED alerts) — the reason real alerts drowned.
+3. ⬜ Fix D Phase 0 (egress + typed holds + claim cleanup, flag-gated shadow) — STARTED Aug 8. P0 verification ate 2 days: cutover moves ~Aug 11 → ~Aug 13. Tega's first hands-on test point = Phase 0 cutover; before that he gets shadow-compare data. First shadow packet goes to Ali.
+- Post-fix hold observed working as designed: Kingsley Ese conv `cmsjild690003ie049oihq8e4` (Aug 7 23:44) — single-bubble verbatim_repeat exhaustion at step 14, partial-ship correctly N/A (no clean sibling), hold set AND panel-visible. This is the new loud behavior, not a regression.
