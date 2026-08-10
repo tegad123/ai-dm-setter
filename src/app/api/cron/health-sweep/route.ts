@@ -35,7 +35,21 @@ const SLACK_WEBHOOK =
   process.env.SLACK_WEBHOOK_URL ||
   null;
 
-const ALERT_THROTTLE_MS = 60 * 60 * 1000; // one alert per account per hour
+const ALERT_THROTTLE_MS = 60 * 60 * 1000; // hard floor between alerts (flap guard)
+// An UNCHANGED failure set re-alerts at most daily. The old hourly re-alert
+// produced 11+ identical "Health check FAILED" notifications per day for one
+// persistent condition (8 distress holds), which buried the two real
+// quality-gate alerts on Aug 6 — the operator stopped reading them.
+const SAME_SIGNATURE_REMIND_MS = 24 * 60 * 60 * 1000;
+
+// Stable identity of a failure state: which checks are failing, not their
+// prose details (counts drift without the situation actually changing).
+function failureSignature(failed: HealthCheckResult[]): string {
+  return failed
+    .map((f) => f.id)
+    .sort()
+    .join(',');
+}
 
 async function postSlack(text: string): Promise<void> {
   if (!SLACK_WEBHOOK) return;
@@ -58,23 +72,37 @@ async function fireThrottledAlert(
   failed: HealthCheckResult[]
 ): Promise<boolean> {
   const titlePrefix = 'Health check FAILED';
-  const since = new Date(Date.now() - ALERT_THROTTLE_MS);
-  const existing = await prisma.notification
+  const sig = failureSignature(failed);
+  const last = await prisma.notification
     .findFirst({
       where: {
         accountId,
         type: 'SYSTEM',
-        title: { contains: titlePrefix },
-        createdAt: { gte: since }
+        title: { contains: titlePrefix }
       },
-      select: { id: true }
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true, body: true }
     })
     .catch(() => null);
-  if (existing) return false;
+
+  let stillFailing = false;
+  if (last) {
+    const age = Date.now() - last.createdAt.getTime();
+    if (age < ALERT_THROTTLE_MS) return false;
+    const lastSig = /\nsig:(.*)$/.exec(last.body ?? '')?.[1] ?? null;
+    if (lastSig === sig) {
+      if (age < SAME_SIGNATURE_REMIND_MS) return false;
+      stillFailing = true;
+    }
+  }
 
   const failList = failed.map((f) => `• ${f.label}: ${f.detail}`).join('\n');
   const title = `${titlePrefix} — ${accountName}`;
-  const body = `${failed.length} check(s) failing:\n${failList}`;
+  const body = `${
+    stillFailing
+      ? `STILL failing (unchanged 24h+), ${failed.length} check(s):`
+      : `${failed.length} check(s) failing:`
+  }\n${failList}\nsig:${sig}`;
 
   await prisma.notification
     .create({ data: { accountId, type: 'SYSTEM', title, body } })
@@ -105,7 +133,7 @@ export async function GET(req: NextRequest) {
   }
 
   const accounts = await prisma.account.findMany({
-    select: { id: true, name: true }
+    select: { id: true, name: true, healthStatus: true }
   });
 
   let critical = 0;
@@ -145,6 +173,39 @@ export async function GET(req: NextRequest) {
           failed
         );
         if (fired) alertsFired += 1;
+      } else if (account.healthStatus === 'CRITICAL') {
+        // State change CRITICAL → healthy: announce recovery once. The
+        // persisted healthStatus was just overwritten above, so a stable
+        // recovery fires exactly one notice. 1h floor guards a flapping
+        // check from producing a FAILED/RECOVERED pair every sweep.
+        const since = new Date(Date.now() - ALERT_THROTTLE_MS);
+        const recentRecovery = await prisma.notification
+          .findFirst({
+            where: {
+              accountId: account.id,
+              type: 'SYSTEM',
+              title: { contains: 'Health check RECOVERED' },
+              createdAt: { gte: since }
+            },
+            select: { id: true }
+          })
+          .catch(() => null);
+        if (!recentRecovery) {
+          const title = `Health check RECOVERED — ${account.name}`;
+          const body = 'All health checks passing again.';
+          await prisma.notification
+            .create({
+              data: { accountId: account.id, type: 'SYSTEM', title, body }
+            })
+            .catch((err) =>
+              console.error(
+                '[cron/health-sweep] recovery notification write failed:',
+                err
+              )
+            );
+          broadcastNotification(account.id, { type: 'SYSTEM', title });
+          await postSlack(`:white_check_mark: *${title}*`);
+        }
       }
     } catch (err) {
       console.error(
