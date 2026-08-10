@@ -80,6 +80,12 @@ import { randomUUID } from 'crypto';
 // leaked through as a username/handle before any DB write.
 const NUMERIC_IGSID = /^\d{12,}$/;
 
+// Sentinel thrown to exit the distress supportive-send block after its
+// guard decides the send must not happen (aiActive=false / duplicate).
+// The enclosing catch recognizes it and stays quiet — it is control flow,
+// not an error.
+const SKIP_SUPPORTIVE_SEND = Symbol('skip-supportive-send');
+
 // ---------------------------------------------------------------------------
 // Meta send helper — delivery with pmid capture + token-invalidation alert
 // ---------------------------------------------------------------------------
@@ -1771,6 +1777,39 @@ export async function processIncomingMessage(
 
         // Generate + ship the supportive (non-sales) response.
         try {
+          // F1 guard (2026-08-10, first Fix D egress-shadow finding): the
+          // flags + escalation above ALWAYS run, but the automated
+          // supportive send must not — (a) when the operator turned AI off
+          // (they own the conversation; the bot interjecting canned
+          // support lines mid-human-conversation is the violation the
+          // shadow caught), or (b) when an AI message already exists after
+          // this lead message (retried webhook / stale scheduled reply
+          // re-entering this path re-sends the same line).
+          const distressConvState = await prisma.conversation.findUnique({
+            where: { id: conversationId },
+            select: { aiActive: true }
+          });
+          const distressAlreadyResponded = await prisma.message.findFirst({
+            where: {
+              conversationId,
+              sender: 'AI',
+              timestamp: { gt: now }
+            },
+            select: { id: true }
+          });
+          if (
+            distressConvState?.aiActive === false ||
+            distressAlreadyResponded
+          ) {
+            console.warn(
+              `[webhook-processor] distress supportive send SKIPPED (conv ${conversationId}): ` +
+                (distressConvState?.aiActive === false
+                  ? 'aiActive=false — operator owns this conversation'
+                  : 'a response was already sent for this lead message') +
+                '. Distress flags + operator escalation already set.'
+            );
+            throw SKIP_SUPPORTIVE_SEND;
+          }
           const { generateSupportiveResponse } = await import(
             '@/lib/distress-response'
           );
@@ -1824,10 +1863,12 @@ export async function processIncomingMessage(
             conversationId
           });
         } catch (supErr) {
-          console.error(
-            '[webhook-processor] Distress supportive-response path failed (non-fatal):',
-            supErr
-          );
+          if (supErr !== SKIP_SUPPORTIVE_SEND) {
+            console.error(
+              '[webhook-processor] Distress supportive-response path failed (non-fatal):',
+              supErr
+            );
+          }
         }
         // Skip the rest of normal processing — no effectiveness backfill,
         // no re-engagement, no scoring. Return early so caller doesn't
@@ -4551,7 +4592,7 @@ async function sendAIReply(
       const latestLead = await prisma.message.findFirst({
         where: { conversationId, sender: 'LEAD' },
         orderBy: { timestamp: 'desc' },
-        select: { id: true, content: true }
+        select: { id: true, content: true, timestamp: true }
       });
       await prisma.conversation.update({
         where: { id: conversationId },
@@ -4596,7 +4637,33 @@ async function sendAIReply(
         );
       }
       // Ship the supportive response through the same helper as Layer 1.
-      if (latestLead?.content) {
+      // Same F1 guard as Layer 1 (2026-08-10 shadow finding): Layer 2 is
+      // re-entrant (retried webhooks, stale scheduled replies), and it was
+      // the path re-sending the same supportive line on an aiActive=false
+      // conversation while the operator was talking to the lead.
+      const l2ConvState = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { aiActive: true }
+      });
+      const l2AlreadyResponded = latestLead
+        ? await prisma.message.findFirst({
+            where: {
+              conversationId,
+              sender: 'AI',
+              timestamp: { gt: latestLead.timestamp }
+            },
+            select: { id: true }
+          })
+        : null;
+      if (l2ConvState?.aiActive === false || l2AlreadyResponded) {
+        console.warn(
+          `[webhook-processor] Layer 2 distress supportive send SKIPPED (conv ${conversationId}): ` +
+            (l2ConvState?.aiActive === false
+              ? 'aiActive=false — operator owns this conversation'
+              : 'a response was already sent for this lead message') +
+            '. Distress flags + operator escalation already set.'
+        );
+      } else if (latestLead?.content) {
         const { generateSupportiveResponse } = await import(
           '@/lib/distress-response'
         );
