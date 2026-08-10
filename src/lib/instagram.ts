@@ -62,6 +62,15 @@ export async function sendDM(
   messageText: string,
   opts?: { tag?: 'HUMAN_AGENT' }
 ): Promise<{ messageId: string }> {
+  // Fix D Phase 0: shadow-compare the canSend machine at the physical send
+  // choke point. Log-only, fire-and-forget — never blocks or delays a send.
+  try {
+    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+    shadowEgressCheck({ accountId, recipientId, messageText });
+  } catch {
+    // shadow must never break a send
+  }
+
   // For Instagram DMs, prefer the Instagram token (IGAA...) over the Facebook Page token
   const { getCredentials } = await import('@/lib/credential-store');
   const igCreds = await getCredentials(accountId, 'INSTAGRAM');
@@ -258,6 +267,16 @@ export async function sendAudioDM(
   recipientId: string,
   audioUrl: string
 ): Promise<{ messageId: string }> {
+  try {
+    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+    shadowEgressCheck({
+      accountId,
+      recipientId,
+      messageText: `[audio] ${audioUrl}`
+    });
+  } catch {
+    // shadow must never break a send
+  }
   const { getCredentials } = await import('@/lib/credential-store');
   const igCreds = await getCredentials(accountId, 'INSTAGRAM');
   const igToken = igCreds?.accessToken as string | undefined;

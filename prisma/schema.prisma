@@ -2159,6 +2159,27 @@ model TrainingDataAnalysis {
 
 // ─── Voice Quality Gate Failures (logging) ────────────────────────
 
+// ─── Fix D Phase 0: egress shadow-compare ledger ─────────────────────
+// One row per outbound send observed at the sendDM choke point. The live
+// code already decided to send (live verdict = ALLOW by construction);
+// agreed=false rows are where the canSend machine would have blocked — the
+// shadow-diff review queue for Phase 0 cutover sign-off.
+model EgressShadowLog {
+  id             String   @id @default(cuid())
+  accountId      String
+  conversationId String?
+  sendPath       String // best-effort caller tag (diagnostic only)
+  draftPreview   String?  @db.Text
+  machineAllow   Boolean
+  machineReason  String? // HOLD | AI_OFF | UNSET_VARIABLE | NO_CONVERSATION_STATE
+  machineHold    String? // typed hold when machineReason=HOLD
+  agreed         Boolean
+  createdAt      DateTime @default(now())
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([agreed, createdAt(sort: Desc)])
+}
+
 model VoiceQualityFailure {
   id          String   @id @default(cuid())
   accountId   String
