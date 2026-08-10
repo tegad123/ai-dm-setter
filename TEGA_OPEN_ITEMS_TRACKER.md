@@ -118,6 +118,11 @@ TEGA (Aug 8, 8:52 PM, after reading the full P0 report): "Yes I did, ready to pr
 
 WORK QUEUE (in order):
 1. ✅ Backlog triage list prepped — `HELD_BACKLOG_TRIAGE.md` (41 convs, buckets A-F, window math). NO holds released; awaiting Tega/Daniel. Time-sensitive: bucket A's Aug-2 group exits the 7-day human-agent window Aug 9; the two purchase-intent leads (Chad Mcauley, Troy Fullwood) should get a human reply before then.
-2. ⬜ Health-check notification spam fix (dedupe/throttle the hourly FAILED alerts) — the reason real alerts drowned.
-3. ⬜ Fix D Phase 0 (egress + typed holds + claim cleanup, flag-gated shadow) — STARTED Aug 8. P0 verification ate 2 days: cutover moves ~Aug 11 → ~Aug 13. Tega's first hands-on test point = Phase 0 cutover; before that he gets shadow-compare data. First shadow packet goes to Ali.
+2. ✅ Health-check notification spam FIXED (`8e66ff9`): state-change alerting. Root: the sole failing check was distress_handled ("8 distress conversation(s) still aiActive >1h" = triage bucket B), re-alerted hourly = 42 identical notifications in 48h. Now: unchanged failure signature re-alerts at most daily ("STILL failing"), changed signature alerts after 1h flap floor, CRITICAL→healthy fires a one-time RECOVERED notice. NOTE: clearing bucket B is what actually clears the health FAIL.
+3. 🔨 Fix D Phase 0 IN PROGRESS — skeleton SHIPPED (`20ca85a`), shadow-only, zero behavior change:
+   - `src/lib/state-machine/` — types (4 typed holds, MachineEvent vocabulary, pure transition() with F1 terminal-state semantics: operator reply releases all holds EXCEPT distress, which needs explicit release), can-send.ts (canSend verdict: hold block / AI_OFF / unresolved-variable artifact; deriveMachineState bridges boolean-era columns with hold precedence), shadow.ts (fire-and-forget compare at sendDM/sendAudioDM choke point).
+   - EgressShadowLog table + migration (auto-applies on Vercel build). FIX_D_EGRESS_SHADOW default ON, log-only. agreed=false rows = shadow diff = Ali's sign-off packet.
+   - scripts/test-state-machine.ts: 21/21 green.
+   - REMAINING for Phase 0: lastGenerationClaim cdp cleanup; let shadow accumulate 1-2 days of live traffic; review diff; build Ali packet; cutover ~Aug 13 (canSend authoritative + typed holds surfaced in UI).
+   - PARKED (private): the seeded-defect item is tied to the first shadow-compare packet.
 - Post-fix hold observed working as designed: Kingsley Ese conv `cmsjild690003ie049oihq8e4` (Aug 7 23:44) — single-bubble verbatim_repeat exhaustion at step 14, partial-ship correctly N/A (no clean sibling), hold set AND panel-visible. This is the new loud behavior, not a regression.
