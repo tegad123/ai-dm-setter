@@ -123,6 +123,13 @@ WORK QUEUE (in order):
    - `src/lib/state-machine/` — types (4 typed holds, MachineEvent vocabulary, pure transition() with F1 terminal-state semantics: operator reply releases all holds EXCEPT distress, which needs explicit release), can-send.ts (canSend verdict: hold block / AI_OFF / unresolved-variable artifact; deriveMachineState bridges boolean-era columns with hold precedence), shadow.ts (fire-and-forget compare at sendDM/sendAudioDM choke point).
    - EgressShadowLog table + migration (auto-applies on Vercel build). FIX_D_EGRESS_SHADOW default ON, log-only. agreed=false rows = shadow diff = Ali's sign-off packet.
    - scripts/test-state-machine.ts: 21/21 green.
-   - REMAINING for Phase 0: lastGenerationClaim cdp cleanup; let shadow accumulate 1-2 days of live traffic; review diff; build Ali packet; cutover ~Aug 13 (canSend authoritative + typed holds surfaced in UI).
-   - PARKED (private): the seeded-defect item is tied to the first shadow-compare packet.
+   - REMAINING for Phase 0: lastGenerationClaim cdp cleanup; let shadow accumulate 1-2 days of live traffic; review diff; build sign-off packet; cutover ~Aug 13 (canSend authoritative + typed holds surfaced in UI).
+
+## PERSONNEL CHANGE (2026-08-09, from Shazim)
+
+Ali is OFF the project (Tega let him go). Tega now does ALL testing/verification himself. Team = Shazim (build) + Tega (verify).
+- Every "Ali verifies / Ali packet" item re-routes to Tega directly. The runner-doesn't-grade rule survives with two people: Shazim runs, Tega grades.
+- C2 (leak-audit independent verification, was BLOCKED on Ali's repo access) — blocker dissolved. Ask Tega: does he verify the audit findings himself, or accept evidence-based review? C3/C4 classification still his call.
+- Phase 0 shadow-compare sign-off packet goes to Tega, not Ali. Packet must be fully self-serve (conv IDs, ready-to-run queries, before/after) since there is no second verifier to lean on.
+- All other Ali-tagged items in this file: read "Ali" as "Tega" from here on.
 - Post-fix hold observed working as designed: Kingsley Ese conv `cmsjild690003ie049oihq8e4` (Aug 7 23:44) — single-bubble verbatim_repeat exhaustion at step 14, partial-ship correctly N/A (no clean sibling), hold set AND panel-visible. This is the new loud behavior, not a regression.
