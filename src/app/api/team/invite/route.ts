@@ -1,6 +1,10 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
 import { sendEmail } from '@/lib/email-notifier';
+import {
+  ASSIGNABLE_TEAM_ROLES,
+  type AssignableTeamRole
+} from '@/lib/team-roles';
 import { Role } from '@prisma/client';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -21,8 +25,10 @@ import { NextRequest, NextResponse } from 'next/server';
 // ---------------------------------------------------------------------------
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const VALID_ROLES = ['ADMIN', 'CLOSER', 'SETTER', 'READ_ONLY'] as const;
-type ValidRole = (typeof VALID_ROLES)[number];
+// Allowlist factored into a shared constant (leak-audit 5-1) so this
+// route and PATCH /api/team/[id] cannot drift apart.
+const VALID_ROLES = ASSIGNABLE_TEAM_ROLES;
+type ValidRole = AssignableTeamRole;
 
 export async function POST(request: NextRequest) {
   try {

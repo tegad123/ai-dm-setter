@@ -20,6 +20,8 @@ Every finding falls into one of two buckets, and **neither is architectural**:
 
 **Totals (deduplicated):** 3 CRITICAL, 4 HIGH, 9 MEDIUM.
 
+**REMEDIATION STATUS (2026-08-11):** all 3 CRITICAL fixed — 1-1 (main-offer label config-resolved, generic fallback "the main program"), 1-2 (closer name config-resolved at both sites, name dropped when unconfigured), 5-1 (PATCH /api/team/[id] now ADMIN-only, role validated against the shared invite allowlist in `src/lib/team-roles.ts`, self role/isActive changes forbidden; DELETE also ADMIN-gated as the same class). HIGH/MEDIUM remain open pending classification.
+
 ---
 
 ## CRITICAL

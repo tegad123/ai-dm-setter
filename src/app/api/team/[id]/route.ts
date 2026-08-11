@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import { isAssignableTeamRole } from '@/lib/team-roles';
 import { NextRequest, NextResponse } from 'next/server';
 
 const userSelectWithoutPassword = {
@@ -57,6 +58,19 @@ export async function PATCH(
     const auth = await requireAuth(req);
     const { id } = await params;
 
+    // Leak-audit finding 5-1 (CRITICAL): this route previously copied
+    // `role` straight from the body with no caller gate and no value
+    // allowlist, letting any tenant user self-promote to SUPER_ADMIN and
+    // flip isPlatformOperator() — defeating every cross-tenant guard in
+    // the app. Same contract as the invite route now: ADMIN-only,
+    // allowlisted roles, and nobody edits their own role/isActive.
+    if (auth.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Only admins can edit team members.' },
+        { status: 403 }
+      );
+    }
+
     // Verify user belongs to this account
     const existing = await prisma.user.findFirst({
       where: { id, accountId: auth.accountId }
@@ -66,6 +80,22 @@ export async function PATCH(
     }
 
     const body = await req.json();
+
+    if (body.role !== undefined && !isAssignableTeamRole(body.role)) {
+      return NextResponse.json(
+        { error: `Unsupported role "${String(body.role)}".` },
+        { status: 400 }
+      );
+    }
+    if (
+      id === auth.userId &&
+      (body.role !== undefined || body.isActive !== undefined)
+    ) {
+      return NextResponse.json(
+        { error: 'You cannot change your own role or active status.' },
+        { status: 403 }
+      );
+    }
 
     const allowedFields = ['name', 'email', 'role', 'isActive'];
     const data: Record<string, unknown> = {};
@@ -104,6 +134,14 @@ export async function DELETE(
   try {
     const auth = await requireAuth(req);
     const { id } = await params;
+
+    // Same class as finding 5-1: removing teammates is an admin action.
+    if (auth.role !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Only admins can remove team members.' },
+        { status: 403 }
+      );
+    }
 
     // Verify user belongs to this account
     const existing = await prisma.user.findFirst({

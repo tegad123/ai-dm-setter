@@ -3395,7 +3395,16 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     callHandoff?: { closerName?: string };
     homeworkUrl?: unknown;
     earlyCapitalGate?: boolean;
+    mainOffer?: unknown;
   };
+  // Leak-audit 1-1: label for the persona's primary offer, used by
+  // deterministic fallbacks that previously hardcoded the founding
+  // tenant's "marcus's 1-on-1". Generic fallback, never a tenant literal.
+  const mainOfferLabel =
+    typeof promptConfigForGate.mainOffer === 'string' &&
+    promptConfigForGate.mainOffer.trim()
+      ? promptConfigForGate.mainOffer.trim()
+      : 'the main program';
   const earlyCapitalGateEnabled = promptConfigForGate.earlyCapitalGate === true;
   const homeworkUrl =
     typeof promptConfigForGate.homeworkUrl === 'string' &&
@@ -6368,8 +6377,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           `[ai-engine] dangling_template_tail exhausted — injecting deterministic bridging question (conv ${activeConversationId})`
         );
       } else if (postBookingEmailExhausted) {
-        parsed.message =
-          "you're all locked in bro, anthony will be ready for you at that time";
+        // Leak-audit 1-2: closer name resolved from persona config
+        // (previously hardcoded "anthony" for every tenant).
+        parsed.message = closerNames[0]
+          ? `you're all locked in bro, ${closerNames[0]} will be ready for you at that time`
+          : "you're all locked in bro, you're set for that time";
         parsed.messages = [parsed.message];
         parsed.escalateToHuman = false;
         console.warn(
@@ -6569,7 +6581,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               // tried to book. Safe recovery: pitch the downsell directly.
               // No human escalation needed — there is always a valid next
               // message in this state (the downsell offer).
-              const downsellMsg = `i hear you bro. the capital for marcus's 1-on-1 is a bit higher than what you've got right now, but that doesn't mean you're stuck — my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build your capital up while you're learning. want me to send that over?`;
+              // Leak-audit 1-1: main-offer label resolved from persona
+              // config (previously hardcoded "marcus's 1-on-1").
+              const downsellMsg = `i hear you bro. the capital for ${mainOfferLabel} is a bit higher than what you've got right now, but that doesn't mean you're stuck — my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build your capital up while you're learning. want me to send that over?`;
               parsed.message = downsellMsg;
               parsed.messages = [downsellMsg];
               parsed.stage = 'SOFT_PITCH_COMMITMENT';
@@ -7171,8 +7185,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             `[ai-engine] scam_objection_parrot — injecting ${accountScamScriptInner ? 'account OBJ-SCAM script' : 'global fallback'} (conv ${activeConversationId})`
           );
         } else if (postBookingEmailHallucination) {
-          const fallback =
-            "you're all locked in bro, anthony will be ready for you at that time";
+          // Leak-audit 1-2: same config-resolved closer as the exhausted
+          // path above — never a tenant literal.
+          const fallback = closerNames[0]
+            ? `you're all locked in bro, ${closerNames[0]} will be ready for you at that time`
+            : "you're all locked in bro, you're set for that time";
           parsed.message = fallback;
           parsed.messages = [fallback];
           parsed.escalateToHuman = false;
