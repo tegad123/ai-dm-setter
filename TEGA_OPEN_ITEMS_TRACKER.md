@@ -125,6 +125,13 @@ WORK QUEUE (in order):
    - scripts/test-state-machine.ts: 21/21 green.
    - REMAINING for Phase 0: lastGenerationClaim cdp cleanup; let shadow accumulate 1-2 days of live traffic; review diff; build sign-off packet; cutover ~Aug 13 (canSend authoritative + typed holds surfaced in UI).
 
+## SHIPPED 2026-08-10/11 (M4 sprint)
+
+- `714fcff` F1 distress-responder fix: both distress layers now skip the automated supportive send when aiActive=false (operator owns the conversation) or when already responded to that lead message; flags + escalation always still run. Root: first Fix D egress-shadow finding (3 disagreement rows, other-tenant conv, AI-off + distress hold, repeated send attempts).
+- `0f282d3` ALL 3 leak-audit CRITICALs closed: 5-1 (PATCH /api/team/[id] ADMIN-only + shared role allowlist src/lib/team-roles.ts + no self role/isActive edits; DELETE gated too), 1-1 ("marcus's 1-on-1" → config-resolved mainOffer, fallback "the main program"), 1-2 ("anthony will be ready" ×2 → configured closer or name dropped). Audit doc updated with remediation status. Evidence: grep the literals — only comments remain.
+- `6d9a62c` Phase 0 lastGenerationClaim cleanup: claim moved from capturedDataPoints to Conversation.generationClaimMessageId/At columns, migration strips legacy key.
+- Phase 0 BUILD COMPLETE. Remaining: shadow accumulation on live traffic → diff review → self-serve packet to Tega → cutover (canSend authoritative + typed holds in UI).
+
 ## PERSONNEL CHANGE (2026-08-09, from Shazim)
 
 Ali is OFF the project (Tega let him go). Tega now does ALL testing/verification himself. Team = Shazim (build) + Tega (verify).
