@@ -1061,6 +1061,14 @@ model Conversation {
   awaitingAiResponse       Boolean   @default(false)
   awaitingSince            DateTime?
   awaitingHumanReview      Boolean   @default(false)
+  // Atomic per-turn generation claim (Fix D P0 cleanup, 2026-08-11).
+  // Previously lived as capturedDataPoints.lastGenerationClaim — transient
+  // coordination state inside business data, racing application-level cdp
+  // writes and needing a special-case hide in the trace viewer. Claims
+  // older than 3 minutes are stale by contract (see webhook-processor
+  // step 0a).
+  generationClaimMessageId String?
+  generationClaimAt        DateTime?
   silentStopCount          Int       @default(0)
   lastSilentStopAt         DateTime?
   silentStopRecoveredCount Int       @default(0)

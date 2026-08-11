@@ -2614,20 +2614,22 @@ export async function scheduleAIReply(
       // sleep-and-check alone is NOT a mutex — when invocation A starts late
       // enough to already see msg2, A and B both compute the same "latest
       // lead message" and both proceed. Claim the turn keyed on the newest
-      // inbound id via an atomic conditional jsonb write; exactly one
-      // invocation wins per message id. Claims older than 3 minutes are
-      // stale (so silent-stop/heartbeat regeneration is never deadlocked).
+      // inbound id via an atomic conditional write; exactly one invocation
+      // wins per message id. Claims older than 3 minutes are stale (so
+      // silent-stop/heartbeat regeneration is never deadlocked).
+      // Fix D P0 (2026-08-11): claim moved from
+      // capturedDataPoints.lastGenerationClaim to dedicated columns —
+      // transient coordination state does not belong inside business data
+      // (it raced application-level cdp writes and needed a special-case
+      // hide in the trace viewer).
       const claimed: number = await prisma.$executeRaw`
         UPDATE "Conversation"
-        SET "capturedDataPoints" = jsonb_set(
-          COALESCE("capturedDataPoints", '{}'::jsonb),
-          '{lastGenerationClaim}',
-          jsonb_build_object('id', ${triggerLatestLead.id}::text, 'at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
-        )
+        SET "generationClaimMessageId" = ${triggerLatestLead.id}::text,
+            "generationClaimAt" = now()
         WHERE id = ${conversationId}
           AND (
-            COALESCE("capturedDataPoints"->'lastGenerationClaim'->>'id', '') <> ${triggerLatestLead.id}::text
-            OR COALESCE(("capturedDataPoints"->'lastGenerationClaim'->>'at')::timestamptz, 'epoch'::timestamptz) < now() - interval '3 minutes'
+            COALESCE("generationClaimMessageId", '') <> ${triggerLatestLead.id}::text
+            OR COALESCE("generationClaimAt", 'epoch'::timestamptz) < now() - interval '3 minutes'
           )
       `;
       if (claimed === 0) {
