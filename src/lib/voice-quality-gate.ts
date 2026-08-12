@@ -881,6 +881,17 @@ export interface VoiceQualityOptions {
     askContents: string[];
   }> | null;
   /**
+   * Answered-question ledger (Fix D Phase 2). Variable names whose anchored
+   * ask received a real lead answer THIS conversation, even when the answer
+   * was not authoritatively captured into capturedDataPoints (the F3
+   * resolver deliberately omits low-confidence bindings). Computed in
+   * ai-engine from the anchored ask→reply pair via replyAnswersAsk. The
+   * reasks_captured_variable guard fires on this set too, closing the gap
+   * where a lead answered but the value was not persisted so the AI
+   * re-asked as if it never heard them.
+   */
+  answeredAnchorVariables?: string[] | null;
+  /**
    * Full content list of all prior AI messages on this conversation.
    * Used by the mandatory-ask-skipped guard to verify that scripted
    * [ASK] phrasings actually fired in history before the AI is allowed
@@ -2102,14 +2113,18 @@ export function scoreVoiceQuality(
         );
         break;
       }
+      const answeredButMaybeUnpersisted =
+        Array.isArray(options?.answeredAnchorVariables) &&
+        options.answeredAnchorVariables.includes(anchor.variableName);
       if (
         capturedDataPointHasValue(
           options?.capturedDataPoints,
           anchor.variableName
-        )
+        ) ||
+        answeredButMaybeUnpersisted
       ) {
         hardFails.push(
-          `reasks_captured_variable: the lead already answered this — ${anchor.variableName} is captured. Do not re-ask; acknowledge what they said and continue the CURRENT step.`
+          `reasks_captured_variable: the lead already answered this — ${anchor.variableName} is ${answeredButMaybeUnpersisted ? 'answered in this conversation' : 'captured'}. Do not re-ask; acknowledge what they said and continue the CURRENT step.`
         );
         break;
       }

@@ -29,6 +29,7 @@ import {
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
 import { personaConfigDisablesStageProgression } from '@/lib/lead-stage';
 import { detectInterrupt } from '@/lib/interrupt-layer';
+import { replyAnswersAsk } from '@/lib/answer-satisfaction';
 import { isVerbatimRepeatBubble } from '@/lib/verbatim-normalize';
 import {
   recordGenerationTurn,
@@ -3160,6 +3161,43 @@ export async function generateReply(
   const scriptAskAnchorsForTurn = buildVariableAskAnchors(
     scriptStateSnapshot?.script?.steps ?? null
   );
+
+  // ── Answered-question ledger (Fix D Phase 2) ───────────────────────────
+  // reasks_captured_variable in the gate only fires when the variable is in
+  // capturedDataPoints. But the F3 resolver deliberately omits values it
+  // can't authoritatively bind, so a lead can ANSWER an ask and still have
+  // it unpersisted — and the AI then re-asks as if it never heard them (the
+  // exact "AI doesn't respond to what the lead said" class). Derive, from
+  // the anchored ask→reply pair, the set of variables the lead has actually
+  // answered this conversation (via the shared replyAnswersAsk predicate),
+  // regardless of persistence, and hand it to the gate.
+  const answeredAnchorVariables: string[] = (() => {
+    const answered = new Set<string>();
+    const history = conversationHistory;
+    for (const anchor of scriptAskAnchorsForTurn ?? []) {
+      const asks = anchor.askContents.filter(
+        (a) => typeof a === 'string' && a.trim().length > 0
+      );
+      if (asks.length === 0) continue;
+      // Find an AI message that delivered one of this anchor's asks, then
+      // check the NEXT lead message answers it (shared predicate — same one
+      // step-completion uses).
+      for (let i = 0; i < history.length - 1; i++) {
+        const m = history[i];
+        if (m.sender !== 'AI' || typeof m.content !== 'string') continue;
+        if (!asks.some((ask) => scriptAskMatchesText(ask, m.content ?? '')))
+          continue;
+        const next = history
+          .slice(i + 1)
+          .find((h) => h.sender === 'LEAD' && typeof h.content === 'string');
+        if (next && replyAnswersAsk(next.content)) {
+          answered.add(anchor.variableName);
+          break;
+        }
+      }
+    }
+    return Array.from(answered);
+  })();
   // Cross-script clamp (2026-07-26): highest step number in the ACTIVE
   // script, for the step-distance detector. Low-ticket funnel = 8 steps;
   // an inferred "Step 10"/"Step 16" (hardcoded high-ticket patterns) can
@@ -4190,6 +4228,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // F5 (2026-07-25): script ask-anchors for the backward-content guards
     // (earlier_step_ask_regression / reasks_captured_variable).
     scriptAskAnchors: scriptAskAnchorsForTurn,
+    answeredAnchorVariables,
     // Low-ticket personas: hard-fail verbatim self-repeats (Ahsan Ali
     // 2026-07-19 — CTA re-sent word-for-word after lead engagement).
     verbatimRepeatGuard: personaConfigDisablesStageProgression(
