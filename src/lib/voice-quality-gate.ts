@@ -2230,6 +2230,33 @@ export function scoreVoiceQuality(
     );
   }
 
+  // Empty-variable render gap (D2, step-7 personalization: shipped
+  // "breathing room, wanting ," — a Step-7 template with an unfilled
+  // {{variable}} slot left a stranded connective/comma where the value
+  // should have been). The variable resolver deliberately omits a value it
+  // can't authoritatively bind (F3), but the model can still render the
+  // SURROUNDING scaffolding — "wanting X" with X empty collapses to
+  // "wanting ,". Hard-fail the visible scars so it regenerates without the
+  // orphaned slot rather than shipping a broken sentence.
+  const EMPTY_SLOT_SCAR_RE =
+    // preposition/verb immediately followed by comma or sentence end:
+    // "wanting ,"  "for .",  "wanting  and"  "your  so you can"
+    /\b(wanting|for|your|of|about|toward|towards|around|reach|hit|achieve|build)\s+([,.;!?]|and\b|so\b|but\b|because\b)/i;
+  const doubleCommaScar = /,\s*,/;
+  // Empty slot BEFORE a real word leaves a double space after the
+  // personalization connective ("wanting  for your family" — value gone).
+  const DOUBLE_SPACE_SCAR_RE =
+    /\b(wanting|reach|toward|towards|achieve)\s{2,}/i;
+  const emptySlotMatch =
+    EMPTY_SLOT_SCAR_RE.exec(reply) ??
+    doubleCommaScar.exec(reply) ??
+    DOUBLE_SPACE_SCAR_RE.exec(reply);
+  if (emptySlotMatch) {
+    hardFails.push(
+      `empty_variable_render: reply contains "${emptySlotMatch[0].trim()}" — an unfilled personalization slot left a stranded connective (the {{variable}} resolved to nothing). Rephrase WITHOUT that clause; do not leave an orphaned "wanting ," / dangling preposition.`
+    );
+  }
+
   // R34. Metadata leak guard — internal JSON fields, confidence scores,
   // placeholders, debug annotations, or structured fragments must never
   // reach lead-facing copy.
