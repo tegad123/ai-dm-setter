@@ -59,6 +59,18 @@ export async function sendMessage(
   messageText: string,
   opts?: MetaSendOptions
 ): Promise<{ messageId: string }> {
+  // Fix D Phase 0: shadow-compare the canSend machine at the physical send
+  // choke point. Awaited so the write survives serverless teardown; the
+  // try/catch keeps it from ever breaking a send. This is the FACEBOOK
+  // choke point — daetradez is a FB funnel, so this is where the real
+  // traffic flows (the IG hook alone logged almost nothing).
+  try {
+    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+    await shadowEgressCheck({ accountId, recipientId, messageText });
+  } catch {
+    // shadow must never break a send
+  }
+
   const accessToken = await getMetaAccessToken(accountId);
   if (!accessToken) {
     throw new Error('No Meta access token configured for this account');
@@ -138,6 +150,17 @@ export async function sendAudioMessage(
   recipientId: string,
   audioUrl: string
 ): Promise<{ messageId: string }> {
+  try {
+    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+    await shadowEgressCheck({
+      accountId,
+      recipientId,
+      messageText: `[audio] ${audioUrl}`
+    });
+  } catch {
+    // shadow must never break a send
+  }
+
   const accessToken = await getMetaAccessToken(accountId);
   if (!accessToken) {
     throw new Error('No Meta access token configured for this account');
