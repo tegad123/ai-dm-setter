@@ -134,6 +134,18 @@ WORK QUEUE (in order):
 - `2434167` Phase 1 INTERRUPT LAYER shipped: src/lib/interrupt-layer.ts — price + scam-objection + time-objection detected pre-routing, answered from the persona's own configured branch copy (never hardcoded), applied as a leading bubble post-generation. Position-safe (writes no branch-selection event). Replaces the 2026-07-28 temporary price-only inline patch. 12/12 tests.
 - Phase 1 NO-BACKWARD-MOVEMENT: assessed as ALREADY ENFORCED, not rebuilt — F5 monotonic step floor (script-state-recovery.ts:4748, unconditional position guard) + durable branch-history floor + +1/turn advance cap, plus content-level earlier_step_ask_regression hard-fail (voice-quality-gate.ts:2071). Honest note: this is real coverage today; the transition()-based replacement is a Phase 1 CUTOVER migration (shadow-compared), sequenced AFTER Phase 0 cutover, not a from-scratch rebuild to force now.
 
+## SHIPPED 2026-08-12 (M4 sprint cont.)
+
+- `5c8b6a6` + `8fdbefc` Phase 0 shadow now ACTUALLY instrumented + VERIFIED. Two bugs found only by checking real prod data, not by trusting code:
+  1. shadow write was fire-and-forget → Vercel froze the function before the detached write finished. Made it awaited. (5c8b6a6)
+  2. hook was only in instagram.ts, but daetradez is a FACEBOOK funnel → 47 real sends logged ZERO rows. Added the hook to facebook.ts sendMessage + sendAudioMessage. (8fdbefc)
+  VERIFIED: drove fresh FB turns on prod, 2 shadow rows logged (16:14/16:19Z), machineAllow=true/agreed=true on a clean ACTIVE conv — the machine agrees with live sends. Hook fires at the choke point even when downstream Meta send fails on the 24h window (correct — shadow is about the DECISION). Minor cosmetic: sendPath='unknown' (stack-frame inference), not worth fixing.
+- `ced0580` Phase 2 D2: empty-variable render gate — hard-fails 'wanting ,' / stranded-connective scars from unfilled {{variable}} slots. 13/13 tests, zero false positives on idioms.
+- `3513ac5` Phase 2 answered-question ledger: reasks_captured_variable now fires on answered-but-UNPERSISTED variables (F3 omits low-confidence bindings, so a lead could answer and get re-asked). Derived from anchored ask→reply via shared replyAnswersAsk. This is the 'AI ignores what the lead said' class. 4/4 tests.
+- Phase 2 BUILD COMPLETE.
+
+STATUS SUMMARY (what's left in M4): Phase 0 shadow now accumulating on real FB traffic → needs ~1 day → cutover packet to Tega → cutover. Phase 1 cutover (transition() routing) sequenced after. Phase 3 (retire legacy guards) gated on cutovers. Leak HIGH/MEDIUM await Tega classification. Interrupt layer + answered-ledger + D2 + all 3 leak CRITICALs + distress F1 all shipped & tested.
+
 ## PERSONNEL CHANGE (2026-08-09, from Shazim)
 
 Ali is OFF the project (Tega let him go). Tega now does ALL testing/verification himself. Team = Shazim (build) + Tega (verify).
