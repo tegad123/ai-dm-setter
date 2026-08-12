@@ -35,7 +35,7 @@ function inferSendPath(): string {
   }
 }
 
-export function shadowEgressCheck(params: {
+export async function shadowEgressCheck(params: {
   accountId: string;
   recipientId: string;
   messageText: string;
@@ -43,10 +43,16 @@ export function shadowEgressCheck(params: {
   // suggestion routes pass this once call sites adopt it; default false =
   // treat as AI-initiated, the conservative shadow reading).
   operatorInitiated?: boolean;
-}): void {
+}): Promise<void> {
   if (!SHADOW_ENABLED) return;
-  // Fire-and-forget: a shadow failure must never delay or break a real send.
-  void (async () => {
+  // AWAITABLE (was fire-and-forget): on Vercel the serverless function can
+  // be frozen the moment the handler returns, killing a detached promise
+  // mid-write. That silently dropped every shadow row on the normal reply
+  // path (the send returns immediately) while the distress path — which
+  // awaits more work after the send — logged fine. The body is wrapped so
+  // a shadow failure still never breaks a real send; callers await it (a
+  // couple of cheap indexed reads + one insert).
+  {
     try {
       const lead = await prisma.lead.findFirst({
         where: {
@@ -126,5 +132,5 @@ export function shadowEgressCheck(params: {
         err
       );
     }
-  })();
+  }
 }

@@ -63,10 +63,12 @@ export async function sendDM(
   opts?: { tag?: 'HUMAN_AGENT' }
 ): Promise<{ messageId: string }> {
   // Fix D Phase 0: shadow-compare the canSend machine at the physical send
-  // choke point. Log-only, fire-and-forget — never blocks or delays a send.
+  // choke point. Log-only; awaited (not detached) so the write completes
+  // before the serverless function can freeze — a couple of cheap indexed
+  // reads + one insert. The try/catch keeps it from ever breaking a send.
   try {
     const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    shadowEgressCheck({ accountId, recipientId, messageText });
+    await shadowEgressCheck({ accountId, recipientId, messageText });
   } catch {
     // shadow must never break a send
   }
@@ -269,7 +271,7 @@ export async function sendAudioDM(
 ): Promise<{ messageId: string }> {
   try {
     const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    shadowEgressCheck({
+    await shadowEgressCheck({
       accountId,
       recipientId,
       messageText: `[audio] ${audioUrl}`
