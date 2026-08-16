@@ -189,8 +189,49 @@ function formatGoalForDeepWhyAsk(
   return 'that goal';
 }
 
-function buildStep10DeepWhyDirective(goalText: string): string {
-  return `\n\n===== STEP 10 — DEEP WHY MUST FIRE BEFORE ANY STEP 12+ CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES Step 10 to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, capital question, or call proposal.\n\nFORBIDDEN ON THIS TURN:\n  ✗ "what's your capital situation" / any question about budget, capital, savings, or how much they have\n  ✗ "what's the main thing holding you back" / any obstacle re-ask\n  ✗ Belief-break / "99% of traders" reframe\n  ✗ "would that kind of structure help" buy-in confirmation\n  ✗ "is now the time to overcome" urgency push\n  ✗ "set up a call with anthony" / any call proposal language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS TURN — Step 10 verbatim:\n  [MSG] "I respect that bro, I truly do. I hear so many people talk about cars and materialistic stuff so it's refreshing to hear this haha."\n  [ASK] "But why is ${goalText} so important to you though? Asking since the more I know the better I'll be able to help."\n\nDo NOT skip the [MSG] — send it before the [ASK] in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
+// Leak-audit 1-3: the deep-why directive previously hardcoded daetradez's
+// verbatim Step-10 lines ("cars and materialistic stuff", "call with anthony",
+// "99% of traders") as REQUIRED model output for ANY persona. Now the ASK comes
+// from the active persona's own configured deep-why step (`deepWhyAsk`, resolved
+// from its script anchor); if none is configured we fall back to a generic
+// paraphrase. The forbidden list is described by CLASS (capital question,
+// obstacle re-ask, belief-break reframe, call proposal) rather than by
+// daetradez-specific example phrases.
+// Resolve the persona's own deep-why ASK text from its script anchors, so the
+// directive uses the configured question rather than daetradez's literal
+// (leak-audit 1-3). Returns null when the persona has no deep-why anchor.
+function resolveDeepWhyAsk(
+  anchors:
+    | Array<{ variableName: string; askContents: string[] }>
+    | null
+    | undefined
+): string | null {
+  const DEEP_WHY_KEYS = [
+    'deepwhy',
+    'deep_why',
+    'desiredoutcome',
+    'desired_outcome'
+  ];
+  for (const a of anchors ?? []) {
+    const norm = a.variableName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (DEEP_WHY_KEYS.some((k) => norm === k.replace(/[^a-z0-9]/g, ''))) {
+      const ask = a.askContents.find(
+        (c) => typeof c === 'string' && c.trim().length > 0
+      );
+      if (ask) return ask.trim();
+    }
+  }
+  return null;
+}
+
+function buildStep10DeepWhyDirective(
+  goalText: string,
+  deepWhyAsk: string | null
+): string {
+  const askLine = deepWhyAsk
+    ? `  [ASK] "${deepWhyAsk}"`
+    : `  [ASK] "But why is ${goalText} so important to you though? Asking since the more I know the better I'll be able to help."`;
+  return `\n\n===== DEEP WHY MUST FIRE BEFORE ANY LATER-STAGE CONTENT =====\nThe lead has shared their income goal but you have NOT yet captured their emotional reason behind it (deepWhy / desiredOutcome). The script REQUIRES the deep-why to fire before any obstacle re-ask, belief break, buy-in confirmation, urgency push, capital question, or call proposal.\n\nFORBIDDEN ON THIS TURN:\n  ✗ Any question about budget, capital, savings, or how much they have\n  ✗ Any obstacle re-ask ("what's holding you back")\n  ✗ Any belief-break / statistics reframe\n  ✗ Any buy-in confirmation ("would that structure help")\n  ✗ Any urgency push ("is now the time")\n  ✗ Any call-proposal / closer-introduction language\n  ✗ Skipping ahead because early_obstacle is already captured (early_obstacle is NOT the same signal as deepWhy)\n\nREQUIRED ON THIS TURN — acknowledge what they shared, then ask the deep-why:\n  [MSG] a brief, genuine acknowledgment of the goal they just gave\n${askLine}\n\nSend the acknowledgment before the ask in the same turn (multi-bubble) or as the opener of a single-bubble reply.\n=====`;
 }
 
 /**
@@ -3444,15 +3485,22 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         // override directives don't inject "Session Liquidity Model" for other
         // accounts. Real accounts set persona.downsellConfig.productName.
         'the course';
+  // Leak-audit 7-1: was '497' (daetradez's real price) when unconfigured,
+  // which then rendered "$497 the course" in downsell directives/messages for
+  // ANY tenant. Now: no configured price → empty string, so the templates
+  // degrade to "the course" (product name only) rather than asserting Dae's
+  // price. Configured tenants render "$<their price> <their product>" as before.
   const downsellPriceStr = (() => {
     const raw = downsellCfgForGate.price;
     if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
     if (typeof raw === 'string' && raw.trim()) {
       return raw.trim().replace(/^\$/, '');
     }
-    return '497';
+    return null;
   })();
-  const downsellPriceWithSign = `$${downsellPriceStr}`;
+  // Trailing space folds so "${withSign} ${productName}" → "the course" cleanly
+  // when no price is set (the templates put a space between the two).
+  const downsellPriceWithSign = downsellPriceStr ? `$${downsellPriceStr}` : '';
   const promptConfigForGate = (personaForGate?.promptConfig || {}) as {
     callHandoff?: { closerName?: string };
     homeworkUrl?: unknown;
@@ -3940,7 +3988,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               'income_goal'
             ]),
             lastLeadMsg?.content ?? null
-          )
+          ),
+          resolveDeepWhyAsk(scriptAskAnchorsForTurn)
         )
       : '';
   const coldStartStep1Directive = coldStartStep1Inbound
@@ -6082,7 +6131,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               'income_goal'
             ]),
             lastLeadMsg?.content ?? null
-          )
+          ),
+          resolveDeepWhyAsk(scriptAskAnchorsForTurn)
         );
         systemPromptForLLM = baseSystemPrompt + step10Override;
         console.warn(
@@ -6646,7 +6696,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               // message in this state (the downsell offer).
               // Leak-audit 1-1: main-offer label resolved from persona
               // config (previously hardcoded "marcus's 1-on-1").
-              const downsellMsg = `i hear you bro. the capital for ${mainOfferLabel} is a bit higher than what you've got right now, but that doesn't mean you're stuck — my ${downsellPriceWithSign} ${downsellProductName} covers the full system so you can build your capital up while you're learning. want me to send that over?`;
+              const downsellOffer =
+                `${downsellPriceWithSign} ${downsellProductName}`
+                  .replace(/\s+/g, ' ')
+                  .trim();
+              const downsellMsg = `i hear you bro. the capital for ${mainOfferLabel} is a bit higher than what you've got right now, but that doesn't mean you're stuck — my ${downsellOffer} covers the full system so you can build your capital up while you're learning. want me to send that over?`;
               parsed.message = downsellMsg;
               parsed.messages = [downsellMsg];
               parsed.stage = 'SOFT_PITCH_COMMITMENT';

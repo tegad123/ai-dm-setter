@@ -552,14 +552,14 @@ const CALL_PROPOSAL_PATTERNS: RegExp[] = [
   // Bare "quick call / 15-min chat" anywhere in the message.
   /\b(quick|15[\s-]?min(ute)?)\s+(call|chat|convo)\b/i,
   // "call/chat with my right-hand / Anthony" — direct closer mentions.
-  /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
+  /\b(call|chat|time)\s+with\s+(my\s+)?(right.?hand|partner|head\s+coach|business\s+partner|closer)\b/i,
   // Closer-handoff phrases that don't include "call" but clearly route
   // toward the booking handoff. Covers Step 16 ("set up a time with my
   // right hand guy Anthony to break down a roadmap"), Step 20 ("locked
   // in with my head coach Anthony"), and the Step 16-alt branch
   // ("set you up with my right hand guy").
-  /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
-  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
+  /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i,
+  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i,
   // Typeform / booking-link delivery is the scheduling trigger.
   /\b(typeform|booking\s+link|application\s+link)\b/i
 ];
@@ -1405,8 +1405,8 @@ const STEP_PATTERN_MAP: StepPatternMapping[] = [
     patterns: [
       /\bset\s+up\s+a\s+(quick\s+)?(call|chat|convo|conversation|zoom|time)\b/i,
       /\b(book(ing)?|schedule|hop(ping)?\s*on|jump(ing)?\s*on|get\s*you\s*on|get\s*on)\s+a?\s*(quick\s+)?(call|chat|convo|conversation|zoom)\b/i,
-      /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
-      /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+      /\b(call|chat|time)\s+with\s+(my\s+)?(right.?hand|partner|head\s+coach|business\s+partner|closer)\b/i,
+      /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i
     ]
   },
   {
@@ -1414,7 +1414,7 @@ const STEP_PATTERN_MAP: StepPatternMapping[] = [
     label: 'Step 17 — Booking Link',
     patterns: [
       /\b(typeform|booking\s+link|application\s+link)\b/i,
-      /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i
+      /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i
     ]
   },
   {

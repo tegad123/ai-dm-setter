@@ -1152,9 +1152,12 @@ const CALL_PROPOSAL_MESSAGE_PATTERNS: RegExp[] = [
   /\bset\s+up\s+a\s+(quick\s+)?(call|chat|convo|conversation|zoom|time)\b/i,
   /\b(book(ing)?|schedule|hop(ping)?\s*on|jump(ing)?\s*on|get\s*you\s*on|get\s*on)\s+a?\s*(quick\s+)?(call|chat|convo|conversation|zoom)\b/i,
   /\b(quick|15[\s-]?min(ute)?)\s+(call|chat|convo)\b/i,
-  /\b(call|chat|time)\s+with\s+(my\s+(right.?hand|partner|head\s+coach|business\s+partner|closer)|anthony)\b/i,
-  /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
-  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|anthony|closer)\b/i,
+  // Leak-audit 1-5: removed the hardcoded "anthony" closer literal; the
+  // generic closer terms (right hand / head coach / partner / closer) cover
+  // the same intent for any tenant without leaking daetradez's closer name.
+  /\b(call|chat|time)\s+with\s+(my\s+)?(right.?hand|partner|head\s+coach|business\s+partner|closer)\b/i,
+  /\bset\s+(you\s+)?up\s+(a\s+time\s+)?with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i,
+  /\blocked\s+in\s+with\s+(my\s+)?(right.?hand|head\s+coach|partner|closer)\b/i,
   /\b(point\s+you\s+in\s+the\s+right\s+direction|break\s+down\s+a\s+roadmap|working\s+together\s+looks\s+like|would\s+that\s+help)\b/i
 ];
 
@@ -2399,10 +2402,11 @@ function scoreScriptArtifactUrl(
       return -1;
     }
     if (
-      /course|whop|checkout|payment|purchase|module|self.?paced|session liquidity model/.test(
-        text
-      ) ||
-      /whop|checkout/.test(lowerUrl)
+      // Leak-audit 1-5: dropped "whop" and "session liquidity model" literals
+      // (daetradez's downsell host/product). Generic commerce terms classify
+      // a downsell URL for any tenant.
+      /course|checkout|payment|purchase|module|self.?paced/.test(text) ||
+      /checkout/.test(lowerUrl)
     ) {
       return 100;
     }
@@ -2410,7 +2414,8 @@ function scoreScriptArtifactUrl(
   }
 
   if (artifactField === 'fallbackContentUrl') {
-    if (/whop|checkout|typeform|zoom/.test(lowerUrl)) return -1;
+    // Leak-audit 1-5: dropped "whop" literal; generic commerce/booking hosts.
+    if (/checkout|typeform|zoom/.test(lowerUrl)) return -1;
     if (/youtube|youtu\.be|video|bootcamp|free/.test(text + ' ' + lowerUrl)) {
       return 100;
     }
@@ -3044,7 +3049,9 @@ function extractDataPoints(params: {
     points,
     history: params.history,
     field: 'downsellInterestConfirmed',
-    promptPattern: /\b(course|whop|downsell|lower.ticket|497|self.paced)\b/i,
+    // Leak-audit 1-5/7-1: dropped "whop" host + "497" price literals (both
+    // daetradez-specific); generic downsell terms classify for any tenant.
+    promptPattern: /\b(course|downsell|lower.ticket|self.paced)\b/i,
     method: 'affirmed_downsell_interest'
   });
 
@@ -4827,7 +4834,8 @@ export function computeSystemStage(
 
 const STEP_INFERENCE_PATTERNS: Record<string, RegExp[]> = {
   SOFT_PITCH: [
-    /(quick\s+)?call with (my right hand|anthony)/i,
+    // Leak-audit 1-5: removed "anthony"; generic closer phrasing only.
+    /(quick\s+)?call with (my right hand|my partner|my closer|head coach)/i,
     /break (it|that) down/i,
     /game ?plan/i,
     /would you be (open|down) (to|for)/i,
@@ -4846,10 +4854,11 @@ const STEP_INFERENCE_PATTERNS: Record<string, RegExp[]> = {
     /\bcapital\b.{0,25}\b(markets|trading|mentorship|education)\b/i
   ],
   DOWNSELL_DELIVERY: [
-    /whop\.com/i,
-    /session liquidity/i,
+    // Leak-audit 1-5: removed "whop.com" and "session liquidity" (daetradez's
+    // downsell host/product); generic downsell terms only.
     /self.?paced/i,
-    /\bcourse link\b/i
+    /\bcourse link\b/i,
+    /\bcheckout\b/i
   ],
   BOOKING_CONFIRM: [
     /\bbooking\b/i,

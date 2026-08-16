@@ -20,7 +20,16 @@ Every finding falls into one of two buckets, and **neither is architectural**:
 
 **Totals (deduplicated):** 3 CRITICAL, 4 HIGH, 9 MEDIUM.
 
-**REMEDIATION STATUS (2026-08-11):** all 3 CRITICAL fixed — 1-1 (main-offer label config-resolved, generic fallback "the main program"), 1-2 (closer name config-resolved at both sites, name dropped when unconfigured), 5-1 (PATCH /api/team/[id] now ADMIN-only, role validated against the shared invite allowlist in `src/lib/team-roles.ts`, self role/isActive changes forbidden; DELETE also ADMIN-gated as the same class). HIGH/MEDIUM remain open pending classification.
+**REMEDIATION STATUS (2026-08-11):** all 3 CRITICAL fixed — 1-1 (main-offer label config-resolved, generic fallback "the main program"), 1-2 (closer name config-resolved at both sites, name dropped when unconfigured), 5-1 (PATCH /api/team/[id] now ADMIN-only, role validated against the shared invite allowlist in `src/lib/team-roles.ts`, self role/isActive changes forbidden; DELETE also ADMIN-gated as the same class).
+
+**REMEDIATION STATUS (2026-08-16):** 4 of 5 HIGH fixed —
+- 1-3: `buildStep10DeepWhyDirective` no longer ships daetradez's verbatim Step-10 lines. The deep-why ASK now resolves from the persona's own script anchor (`resolveDeepWhyAsk` over `scriptAskAnchorsForTurn`), the MSG is a generic acknowledgment, and the forbidden list is described by class (capital question / obstacle re-ask / belief-break / call proposal) instead of "cars and materialistic stuff" / "call with anthony" / "99% of traders".
+- 1-4: removed the `anthony` closer literals from every regex in `script-step-progression.ts` (generic closer terms retained). The STEP_PATTERN_MAP adherence checks are ALSO already gated on `activeScriptHasAnchors` (P0 fix `d3b4321`), so they don't run for multi-tenant personas at all. `99% of traders` kept as a generic belief-break trading phrase (not a tenant identifier).
+- 1-5: removed `anthony`, `session liquidity` / `session liquidity model`, `whop` / `whop.com` literals from all detection regexes in `script-state-recovery.ts`; generic closer/commerce terms retained.
+- 7-1: the `'497'` price fallback is gone from both `ai-prompts.ts` and `ai-engine.ts`. Unconfigured price now → null; the prompt strips the price clause and the outbound downsell message renders "the course" (product name only, whitespace-folded) instead of asserting daetradez's real $497. Configured tenants unchanged.
+- 6-1/2-1 (CRM webhook cross-tenant write) — STILL OPEN, being assessed next; it is a genuine cross-tenant MUTATION path (shared secret + unscoped `leadId` write), arguably the most serious HIGH.
+
+Suites green after 1-3/1-4/1-5/7-1: harm gate 36/36, branch-router, interrupt 12/12, answered-ledger 4/4, script-state-recovery. TSC clean.
 
 ---
 

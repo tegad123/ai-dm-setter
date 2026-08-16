@@ -2043,12 +2043,27 @@ export async function buildDynamicSystemPrompt(
       : typeof raw === 'string' && raw.trim()
         ? raw.trim().replace(/^\$/, '')
         : null;
+  // Leak-audit 7-1: the price fallback was '497' — daetradez's REAL price —
+  // which then substituted into "{{downsellProductName}} is $497 one time"
+  // throughout an unconfigured tenant's prompt, presenting Dae's price as
+  // theirs. Now: no configured price → null → strip the price clause entirely
+  // rather than assert a fabricated number. Configured tenants are unchanged.
   const downsellPriceStr =
     resolveDownsellPrice(downsellCfg.price) ??
-    resolveDownsellPrice(promptDownsellCfg.price) ??
-    '497';
+    resolveDownsellPrice(promptDownsellCfg.price);
   prompt = prompt.replace(/\{\{downsellProductName\}\}/g, downsellProductName);
-  prompt = prompt.replace(/\{\{downsellPrice\}\}/g, downsellPriceStr);
+  if (downsellPriceStr) {
+    prompt = prompt.replace(/\{\{downsellPrice\}\}/g, downsellPriceStr);
+  } else {
+    // Remove a "$X {{downsellPrice}}" / "is {{downsellPrice}} one time" style
+    // clause so no price is asserted; leave the surrounding sentence clean.
+    prompt = prompt
+      .replace(
+        /\s*(?:is\s+)?\$?\{\{downsellPrice\}\}(?:\s+(?:one[\s-]?time|per\s+\w+))?/gi,
+        ''
+      )
+      .replace(/\{\{downsellPrice\}\}/g, '');
+  }
   // ── Call handoff (setter → closer) ────────────────────────────────
   // Tenant-level rule: the AI is the setter in the DMs, but the actual
   // call is taken by someone else (partner, closer, co-founder).
