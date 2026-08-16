@@ -13,17 +13,32 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { leadId, showed, closed, dealValue, closeReason, notes } = body;
+    const { accountId, leadId, showed, closed, dealValue, closeReason, notes } =
+      body;
 
-    if (!leadId || showed === undefined) {
+    // Leak-audit 6-1/2-1 (CRITICAL cross-tenant WRITE): the secret is
+    // currently platform-wide, and the lead was resolved by caller-supplied
+    // `leadId` with NO account scope — so any holder of the shared secret
+    // could POST an arbitrary leadId and mutate ANY other tenant's lead
+    // (force CLOSED_WON, set revenue, corrupt their pipeline). Require the
+    // caller to name the account and scope EVERY lookup/write to
+    // { id: leadId, accountId }: a leadId that does not belong to the named
+    // account 404s, so the shared secret can no longer reach across tenants.
+    // (Full fix — a per-account CRM secret in IntegrationCredential, matching
+    // LeadConnector/Typeform — needs a `CRM` IntegrationProvider enum value
+    // and a migration; tracked as the follow-on. This scoping closes the
+    // cross-tenant mutation today without a schema change.)
+    if (!accountId || !leadId || showed === undefined) {
       return NextResponse.json(
-        { error: 'leadId and showed are required' },
+        { error: 'accountId, leadId and showed are required' },
         { status: 400 }
       );
     }
 
-    // Find the lead
-    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    // Find the lead SCOPED to the named account — cross-tenant leadIds 404.
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, accountId }
+    });
     if (!lead) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
@@ -71,7 +86,13 @@ export async function POST(req: NextRequest) {
       nonStageUpdate.closedAt = new Date();
       if (dealValue) nonStageUpdate.revenue = dealValue;
     }
-    await prisma.lead.update({ where: { id: leadId }, data: nonStageUpdate });
+    // Scope the write with updateMany({ id, accountId }) so it is impossible
+    // to mutate a lead outside the named account even if the lead was
+    // somehow re-pointed between the findFirst above and here.
+    await prisma.lead.updateMany({
+      where: { id: leadId, accountId },
+      data: nonStageUpdate
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
