@@ -141,6 +141,19 @@ export async function GET(req: NextRequest) {
               lastError: 'skipped:ai_inactive'
             }
           });
+        } else if (outcome === 'skipped_held_for_review') {
+          // Conversation is held for human review / distress — mark FIRED so
+          // the follow-up doesn't retry every tick against a held convo. If
+          // the operator later releases the hold, fresh follow-ups schedule
+          // from the next AI reply as normal.
+          await prisma.scheduledMessage.update({
+            where: { id: row.id },
+            data: {
+              status: 'FIRED',
+              firedAt: new Date(),
+              lastError: 'skipped:held_for_review'
+            }
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -176,7 +189,7 @@ export async function GET(req: NextRequest) {
 
 // ---------------------------------------------------------------------------
 // Core: generate + send ONE scheduled message
-// Returns 'sent' | 'deduped' | 'skipped_ai_inactive'. Throws on
+// Returns 'sent' | 'deduped' | 'skipped_ai_inactive' | 'skipped_held_for_review'. Throws on
 // platform send failure so the caller can bump attempts + set status.
 //
 // CRITICAL ORDER: platform send FIRST, then Message row + broadcast.
@@ -189,7 +202,9 @@ export async function GET(req: NextRequest) {
 
 async function fireScheduledMessage(
   scheduledMessageId: string
-): Promise<'sent' | 'deduped' | 'skipped_ai_inactive'> {
+): Promise<
+  'sent' | 'deduped' | 'skipped_ai_inactive' | 'skipped_held_for_review'
+> {
   const row = await prisma.scheduledMessage.findUnique({
     where: { id: scheduledMessageId },
     include: {
@@ -225,6 +240,23 @@ async function fireScheduledMessage(
       `[cron/scheduled-messages] ${row.id}: aiActive=false, skipping`
     );
     return 'skipped_ai_inactive';
+  }
+
+  // Guardrail (2026-08-17, Fix D egress-shadow finding): a conversation
+  // HELD for human review or flagged for distress must not fire automated
+  // follow-ups / keepalives ("yo bro you still there?"). The hold is a
+  // separate flag from aiActive, so aiActive stays true while awaiting
+  // review — the cron was nudging the lead behind the operator's back.
+  // The shadow caught two live conversations doing exactly this. This is
+  // the same terminal-hold protection canSend enforces, applied at the
+  // scheduled-message choke point.
+  if (conversation.awaitingHumanReview || conversation.distressDetected) {
+    console.log(
+      `[cron/scheduled-messages] ${row.id}: conversation held (` +
+        `awaitingHumanReview=${conversation.awaitingHumanReview}, ` +
+        `distress=${conversation.distressDetected}) — skipping automated follow-up`
+    );
+    return 'skipped_held_for_review';
   }
 
   if (
