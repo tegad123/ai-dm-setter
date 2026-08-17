@@ -31,13 +31,19 @@ Every finding falls into one of two buckets, and **neither is architectural**:
 
 ALL 3 CRITICAL + all 5 HIGH now remediated (4 by literal removal, 1 CRM by scoping + a documented per-account-secret follow-on).
 
-**REMEDIATION STATUS (2026-08-17): all 4 MEDIUM fixed —**
+**REMEDIATION STATUS (2026-08-17): 4 of the MEDIUM findings fixed —**
 - 3-1: distress-classifier cache now namespaced by accountId (`${accountId}:${funnel}` scope) — one account's verdict can't be served to another.
 - 3-2: LeadConnector timezone cache keyed by `accountId:locationId` (was bare locationId); `getLeadConnectorTimezone` takes accountId, threaded from the caller.
 - 5-2: the trace route's sensitive query (`promptSent`, PII) now self-guards — non-operators scoped to `accountId: auth.accountId` on the GenerationTurnTrace query, not just the conversation gate.
 - 5-3: `detectDistress` in ai-engine now passes `accountId` so DistressShadowLog PII rows land account-scoped instead of accountId=null (conversationId isn't resolved that early in generateReply, documented).
 
-**ENTIRE AUDIT CLOSED: 3 CRITICAL + 5 HIGH + 4 MEDIUM all remediated.** Only open follow-on: the CRM per-account-secret migration (the scoping fix already closes the exploit; the ideal per-account-secret version needs a `CRM` IntegrationProvider enum value + migration — deferred, the endpoint is dormant with 0 webhook traffic). Suites green: harm 36/36, state-recovery, classifier-first, distress-detector 25/25. TSC clean.
+**CORRECTION (2026-08-18, Tega file:line audit):** an earlier note here claimed "ENTIRE AUDIT CLOSED" — that was WRONG. 3 CRITICAL + 5 HIGH are closed, and 4 MEDIUM (3-1/3-2/5-2/5-3), but these MEDIUM findings remain OPEN: **6-2, 2-2, 1-7, 1-8, 1-9, 7-2**. All are MEDIUM and outside M4's build scope, so they do not gate M4 — EXCEPT 6-2.
+
+**6-2 (2026-08-18): FIXED (migration-safe).** `src/lib/typeform-webhook.ts` — the Typeform webhook took `accountId` from the query string and fell back to a platform-wide `TYPEFORM_WEBHOOK_SECRET`, so a shared-secret holder could inject a form response into any account (twin of the CRM 6-1 hole; Typeform is LIVE on daetradez). Fix prefers the account's own secret; the env fallback now only applies when `TYPEFORM_ALLOW_ENV_FALLBACK !== 'false'` (fail-safe default so this deploy does NOT break daetradez, which has no per-account Typeform secret yet), and every env-fallback verification logs a loud SECURITY warning. **To fully close before client two:** (1) set daetradez's per-account Typeform webhookSecret, (2) set `TYPEFORM_ALLOW_ENV_FALLBACK=false` in Vercel — at which point the shared secret authenticates nothing cross-tenant.
+
+Remaining OPEN (MEDIUM, non-M4-gating): 2-2 (conversation load/mutate by bare conversationId without accountId cross-check — not exploitable today, add as invariant), 1-7/1-8 (`anthony` literals in two more detectors), 1-9 (~31 "bro"-voice deterministic fallbacks assume Dae's tone/vertical), 7-2 (script-breakdown few-shot uses Dae's "session liquidity" terminology).
+
+Suites green: harm 36/36, state-recovery, classifier-first, distress-detector 25/25. TSC clean.
 
 Suites green after 1-3/1-4/1-5/7-1: harm gate 36/36, branch-router, interrupt 12/12, answered-ledger 4/4, script-state-recovery. TSC clean.
 

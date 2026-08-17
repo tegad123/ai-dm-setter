@@ -170,13 +170,52 @@ export async function processTypeformWebhook(params: {
     throw new TypeformWebhookError('Account not found', 404);
   }
 
+  // Leak-audit 6-2 (twin of the CRM 6-1 hole): accountId comes from the
+  // query string, and the secret previously fell back to a PLATFORM-WIDE
+  // process.env.TYPEFORM_WEBHOOK_SECRET. So a holder of the shared secret
+  // could pass ANY accountId in the URL and inject a form response / lead
+  // into another tenant's account.
+  //
+  // Fix: prefer the account's OWN Typeform secret. The platform env secret
+  // is ONLY accepted as a fallback while TYPEFORM_ALLOW_ENV_FALLBACK is set
+  // (a migration window flag) — because daetradez currently has no
+  // per-account Typeform credential and removing the fallback outright would
+  // 401 its live booking flow. ROLLOUT: (1) set daetradez's per-account
+  // TYPEFORM webhookSecret, (2) unset TYPEFORM_ALLOW_ENV_FALLBACK, at which
+  // point the shared secret authenticates nothing cross-tenant. Even during
+  // the window, an env-fallback verification is logged loudly so the
+  // remaining exposure is visible, not silent.
   const creds = await getCredentials(accountId, 'TYPEFORM');
-  const webhookSecret =
+  const perAccountSecret =
     (typeof creds?.webhookSecret === 'string' && creds.webhookSecret) ||
     (typeof creds?.typeformWebhookSecret === 'string' &&
       creds.typeformWebhookSecret) ||
-    process.env.TYPEFORM_WEBHOOK_SECRET ||
     null;
+  // Fail-safe default: the env fallback stays ENABLED until explicitly
+  // disabled with TYPEFORM_ALLOW_ENV_FALLBACK=false, so this deploy does NOT
+  // break daetradez's live Typeform flow (it has no per-account secret yet).
+  // Closing 6-2 = set daetradez's per-account secret, then set this to false.
+  const allowEnvFallback =
+    process.env.TYPEFORM_ALLOW_ENV_FALLBACK !== 'false' &&
+    !!process.env.TYPEFORM_WEBHOOK_SECRET;
+  const webhookSecret =
+    perAccountSecret ||
+    (allowEnvFallback ? process.env.TYPEFORM_WEBHOOK_SECRET! : null);
+
+  if (!webhookSecret) {
+    throw new TypeformWebhookError(
+      'No per-account Typeform webhook secret configured for this account',
+      401
+    );
+  }
+  if (!perAccountSecret && allowEnvFallback) {
+    console.warn(
+      `[typeform-webhook] SECURITY: account ${accountId} authenticated via the ` +
+        `PLATFORM env secret (no per-account Typeform credential). This is the ` +
+        `6-2 exposure — set a per-account secret and unset ` +
+        `TYPEFORM_ALLOW_ENV_FALLBACK to close it.`
+    );
+  }
 
   if (
     !verifyTypeformSignature({
