@@ -55,8 +55,17 @@ export async function GET(
     const promptIndex =
       promptIndexRaw !== null ? Number.parseInt(promptIndexRaw, 10) : null;
 
+    // Leak-audit 5-2: the trace query selects sensitive data (promptSent, PII)
+    // and previously relied solely on the conversation ownership gate above
+    // 404ing first. Self-guard the sensitive query too: non-operators are
+    // scoped to their own account's traces (GenerationTurnTrace carries
+    // accountId). The conversation gate already proved ownership, so this is
+    // defense-in-depth, not a new access path.
     const traces = await prisma.generationTurnTrace.findMany({
-      where: { conversationId: id },
+      where: {
+        conversationId: id,
+        ...(isPlatformOperator(auth.role) ? {} : { accountId: auth.accountId })
+      },
       orderBy: { createdAt: 'asc' },
       select: {
         createdAt: true,

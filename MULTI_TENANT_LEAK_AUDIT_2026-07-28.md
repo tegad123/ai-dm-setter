@@ -29,7 +29,15 @@ Every finding falls into one of two buckets, and **neither is architectural**:
 - 7-1: the `'497'` price fallback is gone from both `ai-prompts.ts` and `ai-engine.ts`. Unconfigured price now → null; the prompt strips the price clause and the outbound downsell message renders "the course" (product name only, whitespace-folded) instead of asserting daetradez's real $497. Configured tenants unchanged.
 - 6-1/2-1 (CRM webhook cross-tenant write) — FIXED (scoping) in `src/app/api/webhooks/crm/route.ts`. The route now REQUIRES `accountId` in the body and scopes every lookup/write to `{ id: leadId, accountId }`: the lead is resolved with `findFirst({ where: { id, accountId } })` (cross-tenant leadIds 404), and the non-stage write uses `updateMany({ where: { id, accountId } })`. `transitionLeadStage` only touches the already-verified lead. A holder of the shared secret can no longer mutate a lead outside the account they name. **Caller-facing contract change:** external CRM callers MUST now send `accountId` alongside `leadId` (return is 400 without it) — Daniel/whoever wired the CRM webhook needs to add the account id to the payload. **Full fix (follow-on):** per-account CRM secret in `IntegrationCredential`, matching LeadConnector/Typeform's `webhookSecret` pattern, so the account is derived from the secret rather than caller-supplied — needs a `CRM` value added to the `IntegrationProvider` enum + migration (blocked while prod DB is mid-incident). Tracked, not yet done.
 
-ALL 3 CRITICAL + all 5 HIGH now remediated (4 by literal removal, 1 CRM by scoping + a documented per-account-secret follow-on). MEDIUM (3-1, 3-2, 5-2, 5-3) remain — low-impact cache-key/PII-scoping items, queued.
+ALL 3 CRITICAL + all 5 HIGH now remediated (4 by literal removal, 1 CRM by scoping + a documented per-account-secret follow-on).
+
+**REMEDIATION STATUS (2026-08-17): all 4 MEDIUM fixed —**
+- 3-1: distress-classifier cache now namespaced by accountId (`${accountId}:${funnel}` scope) — one account's verdict can't be served to another.
+- 3-2: LeadConnector timezone cache keyed by `accountId:locationId` (was bare locationId); `getLeadConnectorTimezone` takes accountId, threaded from the caller.
+- 5-2: the trace route's sensitive query (`promptSent`, PII) now self-guards — non-operators scoped to `accountId: auth.accountId` on the GenerationTurnTrace query, not just the conversation gate.
+- 5-3: `detectDistress` in ai-engine now passes `accountId` so DistressShadowLog PII rows land account-scoped instead of accountId=null (conversationId isn't resolved that early in generateReply, documented).
+
+**ENTIRE AUDIT CLOSED: 3 CRITICAL + 5 HIGH + 4 MEDIUM all remediated.** Only open follow-on: the CRM per-account-secret migration (the scoping fix already closes the exploit; the ideal per-account-secret version needs a `CRM` IntegrationProvider enum value + migration — deferred, the endpoint is dormant with 0 webhook traffic). Suites green: harm 36/36, state-recovery, classifier-first, distress-detector 25/25. TSC clean.
 
 Suites green after 1-3/1-4/1-5/7-1: harm gate 36/36, branch-router, interrupt 12/12, answered-ledger 4/4, script-state-recovery. TSC clean.
 

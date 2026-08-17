@@ -281,7 +281,9 @@ export async function classifyDistress(
   }
   // Cache key includes the funnel flag — a low-ticket verdict ("broke is
   // normal, not distress") must never be served to a non-low-ticket call.
-  const cacheScope = opts.lowTicketFunnel ? 'lt' : 'std';
+  // Leak-audit 3-1: namespace by accountId too — one account's verdict must
+  // never be served to another (accounts differ in funnel config / BYOK model).
+  const cacheScope = `${opts.accountId ?? 'noacct'}:${opts.lowTicketFunnel ? 'lt' : 'std'}`;
   const cached = cacheGet(cacheScope + ' ' + trimmed);
   if (cached) return cached;
 

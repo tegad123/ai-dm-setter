@@ -2645,7 +2645,13 @@ export async function generateReply(
         // paycheck". Kill switch is still one env var away.
         classifierAuthoritative:
           process.env.DISTRESS_CLASSIFIER_AUTHORITATIVE !== 'false',
-        lowTicketFunnel: lowTicketForDistress
+        lowTicketFunnel: lowTicketForDistress,
+        // Leak-audit 5-3: pass accountId so DistressShadowLog PII rows land
+        // scoped to their account instead of accountId=null. (conversationId
+        // isn't resolved this early in generateReply — it's looked up later —
+        // so it stays null here; the account scope is the security-relevant
+        // part the audit flagged.)
+        accountId
       });
       if (distress.detected) {
         console.warn(

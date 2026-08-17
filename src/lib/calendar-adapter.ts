@@ -199,7 +199,8 @@ export async function getUnifiedAvailability(
               ? ((await getLeadConnectorTimezone(
                   lcCreds.apiKey as string,
                   lcCreds.locationId as string,
-                  reqId
+                  reqId,
+                  accountId
                 )) ?? undefined)
               : undefined);
           calLog(
@@ -408,7 +409,8 @@ export async function bookUnifiedAppointment(
 // ---------------------------------------------------------------------------
 
 // Cache the resolved location timezone (it's stable) to avoid an extra API call
-// on every availability fetch. Keyed by locationId.
+// on every availability fetch. Keyed by accountId:locationId (leak-audit 3-2)
+// so one tenant's location tz can never be served to another.
 const lcTimezoneCache = new Map<string, string>();
 
 /**
@@ -422,10 +424,12 @@ const lcTimezoneCache = new Map<string, string>();
 export async function getLeadConnectorTimezone(
   apiKey: string,
   locationId: string,
-  requestId?: string
+  requestId?: string,
+  accountId?: string
 ): Promise<string | null> {
   if (!locationId) return null;
-  const cached = lcTimezoneCache.get(locationId);
+  const cacheKey = `${accountId ?? 'noacct'}:${locationId}`;
+  const cached = lcTimezoneCache.get(cacheKey);
   if (cached) return cached;
   const reqId = requestId || randomUUID().slice(0, 8);
   try {
@@ -442,7 +446,7 @@ export async function getLeadConnectorTimezone(
       timezone?: string | null;
     };
     const tz = body.location?.timezone ?? body.timezone ?? null;
-    if (tz) lcTimezoneCache.set(locationId, tz);
+    if (tz) lcTimezoneCache.set(cacheKey, tz);
     calLog('LC.Timezone.resolved', { tz }, reqId);
     return tz;
   } catch (err) {
