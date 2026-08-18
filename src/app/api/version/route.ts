@@ -13,6 +13,15 @@ export async function GET() {
     fullCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
     message: process.env.VERCEL_GIT_COMMIT_MESSAGE?.slice(0, 100) ?? null,
     deployedAt: process.env.VERCEL_DEPLOYMENT_COMPLETED_AT ?? null,
-    env: process.env.VERCEL_ENV ?? null
+    env: process.env.VERCEL_ENV ?? null,
+    // Fix D cutover state — non-secret flag echo so a verification run can
+    // PROVE the egress gate is authoritative (and for which platforms)
+    // instead of inferring it. Never exposes a secret value, only which
+    // platforms enforce and whether shadow logging is on.
+    fixD: {
+      egressAuthoritativePlatforms:
+        process.env.FIX_D_CANSEND_AUTHORITATIVE ?? null,
+      egressShadowEnabled: process.env.FIX_D_EGRESS_SHADOW !== 'false'
+    }
   });
 }
