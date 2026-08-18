@@ -218,17 +218,22 @@ export async function POST(
       const bubble = bubbles[i];
       try {
         let sendResult: { messageId: string } | undefined;
+        // Fix D cutover cond 1: an operator approved + sent this suggestion —
+        // a human action. operatorInitiated:true so canSend lets it through a
+        // hold (approving a reply is a valid way to resolve one).
         if (lead.platform === 'INSTAGRAM') {
           sendResult = await sendInstagramDM(
             lead.accountId,
             lead.platformUserId,
-            bubble
+            bubble,
+            { operatorInitiated: true }
           );
         } else if (lead.platform === 'FACEBOOK') {
           sendResult = await sendFacebookMessage(
             lead.accountId,
             lead.platformUserId,
-            bubble
+            bubble,
+            { operatorInitiated: true }
           );
         } else {
           throw new Error(`unsupported platform: ${lead.platform}`);

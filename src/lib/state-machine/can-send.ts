@@ -22,7 +22,8 @@ export type CanSendVerdict =
       reason:
         | 'HOLD' // conversation is in a terminal hold
         | 'AI_OFF' // operator disabled AI
-        | 'UNSET_VARIABLE'; // draft references a variable that isn't bound
+        | 'UNSET_VARIABLE' // draft references a variable that isn't bound
+        | 'NO_CONVERSATION_STATE'; // can't resolve the conversation to gate on
       hold?: TypedHold;
       detail: string;
     };
@@ -32,6 +33,18 @@ export type CanSendVerdict =
 // resolver emits when a binding is missing.
 const UNRESOLVED_VARIABLE_RE =
   /\{\{[^}]*\}\}|(?<![\w$])\{[a-zA-Z_][a-zA-Z0-9_]*\}|\[unknown\]|\bundefined, \b/;
+
+// Thrown by a send function when the egress gate (authoritative mode) blocks
+// the send. Callers can catch it to distinguish a policy block from a
+// platform/network send failure.
+export class EgressBlockedError extends Error {
+  reason: string;
+  constructor(message: string, reason: string) {
+    super(message);
+    this.name = 'EgressBlockedError';
+    this.reason = reason;
+  }
+}
 
 export interface CanSendDraft {
   text: string;

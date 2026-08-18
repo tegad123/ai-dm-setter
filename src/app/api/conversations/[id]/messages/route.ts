@@ -429,11 +429,17 @@ export async function POST(
           if (!lead?.platformUserId) return;
           try {
             let sendResult: { messageId: string } | undefined;
+            // Fix D cutover cond 1: this is a HUMAN operator's manual reply.
+            // operatorInitiated:true lets canSend pass it even on a held
+            // conversation — replying manually is exactly how an operator
+            // resolves a hold. Without this, the authoritative gate would
+            // block the operator's own reply.
             if (lead.platform === 'FACEBOOK') {
               sendResult = await sendFacebookMessage(
                 lead.accountId,
                 lead.platformUserId,
-                messageContent
+                messageContent,
+                { operatorInitiated: true }
               );
               console.log(
                 `[send] Facebook message sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
@@ -442,7 +448,8 @@ export async function POST(
               sendResult = await sendInstagramDM(
                 lead.accountId,
                 lead.platformUserId,
-                messageContent
+                messageContent,
+                { operatorInitiated: true }
               );
               console.log(
                 `[send] Instagram DM sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`

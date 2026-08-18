@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getMetaAccessToken } from '@/lib/credential-store';
+import { EgressBlockedError } from '@/lib/state-machine/can-send';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -48,6 +49,12 @@ export function verifyWebhookSignature(
  */
 export interface MetaSendOptions {
   tag?: 'HUMAN_AGENT';
+  // Fix D cutover condition 1: true when a human operator initiated this send
+  // (manual reply / approved suggestion). At authoritative, canSend lets
+  // operator sends through even on a HELD conversation — replying manually IS
+  // the resolution of a hold. Crons / webhook-processor pass false (or omit),
+  // so automated sends stay gated. Threads to the egress shadow / gate.
+  operatorInitiated?: boolean;
 }
 
 /**
@@ -64,11 +71,33 @@ export async function sendMessage(
   // try/catch keeps it from ever breaking a send. This is the FACEBOOK
   // choke point — daetradez is a FB funnel, so this is where the real
   // traffic flows (the IG hook alone logged almost nothing).
-  try {
-    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    await shadowEgressCheck({ accountId, recipientId, messageText });
-  } catch {
-    // shadow must never break a send
+  // Fix D egress gate. In shadow mode this only logs; when
+  // FIX_D_CANSEND_AUTHORITATIVE includes FACEBOOK it ENFORCES — a blocked
+  // send throws EgressBlockedError and this send is aborted. The gate itself
+  // fails open on internal error, so a throw here is a real policy block.
+  {
+    let gate: { block: boolean; reason?: string; detail?: string } = {
+      block: false
+    };
+    try {
+      const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+      gate = await shadowEgressCheck({
+        accountId,
+        recipientId,
+        messageText,
+        platform: 'FACEBOOK',
+        operatorInitiated: opts?.operatorInitiated ?? false
+      });
+    } catch {
+      // gate infra error must never break a send — treat as allow
+      gate = { block: false };
+    }
+    if (gate.block) {
+      throw new EgressBlockedError(
+        `Egress gate blocked send: ${gate.reason ?? 'blocked'}${gate.detail ? ` — ${gate.detail}` : ''}`,
+        gate.reason ?? 'BLOCKED'
+      );
+    }
   }
 
   const accessToken = await getMetaAccessToken(accountId);
@@ -155,7 +184,8 @@ export async function sendAudioMessage(
     await shadowEgressCheck({
       accountId,
       recipientId,
-      messageText: `[audio] ${audioUrl}`
+      messageText: `[audio] ${audioUrl}`,
+      platform: 'FACEBOOK'
     });
   } catch {
     // shadow must never break a send

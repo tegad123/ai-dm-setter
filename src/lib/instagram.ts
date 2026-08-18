@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getMetaAccessToken } from '@/lib/credential-store';
+import { EgressBlockedError } from '@/lib/state-machine/can-send';
 import prisma from '@/lib/prisma';
 
 const GRAPH_API_VERSION = 'v21.0';
@@ -60,17 +61,36 @@ export async function sendDM(
   accountId: string,
   recipientId: string,
   messageText: string,
-  opts?: { tag?: 'HUMAN_AGENT' }
+  // operatorInitiated (Fix D cutover cond 1): true for human-initiated sends
+  // (manual reply / approved suggestion) so canSend lets them through a hold.
+  opts?: { tag?: 'HUMAN_AGENT'; operatorInitiated?: boolean }
 ): Promise<{ messageId: string }> {
-  // Fix D Phase 0: shadow-compare the canSend machine at the physical send
-  // choke point. Log-only; awaited (not detached) so the write completes
-  // before the serverless function can freeze — a couple of cheap indexed
-  // reads + one insert. The try/catch keeps it from ever breaking a send.
-  try {
-    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    await shadowEgressCheck({ accountId, recipientId, messageText });
-  } catch {
-    // shadow must never break a send
+  // Fix D egress gate at the physical send choke point. Awaited so the write
+  // survives serverless teardown. IG stays SHADOW-only until its own window
+  // (cutover condition 3), so gate.block is false here today — but the block
+  // is honored (thrown OUTSIDE the fail-open try) so IG's later flip is a
+  // flag change, not a code change.
+  {
+    let gate: { block: boolean; reason?: string } = { block: false };
+    try {
+      const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+      gate = await shadowEgressCheck({
+        accountId,
+        recipientId,
+        messageText,
+        platform: 'INSTAGRAM',
+        operatorInitiated: opts?.operatorInitiated ?? false
+      });
+    } catch {
+      // gate infra error must never break a send — treat as allow
+      gate = { block: false };
+    }
+    if (gate.block) {
+      throw new EgressBlockedError(
+        `Egress gate blocked send: ${gate.reason ?? 'blocked'}`,
+        gate.reason ?? 'BLOCKED'
+      );
+    }
   }
 
   // For Instagram DMs, prefer the Instagram token (IGAA...) over the Facebook Page token
@@ -274,7 +294,8 @@ export async function sendAudioDM(
     await shadowEgressCheck({
       accountId,
       recipientId,
-      messageText: `[audio] ${audioUrl}`
+      messageText: `[audio] ${audioUrl}`,
+      platform: 'INSTAGRAM'
     });
   } catch {
     // shadow must never break a send

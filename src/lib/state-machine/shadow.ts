@@ -1,21 +1,48 @@
 // ---------------------------------------------------------------------------
-// Fix D — Phase 0: egress shadow-compare.
+// Fix D — Phase 0: egress gate (shadow, then authoritative at cutover).
 // ---------------------------------------------------------------------------
-// Called (fire-and-forget) from the physical send choke point. By
-// construction the live code has ALREADY decided to send when this runs, so
-// the live verdict is always ALLOW; every row where the machine disagrees
-// (machineAllow=false) is the shadow-diff review queue for Ali's Phase 0
-// sign-off packet.
+// Called from the physical send choke point.
 //
-// Flag: FIX_D_EGRESS_SHADOW, default ON (log-only, no behavior change).
-// Lesson from A6: a shadow mode that ships default-off never accumulates
-// data. Kill switch: set FIX_D_EGRESS_SHADOW=false.
+// SHADOW mode (default): the live code has already decided to send, so the
+// verdict is logged only — every disagreement row (machineAllow=false) is the
+// review queue. Returns { block:false } always; nothing is prevented.
+//
+// AUTHORITATIVE mode (cutover): when FIX_D_CANSEND_AUTHORITATIVE names a
+// platform (e.g. "FACEBOOK") the machine's verdict is ENFORCED for that
+// platform — a blocked send returns { block:true } and the caller aborts the
+// send. IG stays shadow until its own window (cutover condition 3).
+//
+// Flags:
+//   FIX_D_EGRESS_SHADOW           default ON  — log-only shadow rows.
+//   FIX_D_CANSEND_AUTHORITATIVE   csv of platforms to ENFORCE (default none).
+//
+// Fail-open invariant: any error resolving state fails OPEN (never blocks a
+// real send on our own bug) but logs loudly. NO_CONVERSATION_STATE is the
+// one exception under authoritative — it blocks and alerts (cond 2), because
+// a send we can't attribute to a conversation is exactly what the gate is for.
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
 import { canSend, deriveMachineState } from './can-send';
 
 const SHADOW_ENABLED = process.env.FIX_D_EGRESS_SHADOW !== 'false';
+
+function isAuthoritativeForPlatform(platform: string | null): boolean {
+  const raw = process.env.FIX_D_CANSEND_AUTHORITATIVE;
+  if (!raw) return false;
+  const set = raw
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  if (set.includes('ALL')) return true;
+  return platform ? set.includes(platform.toUpperCase()) : false;
+}
+
+export interface EgressGateResult {
+  block: boolean;
+  reason?: string;
+  detail?: string;
+}
 
 // Coarse caller tag from the stack — first app frame outside this module and
 // the send module. Diagnostic only; never load-bearing.
@@ -39,12 +66,16 @@ export async function shadowEgressCheck(params: {
   accountId: string;
   recipientId: string;
   messageText: string;
+  platform?: string | null;
   // true for sends a human explicitly initiated (manual reply / approved
   // suggestion routes pass this once call sites adopt it; default false =
   // treat as AI-initiated, the conservative shadow reading).
   operatorInitiated?: boolean;
-}): Promise<void> {
-  if (!SHADOW_ENABLED) return;
+}): Promise<EgressGateResult> {
+  const authoritative = isAuthoritativeForPlatform(params.platform ?? null);
+  // Shadow logging can be off while authoritative is on (post-cutover we may
+  // keep logging; the flags are independent). If BOTH are off, no-op allow.
+  if (!SHADOW_ENABLED && !authoritative) return { block: false };
   // AWAITABLE (was fire-and-forget): on Vercel the serverless function can
   // be frozen the moment the handler returns, killing a detached promise
   // mid-write. That silently dropped every shadow row on the normal reply
@@ -76,22 +107,36 @@ export async function shadowEgressCheck(params: {
           })
         : null;
 
-      // No conversation resolvable — machine has no state to gate on;
-      // record it (these rows themselves are a finding: sends that bypass
-      // conversation state entirely).
+      // No conversation resolvable — machine has no state to gate on.
+      // Cutover condition 2: under authoritative this is BLOCK-and-alert (a
+      // send we can't attribute to a conversation shouldn't ship); under
+      // shadow it's logged allow, as before.
       if (!conv) {
+        const blockNoState = authoritative;
         await prisma.egressShadowLog.create({
           data: {
             accountId: params.accountId,
             conversationId: null,
             sendPath: inferSendPath(),
             draftPreview: params.messageText.slice(0, 300),
-            machineAllow: true,
+            machineAllow: !blockNoState,
             machineReason: 'NO_CONVERSATION_STATE',
-            agreed: true
+            agreed: !blockNoState
           }
         });
-        return;
+        if (blockNoState) {
+          console.error(
+            `[fix-d/egress] BLOCKED (authoritative): NO_CONVERSATION_STATE for ` +
+              `account ${params.accountId} recipient ${params.recipientId} — ` +
+              `send has no resolvable conversation to gate on.`
+          );
+          return {
+            block: true,
+            reason: 'NO_CONVERSATION_STATE',
+            detail: 'no resolvable conversation for this send'
+          };
+        }
+        return { block: false };
       }
 
       // Distinguish gate-exhaustion holds from generic review holds for the
@@ -114,6 +159,10 @@ export async function shadowEgressCheck(params: {
         operatorInitiated: params.operatorInitiated ?? false
       });
 
+      // In shadow the live code always ships, so agreed = verdict.allow. In
+      // authoritative we ENFORCE the verdict, so the live outcome equals the
+      // machine's — agreed is trivially true (kept true so post-cutover rows
+      // don't read as disagreements).
       await prisma.egressShadowLog.create({
         data: {
           accountId: params.accountId,
@@ -123,14 +172,30 @@ export async function shadowEgressCheck(params: {
           machineAllow: verdict.allow,
           machineReason: verdict.allow ? null : verdict.reason,
           machineHold: verdict.allow ? null : (verdict.hold ?? null),
-          agreed: verdict.allow // live verdict is ALLOW by construction
+          agreed: authoritative ? true : verdict.allow
         }
       });
+
+      if (authoritative && !verdict.allow) {
+        console.warn(
+          `[fix-d/egress] BLOCKED (authoritative): ${verdict.reason}` +
+            `${verdict.hold ? ` (${verdict.hold})` : ''} on conv ${conv.id} — ` +
+            verdict.detail
+        );
+        return {
+          block: true,
+          reason: verdict.reason,
+          detail: verdict.detail
+        };
+      }
+      return { block: false };
     } catch (err) {
+      // Fail-open: never block a real send because our own gate errored.
       console.error(
-        '[fix-d/shadow] egress shadow log failed (non-fatal):',
+        '[fix-d/egress] gate check failed (failing OPEN, send proceeds):',
         err
       );
+      return { block: false };
     }
   }
 }
