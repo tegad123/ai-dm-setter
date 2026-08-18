@@ -1874,23 +1874,43 @@ export function scoreVoiceQuality(
     );
   }
 
-  const currentStepHasAskBranch =
-    options?.activeBranchHasAskAction ??
-    options?.currentStepHasAskBranch ??
-    options?.currentStepHasAnyAskAction;
+  // P1-A (Tega 2026-08-18): the missing-ask check previously keyed on the
+  // SELECTED branch having an ask (activeBranchHasAskAction first). On a
+  // react/acknowledgment turn the model picks a "Default" branch that carries
+  // only the empathy [MSG] and no [ASK], so activeBranchHasAskAction was
+  // false and the check passed clean — the turn shipped warmth with no
+  // question, the conversation stalled, and the backlog grew. That is the
+  // silent-stall mechanism.
+  //
+  // Fix: require an ask whenever the STEP requires one (currentStepHasAnyAskAction
+  // — computed across all the step's branches, ends in ask_question→wait),
+  // UNLESS the selected branch is explicitly a silent acknowledgment branch
+  // ([MSG]+[WAIT], no [ASK]) — those are intentionally question-free and are
+  // already handled by the silent_branch guard above. So: step wants an ask,
+  // the active branch isn't a silent one, and the reply has no question →
+  // hard-fail. Symmetric twin of the offscript check.
+  const stepRequiresAsk =
+    options?.currentStepHasAnyAskAction === true ||
+    options?.activeBranchHasAskAction === true ||
+    options?.currentStepHasAskBranch === true;
   const stepNumber = options?.currentScriptStepNumber ?? null;
   const isBookingOrLinkStep =
     typeof stepNumber === 'number' && stepNumber >= 17;
-  console.warn('[voice-quality-gate] ASK-BRANCH EVAL:', {
-    currentStepHasAskBranch,
+  console.warn('[voice-quality-gate] ASK-STEP EVAL:', {
+    stepRequiresAsk,
+    activeBranchHasAskAction: options?.activeBranchHasAskAction ?? null,
+    currentStepHasAnyAskAction: options?.currentStepHasAnyAskAction ?? null,
     activeBranchLabel: options?.currentStepActiveBranchLabel ?? null,
+    activeBranchIsSilent: options?.currentStepActiveBranchIsSilent ?? null,
     replyHasQuestion: countQuestionMarks(reply) > 0,
     stepNumber,
     gateWouldFire:
-      currentStepHasAskBranch === true && countQuestionMarks(reply) === 0
+      stepRequiresAsk === true &&
+      countQuestionMarks(reply) === 0 &&
+      options?.currentStepActiveBranchIsSilent !== true
   });
   if (
-    currentStepHasAskBranch === true &&
+    stepRequiresAsk === true &&
     replyQuestionCount === 0 &&
     options?.currentStepActiveBranchIsSilent !== true &&
     options?.currentStepActiveBranchIsJudgeOnly !== true &&
@@ -1899,7 +1919,7 @@ export function scoreVoiceQuality(
     console.warn(
       '[voice-quality-gate] missing_required_question_on_ask_step:',
       {
-        currentStepHasAskBranch,
+        stepRequiresAsk,
         replyHasQuestion: countQuestionMarks(reply) > 0,
         replyFirst100: reply.slice(0, 100)
       }
