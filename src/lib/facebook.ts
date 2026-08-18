@@ -177,18 +177,34 @@ export async function sendMessage(
 export async function sendAudioMessage(
   accountId: string,
   recipientId: string,
-  audioUrl: string
+  audioUrl: string,
+  opts?: { operatorInitiated?: boolean }
 ): Promise<{ messageId: string }> {
-  try {
-    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    await shadowEgressCheck({
-      accountId,
-      recipientId,
-      messageText: `[audio] ${audioUrl}`,
-      platform: 'FACEBOOK'
-    });
-  } catch {
-    // shadow must never break a send
+  // Voice notes must pass the SAME authoritative egress gate as text sends
+  // (Tega 2026-08-18: audio previously bypassed it). Block honored outside
+  // the fail-open try, same asymmetry as sendMessage.
+  {
+    let gate: { block: boolean; reason?: string; detail?: string } = {
+      block: false
+    };
+    try {
+      const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+      gate = await shadowEgressCheck({
+        accountId,
+        recipientId,
+        messageText: `[audio] ${audioUrl}`,
+        platform: 'FACEBOOK',
+        operatorInitiated: opts?.operatorInitiated ?? false
+      });
+    } catch {
+      gate = { block: false };
+    }
+    if (gate.block) {
+      throw new EgressBlockedError(
+        `Egress gate blocked audio send: ${gate.reason ?? 'blocked'}${gate.detail ? ` — ${gate.detail}` : ''}`,
+        gate.reason ?? 'BLOCKED'
+      );
+    }
   }
 
   const accessToken = await getMetaAccessToken(accountId);

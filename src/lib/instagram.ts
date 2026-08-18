@@ -287,18 +287,31 @@ export async function unsendDM(
 export async function sendAudioDM(
   accountId: string,
   recipientId: string,
-  audioUrl: string
+  audioUrl: string,
+  opts?: { operatorInitiated?: boolean }
 ): Promise<{ messageId: string }> {
-  try {
-    const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
-    await shadowEgressCheck({
-      accountId,
-      recipientId,
-      messageText: `[audio] ${audioUrl}`,
-      platform: 'INSTAGRAM'
-    });
-  } catch {
-    // shadow must never break a send
+  // Voice notes pass the same egress gate as text (Tega 2026-08-18). IG is
+  // shadow-only today, so block is inert — but wired so IG's flip is a flag.
+  {
+    let gate: { block: boolean; reason?: string } = { block: false };
+    try {
+      const { shadowEgressCheck } = await import('@/lib/state-machine/shadow');
+      gate = await shadowEgressCheck({
+        accountId,
+        recipientId,
+        messageText: `[audio] ${audioUrl}`,
+        platform: 'INSTAGRAM',
+        operatorInitiated: opts?.operatorInitiated ?? false
+      });
+    } catch {
+      gate = { block: false };
+    }
+    if (gate.block) {
+      throw new EgressBlockedError(
+        `Egress gate blocked audio send: ${gate.reason ?? 'blocked'}`,
+        gate.reason ?? 'BLOCKED'
+      );
+    }
   }
   const { getCredentials } = await import('@/lib/credential-store');
   const igCreds = await getCredentials(accountId, 'INSTAGRAM');
