@@ -39,23 +39,35 @@ export async function runHealthChecks(
   const now = new Date();
   const results: HealthCheckResult[] = [];
 
-  // 1. Meta webhook receiving messages — at least 1 LEAD message in
-  // the last 24h on any conversation owned by this account.
-  const recentLead = await prisma.message.findFirst({
+  // 1. Meta webhook receiving messages — at least 1 conversation with recent
+  // lead activity in the last 24h.
+  //
+  // P1-C (Tega 2026-08-18, egress): this previously did
+  // message.findFirst({ sender:'LEAD', conversation.lead.accountId,
+  // timestamp>=24h }). No index supports "LEAD messages across ALL of an
+  // account's conversations by timestamp" (Message indexes are all
+  // conversationId-first), so Postgres SCANNED the Message table every run
+  // ×15 accounts ×~100 runs/day — a top egress source. Rewritten to start
+  // from Conversation.lastMessageAt (indexed) with the accountId join, which
+  // is an index range scan instead of a Message-table sweep. lastMessageAt
+  // is bumped on every inbound, so "recent lastMessageAt" is a sound proxy
+  // for "webhook receiving messages" (the real-time pre-gen path already
+  // covers correctness; this sweep is a health signal, not a scanner).
+  const recentConvo = await prisma.conversation.findFirst({
     where: {
-      sender: 'LEAD',
-      conversation: { lead: { accountId } },
-      timestamp: { gte: new Date(now.getTime() - DAY_MS) }
+      lead: { accountId },
+      lastMessageAt: { gte: new Date(now.getTime() - DAY_MS) }
     },
-    select: { timestamp: true }
+    orderBy: { lastMessageAt: 'desc' },
+    select: { lastMessageAt: true }
   });
   results.push({
     id: 'webhook_active',
     label: 'Meta webhook receiving messages',
-    status: recentLead ? 'PASS' : 'WARN',
-    detail: recentLead
-      ? `Last lead message ${recentLead.timestamp.toISOString()}`
-      : 'No lead messages in the last 24h',
+    status: recentConvo?.lastMessageAt ? 'PASS' : 'WARN',
+    detail: recentConvo?.lastMessageAt
+      ? `Last activity ${recentConvo.lastMessageAt.toISOString()}`
+      : 'No conversation activity in the last 24h',
     lastCheckedAt: now
   });
 

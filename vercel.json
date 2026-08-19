@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/health-sweep",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/media-retention",
