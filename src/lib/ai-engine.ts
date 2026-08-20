@@ -7389,6 +7389,55 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           qualityGateTerminalFailure = true;
           qualityGateFailureReason = 'hard_unshippable_after_quality_retries';
           qualityGateHardFails = [...quality.hardFails];
+        } else if (
+          softUnshippable &&
+          personaConfigDisablesStageProgression(personaForGate?.promptConfig)
+        ) {
+          // P1-B / exhaustion-to-hold (Tega 2026-08-19): on the low-ticket
+          // "script-is-product" funnel, shipping a gate-flagged best-effort
+          // reply is worse than holding. Justin/Prada showed banned_emoji and
+          // branch-misroute content shipping on the opening turn because
+          // softUnshippable best-effort fired. On THIS funnel, exhaustion of a
+          // soft-unshippable gate HOLDS for human review and fires a
+          // notification IMMEDIATELY (not end-of-day) so the operator sees it
+          // now and no new silent backlog forms.
+          parsed.escalateToHuman = true;
+          qualityGateTerminalFailure = true;
+          qualityGateFailureReason = 'lowticket_soft_gate_exhausted_held';
+          qualityGateHardFails = [...quality.hardFails];
+          const heldGateType = softUnshippable
+            .split(':')[0]
+            .replace(/^\[[^\]]*\]\s*/, '')
+            .trim();
+          console.warn(
+            `[ai-engine] low-ticket soft gate "${heldGateType}" exhausted ${MAX_RETRIES + 1} attempts — HOLDING for review + immediate notification (not shipping best-effort) on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
+          );
+          if (activeConversationId) {
+            try {
+              const { escalate } = await import('@/lib/escalation-dispatch');
+              const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+              const link = origin
+                ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${activeConversationId}`
+                : undefined;
+              await escalate({
+                type: 'ai_stuck',
+                accountId,
+                conversationId: activeConversationId,
+                leadName: leadContext.leadName ?? 'Lead',
+                leadHandle: leadContext.handle ?? '',
+                title:
+                  'AI held — reply failed quality gate, needs manual response',
+                body: `The AI could not produce a passing reply after ${MAX_RETRIES + 1} attempts (${heldGateType}). The conversation is held so no gate-flagged message ships. Please respond manually.`,
+                details: `Gate: ${heldGateType}`,
+                link
+              });
+            } catch (notifErr) {
+              console.error(
+                '[ai-engine] held-on-exhaustion notification failed (non-fatal):',
+                notifErr
+              );
+            }
+          }
         } else if (softUnshippable) {
           // Soft-fail best-effort (script-adherence drift: markdown, repeated
           // capital Q, verbatim/mandatory-ask/step-distance). Ship the reply,
@@ -7396,7 +7445,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           // forward-moving reply beats silence for these non-harmful gates.
           // F5.1 (2026-06-07): explicitly force escalateToHuman=false here so a
           // soft gate can NEVER silence the conversation, even if an earlier
-          // retry directive left the flag set.
+          // retry directive left the flag set. (High-ticket / non-low-ticket
+          // personas only — low-ticket now holds, see the branch above.)
           parsed.escalateToHuman = false;
           const gateType = softUnshippable
             .split(':')[0]
