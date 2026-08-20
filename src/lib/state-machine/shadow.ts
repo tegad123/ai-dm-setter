@@ -38,6 +38,30 @@ function isAuthoritativeForPlatform(platform: string | null): boolean {
   return platform ? set.includes(platform.toUpperCase()) : false;
 }
 
+// Best-effort shadow-log write. Swallows its OWN errors so a flaky DB write
+// (the intermittent pooler init error) can never bubble into the gate's
+// enforcement path and fail it open. Test 4 root cause: the log create() was
+// inline, so its failure allowed a send that the verdict said to block.
+async function logShadowRow(data: {
+  accountId: string;
+  conversationId: string | null;
+  sendPath: string;
+  draftPreview: string;
+  machineAllow: boolean;
+  machineReason: string | null;
+  machineHold: string | null;
+  agreed: boolean;
+}): Promise<void> {
+  try {
+    await prisma.egressShadowLog.create({ data });
+  } catch (err) {
+    console.error(
+      '[fix-d/egress] shadow-log write failed (non-fatal, enforcement unaffected):',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 export interface EgressGateResult {
   block: boolean;
   reason?: string;
@@ -148,16 +172,19 @@ export async function shadowEgressCheck(params: {
       // shadow it's logged allow, as before.
       if (!conv) {
         const blockNoState = authoritative;
-        await prisma.egressShadowLog.create({
-          data: {
-            accountId: params.accountId,
-            conversationId: null,
-            sendPath: inferSendPath(),
-            draftPreview: params.messageText.slice(0, 300),
-            machineAllow: !blockNoState,
-            machineReason: 'NO_CONVERSATION_STATE',
-            agreed: !blockNoState
-          }
+        // Log is BEST-EFFORT (Test 4 fix): a log-write failure must NEVER
+        // change the enforcement decision. Previously the create() ran before
+        // the block return, so a flaky DB write threw into the outer catch and
+        // failed OPEN — allowing a send that should have blocked.
+        await logShadowRow({
+          accountId: params.accountId,
+          conversationId: null,
+          sendPath: inferSendPath(),
+          draftPreview: params.messageText.slice(0, 300),
+          machineAllow: !blockNoState,
+          machineReason: 'NO_CONVERSATION_STATE',
+          machineHold: null,
+          agreed: !blockNoState
         });
         if (blockNoState) {
           console.error(
@@ -175,7 +202,7 @@ export async function shadowEgressCheck(params: {
       }
 
       // Distinguish gate-exhaustion holds from generic review holds for the
-      // typed-reason requirement (cheap check, shadow-only).
+      // typed-reason requirement.
       let qualityGateHeld = false;
       if (conv.awaitingHumanReview) {
         const gateFail = await prisma.voiceQualityFailure.findFirst({
@@ -194,21 +221,17 @@ export async function shadowEgressCheck(params: {
         operatorInitiated: params.operatorInitiated ?? false
       });
 
-      // In shadow the live code always ships, so agreed = verdict.allow. In
-      // authoritative we ENFORCE the verdict, so the live outcome equals the
-      // machine's — agreed is trivially true (kept true so post-cutover rows
-      // don't read as disagreements).
-      await prisma.egressShadowLog.create({
-        data: {
-          accountId: params.accountId,
-          conversationId: conv.id,
-          sendPath: inferSendPath(),
-          draftPreview: params.messageText.slice(0, 300),
-          machineAllow: verdict.allow,
-          machineReason: verdict.allow ? null : verdict.reason,
-          machineHold: verdict.allow ? null : (verdict.hold ?? null),
-          agreed: authoritative ? true : verdict.allow
-        }
+      // Log is BEST-EFFORT and happens AFTER the verdict is decided. The
+      // enforcement return below does not depend on this write succeeding.
+      await logShadowRow({
+        accountId: params.accountId,
+        conversationId: conv.id,
+        sendPath: inferSendPath(),
+        draftPreview: params.messageText.slice(0, 300),
+        machineAllow: verdict.allow,
+        machineReason: verdict.allow ? null : verdict.reason,
+        machineHold: verdict.allow ? null : (verdict.hold ?? null),
+        agreed: authoritative ? true : verdict.allow
       });
 
       if (authoritative && !verdict.allow) {
@@ -225,9 +248,12 @@ export async function shadowEgressCheck(params: {
       }
       return { block: false };
     } catch (err) {
-      // Fail-open: never block a real send because our own gate errored.
+      // Fail-open ONLY for state-resolution failures (the reads needed to
+      // DECIDE). A log-write failure can no longer reach here — logShadowRow
+      // swallows its own errors — so a blocked send is never allowed just
+      // because logging hiccuped (the Test 4 root cause).
       console.error(
-        '[fix-d/egress] gate check failed (failing OPEN, send proceeds):',
+        '[fix-d/egress] gate STATE RESOLUTION failed (failing OPEN, send proceeds):',
         err
       );
       return { block: false };
