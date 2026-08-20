@@ -284,13 +284,15 @@ export async function GET(req: NextRequest) {
             await sendInstagramDM(
               conv.lead.accountId,
               conv.lead.platformUserId,
-              keepaliveText
+              keepaliveText,
+              { conversationId: conv.id }
             );
           } else if (conv.lead.platform === 'FACEBOOK') {
             await sendFacebookMessage(
               conv.lead.accountId,
               conv.lead.platformUserId,
-              keepaliveText
+              keepaliveText,
+              { conversationId: conv.id }
             );
           } else {
             console.warn(

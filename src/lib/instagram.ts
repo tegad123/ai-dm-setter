@@ -63,7 +63,11 @@ export async function sendDM(
   messageText: string,
   // operatorInitiated (Fix D cutover cond 1): true for human-initiated sends
   // (manual reply / approved suggestion) so canSend lets them through a hold.
-  opts?: { tag?: 'HUMAN_AGENT'; operatorInitiated?: boolean }
+  opts?: {
+    tag?: 'HUMAN_AGENT';
+    operatorInitiated?: boolean;
+    conversationId?: string | null;
+  }
 ): Promise<{ messageId: string }> {
   // Fix D egress gate at the physical send choke point. Awaited so the write
   // survives serverless teardown. IG stays SHADOW-only until its own window
@@ -79,6 +83,7 @@ export async function sendDM(
         recipientId,
         messageText,
         platform: 'INSTAGRAM',
+        conversationId: opts?.conversationId ?? null,
         operatorInitiated: opts?.operatorInitiated ?? false
       });
     } catch {
@@ -288,7 +293,7 @@ export async function sendAudioDM(
   accountId: string,
   recipientId: string,
   audioUrl: string,
-  opts?: { operatorInitiated?: boolean }
+  opts?: { operatorInitiated?: boolean; conversationId?: string | null }
 ): Promise<{ messageId: string }> {
   // Voice notes pass the same egress gate as text (Tega 2026-08-18). IG is
   // shadow-only today, so block is inert — but wired so IG's flip is a flag.
@@ -301,6 +306,7 @@ export async function sendAudioDM(
         recipientId,
         messageText: `[audio] ${audioUrl}`,
         platform: 'INSTAGRAM',
+        conversationId: opts?.conversationId ?? null,
         operatorInitiated: opts?.operatorInitiated ?? false
       });
     } catch {

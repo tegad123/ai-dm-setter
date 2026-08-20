@@ -155,8 +155,13 @@ async function shipTextToMeta(
   platform: string,
   accountId: string,
   platformUserId: string,
-  text: string
+  text: string,
+  // Test 4 fix: thread the exact conversation to the egress gate. This is an
+  // automated AI send (operatorInitiated stays false) so a held conversation
+  // is correctly blocked.
+  conversationId?: string | null
 ): Promise<ShipOutcome> {
+  const gateOpts = { conversationId: conversationId ?? null };
   try {
     if (!canShipToPlatformRecipient(platform, platformUserId)) {
       throw new Error(
@@ -164,7 +169,12 @@ async function shipTextToMeta(
       );
     }
     if (platform === 'INSTAGRAM') {
-      const r = await sendInstagramDM(accountId, platformUserId, text);
+      const r = await sendInstagramDM(
+        accountId,
+        platformUserId,
+        text,
+        gateOpts
+      );
       const messageId = r?.messageId?.trim();
       if (!messageId) {
         throw new Error('Instagram send DM succeeded without a messageId');
@@ -176,7 +186,12 @@ async function shipTextToMeta(
       };
     }
     if (platform === 'FACEBOOK') {
-      const r = await sendFacebookMessage(accountId, platformUserId, text);
+      const r = await sendFacebookMessage(
+        accountId,
+        platformUserId,
+        text,
+        gateOpts
+      );
       const messageId = r?.messageId?.trim();
       if (!messageId) {
         throw new Error('Facebook send message succeeded without a messageId');
@@ -3919,7 +3934,8 @@ async function deliverBubbleGroup(params: {
           lead.platform,
           lead.accountId,
           lead.platformUserId,
-          bubble
+          bubble,
+          conversationId
         )
       : {
           messageId: null,
@@ -4298,7 +4314,8 @@ async function deliverSingleAIMessage(params: {
       lead.platform,
       lead.accountId,
       platformUserId,
-      result.reply
+      result.reply,
+      conversationId
     );
     if (!ship.messageId) {
       await notifyAndThrowDeliveryFailure({
@@ -7282,7 +7299,8 @@ async function handleTypeformFilledNoBookingScreenOut(
       p.platform,
       p.accountId,
       p.platformUserId,
-      TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE
+      TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
+      p.conversationId
     );
     if (ship.messageId) {
       await prisma.message

@@ -202,14 +202,16 @@ export async function GET(req: NextRequest) {
             const r = await sendInstagramDM(
               conv.lead.accountId,
               conv.lead.platformUserId,
-              bubble
+              bubble,
+              { conversationId: group.conversationId }
             );
             messageId = r?.messageId ?? null;
           } else if (conv.lead.platform === 'FACEBOOK') {
             const r = await sendFacebookMessage(
               conv.lead.accountId,
               conv.lead.platformUserId,
-              bubble
+              bubble,
+              { conversationId: group.conversationId }
             );
             messageId =
               typeof r === 'string' ? r : ((r as any)?.messageId ?? null);

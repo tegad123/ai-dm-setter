@@ -447,7 +447,15 @@ async function fireScheduledMessage(
     row.messageType === 'FOLLOW_UP_3' ||
     row.messageType === 'FOLLOW_UP_SOFT_EXIT' ||
     row.messageType === 'BOOKING_LINK_FOLLOWUP';
-  const sendOpts = isFollowUp ? ({ tag: 'HUMAN_AGENT' } as const) : undefined;
+  // Thread the exact conversationId to the egress gate (Test 4 fix) so it
+  // checks THIS conversation's hold state, not a heuristic guess. This is an
+  // AUTOMATED send — operatorInitiated stays false, so a held conversation
+  // is correctly blocked.
+  const sendOpts = {
+    ...(isFollowUp ? { tag: 'HUMAN_AGENT' as const } : {}),
+    conversationId: conversation.id,
+    operatorInitiated: false
+  };
 
   try {
     if (lead.platform === 'INSTAGRAM') {

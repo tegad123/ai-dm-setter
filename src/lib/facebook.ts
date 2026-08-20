@@ -55,6 +55,10 @@ export interface MetaSendOptions {
   // the resolution of a hold. Crons / webhook-processor pass false (or omit),
   // so automated sends stay gated. Threads to the egress shadow / gate.
   operatorInitiated?: boolean;
+  // The conversation this send targets. Passed to the egress gate so it
+  // checks THIS conversation's hold state, not a heuristically-guessed one
+  // (Test 4 fix — a lead with multiple conversations was mis-resolved).
+  conversationId?: string | null;
 }
 
 /**
@@ -86,6 +90,7 @@ export async function sendMessage(
         recipientId,
         messageText,
         platform: 'FACEBOOK',
+        conversationId: opts?.conversationId ?? null,
         operatorInitiated: opts?.operatorInitiated ?? false
       });
     } catch {
@@ -178,7 +183,7 @@ export async function sendAudioMessage(
   accountId: string,
   recipientId: string,
   audioUrl: string,
-  opts?: { operatorInitiated?: boolean }
+  opts?: { operatorInitiated?: boolean; conversationId?: string | null }
 ): Promise<{ messageId: string }> {
   // Voice notes must pass the SAME authoritative egress gate as text sends
   // (Tega 2026-08-18: audio previously bypassed it). Block honored outside
@@ -194,6 +199,7 @@ export async function sendAudioMessage(
         recipientId,
         messageText: `[audio] ${audioUrl}`,
         platform: 'FACEBOOK',
+        conversationId: opts?.conversationId ?? null,
         operatorInitiated: opts?.operatorInitiated ?? false
       });
     } catch {

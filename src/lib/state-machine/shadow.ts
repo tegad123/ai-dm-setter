@@ -67,6 +67,15 @@ export async function shadowEgressCheck(params: {
   recipientId: string;
   messageText: string;
   platform?: string | null;
+  // The conversation this send targets. When provided, the gate resolves
+  // state from THIS exact conversation — the authoritative, correct path.
+  // Test 4 (Tega 2026-08-19) failed because, absent this, the gate fell back
+  // to a heuristic (latest lead by platformUserId → latest conversation by
+  // lastMessageAt) and, for a lead with multiple conversations, checked a
+  // DIFFERENT conversation than the one being sent to — so a held
+  // conversation's send was allowed. Every send path that knows its
+  // conversationId (nearly all) must pass it; the heuristic is a last resort.
+  conversationId?: string | null;
   // true for sends a human explicitly initiated (manual reply / approved
   // suggestion routes pass this once call sites adopt it; default false =
   // treat as AI-initiated, the conservative shadow reading).
@@ -85,27 +94,53 @@ export async function shadowEgressCheck(params: {
   // couple of cheap indexed reads + one insert).
   {
     try {
-      const lead = await prisma.lead.findFirst({
-        where: {
-          accountId: params.accountId,
-          platformUserId: params.recipientId
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true }
-      });
-      const conv = lead
-        ? await prisma.conversation.findFirst({
-            where: { leadId: lead.id },
-            orderBy: { lastMessageAt: 'desc' },
-            select: {
-              id: true,
-              aiActive: true,
-              distressDetected: true,
-              schedulingConflict: true,
-              awaitingHumanReview: true
-            }
+      const convSelect = {
+        id: true,
+        aiActive: true,
+        distressDetected: true,
+        schedulingConflict: true,
+        awaitingHumanReview: true
+      } as const;
+
+      // PRIMARY: resolve the exact conversation the caller named. This is the
+      // authoritative path — no guessing. (Test 4 fix.)
+      let conv = params.conversationId
+        ? await prisma.conversation.findUnique({
+            where: { id: params.conversationId },
+            select: convSelect
           })
         : null;
+
+      // FALLBACK (heuristic): only when the caller didn't pass a
+      // conversationId. Latest lead by platformUserId → latest conversation.
+      // Ambiguous for a lead with multiple conversations; logged as such so
+      // any remaining un-threaded call site is visible in the shadow data.
+      let resolvedByHeuristic = false;
+      if (!conv) {
+        const lead = await prisma.lead.findFirst({
+          where: {
+            accountId: params.accountId,
+            platformUserId: params.recipientId
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true }
+        });
+        conv = lead
+          ? await prisma.conversation.findFirst({
+              where: { leadId: lead.id },
+              orderBy: { lastMessageAt: 'desc' },
+              select: convSelect
+            })
+          : null;
+        resolvedByHeuristic = Boolean(conv);
+        if (resolvedByHeuristic) {
+          console.warn(
+            `[fix-d/egress] conversation resolved by HEURISTIC (no conversationId passed) for ` +
+              `account ${params.accountId} recipient ${params.recipientId} → conv ${conv?.id}. ` +
+              `This send path should thread conversationId for a correct gate decision.`
+          );
+        }
+      }
 
       // No conversation resolvable — machine has no state to gate on.
       // Cutover condition 2: under authoritative this is BLOCK-and-alert (a

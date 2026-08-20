@@ -226,14 +226,14 @@ export async function POST(
             lead.accountId,
             lead.platformUserId,
             bubble,
-            { operatorInitiated: true }
+            { operatorInitiated: true, conversationId }
           );
         } else if (lead.platform === 'FACEBOOK') {
           sendResult = await sendFacebookMessage(
             lead.accountId,
             lead.platformUserId,
             bubble,
-            { operatorInitiated: true }
+            { operatorInitiated: true, conversationId }
           );
         } else {
           throw new Error(`unsupported platform: ${lead.platform}`);

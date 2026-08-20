@@ -439,7 +439,7 @@ export async function POST(
                 lead.accountId,
                 lead.platformUserId,
                 messageContent,
-                { operatorInitiated: true }
+                { operatorInitiated: true, conversationId: id }
               );
               console.log(
                 `[send] Facebook message sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
@@ -449,7 +449,7 @@ export async function POST(
                 lead.accountId,
                 lead.platformUserId,
                 messageContent,
-                { operatorInitiated: true }
+                { operatorInitiated: true, conversationId: id }
               );
               console.log(
                 `[send] Instagram DM sent to ${lead.platformUserId} (mid=${sendResult?.messageId ?? 'none'})`
