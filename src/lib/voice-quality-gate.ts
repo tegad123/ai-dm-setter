@@ -597,6 +597,40 @@ const BANNED_EMOJIS = [
   '💪' // without skin tone — Daniel uses 💪🏿 specifically
 ];
 
+// Strip banned emojis from a reply (Tega 2026-08-21): a banned_emoji gate is
+// cosmetic — the fix is to REMOVE the emoji and ship the clean text, not to
+// hold the conversation (holding the opener over a 🙏 is worse than the emoji)
+// and not to ship the emoji anyway (Tega's original complaint). Collapses any
+// double space / trailing space left behind.
+export function stripBannedEmojis(text: string): string {
+  // Skin-tone modifiers are U+1F3FB–U+1F3FF. A banned base emoji FOLLOWED by
+  // a skin tone is an intentionally-allowed variant (e.g. 💪🏿 — Daniel's), so
+  // don't strip those; only strip the bare banned form. codePointAt handles
+  // the surrogate pair the modifier is encoded as.
+  const isSkinTone = (s: string): boolean => {
+    const cp = s.codePointAt(0);
+    return cp !== undefined && cp >= 0x1f3fb && cp <= 0x1f3ff;
+  };
+  let out = text;
+  for (const emoji of BANNED_EMOJIS) {
+    let idx = out.indexOf(emoji);
+    while (idx !== -1) {
+      const after = out.slice(idx + emoji.length);
+      if (isSkinTone(after)) {
+        // allowed skin-tone variant — skip past it, don't strip
+        idx = out.indexOf(emoji, idx + emoji.length);
+      } else {
+        out = out.slice(0, idx) + out.slice(idx + emoji.length);
+        idx = out.indexOf(emoji, idx);
+      }
+    }
+  }
+  return out
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.!?,])/g, '$1')
+    .trim();
+}
+
 const CALL_LOGISTICS_PATTERNS = [
   /\bquiet (spot|area|place|environment|room)\b/i,
   /make sure you('?re| are) in a/i,

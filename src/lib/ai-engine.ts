@@ -24,6 +24,7 @@ import {
   aiPromisedArtifact,
   TYPEFORM_NO_BOOKING_SOFT_EXIT_MESSAGE,
   extractEmbeddedQuotes,
+  stripBannedEmojis,
   type RequiredMessage
 } from '@/lib/voice-quality-gate';
 import { countCapitalQuestionAsks } from '@/lib/conversation-facts';
@@ -7502,17 +7503,37 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           }
         } else if (
           personaConfigDisablesStageProgression(personaForGate?.promptConfig) &&
-          quality.hardFails.length > 0
+          quality.hardFails.some((f) => {
+            // #3 refinement (Tega 2026-08-21 re-run): HOLD only on SUBSTANTIVE
+            // content gates — wrong/duplicate/off-script content reaching the
+            // lead. COSMETIC gates (banned_emoji, markdown) must NOT hold the
+            // conversation: the first re-run held the OPENER over a single 🙏,
+            // which is worse than the emoji. Those get stripped/shipped by the
+            // strip paths / best-effort else, not a hold. This keeps Tega's
+            // bar ("no gate-flagged content reaches the lead") for the classes
+            // that matter — offscript question, verbatim/repeated question,
+            // fabricated url, multiple questions, missing ask — without
+            // holding on a stray emoji.
+            const substantive = [
+              'offscript_question_on_lowticket:',
+              'verbatim_repeat:',
+              'verbatim_repeat_bubble:',
+              'repeated_question:',
+              'multiple_questions:',
+              'missing_required_question_on_ask_step:',
+              'fabricated_url_in_reply:',
+              'reasks_captured_variable:'
+            ];
+            return substantive.some((s) => f.includes(s));
+          })
         ) {
-          // P1-B / #3 catch-all (Tega 2026-08-21): on the low-ticket
-          // "script-is-product" funnel, NO gate-flagged content may reach the
-          // lead. The earlier softUnshippable-only hold (8f7dbe4) was too
-          // narrow — repeated_question, multiple_questions, and fabricated_url
-          // took THIS final best-effort else and shipped anyway. Any
-          // still-failing hard gate on this funnel now HOLDS for review and
-          // fires an immediate notification, matching the softUnshippable
-          // branch above. High-ticket personas keep best-effort ship (the
-          // final else below), where a forward reply beats silence.
+          // On the low-ticket "script-is-product" funnel, substantive
+          // gate-flagged content (wrong/duplicate/off-script) must NOT reach
+          // the lead. The earlier softUnshippable-only hold (8f7dbe4) was too
+          // narrow — repeated_question / multiple_questions / fabricated_url
+          // took the final best-effort else and shipped. Now they HOLD for
+          // review + immediate notification. Cosmetic-only fails (emoji,
+          // markdown) fall through to best-effort ship, not a hold.
           parsed.escalateToHuman = true;
           qualityGateTerminalFailure = true;
           qualityGateFailureReason = 'lowticket_gate_exhausted_held';
@@ -7550,8 +7571,24 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           // (F5.1 2026-06-07) — a forward-moving reply beats silence. Only the
           // enumerated hard gates above (allBubblesEmpty / hardUnshippable) may
           // escalate; everything that reaches here must not. (High-ticket only;
-          // low-ticket now holds — see the branch above.)
+          // low-ticket substantive fails now hold — see the branch above.)
           parsed.escalateToHuman = false;
+          // If the ONLY unresolved issue is a banned emoji, STRIP it and ship
+          // the clean text (Tega 2026-08-21) — don't ship the 🙏 (his original
+          // complaint) and don't hold the conversation over it either.
+          if (quality.hardFails.some((f) => f.includes('banned_emoji:'))) {
+            if (Array.isArray(parsed.messages)) {
+              parsed.messages = parsed.messages.map((m) =>
+                typeof m === 'string' ? stripBannedEmojis(m) : m
+              );
+              parsed.message = parsed.messages[0] ?? parsed.message;
+            } else if (typeof parsed.message === 'string') {
+              parsed.message = stripBannedEmojis(parsed.message);
+            }
+            console.warn(
+              `[ai-engine] stripped banned emoji from best-effort reply before shipping (conv ${activeConversationId})`
+            );
+          }
           console.warn(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate)`
           );
