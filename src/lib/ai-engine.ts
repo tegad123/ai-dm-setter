@@ -1880,6 +1880,27 @@ function collectCurrentTurnAllowedUrls(params: {
     }
   }
 
+  // fabricated_url fix (Tega 2026-08-21, finding #1): a URL authored ANYWHERE
+  // in the active script's send_link actions is real, script-authored copy —
+  // it can never be "fabricated" (that means invented by the model, present
+  // nowhere in the script). The old allowlist only collected the INFERRED
+  // current step's URLs, so when step inference drifted (or a real link
+  // belonged to a neighbouring step), the correct scripted URL got flagged as
+  // fabricated — exactly what fired on Step 13's real checkout link in the
+  // dry-run. Collect every send_link URL across the whole active script.
+  if (script) {
+    for (const step of script.steps ?? []) {
+      for (const action of step.actions ?? []) {
+        addAllowedUrlsFromAction(action as UrlActionLike, urls);
+      }
+      for (const branch of step.branches ?? []) {
+        for (const action of branch.actions ?? []) {
+          addAllowedUrlsFromAction(action as UrlActionLike, urls);
+        }
+      }
+    }
+  }
+
   addPersonaFallbackUrls(params.snapshot?.persona, urls, !!script);
   addCapturedTemplateUrls(params.snapshot?.capturedDataPoints, urls);
 
@@ -7479,12 +7500,57 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               );
             }
           }
+        } else if (
+          personaConfigDisablesStageProgression(personaForGate?.promptConfig) &&
+          quality.hardFails.length > 0
+        ) {
+          // P1-B / #3 catch-all (Tega 2026-08-21): on the low-ticket
+          // "script-is-product" funnel, NO gate-flagged content may reach the
+          // lead. The earlier softUnshippable-only hold (8f7dbe4) was too
+          // narrow — repeated_question, multiple_questions, and fabricated_url
+          // took THIS final best-effort else and shipped anyway. Any
+          // still-failing hard gate on this funnel now HOLDS for review and
+          // fires an immediate notification, matching the softUnshippable
+          // branch above. High-ticket personas keep best-effort ship (the
+          // final else below), where a forward reply beats silence.
+          parsed.escalateToHuman = true;
+          qualityGateTerminalFailure = true;
+          qualityGateFailureReason = 'lowticket_gate_exhausted_held';
+          qualityGateHardFails = [...quality.hardFails];
+          console.warn(
+            `[ai-engine] low-ticket gate exhausted ${MAX_RETRIES + 1} attempts with unresolved hard fail(s) — HOLDING (not shipping best-effort) on convo ${activeConversationId}. hardFails=${JSON.stringify(quality.hardFails)}`
+          );
+          try {
+            const { escalate } = await import('@/lib/escalation-dispatch');
+            const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+            const link = origin
+              ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${activeConversationId}`
+              : undefined;
+            await escalate({
+              type: 'ai_stuck',
+              accountId,
+              conversationId: activeConversationId ?? undefined,
+              leadName: leadContext.leadName ?? 'Lead',
+              leadHandle: leadContext.handle ?? '',
+              title:
+                'AI held — reply failed quality gate, needs manual response',
+              body: `The AI could not produce a passing reply after ${MAX_RETRIES + 1} attempts. Held so no gate-flagged message ships. Gates: ${quality.hardFails.map((f) => f.split(':')[0]).join(', ')}. Please respond manually.`,
+              details: quality.hardFails.slice(0, 3).join(' | '),
+              link
+            });
+          } catch (notifErr) {
+            console.error(
+              '[ai-engine] low-ticket held-on-exhaustion notification failed (non-fatal):',
+              notifErr
+            );
+          }
         } else {
           // Catch-all best-effort: gate exhausted but no hard-unshippable fail
           // and output is non-empty. Ship it and guarantee the AI stays active
           // (F5.1 2026-06-07) — a forward-moving reply beats silence. Only the
           // enumerated hard gates above (allBubblesEmpty / hardUnshippable) may
-          // escalate; everything that reaches here must not.
+          // escalate; everything that reaches here must not. (High-ticket only;
+          // low-ticket now holds — see the branch above.)
           parsed.escalateToHuman = false;
           console.warn(
             `[ai-engine] Voice quality gate exhausted ${MAX_RETRIES + 1} attempts — sending best effort (no escalate)`
