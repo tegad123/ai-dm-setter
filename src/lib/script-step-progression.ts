@@ -838,6 +838,17 @@ export interface StepActionShape {
    * question on the branch the LLM is taking.
    */
   hasAnyAskAction: boolean;
+  /**
+   * True when the step expects a lead REPLY but the prompt is expressed as a
+   * runtime_judgment (not an explicit ask_question) followed by
+   * wait_for_response. P1-A / Tega 2026-08-21: Step 5's ask is
+   * "Ask them why that goal matters" as a runtime_judgment + wait, so
+   * hasAnyAskAction is false and the missing-ask widen never armed. A step
+   * that WAITS for a response structurally requires something to reply to —
+   * so a non-silent branch with a wait but no explicit ask still owes the
+   * lead a question. Structural, no semantic parsing.
+   */
+  hasRuntimeJudgmentWait: boolean;
   /** Concatenated [ASK] content strings across branches (for off-script comparison). */
   scriptedQuestionContents: string[];
   /** Direct current-step [MSG] contents that must be sent verbatim. */
@@ -895,6 +906,7 @@ export function getStepActionShape(
   const scriptedQuestionContents: string[] = [];
   const requiredMessageContents: string[] = [];
   let hasAnyAskAction = false;
+  let hasRuntimeJudgmentWait = false;
 
   const allStepActions = collectAllStepActions(step);
 
@@ -934,11 +946,29 @@ export function getStepActionShape(
       // Silent branch: operator wrote acknowledgment + wait, no question.
       silentBranchLabels.push(branch.label);
     }
+
+    // P1-A widen-arms-on-wait: a NON-silent branch that has a
+    // runtime_judgment (an instruction to ask, e.g. "Ask them why that goal
+    // matters") AND a wait_for_response, but NO explicit ask_question action,
+    // still owes the lead a question — the step waits for a reply. This is
+    // the Step-5 shape the ask_question-only signal missed.
+    const hasRjInBranch = branch.actions.some(
+      (a) => a.actionType === 'runtime_judgment'
+    );
+    if (
+      askActions.length === 0 &&
+      waitActions.length > 0 &&
+      hasRjInBranch &&
+      !silentBranchLabels.includes(branch.label)
+    ) {
+      hasRuntimeJudgmentWait = true;
+    }
   }
 
   return {
     hasSilentBranch: silentBranchLabels.length > 0,
     hasAnyAskAction,
+    hasRuntimeJudgmentWait,
     scriptedQuestionContents,
     requiredMessageContents,
     silentBranchLabels

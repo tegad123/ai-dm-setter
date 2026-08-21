@@ -4246,6 +4246,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepRequiredMessages: currentStepRequiredMessagesForGate,
     activeBranchRequiredMessages,
     currentStepHasAnyAskAction: currentStepShape?.hasAnyAskAction ?? false,
+    currentStepHasRuntimeJudgmentWait:
+      currentStepShape?.hasRuntimeJudgmentWait ?? false,
     activeBranchHasSilentBranch: selectedCurrentJudgeBranch
       ? currentStepActiveBranchIsSilent
       : undefined,

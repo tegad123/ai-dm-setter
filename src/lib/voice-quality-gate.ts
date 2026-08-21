@@ -814,6 +814,9 @@ export interface VoiceQualityOptions {
   activeBranchRequiredMessages?: RequiredMessage[];
   /** True when the current step has at least one [ASK] action in any branch. */
   currentStepHasAnyAskAction?: boolean;
+  // P1-A widen-arms-on-wait (Tega 2026-08-21): step expects a reply via a
+  // runtime_judgment + wait_for_response, not an explicit ask_question.
+  currentStepHasRuntimeJudgmentWait?: boolean;
   /** True when the classifier-selected branch has [MSG]+[WAIT] and no [ASK]. */
   activeBranchHasSilentBranch?: boolean;
   /** True when the classifier-selected branch contains an [ASK]. */
@@ -1892,7 +1895,11 @@ export function scoreVoiceQuality(
   const stepRequiresAsk =
     options?.currentStepHasAnyAskAction === true ||
     options?.activeBranchHasAskAction === true ||
-    options?.currentStepHasAskBranch === true;
+    options?.currentStepHasAskBranch === true ||
+    // The Step-5 shape: a runtime_judgment "ask" + wait_for_response, no
+    // explicit ask_question action. A step that waits for a reply requires
+    // a question to have been asked.
+    options?.currentStepHasRuntimeJudgmentWait === true;
   const stepNumber = options?.currentScriptStepNumber ?? null;
   const isBookingOrLinkStep =
     typeof stepNumber === 'number' && stepNumber >= 17;
