@@ -238,21 +238,35 @@ export async function processManyChatHandoff(params: {
       `[manychat-handoff] payload REJECTED for account ${account.id}: ${detail}`
     );
     try {
-      const recent = await prisma.notification.findFirst({
-        where: {
-          accountId: account.id,
-          title: 'ManyChat handoff rejected',
-          createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) }
-        },
-        select: { id: true }
+      // Noise fix (Tega 2026-08-22): an UNCHANGED rejection reason is a
+      // standing config gap, not news. It previously re-notified every 30
+      // min, so a persistent empty-subscriberId issue produced 8 identical
+      // notifications over ~30h that buried the AI-held alerts the operator
+      // actually needed. Now: dedupe on the REASON — the same rejection
+      // reason re-notifies at most once per 24h; a DIFFERENT reason (a new
+      // config problem) still surfaces within the 30-min flap floor.
+      const REASON_REMIND_MS = 24 * 60 * 60 * 1000;
+      const FLAP_FLOOR_MS = 30 * 60 * 1000;
+      const reasonTag = `\nreason:${detail.slice(0, 120)}`;
+      const last = await prisma.notification.findFirst({
+        where: { accountId: account.id, title: 'ManyChat handoff rejected' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, body: true }
       });
-      if (!recent) {
+      let shouldNotify = true;
+      if (last) {
+        const age = Date.now() - last.createdAt.getTime();
+        const sameReason = (last.body ?? '').includes(reasonTag.trim());
+        if (age < FLAP_FLOOR_MS) shouldNotify = false;
+        else if (sameReason && age < REASON_REMIND_MS) shouldNotify = false;
+      }
+      if (shouldNotify) {
         await prisma.notification.create({
           data: {
             accountId: account.id,
             type: 'SYSTEM',
             title: 'ManyChat handoff rejected',
-            body: `A ManyChat External Request reached Convlo but its payload was rejected, so the handoff was dropped and the lead will arrive as a plain inbound DM instead. Reason: ${detail.slice(0, 800)}. Fix the External Request body in ManyChat to match.`
+            body: `A ManyChat External Request reached Convlo but its payload was rejected, so the handoff was dropped and the lead will arrive as a plain inbound DM instead. Reason: ${detail.slice(0, 800)}. Fix the External Request body in ManyChat to match.${reasonTag}`
           }
         });
       }
