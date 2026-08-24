@@ -3175,14 +3175,19 @@ export async function generateReply(
   const smartModeActive =
     hasRuntimeJudgmentAction(scriptStateSnapshot?.currentStep ?? null) &&
     shouldUseSmartModeForJudgeConfidence(currentJudgeBranchMatch.confidence);
-  let selectedCurrentJudgeBranch =
-    currentJudgeBranchLocked && currentJudgeBranchMatch.branchLabel
-      ? scriptStateSnapshot?.currentStep?.branches.find(
-          (branch) => branch.branchLabel === currentJudgeBranchMatch.branchLabel
-        )
-      : null;
+  // Step 1 entry routing is a SOURCE decision (did the lead come through
+  // ManyChat, or DM directly?), not a content judgment. The judge/token
+  // classifier must NOT get to pick between "ManyChat already answered" and
+  // "Warm Inbound" — it has no signal for that and mispicks, then the next
+  // turn flips, and the step thrashes and never completes (Kaden cmt3hk0g4,
+  // Tega 2026-08-22). So on step 1, run the deterministic source resolver
+  // FIRST and let it take precedence; the judge classifier only applies on
+  // step 1 if source routing is ambiguous (returns !=1 branch).
+  type Step1Branch = NonNullable<
+    NonNullable<typeof scriptStateSnapshot>['currentStep']
+  >['branches'][number];
+  let selectedCurrentJudgeBranch: Step1Branch | undefined | null = null;
   if (
-    !selectedCurrentJudgeBranch &&
     scriptStateSnapshot?.currentStep?.stepNumber === 1 &&
     scriptStateSnapshot.currentStep.branches.length > 0
   ) {
@@ -3200,7 +3205,21 @@ export async function generateReply(
     );
     if (selectedStep1Branches.length === 1) {
       selectedCurrentJudgeBranch = selectedStep1Branches[0];
+      console.warn(
+        `[ai-engine] step-1 deterministic source routing selected "${selectedStep1Branches[0].branchLabel}" (source-based, judge classifier not consulted) — conv ${activeConversationId}`
+      );
     }
+  }
+  // Fall back to the judge classifier when step-1 source routing didn't
+  // resolve to exactly one branch, and for every step after step 1.
+  if (!selectedCurrentJudgeBranch) {
+    selectedCurrentJudgeBranch =
+      currentJudgeBranchLocked && currentJudgeBranchMatch.branchLabel
+        ? scriptStateSnapshot?.currentStep?.branches.find(
+            (branch) =>
+              branch.branchLabel === currentJudgeBranchMatch.branchLabel
+          )
+        : null;
   }
   if (scriptStateSnapshot) {
     scriptStateSnapshot = {
