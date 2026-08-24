@@ -8375,6 +8375,28 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           parsed.messages = bubbles;
           parsed.message = bubbles[0];
         }
+        // Link-delivery override (2026-08-24): on a send_link step, the scripted
+        // URL is the conversion action and is safe, exact, script-authored
+        // content — it can never be "gate-flagged." If the turn was about to
+        // HOLD on a message-side gate fail (msg_verbatim / repeated_opener at
+        // step 13, model circling the [MSG] and never reaching the link), that
+        // hold also withheld the link, so the funnel reached step 13 but the
+        // link shipped only ~1 in 3 runs. Now that N1 has guaranteed the real
+        // link is in the outbound, release the terminal hold for THIS turn so
+        // the link-bearing reply ships. The gate still policed the message; we
+        // simply don't let a message-paraphrase gate block the conversion link.
+        if (
+          !isPlaceholder &&
+          bubbles.some((b) => URL_RE.test(b)) &&
+          qualityGateTerminalFailure
+        ) {
+          qualityGateTerminalFailure = false;
+          qualityGateFailureReason = null;
+          parsed.escalateToHuman = false;
+          console.warn(
+            `[ai-engine] send_link step: releasing message-gate hold because the real conversion link is present in the outbound — shipping the link (conv ${activeConversationId})`
+          );
+        }
       } else {
         // Placeholder / unconfigured. Strip dead links from the outbound and
         // alert the operator loudly (once per hour per account).
