@@ -1711,7 +1711,27 @@ function getActiveBranchRequiredMessages(
   directActions: JudgeActionLike[] = [],
   variableResolutionMap?: ScriptVariableResolutionMap | null
 ): RequiredMessage[] {
-  const actions = [...directActions, ...(activeBranch?.actions ?? [])];
+  // Bug 1 (Tega 2026-08-26): a PURE ROUTING branch — one that carries only
+  // runtime_judgment / wait and NO deliverable content of its own (the step-1
+  // "already answered" ManyChat branch) — must NOT inherit the step's direct
+  // linear script. Merging directActions there pulled in the Warm-Inbound
+  // geography REACT ("That's awesome, I'm over in Texas") and forced it
+  // verbatim for a geography answer the ManyChat lead never gave in-thread
+  // (the cursor-one-action-ahead symptom). Such a branch means "the lead
+  // already did the linear intro, just classify and wait" — its required set
+  // is empty by design. Branches that DO carry their own MSG/ASK still merge
+  // direct actions as before (shared step-level copy + branch-specific asks).
+  const branchActions = activeBranch?.actions ?? [];
+  const branchHasDeliverable = branchActions.some(
+    (a) =>
+      a.actionType === 'send_message' ||
+      a.actionType === 'ask_question' ||
+      a.actionType === 'send_link' ||
+      a.actionType === 'send_video'
+  );
+  const actions = branchHasDeliverable
+    ? [...directActions, ...branchActions]
+    : branchActions;
   return getRequiredMessagesFromActions(actions, variableResolutionMap);
 }
 
@@ -4195,10 +4215,26 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         gateVariableResolutionMap
       )
     : undefined;
-  const currentStepRequiredMessagesForGate = resolveMessageContentsForGate(
-    currentStepShape?.requiredMessageContents ?? [],
-    gateVariableResolutionMap
-  );
+  // Bug 1 (Tega 2026-08-26, populated-metadata entry): when a specific branch
+  // is selected, the required-message set MUST be scoped to THAT branch, not
+  // the union of every branch on the step. On step 1 the "already answered"
+  // ManyChat branch has NO send_message (just runtime_judgment + wait), but
+  // currentStepShape.requiredMessageContents unions ALL branches — so it
+  // included the Warm Inbound branch's geography REACT ("That's awesome, I'm
+  // over in Texas"), and the verbatim-injection forced that react verbatim for
+  // a geography answer the ManyChat lead never gave in-thread. Scope to the
+  // selected branch's own required messages (empty for "already answered" =
+  // no injection, which is correct). Falls back to the step union only when no
+  // branch is selected (ambiguous routing).
+  const currentStepRequiredMessagesForGate =
+    selectedCurrentJudgeBranch && activeBranchRequiredMessages
+      ? activeBranchRequiredMessages
+          .map((m) => m.content)
+          .filter((c) => typeof c === 'string' && c.trim().length > 0)
+      : resolveMessageContentsForGate(
+          currentStepShape?.requiredMessageContents ?? [],
+          gateVariableResolutionMap
+        );
   const currentStepScriptedQuestionsForGate = resolveMessageContentsForGate(
     currentStepShape?.scriptedQuestionContents ?? [],
     gateVariableResolutionMap
@@ -7538,7 +7574,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
               'verbatim_repeat:',
               'verbatim_repeat_bubble:',
               'repeated_question:',
-              'multiple_questions:',
+              // Bug 2 (Tega 2026-08-26): the gate emits this as
+              // "multiple_questions_in_reply:", NOT "multiple_questions:", so
+              // the old entry here never matched and a multi-question turn
+              // shipped on the populated-metadata path without holding. Match
+              // the ACTUAL fail string.
+              'multiple_questions_in_reply:',
+              'msg_verbatim_violation:',
               'missing_required_question_on_ask_step:',
               'fabricated_url_in_reply:',
               'reasks_captured_variable:'
