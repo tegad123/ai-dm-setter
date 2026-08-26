@@ -685,25 +685,42 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
     return branches;
   }
 
+  // STRUCTURAL step-1 routing (2026-08-26, replaces brittle label matching):
+  // step-1 entry is a source decision — did the lead come through ManyChat
+  // (opener already sent, first answer waiting) or DM directly (nothing said
+  // yet)? The two branches differ STRUCTURALLY, not by their label text:
+  //   • The "pick up from ManyChat" branch does NOT re-introduce — it has no
+  //     opener send_message and no intro ask_question (just runtime_judgment
+  //     to read what the lead already said, then wait). The ManyChat opener
+  //     already did the intro, so re-greeting would double up.
+  //   • The "warm inbound" branch DOES re-introduce — it carries the opener
+  //     send_message + the intro ask_question, because the lead hasn't seen
+  //     any of it yet.
+  // Classifying on that behavior (does the branch re-introduce?) is robust
+  // for any tenant regardless of how they NAME their branches — the previous
+  // label-substring matching ("cta"/"manychat"/"warm") mis-picked daetradez's
+  // "Default (ManyChat lead — already answered)" branch (no "cta") for a real
+  // populated-metadata ManyChat lead and re-did the intro (Tega 2026-08-26).
+  const branchReintroduces = (branch: T): boolean =>
+    (branch.actions ?? []).some(
+      (a) => a.actionType === 'send_message' || a.actionType === 'ask_question'
+    );
+
+  const pickUpBranches = branches.filter((b) => !branchReintroduces(b));
+  const reintroduceBranches = branches.filter((b) => branchReintroduces(b));
+
+  // A ManyChat lead continues from where the opener left off (pick-up branch,
+  // no re-intro). A direct/warm lead needs the full intro (re-introduce
+  // branch). If the script doesn't provide a distinct branch for the case,
+  // fall back to all branches so downstream selection still runs.
   const selected =
     mode === 'manychat_cta'
-      ? branches.filter((branch) => {
-          const label = branch.branchLabel.toLowerCase();
-          return (
-            label.includes('cta') &&
-            (label.includes('manychat') || label.includes('clicked')) &&
-            !/\bdid(?:n'?t| not)\b/.test(label)
-          );
-        })
-      : branches.filter((branch) => {
-          const label = branch.branchLabel.toLowerCase();
-          return (
-            label.includes('warm') ||
-            label.includes('dm') ||
-            label.includes('direct') ||
-            label.includes('reached out')
-          );
-        });
+      ? pickUpBranches.length > 0
+        ? pickUpBranches
+        : reintroduceBranches // no dedicated pick-up branch → intro is fine
+      : reintroduceBranches.length > 0
+        ? reintroduceBranches
+        : pickUpBranches;
 
   const finalSelection = selected.length > 0 ? selected : branches;
   console.warn('[branch-debug] Step 1 selection:', {
