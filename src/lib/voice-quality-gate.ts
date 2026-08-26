@@ -2263,7 +2263,17 @@ export function scoreVoiceQuality(
         // branch's required answer bubble and re-drives the verbatim ask,
         // defeating the operator's design (live: "how much is it" on
         // cms0ic2xg — Price Question branch selected, price answer dropped).
-        options?.activeBranchInstructsRephrase !== true
+        options?.activeBranchInstructsRephrase !== true &&
+        // Judge-only branch exemption (2026-08-26, Tega P1): when the active
+        // branch is runtime_judgment + wait with NO scripted ask of its own
+        // (the step-1 "already answered" ManyChat branch, whose judgment says
+        // "read their reply, classify, ask where they're based if unknown"),
+        // the branch DELEGATES the question to the model by design — an
+        // improvised question IS on-script for it. Firing offscript here
+        // compared the question to the OTHER branch's scripted ask, then the
+        // recovery tried to re-drive a scripted ask this branch doesn't have,
+        // producing nothing → "completed without delivering" silent stall.
+        options?.currentStepActiveBranchIsJudgeOnly !== true
       ) {
         hardFails.push(
           `offscript_question_on_lowticket: this question matches none of the current step's scripted asks — on this funnel the script is the product; do not improvise discovery questions. Ask the CURRENT step's scripted question (paraphrase lightly if needed), nothing else.`
