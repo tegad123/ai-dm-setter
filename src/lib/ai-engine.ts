@@ -86,6 +86,7 @@ import {
   countConversationTurns,
   detectBeliefBreakDeliveryStage,
   detectBeliefBreakInMessage,
+  detectCapitalQuestionAttempt,
   getStepActionShape,
   hasCapturedDataPoint,
   incomeGoalSatisfiedByExpectedStep,
@@ -3240,6 +3241,28 @@ export async function generateReply(
               branch.branchLabel === currentJudgeBranchMatch.branchLabel
           )
         : null;
+  }
+  // Single-branch determinism (Tega 2026-08-27, conv cmt9uzm4c…2bsqppht).
+  // When a step has exactly ONE branch there is nothing to classify — the
+  // branch is unconditionally the active one (e.g. step 11 "Qualification —
+  // Ask", whose sole "Default" branch is "always taken on entry" and carries
+  // the verbatim "$200 USD" send_message + the "would that be realistic" ask).
+  // The judge classifier was leaving selectedCurrentJudgeBranch NULL here
+  // whenever its confidence didn't lock, which emptied the required-message
+  // set: the gate went blind (no msg_verbatim ground truth), the deterministic
+  // $200 [MSG] injection (verbatimRecoverable) had no literal text to inject,
+  // and the lead got the bare "would that be realistic" orphan with the price
+  // line silently dropped. A single-branch step has no ambiguity to defer to
+  // the classifier — select it directly so its required content is always in
+  // scope. Multi-branch steps are untouched (they still route via the judge).
+  if (
+    !selectedCurrentJudgeBranch &&
+    scriptStateSnapshot?.currentStep?.branches.length === 1
+  ) {
+    selectedCurrentJudgeBranch = scriptStateSnapshot.currentStep.branches[0];
+    console.warn(
+      `[ai-engine] single-branch step ${scriptStateSnapshot.currentStep.stepNumber} — deterministically selecting sole branch "${selectedCurrentJudgeBranch?.branchLabel}" (no classification ambiguity) on conv ${activeConversationId}`
+    );
   }
   if (scriptStateSnapshot) {
     scriptStateSnapshot = {
@@ -7431,8 +7454,19 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           // the whole funnel — inject a safe, on-persona line that keeps the
           // lead pointed at the website (the funnel's only asset) with no call,
           // no booking, no capital ask. AI stays active.
-          const safeLowTicket =
-            'for sure bro — everything you need to get started is on the page i mentioned, take a look through it and lmk what stands out to you 🙌';
+          //
+          // Phantom-page fix (Tega 2026-08-27, conv cmt9uzm4c…2bsqppht): the
+          // old fallback said "everything…is on the page i mentioned" even when
+          // NO link had ever been sent in the thread — the engine itself
+          // authored a reference to a page that didn't exist, and the lead
+          // caught it live ("You never mentioned a psge"). Only claim a prior
+          // mention when a URL was actually delivered earlier (alreadySentUrls,
+          // computed above from the AI's own sent history). Otherwise use a
+          // phrasing that offers to send it rather than lying about the past.
+          const aLinkWasAlreadySent = alreadySentUrls.length > 0;
+          const safeLowTicket = aLinkWasAlreadySent
+            ? 'for sure bro — everything you need to get started is on the page i sent you, take a look through it and lmk what stands out to you 🙌'
+            : 'for sure bro — i can send over the page that walks through everything you need to get started, want me to drop it?';
           parsed.message = safeLowTicket;
           parsed.messages = [safeLowTicket];
           parsed.stage = parsed.stage || 'SITUATION_DISCOVERY';
@@ -7713,6 +7747,79 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
 
   if (!parsed) {
     throw new Error('Failed to generate AI response');
+  }
+
+  // ── Branch-null unverifiability HOLD (Tega 2026-08-27, conv cmt9uzm4c…) ──
+  // Narrow M4 mitigation for the branch-selection/cursor gap (the full fix is
+  // the compiled FSM owning branch selection — Fix D / M5). Root: when the
+  // judge classifier can't confidently lock a branch, selectedCurrentJudgeBranch
+  // stays null and the required-message set the gate compares against is empty.
+  // With nothing to compare, the group gate's substantive checks
+  // (msg_verbatim / bubble-sequence) silently no-op, hardFails comes back
+  // empty, quality.passed is TRUE, and the reply ships on the first attempt —
+  // even when it carries lead-facing capital/screening content that this
+  // low-ticket funnel is never supposed to improvise. That is exactly how a
+  // capital-fishing question ("what's realistic for you right now, bro") and a
+  // decline line shipped from an UNSELECTED branch with zero hardFails.
+  //
+  // We do NOT hold every null-branch turn — pure-routing / acknowledgment
+  // turns legitimately have no required content and must keep shipping (holding
+  // them reopens the silent-stall class we already closed). We hold ONLY the
+  // unverifiable case: low-ticket funnel + no branch selected + empty required
+  // set (so the gate could not verify) + the reply actually contains a capital
+  // question (the one improvisation that is unambiguous lead-facing harm on a
+  // funnel with no financial screening). This is a hold on UNVERIFIABILITY,
+  // independent of hardFails being empty — the ship decision otherwise reads
+  // only hardFails, which structurally cannot represent "I couldn't check this."
+  if (
+    !qualityGateTerminalFailure &&
+    parsed.escalateToHuman !== true &&
+    personaConfigDisablesStageProgression(personaForGate?.promptConfig) &&
+    !selectedCurrentJudgeBranch &&
+    (activeBranchRequiredMessages?.length ?? 0) === 0 &&
+    currentStepRequiredMessagesForGate.length === 0
+  ) {
+    const shippedBubbles = Array.isArray(parsed.messages)
+      ? parsed.messages
+      : [parsed.message];
+    const carriesCapitalContent = shippedBubbles.some(
+      (b) => typeof b === 'string' && detectCapitalQuestionAttempt(b)
+    );
+    if (carriesCapitalContent) {
+      parsed.escalateToHuman = true;
+      qualityGateTerminalFailure = true;
+      qualityGateFailureReason = 'branch_null_unverifiable_capital_held';
+      console.warn(
+        `[ai-engine] branch-null unverifiable capital content — HOLDING (no branch selected, empty required set, gate could not verify) on convo ${activeConversationId}`
+      );
+      if (activeConversationId) {
+        try {
+          const { escalate } = await import('@/lib/escalation-dispatch');
+          const origin = process.env.NEXT_PUBLIC_APP_URL || '';
+          const link = origin
+            ? `${origin.replace(/\/$/, '')}/dashboard/conversations?conversationId=${activeConversationId}`
+            : undefined;
+          await escalate({
+            type: 'ai_stuck',
+            accountId,
+            conversationId: activeConversationId,
+            leadName: leadContext.leadName ?? 'Lead',
+            leadHandle: leadContext.handle ?? '',
+            title:
+              'AI held — unverifiable reply on unrouted step, needs manual response',
+            body: 'The AI produced a capital/screening reply on a step where no branch could be selected, so the quality gate had no scripted content to verify it against. Held so no unverified message ships. Please respond manually.',
+            details:
+              'branch=null | empty required set | capital content detected',
+            link
+          });
+        } catch (notifErr) {
+          console.error(
+            '[ai-engine] branch-null unverifiable hold notification failed (non-fatal):',
+            notifErr
+          );
+        }
+      }
+    }
   }
 
   let selfRecovered = false;
