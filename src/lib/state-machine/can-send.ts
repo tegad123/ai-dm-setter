@@ -31,8 +31,17 @@ export type CanSendVerdict =
 // Unresolved template artifacts that must never reach a lead. Catches raw
 // {{var}} / {var} leftovers and the known sentinel strings the variable
 // resolver emits when a binding is missing.
+//
+// The final alternation catches ALL-CAPS bracketed placeholders like
+// "[BOOKING LINK]" / "[FIRST NAME]" — the class that leaked to a lead in the
+// Steven Petty P0 (2026-04-20). It mirrors the ship-time regex already proven
+// at webhook-processor.ts (`/\[[A-Z][A-Z0-9 _]{2,}\]/`) but sits here so EVERY
+// send path (crons, keepalive, call-confirmation) gets the protection, not
+// just the sendAIReply path. The first char is required UPPERCASE so natural
+// lowercase asides ("[note]", "[link]") don't false-fire — a leaked template
+// token is always an upper-case slot name.
 const UNRESOLVED_VARIABLE_RE =
-  /\{\{[^}]*\}\}|(?<![\w$])\{[a-zA-Z_][a-zA-Z0-9_]*\}|\[unknown\]|\bundefined, \b/;
+  /\{\{[^}]*\}\}|(?<![\w$])\{[a-zA-Z_][a-zA-Z0-9_]*\}|\[unknown\]|\bundefined, \b|\[[A-Z][A-Z0-9 _]{2,}\]/;
 
 // Thrown by a send function when the egress gate (authoritative mode) blocks
 // the send. Callers can catch it to distinguish a policy block from a

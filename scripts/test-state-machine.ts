@@ -111,6 +111,22 @@ check(
   'normal prose with braces-free text passes',
   canSend(base, draft('what got you into trading?')).allow
 );
+check(
+  '[BOOKING LINK] all-caps placeholder blocks (Steven Petty P0)',
+  !canSend(base, draft('grab a time here: [BOOKING LINK] 🙌')).allow
+);
+check(
+  '[FIRST NAME] all-caps placeholder blocks',
+  !canSend(base, draft('hey [FIRST NAME], you around?')).allow
+);
+check(
+  'lowercase bracket aside does NOT false-fire',
+  canSend(base, draft('i left you a note [see above] bro')).allow
+);
+check(
+  'single-word capitalized bracket (too short) does not false-fire',
+  canSend(base, draft('that was a [W] honestly')).allow
+);
 
 // ── deriveMachineState precedence ──────────────────────────────────
 const row = {
