@@ -195,15 +195,22 @@ async function processInstagramEvents(payload: any): Promise<void> {
     const entryId: string = entry.id ?? '';
 
     // Match against all known ID fields across META and INSTAGRAM credentials.
-    // Instagram webhooks send the IG Business Account ID as entry.id, which
-    // may be stored as instagramAccountId (META provider) or igUserId (INSTAGRAM provider).
+    // What Meta puts in entry.id depends on HOW the account was connected:
+    //   • page-linked (Facebook Login): the 17841… instagram_business_account
+    //     id → stored as instagramAccountId (META row) / igBusinessAccountId.
+    //   • standalone Instagram-Login: the 17841… PROFESSIONAL account id from
+    //     graph.instagram.com/me?fields=user_id → stored as
+    //     igProfessionalAccountId (2026-09-06). The app-scoped igUserId that
+    //     the OAuth response returns is NOT what arrives in entry.id, so an
+    //     IG-Login connection with only igUserId stored never matched.
     const matchedCred = allCredentials.find((cred) => {
       const meta = cred.metadata as any;
       return (
         meta?.pageId === entryId ||
         meta?.igUserId === entryId ||
         meta?.instagramAccountId === entryId ||
-        meta?.igBusinessAccountId === entryId
+        meta?.igBusinessAccountId === entryId ||
+        meta?.igProfessionalAccountId === entryId
       );
     });
 
@@ -266,7 +273,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
         credMeta.pageId,
         credMeta.igUserId,
         credMeta.instagramAccountId,
-        credMeta.igBusinessAccountId
+        credMeta.igBusinessAccountId,
+        credMeta.igProfessionalAccountId
       ].filter(Boolean)
     );
 

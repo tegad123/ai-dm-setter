@@ -148,6 +148,17 @@ export async function GET(req: NextRequest) {
     let name = '';
     let profilePicture = '';
     let followersCount = 0;
+    // The Instagram PROFESSIONAL account id (17841…). This — not the OAuth
+    // response's app-scoped `user_id` above — is the value Meta puts in
+    // webhook `entry.id` for Instagram-Login deliveries. Until 2026-09-06 the
+    // callback requested it (`fields=user_id`) and then discarded it, storing
+    // only the app-scoped id; the webhook matcher therefore never matched a
+    // real inbound DM for a standalone IG-Login connection (tegaumukoro_,
+    // Daniel's workspace: Meta delivered entry.id=17841400436427423, stored
+    // ids were all 26071428819190932 → F6.1 reject, silent drop, green
+    // "Connected" badge). Persisted as its own key; igUserId is left as-is
+    // because outbound sends address the account by that id.
+    let igProfessionalAccountId: string | null = null;
 
     if (profileRes.ok) {
       const profileData = await profileRes.json();
@@ -155,7 +166,18 @@ export async function GET(req: NextRequest) {
       name = profileData.name || '';
       profilePicture = profileData.profile_picture_url || '';
       followersCount = profileData.followers_count || 0;
-      console.log(`[instagram-oauth] Profile: @${username} (${name})`);
+      igProfessionalAccountId = profileData.user_id
+        ? String(profileData.user_id)
+        : null;
+      console.log(
+        `[instagram-oauth] Profile: @${username} (${name}) professionalId=${igProfessionalAccountId ?? 'unknown'}`
+      );
+      if (!igProfessionalAccountId) {
+        console.warn(
+          `[instagram-oauth] /me returned no user_id for @${username} — inbound webhooks ` +
+            `(entry.id) will only resolve if a page-linked igBusinessAccountId is discovered.`
+        );
+      }
     } else {
       const err = await profileRes.text();
       console.warn('[instagram-oauth] Profile fetch failed:', err);
@@ -172,6 +194,7 @@ export async function GET(req: NextRequest) {
       {
         igUserId,
         instagramAccountId: igUserId,
+        ...(igProfessionalAccountId ? { igProfessionalAccountId } : {}),
         username,
         name,
         profilePicture,
@@ -216,6 +239,7 @@ export async function GET(req: NextRequest) {
       {
         igUserId,
         instagramAccountId: igUserId,
+        ...(igProfessionalAccountId ? { igProfessionalAccountId } : {}),
         ...(discoveredIgBusinessAccountId
           ? { igBusinessAccountId: discoveredIgBusinessAccountId }
           : {}),
