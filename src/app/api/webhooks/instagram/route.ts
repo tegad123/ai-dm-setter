@@ -18,7 +18,13 @@ import prisma from '@/lib/prisma';
 // Short delays bypass the per-minute cron queue and run inline via after().
 // Anything longer falls back to ScheduledReply + cron pickup so the lambda
 // doesn't have to stay alive for minutes. 90s leaves headroom for AI gen.
-const INLINE_DELAY_THRESHOLD_SECONDS = 90;
+// 2026-09-06: was 90. The inline after() path SLEEPS the delay and THEN
+// generates (30-60s) and sends, all inside maxDuration=120s. At 90s the
+// budget had no headroom: Vercel killed the callback mid-generation with no
+// catch running — the ScheduledReply stayed PENDING with no lastError and no
+// AI Message (every daetradez reply since 2026-09-05 07:28 UTC). 45s leaves
+// ~75s for generation + send. Longer delays take the durable cron path.
+const INLINE_DELAY_THRESHOLD_SECONDS = 45;
 
 function afterCallbackErrorDetails(err: unknown) {
   if (err instanceof Error) {

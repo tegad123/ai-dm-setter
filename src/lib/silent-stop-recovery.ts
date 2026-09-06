@@ -984,7 +984,13 @@ export async function handleSilentStop(
       conversationId: conversation.id,
       detectedAt: now,
       lastLeadMessageAt: lastLead.timestamp,
-      silenceDurationMs: now.getTime() - lastLead.timestamp.getTime(),
+      // Column is INT4 (max ~24.8 days in ms). A conversation silent since
+      // May overflowed it (10,798,173,768) and the insert threw, killing the
+      // heartbeat tick every minute — no SilentStopEvent since 2026-05-29.
+      silenceDurationMs: Math.min(
+        now.getTime() - lastLead.timestamp.getTime(),
+        2_147_483_647
+      ),
       detectedReason: diagnosis.reason,
       lastGateViolation: diagnosis.lastGateViolation,
       lastRegenAttempts: diagnosis.regenAttempts,

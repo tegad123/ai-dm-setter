@@ -40,6 +40,13 @@ export const maxDuration = 60;
 // to 90s 2026-04-23.
 const PROCESSING_STALE_MS = 90 * 1000;
 
+// A reply scheduled more than this long ago can no longer be delivered:
+// Meta's standard messaging window is 24h from the lead's last message. Such
+// rows are aged out as terminal FAILED instead of being retried forever.
+// Without this floor the picker (oldest-first, take 10) served the same ten
+// July rows on held conversations every tick and starved everything newer.
+const UNDELIVERABLE_AFTER_MS = 24 * 60 * 60 * 1000;
+
 type SuggestionForRetry = {
   id: string;
   responseText: string;
@@ -275,30 +282,110 @@ export async function GET(req: NextRequest) {
     console.log('[cron] starting');
     const now = new Date();
 
-    // Reclaim rows stuck in PROCESSING from a crashed prior invocation.
-    // Flips them back to PENDING so the findMany below re-picks them
-    // in this same tick.
+    // Reclaim rows stuck in PROCESSING from a crashed prior invocation so
+    // the findMany below re-picks them in this same tick.
+    //
+    // 2026-09-06 outage: this used to be ONE blind
+    // updateMany(PROCESSING → PENDING). Since 2026-07-28 a partial unique
+    // index (ScheduledReply_one_pending_per_conversation) allows exactly one
+    // PENDING row per conversation, so the moment a stale PROCESSING row's
+    // conversation already had a PENDING sibling the updateMany threw P2002
+    // — before findMany ever ran — and the identical set collided again on
+    // the next tick. The cron crashed on its first statement every minute
+    // from 2026-08-26: 244 rows frozen in PROCESSING, zero replies delivered
+    // after 2026-09-05 07:28 UTC, 771 conversations stuck awaitingAiResponse.
+    // The inline after() path masked it for as long as replies fit inside its
+    // budget. Reclaim now (a) ages out undeliverable rows in bulk as terminal
+    // FAILED — no unique-index interaction, (b) reclaims recent stale rows
+    // one at a time and CANCELS a row whose conversation already has a
+    // PENDING sibling instead of throwing, and (c) can never abort the tick.
     const staleCutoff = new Date(now.getTime() - PROCESSING_STALE_MS);
-    const reclaimed = await prisma.scheduledReply.updateMany({
-      where: {
-        status: 'PROCESSING',
-        scheduledFor: { lt: staleCutoff }
-      },
-      data: { status: 'PENDING' }
-    });
-    if (reclaimed.count > 0) {
-      console.warn(
-        `[cron] reclaimed ${reclaimed.count} stale PROCESSING rows (crashed prior invocations)`
+    const undeliverableCutoff = new Date(
+      now.getTime() - UNDELIVERABLE_AFTER_MS
+    );
+    try {
+      const aged = await prisma.scheduledReply.updateMany({
+        where: {
+          status: { in: ['PENDING', 'PROCESSING', 'FAILED'] },
+          scheduledFor: { lt: undeliverableCutoff },
+          attempts: { lt: SCHEDULED_REPLY_MAX_ATTEMPTS }
+        },
+        data: {
+          status: 'FAILED',
+          attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+          processedAt: now,
+          lastError:
+            'stale: scheduled more than 24h ago, outside the messaging window — not deliverable'
+        }
+      });
+      if (aged.count > 0) {
+        console.warn(
+          `[cron] aged out ${aged.count} undeliverable rows (scheduled >24h ago)`
+        );
+      }
+
+      const stale = await prisma.scheduledReply.findMany({
+        where: {
+          status: 'PROCESSING',
+          scheduledFor: { lt: staleCutoff, gte: undeliverableCutoff }
+        },
+        select: { id: true, conversationId: true },
+        take: 50
+      });
+      let reclaimed = 0;
+      let cancelled = 0;
+      for (const row of stale) {
+        try {
+          await prisma.scheduledReply.update({
+            where: { id: row.id },
+            data: { status: 'PENDING' }
+          });
+          reclaimed++;
+        } catch (err) {
+          if (
+            err instanceof Prisma.PrismaClientKnownRequestError &&
+            err.code === 'P2002'
+          ) {
+            // A newer PENDING reply already exists for this conversation;
+            // it supersedes the crashed one.
+            await prisma.scheduledReply
+              .update({
+                where: { id: row.id },
+                data: {
+                  status: 'CANCELLED',
+                  processedAt: now,
+                  lastError:
+                    'reclaim: a newer PENDING reply already exists for this conversation'
+                }
+              })
+              .catch(() => null);
+            cancelled++;
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (reclaimed > 0 || cancelled > 0) {
+        console.warn(
+          `[cron] reclaimed ${reclaimed} stale PROCESSING rows, cancelled ${cancelled} superseded (crashed prior invocations)`
+        );
+      }
+    } catch (err) {
+      console.error(
+        '[cron] reclaim failed (non-fatal — pickup continues):',
+        err instanceof Error ? err.message : err
       );
     }
 
     // Find due replies. FAILED rows with attempts remaining are retried
     // on later ticks so transient Meta outages stay visible without
-    // becoming permanent "AI silence".
+    // becoming permanent "AI silence". Rows older than the messaging
+    // window are excluded (aged out above) so they can never starve
+    // deliverable ones.
     const dueReplies = await prisma.scheduledReply.findMany({
       where: {
         status: { in: ['PENDING', 'FAILED'] },
-        scheduledFor: { lte: now },
+        scheduledFor: { lte: now, gte: undeliverableCutoff },
         attempts: { lt: SCHEDULED_REPLY_MAX_ATTEMPTS }
       },
       orderBy: { scheduledFor: 'asc' },
