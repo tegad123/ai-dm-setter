@@ -1847,17 +1847,25 @@ export async function processIncomingMessage(
           // but non-fatal: the message row exists, operator can resend.
           if (lead.platformUserId) {
             try {
+              // Thread the exact conversation into the egress gate (Fix D
+              // Test 4 / IG parity day 1 2026-09-08): without it the gate
+              // resolves by platformUserId → latest conversation, which is
+              // wrong for a lead with several conversations and pollutes
+              // the shadow diff the Instagram cutover is judged on.
+              const egress = { conversationId, operatorInitiated: false };
               if (lead.platform === 'INSTAGRAM') {
                 await sendInstagramDM(
                   accountId,
                   lead.platformUserId,
-                  supportiveText
+                  supportiveText,
+                  egress
                 );
               } else if (lead.platform === 'FACEBOOK') {
                 await sendFacebookMessage(
                   accountId,
                   lead.platformUserId,
-                  supportiveText
+                  supportiveText,
+                  egress
                 );
               }
             } catch (sendErr) {
@@ -2135,17 +2143,21 @@ export async function processIncomingMessage(
         });
         if (lead.platformUserId) {
           try {
+            // Exact-conversation egress attribution (IG parity day 1).
+            const egress = { conversationId, operatorInitiated: false };
             if (lead.platform === 'INSTAGRAM') {
               await sendInstagramDM(
                 accountId,
                 lead.platformUserId,
-                HARD_SCHEDULING_HANDOFF_MESSAGE
+                HARD_SCHEDULING_HANDOFF_MESSAGE,
+                egress
               );
             } else if (lead.platform === 'FACEBOOK') {
               await sendFacebookMessage(
                 accountId,
                 lead.platformUserId,
-                HARD_SCHEDULING_HANDOFF_MESSAGE
+                HARD_SCHEDULING_HANDOFF_MESSAGE,
+                egress
               );
             }
           } catch (sendErr) {
@@ -4701,17 +4713,21 @@ async function sendAIReply(
         });
         if (lead.platformUserId) {
           try {
+            // Exact-conversation egress attribution (IG parity day 1).
+            const egress = { conversationId, operatorInitiated: false };
             if (lead.platform === 'INSTAGRAM') {
               await sendInstagramDM(
                 lead.accountId,
                 lead.platformUserId,
-                supportiveText
+                supportiveText,
+                egress
               );
             } else if (lead.platform === 'FACEBOOK') {
               await sendFacebookMessage(
                 lead.accountId,
                 lead.platformUserId,
-                supportiveText
+                supportiveText,
+                egress
               );
             }
           } catch (sendErr) {

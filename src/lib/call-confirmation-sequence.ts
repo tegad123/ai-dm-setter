@@ -540,7 +540,8 @@ async function sendCallSequenceBubbles(params: {
         accountId: conversation.lead.accountId,
         platform: conversation.lead.platform,
         platformUserId: conversation.lead.platformUserId,
-        text: bubble
+        text: bubble,
+        conversationId
       });
       const timestamp = new Date();
       const message = await prisma.message.create({
@@ -611,14 +612,29 @@ async function sendBubbleToPlatform(params: {
   platform: string;
   platformUserId: string;
   text: string;
+  // Threaded into the egress gate so the send is attributed to THIS
+  // conversation instead of the platformUserId → latest-conversation
+  // heuristic (IG parity day 1, 2026-09-08).
+  conversationId: string;
 }): Promise<string | null> {
-  const { accountId, platform, platformUserId, text } = params;
+  const { accountId, platform, platformUserId, text, conversationId } = params;
+  const egress = { conversationId, operatorInitiated: false };
   if (platform === 'INSTAGRAM') {
-    const result = await sendInstagramDM(accountId, platformUserId, text);
+    const result = await sendInstagramDM(
+      accountId,
+      platformUserId,
+      text,
+      egress
+    );
     return extractMetaMessageId(result);
   }
   if (platform === 'FACEBOOK') {
-    const result = await sendFacebookMessage(accountId, platformUserId, text);
+    const result = await sendFacebookMessage(
+      accountId,
+      platformUserId,
+      text,
+      egress
+    );
     return extractMetaMessageId(result);
   }
   throw new Error(`unsupported platform: ${platform}`);

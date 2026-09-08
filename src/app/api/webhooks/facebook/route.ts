@@ -8,6 +8,7 @@ import {
   computeReplyDelaySeconds,
   isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
+import { notifyPlatformNotConnected } from '@/lib/platform-not-connected-alert';
 import prisma from '@/lib/prisma';
 
 // Vercel Hobby defaults to 10s — AI generation + send needs more time.
@@ -220,9 +221,14 @@ async function processFacebookEvents(payload: any): Promise<void> {
       (c) => c.accountId === accountId
     );
     if (!hasMetaCredential) {
-      console.log(
-        `[facebook-webhook] No active credential for account=${accountId}, skipping`
+      // 2026-09-08 (IG parity day 1, Facebook sibling): was a console.log
+      // and a silent skip. Error-level log + one in-app notification per
+      // account per 24h so a dropped DM is never invisible to the operator.
+      console.error(
+        `[facebook-webhook] DROPPED pageId=${pageId} for account=${accountId}: ` +
+          `no active META credential. Operator action: connect Facebook in Settings → Integrations.`
       );
+      await notifyPlatformNotConnected(accountId, 'FACEBOOK');
       continue;
     }
 

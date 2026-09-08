@@ -8,6 +8,7 @@ import {
   computeReplyDelaySeconds,
   isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
+import { notifyPlatformNotConnected } from '@/lib/platform-not-connected-alert';
 import {
   FAILED_QUALITY_GATE_STATUS,
   isQualityGateEscalationError
@@ -265,9 +266,19 @@ async function processInstagramEvents(payload: any): Promise<void> {
       (c) => c.accountId === accountId && c.provider === 'INSTAGRAM'
     );
     if (!hasIgCredential) {
-      console.log(
-        `[instagram-webhook] No INSTAGRAM credential for account=${accountId}, skipping`
+      // 2026-09-08 (IG parity day 1): this was a console.log and a silent
+      // `continue` — an Instagram DM for a workspace whose Instagram was
+      // never connected (or was disconnected) vanished with no operator
+      // signal at all (MULTI_TENANT_LEAK_AUDIT 2026-07-28 #148, still open).
+      // Now: error-level log + ONE in-app notification per account per 24h
+      // so the operator sees "Instagram DMs are arriving but Instagram is
+      // not connected" instead of an empty inbox.
+      console.error(
+        `[instagram-webhook] DROPPED entryId=${entryId} for account=${accountId}: ` +
+          `matched a META credential but the account has no active INSTAGRAM credential. ` +
+          `Operator action: connect Instagram in Settings → Integrations.`
       );
+      await notifyPlatformNotConnected(accountId, 'INSTAGRAM');
       continue;
     }
 
