@@ -1,5 +1,27 @@
 # AGENTS.md - AI Coding Agent Reference
 
+> ## START HERE (Convlo / QualifyDMs, updated 2026-09-09)
+>
+> This repo is **Convlo**, an AI Instagram/Facebook DM lead-qualifier — not a
+> generic dashboard starter (the template notes below are historical). Before
+> doing anything, read in this order:
+>
+> 1. `docs/HANDOVER_2026-09-09.md` — product, people (Tega verifies everything,
+>    Daniel is the client), money/dates, M1–M4 history, what shipped Sept 5–9,
+>    **current prod state**, M5 status per item, decisions pending, next steps,
+>    the evidence-bundle template every closure must use.
+> 2. `docs/RUNBOOK_LOCAL_E2E.md` — how to deploy/verify/debug end to end from a
+>    laptop; the two-database rule, Vercel log scope, signed-webhook proofs,
+>    real vs synthetic senders, tests, flags. Read §0 twice.
+> 3. `docs/M5_PLAN.md` — the approved Milestone 5 implementation plan.
+> 4. `scripts/verify/README.md` — the proof scripts, ready to re-run.
+>
+> Non-negotiables: auto commit + push (never ask); `NODE_PATH=$PWD/node_modules npx tsx`
+> for scripts; `DATABASE_URL` is LOCAL, `PROD_DATABASE_URL` is prod; never hardcode
+> secrets; no em-dashes or AI-sounding prose in messages to Tega; flag slips the
+> day you know; never claim "fixed" without a prod proof; `TEGA_OPEN_ITEMS_TRACKER.md`
+> is internal. Ask before writing settings on a client's prod rows.
+
 This file provides essential information for AI coding agents working on this project. It contains project-specific details, conventions, and guidelines that complement the README.
 
 ---
