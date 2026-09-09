@@ -58,3 +58,4 @@ next-env.d.ts
 /playwright/.cache/
 /tests/e2e/.auth/
 scripts/check-aliraza.ts
+.genonly-prior.json
