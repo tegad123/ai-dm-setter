@@ -2852,20 +2852,40 @@ export async function scheduleAIReply(
   const autoSendOverride = conversation.autoSendOverride;
   const accountForSend = await prisma.account.findUnique({
     where: { id: accountId },
-    select: { awayModeInstagram: true, awayModeFacebook: true, awayMode: true }
+    select: {
+      awayModeInstagram: true,
+      awayModeFacebook: true,
+      awayMode: true,
+      generateOnlyInstagram: true,
+      generateOnlyFacebook: true
+    }
   });
   const awayModeForSend = resolvePlatformAwayMode(
     accountForSend,
     lead.platform
   );
-  const shouldAutoSend = shouldAutoSendReply({
-    aiActive,
-    awayMode: awayModeForSend,
-    autoSendOverride
-  });
+  // Generate-only shadow (2026-09-08): a workspace in generate-only mode for
+  // this platform ALWAYS takes the suggestion path, whatever autoSendOverride
+  // says. Three automated handlers flip autoSendOverride=true (quality-gate
+  // escalation, reschedule re-enable, the cron's gate-failure handler); a
+  // generate-only lead that hit one would drift into send intent, get
+  // blocked at the choke point, and then log every later turn as
+  // "completed without delivering". Deciding it here keeps those leads in
+  // suggestion mode for good. Operator manual sends don't pass through
+  // this function, so they are unaffected.
+  const generateOnlyForSend = resolvePlatformGenerateOnly(
+    accountForSend,
+    lead.platform
+  );
+  const shouldAutoSend =
+    shouldAutoSendReply({
+      aiActive,
+      awayMode: awayModeForSend,
+      autoSendOverride
+    }) && !generateOnlyForSend;
   log(
     'sched.step1.aiActive',
-    `aiActive=${aiActive} awayMode=${awayModeForSend} autoSendOverride=${autoSendOverride} platform=${lead.platform} shouldAutoSend=${shouldAutoSend}`
+    `aiActive=${aiActive} awayMode=${awayModeForSend} autoSendOverride=${autoSendOverride} generateOnly=${generateOnlyForSend} platform=${lead.platform} shouldAutoSend=${shouldAutoSend}`
   );
 
   if (
