@@ -261,6 +261,17 @@ model Account {
   awayModeFacebook           Boolean     @default(false)
   awayModeFacebookEnabledAt  DateTime?
 
+  // Generate-only shadow mode, per platform (2026-09-08, Tega). With this ON
+  // and Away Mode OFF, new leads on that platform get AI ON for generation:
+  // the reply is generated, the quality gate judges it, the egress gate
+  // writes its shadow row (dry run), and the reply is shown as a suggestion.
+  // NOTHING is delivered — enforced at the physical send choke point for
+  // every code path, crons included; operator manual sends still go through.
+  // Purpose: run a client's real inbound volume through the Instagram shadow
+  // window with zero risk to their leads while their team works by hand.
+  generateOnlyInstagram      Boolean     @default(false)
+  generateOnlyFacebook       Boolean     @default(false)
+
   // Per-account default for AI autonomy on NEW inbound conversations.
   // When true (the default), inbound webhooks create conversations
   // with BOTH aiActive=true AND autoSendOverride=true — the AI takes

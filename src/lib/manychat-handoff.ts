@@ -216,7 +216,9 @@ export async function processManyChatHandoff(params: {
       id: true,
       awayModeInstagram: true,
       awayModeFacebook: true,
-      defaultAiActive: true
+      defaultAiActive: true,
+      generateOnlyInstagram: true,
+      generateOnlyFacebook: true
     }
   });
   if (!account) {
@@ -381,8 +383,16 @@ export async function processManyChatHandoff(params: {
     payload.platform === 'FACEBOOK'
       ? account.awayModeFacebook
       : account.awayModeInstagram;
+  // 2026-09-08 generate-only shadow: same rule as the organic gate — AI on
+  // for generation when Away Mode OR generate-only is on; auto-send is still
+  // gated by shouldAutoSendReply so generate-only leads stay suggestions.
+  const generateOnlyForPlatform =
+    payload.platform === 'FACEBOOK'
+      ? account.generateOnlyFacebook
+      : account.generateOnlyInstagram;
   const newManyChatLeadAiActive =
-    awayModeForPlatform && (account.defaultAiActive ?? true);
+    (awayModeForPlatform || generateOnlyForPlatform) &&
+    (account.defaultAiActive ?? true);
 
   if (existingLead?.conversation) {
     const platformUserId =

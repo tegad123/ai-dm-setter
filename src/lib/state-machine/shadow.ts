@@ -24,6 +24,7 @@
 
 import prisma from '@/lib/prisma';
 import { canSend, deriveMachineState } from './can-send';
+import { isGenerateOnlyForAccountPlatform } from '@/lib/generate-only';
 
 const SHADOW_ENABLED = process.env.FIX_D_EGRESS_SHADOW !== 'false';
 
@@ -104,11 +105,52 @@ export async function shadowEgressCheck(params: {
   // suggestion routes pass this once call sites adopt it; default false =
   // treat as AI-initiated, the conservative shadow reading).
   operatorInitiated?: boolean;
+  // Generate-only shadow (2026-09-08): evaluate + log the verdict for a reply
+  // that will NOT be sent (suggestion mode). Never blocks; the row is tagged
+  // sendPath 'generate_only' so the window can be filtered on it.
+  dryRun?: boolean;
 }): Promise<EgressGateResult> {
   const authoritative = isAuthoritativeForPlatform(params.platform ?? null);
   // Shadow logging can be off while authoritative is on (post-cutover we may
   // keep logging; the flags are independent). If BOTH are off, no-op allow.
-  if (!SHADOW_ENABLED && !authoritative) return { block: false };
+  if (!SHADOW_ENABLED && !authoritative && !params.dryRun) {
+    return { block: false };
+  }
+
+  // Generate-only HARD BLOCK (2026-09-08). Enforced before any state
+  // resolution and regardless of the authoritative flag: a workspace in
+  // generate-only mode for this platform must never deliver an AI-initiated
+  // message from ANY path (reply, keepalive, follow-up, recovery, distress
+  // supportive send). Operator sends pass. Dry-run evaluations pass (they
+  // are the point of the mode). Fail-closed here is correct: the flag is a
+  // deliberate "do not send to my leads" instruction from the client.
+  if (!params.dryRun && !params.operatorInitiated) {
+    const generateOnly = await isGenerateOnlyForAccountPlatform(
+      params.accountId,
+      params.platform ?? null
+    );
+    if (generateOnly) {
+      await logShadowRow({
+        accountId: params.accountId,
+        conversationId: params.conversationId ?? null,
+        sendPath: inferSendPath(),
+        draftPreview: params.messageText.slice(0, 300),
+        machineAllow: false,
+        machineReason: 'GENERATE_ONLY',
+        machineHold: null,
+        agreed: true
+      });
+      console.warn(
+        `[fix-d/egress] BLOCKED (generate-only ${params.platform ?? '?'}): AI-initiated send suppressed for account ${params.accountId}` +
+          `${params.conversationId ? ` conv ${params.conversationId}` : ''}`
+      );
+      return {
+        block: true,
+        reason: 'GENERATE_ONLY',
+        detail: `account is in generate-only mode for ${params.platform ?? 'this platform'}; nothing AI-initiated may deliver`
+      };
+    }
+  }
   // AWAITABLE (was fire-and-forget): on Vercel the serverless function can
   // be frozen the moment the handler returns, killing a detached promise
   // mid-write. That silently dropped every shadow row on the normal reply
@@ -223,16 +265,21 @@ export async function shadowEgressCheck(params: {
 
       // Log is BEST-EFFORT and happens AFTER the verdict is decided. The
       // enforcement return below does not depend on this write succeeding.
+      // Dry run: the live pipeline's intent is "would send" (it generated a
+      // reply and is storing it as a suggestion), so `agreed` is simply
+      // whether the machine would also allow it — same semantics as shadow.
       await logShadowRow({
         accountId: params.accountId,
         conversationId: conv.id,
-        sendPath: inferSendPath(),
+        sendPath: params.dryRun ? 'generate_only' : inferSendPath(),
         draftPreview: params.messageText.slice(0, 300),
         machineAllow: verdict.allow,
         machineReason: verdict.allow ? null : verdict.reason,
         machineHold: verdict.allow ? null : (verdict.hold ?? null),
-        agreed: authoritative ? true : verdict.allow
+        agreed: authoritative && !params.dryRun ? true : verdict.allow
       });
+
+      if (params.dryRun) return { block: false };
 
       if (authoritative && !verdict.allow) {
         console.warn(

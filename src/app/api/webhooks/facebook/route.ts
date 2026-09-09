@@ -5,6 +5,7 @@ import {
   processIncomingMessage,
   scheduleAIReply,
   processScheduledReply,
+  scheduledReplyCompletedAsSuggestion,
   computeReplyDelaySeconds,
   isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
@@ -523,6 +524,16 @@ async function processFacebookEvents(payload: any): Promise<void> {
                   select: { id: true }
                 });
                 if (!deliveredMessage) {
+                  // Suggestion mode (auto-send off / generate-only): the
+                  // reply was generated and stored, never meant to ship.
+                  if (
+                    await scheduledReplyCompletedAsSuggestion(scheduledReply.id)
+                  ) {
+                    console.log(
+                      `[facebook-webhook] inline reply completed as suggestion (not auto-sent) for ${targetConvoId}`
+                    );
+                    return;
+                  }
                   throw new Error(
                     'ScheduledReply completed without delivering an AI Message'
                   );

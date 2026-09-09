@@ -8,6 +8,7 @@ import {
 } from '@/lib/call-confirmation-sequence';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
+import { isGenerateOnlyForAccountPlatform } from '@/lib/generate-only';
 import {
   broadcastNewMessage,
   broadcastConversationUpdate
@@ -238,6 +239,16 @@ async function fireScheduledMessage(
   if (!conversation.aiActive) {
     console.log(
       `[cron/scheduled-messages] ${row.id}: aiActive=false, skipping`
+    );
+    return 'skipped_ai_inactive';
+  }
+
+  // Guardrail (2026-09-08, generate-only shadow): a workspace that asked
+  // for generation without delivery never gets automated follow-ups. The
+  // send choke point blocks these too; skipping here keeps the row quiet.
+  if (await isGenerateOnlyForAccountPlatform(row.accountId, lead.platform)) {
+    console.log(
+      `[cron/scheduled-messages] ${row.id}: generate-only ${lead.platform}, skipping`
     );
     return 'skipped_ai_inactive';
   }

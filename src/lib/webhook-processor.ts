@@ -69,6 +69,11 @@ import {
   updateLeadStageFromConversation
 } from '@/lib/stage-progression';
 import {
+  computeInboundAiActive,
+  resolvePlatformGenerateOnly
+} from '@/lib/generate-only';
+import { shadowEgressCheck } from '@/lib/state-machine/shadow';
+import {
   enqueueInboundMediaProcessing,
   extractAttachmentDurationSeconds,
   findFirstMediaAttachment,
@@ -725,6 +730,29 @@ export function shouldAutoSendReply(args: {
   return args.aiActive && (args.awayMode || args.autoSendOverride);
 }
 
+// Stamped on a ScheduledReply that completed as a SUGGESTION (auto-send off:
+// Away Mode off / generate-only). The inline after() paths and the reply
+// cron treat a row carrying this marker as done, not as a missing delivery.
+export const SUGGESTION_ONLY_MARKER =
+  'suggestion_only: generated, not auto-sent (auto-send off for this conversation)';
+
+export async function scheduledReplyCompletedAsSuggestion(
+  scheduledReplyId: string
+): Promise<boolean> {
+  try {
+    const row = await prisma.scheduledReply.findUnique({
+      where: { id: scheduledReplyId },
+      select: { status: true, lastError: true }
+    });
+    return (
+      row?.status === 'CANCELLED' &&
+      (row.lastError ?? '').startsWith('suggestion_only:')
+    );
+  } catch {
+    return false;
+  }
+}
+
 export type GenerateReplyHistoryRow = {
   id: string;
   sender: string;
@@ -1103,10 +1131,16 @@ export async function processIncomingMessage(
         awayMode: true,
         awayModeInstagram: true,
         awayModeFacebook: true,
-        defaultAiActive: true
+        defaultAiActive: true,
+        generateOnlyInstagram: true,
+        generateOnlyFacebook: true
       }
     });
     const awayModeForPlatform = resolvePlatformAwayMode(account, platform);
+    const generateOnlyForPlatform = resolvePlatformGenerateOnly(
+      account,
+      platform
+    );
     // POLICY (2026-05-21, Tega): a NEW lead only gets AI turned ON when the
     // account's Away Mode is ON for this platform. Away Mode OFF → aiActive
     // stays false — no new lead gets AI, no exceptions. Only existing
@@ -1114,9 +1148,16 @@ export async function processIncomingMessage(
     // `defaultAiActive` is an additional per-account opt-out (can keep AI off
     // even in Away Mode). Ongoing-conversation messages always start AI off —
     // the existing thread keeps its operator-controlled state.
-    const shouldEnableAI = isOngoing
-      ? false
-      : awayModeForPlatform && (account?.defaultAiActive ?? true);
+    // 2026-09-08 (generate-only shadow, Tega): generate-only ALSO turns AI on
+    // for generation; auto-send stays gated by shouldAutoSendReply
+    // (awayMode || autoSendOverride), so the lead lands in suggestion mode
+    // and the send choke point blocks delivery. See src/lib/generate-only.ts.
+    const shouldEnableAI = computeInboundAiActive({
+      isOngoing,
+      awayMode: awayModeForPlatform,
+      generateOnly: generateOnlyForPlatform,
+      defaultAiActive: account?.defaultAiActive
+    });
 
     // ── ManyChat handoff detection + recovery (2026-04-30, expanded 2026-05-06) ──
     // For Instagram leads on accounts that have a ManyChat
@@ -3730,6 +3771,46 @@ export async function scheduleAIReply(
 
   // ── Step 5: Handle auto-send vs suggestion mode ────────────────
   if (!shouldAutoSend) {
+    // Generate-only shadow (2026-09-08): this reply will never ship, but the
+    // egress gate still judges it and writes its shadow row (dry run, tagged
+    // sendPath 'generate_only') so a client's full inbound volume fills the
+    // Instagram shadow window with zero deliveries. Best-effort; never
+    // changes the suggestion path.
+    if (lead.platformUserId) {
+      const bubbles = (result as { messages?: unknown }).messages;
+      const draft =
+        Array.isArray(bubbles) && bubbles.every((b) => typeof b === 'string')
+          ? (bubbles as string[]).join('\n')
+          : result.reply;
+      await shadowEgressCheck({
+        accountId,
+        recipientId: lead.platformUserId,
+        messageText: draft,
+        platform: lead.platform,
+        conversationId,
+        operatorInitiated: false,
+        dryRun: true
+      }).catch((err) =>
+        console.error(
+          '[webhook-processor] generate-only dry-run gate failed (non-fatal):',
+          err instanceof Error ? err.message : err
+        )
+      );
+    }
+    // Close the queue row as a completed SUGGESTION so the inline after()
+    // and the reply cron don't read "no AI Message delivered" as a failure
+    // (which retried five times and raised delivery-failure alerts for a
+    // reply that was never meant to ship). Both callers check for this.
+    await prisma.scheduledReply
+      .updateMany({
+        where: { conversationId, status: { in: ['PENDING', 'PROCESSING'] } },
+        data: {
+          status: 'CANCELLED',
+          processedAt: new Date(),
+          lastError: SUGGESTION_ONLY_MARKER
+        }
+      })
+      .catch(() => null);
     // AI is paused — broadcast as a suggestion only, don't save or send
     broadcastAISuggestion(accountId, {
       conversationId,

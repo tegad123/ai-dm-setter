@@ -5,7 +5,10 @@ import {
   getScheduledReplyRetryAt,
   SCHEDULED_REPLY_MAX_ATTEMPTS
 } from '@/lib/meta-delivery-errors';
-import { processScheduledReply } from '@/lib/webhook-processor';
+import {
+  processScheduledReply,
+  scheduledReplyCompletedAsSuggestion
+} from '@/lib/webhook-processor';
 import {
   FAILED_QUALITY_GATE_STATUS,
   isQualityGateEscalationError,
@@ -454,6 +457,15 @@ export async function GET(req: NextRequest) {
           select: { id: true }
         });
         if (!deliveredMessage) {
+          // Suggestion mode (auto-send off / generate-only): generated and
+          // stored, never meant to ship. Row is already CANCELLED with the
+          // suggestion marker — not a delivery failure.
+          if (await scheduledReplyCompletedAsSuggestion(reply.id)) {
+            console.log(
+              `[cron] reply ${reply.id} completed as suggestion (not auto-sent) for convo ${reply.conversationId}`
+            );
+            continue;
+          }
           throw new Error(
             'ScheduledReply completed without delivering an AI Message'
           );

@@ -22,6 +22,7 @@
 
 import prisma from '@/lib/prisma';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
+import { isGenerateOnlyForAccountPlatform } from '@/lib/generate-only';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
 import { broadcastNewMessage, broadcastNotification } from '@/lib/realtime';
 import {
@@ -134,6 +135,23 @@ export async function GET(req: NextRequest) {
           data: {
             failedAt: now,
             deliveryNotes: { reason: 'lead_missing_platform_user_id' }
+          }
+        });
+        continue;
+      }
+      if (
+        await isGenerateOnlyForAccountPlatform(
+          conv.lead.accountId,
+          conv.lead.platform
+        )
+      ) {
+        // Generate-only shadow (2026-09-08): nothing ships to this
+        // workspace's leads on this platform; close the group quietly.
+        await prisma.messageGroup.update({
+          where: { id: group.id },
+          data: {
+            failedAt: now,
+            deliveryNotes: { reason: 'generate_only_no_delivery' }
           }
         });
         continue;

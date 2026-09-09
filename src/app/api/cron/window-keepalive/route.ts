@@ -2,6 +2,7 @@ import prisma from '@/lib/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 import { sendDM as sendInstagramDM } from '@/lib/instagram';
 import { sendMessage as sendFacebookMessage } from '@/lib/facebook';
+import { isGenerateOnlyForAccountPlatform } from '@/lib/generate-only';
 import { generateKeepaliveMessage } from '@/lib/keepalive-generator';
 import { isClosingSignal } from '@/lib/closing-signal-detector';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
@@ -274,6 +275,22 @@ export async function GET(req: NextRequest) {
             })
             .catch(() => {});
           skippedNearDuplicate++;
+          continue;
+        }
+
+        // Generate-only shadow (2026-09-08): never nudge a lead in a
+        // workspace that asked for generation without delivery. The send
+        // choke point would block this anyway; skipping here avoids the
+        // failure path + phantom rows.
+        if (
+          await isGenerateOnlyForAccountPlatform(
+            conv.lead.accountId,
+            conv.lead.platform
+          )
+        ) {
+          console.log(
+            `[cron/window-keepalive] conv ${conv.id}: generate-only ${conv.lead.platform} — keepalive suppressed`
+          );
           continue;
         }
 
