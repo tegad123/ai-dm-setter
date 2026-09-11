@@ -67,6 +67,9 @@ export async function sendDM(
     tag?: 'HUMAN_AGENT';
     operatorInitiated?: boolean;
     conversationId?: string | null;
+    // The one F1 distress supportive reply (may pass a HELD_DISTRESS hold
+    // when FIX_D_DISTRESS_SUPPORTIVE_EXEMPT=true). See can-send.ts.
+    distressSupportive?: boolean;
   }
 ): Promise<{ messageId: string }> {
   // Fix D egress gate at the physical send choke point. Awaited so the write
@@ -84,7 +87,8 @@ export async function sendDM(
         messageText,
         platform: 'INSTAGRAM',
         conversationId: opts?.conversationId ?? null,
-        operatorInitiated: opts?.operatorInitiated ?? false
+        operatorInitiated: opts?.operatorInitiated ?? false,
+        distressSupportive: opts?.distressSupportive ?? false
       });
     } catch {
       // gate infra error must never break a send — treat as allow
@@ -293,7 +297,11 @@ export async function sendAudioDM(
   accountId: string,
   recipientId: string,
   audioUrl: string,
-  opts?: { operatorInitiated?: boolean; conversationId?: string | null }
+  opts?: {
+    operatorInitiated?: boolean;
+    conversationId?: string | null;
+    distressSupportive?: boolean;
+  }
 ): Promise<{ messageId: string }> {
   // Voice notes pass the same egress gate as text (Tega 2026-08-18). IG is
   // shadow-only today, so block is inert — but wired so IG's flip is a flag.
@@ -307,7 +315,8 @@ export async function sendAudioDM(
         messageText: `[audio] ${audioUrl}`,
         platform: 'INSTAGRAM',
         conversationId: opts?.conversationId ?? null,
-        operatorInitiated: opts?.operatorInitiated ?? false
+        operatorInitiated: opts?.operatorInitiated ?? false,
+        distressSupportive: opts?.distressSupportive ?? false
       });
     } catch {
       gate = { block: false };

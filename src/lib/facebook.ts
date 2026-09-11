@@ -59,6 +59,9 @@ export interface MetaSendOptions {
   // checks THIS conversation's hold state, not a heuristically-guessed one
   // (Test 4 fix — a lead with multiple conversations was mis-resolved).
   conversationId?: string | null;
+  // The one F1 distress supportive reply (may pass a HELD_DISTRESS hold when
+  // FIX_D_DISTRESS_SUPPORTIVE_EXEMPT=true). See can-send.ts.
+  distressSupportive?: boolean;
 }
 
 /**
@@ -91,7 +94,8 @@ export async function sendMessage(
         messageText,
         platform: 'FACEBOOK',
         conversationId: opts?.conversationId ?? null,
-        operatorInitiated: opts?.operatorInitiated ?? false
+        operatorInitiated: opts?.operatorInitiated ?? false,
+        distressSupportive: opts?.distressSupportive ?? false
       });
     } catch {
       // gate infra error must never break a send — treat as allow
@@ -183,7 +187,11 @@ export async function sendAudioMessage(
   accountId: string,
   recipientId: string,
   audioUrl: string,
-  opts?: { operatorInitiated?: boolean; conversationId?: string | null }
+  opts?: {
+    operatorInitiated?: boolean;
+    conversationId?: string | null;
+    distressSupportive?: boolean;
+  }
 ): Promise<{ messageId: string }> {
   // Voice notes must pass the SAME authoritative egress gate as text sends
   // (Tega 2026-08-18: audio previously bypassed it). Block honored outside
@@ -200,7 +208,8 @@ export async function sendAudioMessage(
         messageText: `[audio] ${audioUrl}`,
         platform: 'FACEBOOK',
         conversationId: opts?.conversationId ?? null,
-        operatorInitiated: opts?.operatorInitiated ?? false
+        operatorInitiated: opts?.operatorInitiated ?? false,
+        distressSupportive: opts?.distressSupportive ?? false
       });
     } catch {
       gate = { block: false };

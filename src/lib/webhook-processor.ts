@@ -1872,30 +1872,26 @@ export async function processIncomingMessage(
             '@/lib/distress-response'
           );
           const supportiveText = await generateSupportiveResponse(messageText);
-          const supportiveMsg = await prisma.message.create({
-            data: {
-              conversationId,
-              sender: 'AI',
-              content: supportiveText,
-              timestamp: new Date(),
-              // Deliberately no stage / sub_stage — this is not a sales
-              // turn and should not count toward stage progression or
-              // funnel analytics.
-              stage: null,
-              subStage: null
-            }
-          });
-          // Platform send. Use the existing helpers — same retry
-          // behaviour as the normal send path. Failure here is logged
-          // but non-fatal: the message row exists, operator can resend.
+          // 2026-09-11 (Tega, IG parity): SEND FIRST, then save. The row used
+          // to be created before the platform send, so when the egress gate
+          // blocked the supportive reply on a HELD_DISTRESS conversation
+          // (every Facebook distress since the Aug 18 cutover: five leads),
+          // the dashboard showed a message that was never delivered — a
+          // phantom row. Now: a gate block means NO row and no broadcast; a
+          // Meta failure still saves the row (operator can resend, as before).
+          let supportiveDelivered = false;
           if (lead.platformUserId) {
             try {
               // Thread the exact conversation into the egress gate (Fix D
-              // Test 4 / IG parity day 1 2026-09-08): without it the gate
-              // resolves by platformUserId → latest conversation, which is
-              // wrong for a lead with several conversations and pollutes
-              // the shadow diff the Instagram cutover is judged on.
-              const egress = { conversationId, operatorInitiated: false };
+              // Test 4 / IG parity day 1 2026-09-08). distressSupportive
+              // marks this as the ONE F1 supportive reply so the gate can
+              // exempt it from the distress hold when
+              // FIX_D_DISTRESS_SUPPORTIVE_EXEMPT=true (Tega's decision).
+              const egress = {
+                conversationId,
+                operatorInitiated: false,
+                distressSupportive: true
+              };
               if (lead.platform === 'INSTAGRAM') {
                 await sendInstagramDM(
                   accountId,
@@ -1911,12 +1907,37 @@ export async function processIncomingMessage(
                   egress
                 );
               }
+              supportiveDelivered = true;
             } catch (sendErr) {
+              if (sendErr instanceof EgressBlockedError) {
+                console.warn(
+                  `[webhook-processor] Distress supportive reply WITHHELD by the egress gate (${sendErr.reason}) on conv ${conversationId} — no message row saved; flags + operator escalation already set.`
+                );
+                throw SKIP_SUPPORTIVE_SEND;
+              }
               console.error(
                 '[webhook-processor] Distress supportive response platform send failed:',
                 sendErr
               );
             }
+          }
+          const supportiveMsg = await prisma.message.create({
+            data: {
+              conversationId,
+              sender: 'AI',
+              content: supportiveText,
+              timestamp: new Date(),
+              // Deliberately no stage / sub_stage — this is not a sales
+              // turn and should not count toward stage progression or
+              // funnel analytics.
+              stage: null,
+              subStage: null
+            }
+          });
+          if (!supportiveDelivered) {
+            console.warn(
+              `[webhook-processor] Distress supportive row saved WITHOUT delivery (Meta send failed) on conv ${conversationId} — operator can resend.`
+            );
           }
           broadcastNewMessage(accountId, {
             id: supportiveMsg.id,
@@ -4837,20 +4858,16 @@ async function sendAIReply(
         const supportiveText = await generateSupportiveResponse(
           latestLead.content
         );
-        const supportiveMsg = await prisma.message.create({
-          data: {
-            conversationId,
-            sender: 'AI',
-            content: supportiveText,
-            timestamp: new Date(),
-            stage: null,
-            subStage: null
-          }
-        });
+        // 2026-09-11: send FIRST, save only on delivery or a non-gate
+        // failure (see the Layer 1 path for the phantom-row rationale).
+        let l2Withheld = false;
         if (lead.platformUserId) {
           try {
-            // Exact-conversation egress attribution (IG parity day 1).
-            const egress = { conversationId, operatorInitiated: false };
+            const egress = {
+              conversationId,
+              operatorInitiated: false,
+              distressSupportive: true
+            };
             if (lead.platform === 'INSTAGRAM') {
               await sendInstagramDM(
                 lead.accountId,
@@ -4867,19 +4884,38 @@ async function sendAIReply(
               );
             }
           } catch (sendErr) {
-            console.error(
-              '[webhook-processor] Layer 2 supportive platform send failed:',
-              sendErr
-            );
+            if (sendErr instanceof EgressBlockedError) {
+              l2Withheld = true;
+              console.warn(
+                `[webhook-processor] Layer 2 supportive reply WITHHELD by the egress gate (${sendErr.reason}) on conv ${conversationId} — no message row saved.`
+              );
+            } else {
+              console.error(
+                '[webhook-processor] Layer 2 supportive platform send failed:',
+                sendErr
+              );
+            }
           }
         }
-        broadcastNewMessage(accountId, {
-          id: supportiveMsg.id,
-          conversationId,
-          sender: 'AI',
-          content: supportiveText,
-          timestamp: supportiveMsg.timestamp.toISOString()
-        });
+        if (!l2Withheld) {
+          const supportiveMsg = await prisma.message.create({
+            data: {
+              conversationId,
+              sender: 'AI',
+              content: supportiveText,
+              timestamp: new Date(),
+              stage: null,
+              subStage: null
+            }
+          });
+          broadcastNewMessage(accountId, {
+            id: supportiveMsg.id,
+            conversationId,
+            sender: 'AI',
+            content: supportiveText,
+            timestamp: supportiveMsg.timestamp.toISOString()
+          });
+        }
       }
     } catch (err) {
       console.error(

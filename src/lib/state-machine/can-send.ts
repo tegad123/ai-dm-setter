@@ -61,7 +61,18 @@ export interface CanSendDraft {
   // suggestion). Operator sends bypass hold blocking — replying manually to
   // a held conversation is exactly what the hold asks for.
   operatorInitiated: boolean;
+  // true for the ONE F1 distress supportive reply sent at detection time.
+  // Pending Tega's decision (2026-09-11): the machine's HELD_DISTRESS rule
+  // has been blocking this reply on Facebook since the Aug 18 cutover
+  // (five leads, Message row saved, platformMessageId null) while the F1
+  // flow intends it to ship once. With FIX_D_DISTRESS_SUPPORTIVE_EXEMPT=true
+  // that single reply passes a HELD_DISTRESS hold; everything else on the
+  // conversation still holds. Default off = current Facebook behaviour.
+  distressSupportive?: boolean;
 }
+
+const DISTRESS_SUPPORTIVE_EXEMPT =
+  process.env.FIX_D_DISTRESS_SUPPORTIVE_EXEMPT === 'true';
 
 export function canSend(
   state: MachineState,
@@ -80,6 +91,13 @@ export function canSend(
   }
 
   if (isHold(state.phase)) {
+    if (
+      state.phase === 'HELD_DISTRESS' &&
+      draft.distressSupportive === true &&
+      DISTRESS_SUPPORTIVE_EXEMPT
+    ) {
+      return { allow: true };
+    }
     return {
       allow: false,
       reason: 'HOLD',

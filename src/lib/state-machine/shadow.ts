@@ -110,6 +110,8 @@ export async function shadowEgressCheck(params: {
   // that will NOT be sent (suggestion mode). Never blocks; the row is tagged
   // sendPath 'generate_only' so the window can be filtered on it.
   dryRun?: boolean;
+  // The one F1 distress supportive reply (see CanSendDraft.distressSupportive).
+  distressSupportive?: boolean;
 }): Promise<EgressGateResult> {
   const authoritative = isAuthoritativeForPlatform(params.platform ?? null);
   // Shadow logging can be off while authoritative is on (post-cutover we may
@@ -261,7 +263,8 @@ export async function shadowEgressCheck(params: {
       const state = deriveMachineState({ ...conv, qualityGateHeld });
       const verdict = canSend(state, {
         text: params.messageText,
-        operatorInitiated: params.operatorInitiated ?? false
+        operatorInitiated: params.operatorInitiated ?? false,
+        distressSupportive: params.distressSupportive ?? false
       });
 
       // Log is BEST-EFFORT and happens AFTER the verdict is decided. The

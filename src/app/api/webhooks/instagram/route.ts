@@ -331,7 +331,15 @@ async function processInstagramEvents(payload: any): Promise<void> {
     }
 
     // ── Handle messaging events (new DM received) ──────────────────────
-    for (const event of entry.messaging ?? []) {
+    // IG parity day 3 (2026-09-11): Instagram handover-protocol / inbox
+    // events can arrive under `standby` instead of `messaging`, exactly as
+    // on Facebook. Treat both as first-class so native-app operator replies
+    // still hit the admin echo path (ported from facebook/route.ts).
+    const igEvents = [
+      ...((entry.messaging ?? []) as any[]),
+      ...(((entry as any).standby ?? []) as any[])
+    ];
+    for (const event of igEvents) {
       // Some IG webhook variants nest the deletion inside the messaging
       // event itself with `message.is_deleted: true` rather than the
       // top-level `message_deletions` array. Handle that shape here so

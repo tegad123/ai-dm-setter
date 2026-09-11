@@ -158,6 +158,45 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // ── 1b. Instagram-Login token probe (IG parity day 3, 2026-09-11) ──
+      // getMetaAccessToken() prefers the META token, so an account with both
+      // rows never had its INSTAGRAM (IGAA) token checked, and IGAA tokens
+      // must be probed on graph.instagram.com, not graph.facebook.com. On
+      // 2026-09-09 three of four IG-Login tokens in prod were invalidated
+      // (Meta code 190) with nothing surfacing it: webhooks still arrived,
+      // no reply could ever send. Probe the row's own token and alert.
+      if (cred.provider === 'INSTAGRAM') {
+        try {
+          const { getCredentials } = await import('@/lib/credential-store');
+          const igCreds = await getCredentials(cred.accountId, 'INSTAGRAM');
+          const igToken = igCreds?.accessToken as string | undefined;
+          if (igToken) {
+            const igRes = await fetch(
+              `https://graph.instagram.com/v21.0/me?fields=id&access_token=${encodeURIComponent(igToken)}`
+            );
+            const igBody: any = await igRes.json().catch(() => ({}));
+            const code = igBody?.error?.code;
+            if (!igRes.ok && (code === 190 || igRes.status === 401)) {
+              tokenBad++;
+              if (!alertedAccounts.has(cred.accountId)) {
+                const fired = await fireThrottledAlert(
+                  cred.accountId,
+                  'Instagram credential invalidated',
+                  'Instagram credential invalidated — reconnect required',
+                  `Health check: the Instagram access token for this account is no longer valid (Meta code ${code ?? igRes.status}: ${String(igBody?.error?.message ?? '').slice(0, 120)}). Instagram DMs still arrive, but NO reply can be delivered until you reconnect Instagram via Settings → Integrations.`
+                );
+                if (fired) alertedAccounts.add(cred.accountId);
+              }
+            }
+          }
+        } catch (igErr) {
+          console.warn(
+            `[cron/meta-health] Instagram token probe threw for account ${cred.accountId} (suppressed):`,
+            igErr instanceof Error ? igErr.message : igErr
+          );
+        }
+      }
+
       // ── 2. Webhook subscription check — META provider only ─────
       // /{pageId}/subscribed_apps with the Page token returns the apps
       // subscribed to this Page + the fields they're subscribed to.
