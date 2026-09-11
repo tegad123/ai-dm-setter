@@ -73,6 +73,8 @@ import {
   resolvePlatformGenerateOnly
 } from '@/lib/generate-only';
 import { shadowEgressCheck } from '@/lib/state-machine/shadow';
+import { EgressBlockedError } from '@/lib/state-machine/can-send';
+import { WAIT_BOUNDARY_REASON } from '@/lib/state-machine/egress-guards';
 import {
   enqueueInboundMediaProcessing,
   extractAttachmentDurationSeconds,
@@ -3992,6 +3994,11 @@ async function deliverBubbleGroup(params: {
   let deliveryError: Error | null = null;
   let firstMessageId = '';
   let abortedByHuman = false;
+  // M5 item 1: index of the first bubble the Wait-boundary guard refused
+  // (post-Wait script copy shipped before the lead replied). The turn ENDS
+  // there cleanly — earlier bubbles stand, later ones are dropped, the group
+  // completes (not fails) so stale-bubble recovery never re-ships them.
+  let stoppedAtWaitBoundary: number | null = null;
 
   for (let i = 0; i < sanitizedBubbles.length; i++) {
     const isFirst = i === 0;
@@ -4057,6 +4064,16 @@ async function deliverBubbleGroup(params: {
         };
 
     if (!ship.messageId) {
+      if (
+        ship.error instanceof EgressBlockedError &&
+        ship.error.reason === WAIT_BOUNDARY_REASON
+      ) {
+        stoppedAtWaitBoundary = i;
+        console.warn(
+          `[webhook-processor] Multi-bubble group ${group.id} stopped at bubble ${i + 1}/${sanitizedBubbles.length} by the Wait-boundary guard — post-Wait copy withheld until the lead replies (${sanitizedBubbles.length - i} bubble(s) dropped, conv ${conversationId})`
+        );
+        break;
+      }
       failedAt = new Date();
       deliveryError = await notifyDeliveryFailure({
         accountId: lead.accountId,
@@ -4200,6 +4217,11 @@ async function deliverBubbleGroup(params: {
   const notes: Record<string, unknown> = {};
   if (abortedByHuman) notes.abortedByHuman = true;
   if (failedAt) notes.failedAtBubble = delivered;
+  if (stoppedAtWaitBoundary !== null) {
+    notes.reason = 'wait_boundary_stop';
+    notes.stoppedAtBubble = stoppedAtWaitBoundary;
+    notes.droppedBubbles = sanitizedBubbles.length - stoppedAtWaitBoundary;
+  }
   // Prisma's InputJsonValue requires an object literal cast through
   // unknown because its union type excludes arbitrary index signatures.
   await prisma.messageGroup.update({

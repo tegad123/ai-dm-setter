@@ -25,6 +25,7 @@
 import prisma from '@/lib/prisma';
 import { canSend, deriveMachineState } from './can-send';
 import { isGenerateOnlyForAccountPlatform } from '@/lib/generate-only';
+import { runEgressGuards } from './egress-guards';
 
 const SHADOW_ENABLED = process.env.FIX_D_EGRESS_SHADOW !== 'false';
 
@@ -278,6 +279,41 @@ export async function shadowEgressCheck(params: {
         machineHold: verdict.allow ? null : (verdict.hold ?? null),
         agreed: authoritative && !params.dryRun ? true : verdict.allow
       });
+
+      // Content guards (M5 item 7 registry; item 1 = wait_boundary). They run
+      // only when the state verdict allowed the send, and — unlike canSend —
+      // are ENFORCED on every platform: they are structural script rules
+      // with no state ambiguity. In dry run (generate-only) they are logged
+      // only, so the shadow window shows what would have been held.
+      if (verdict.allow && !params.operatorInitiated) {
+        const guard = await runEgressGuards({
+          accountId: params.accountId,
+          conversationId: conv.id,
+          platform: params.platform ?? null,
+          bubble: params.messageText
+        });
+        if (guard.action === 'block') {
+          await logShadowRow({
+            accountId: params.accountId,
+            conversationId: conv.id,
+            sendPath: params.dryRun ? 'generate_only' : inferSendPath(),
+            draftPreview: params.messageText.slice(0, 300),
+            machineAllow: false,
+            machineReason: guard.reason ?? 'GUARD',
+            machineHold: null,
+            agreed: false
+          });
+          if (params.dryRun) return { block: false };
+          console.warn(
+            `[fix-d/egress] BLOCKED (guard ${guard.guard}, all platforms): ${guard.reason} on conv ${conv.id} — ${guard.detail ?? ''}`
+          );
+          return {
+            block: true,
+            reason: guard.reason ?? 'GUARD',
+            detail: guard.detail
+          };
+        }
+      }
 
       if (params.dryRun) return { block: false };
 
