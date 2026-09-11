@@ -2899,6 +2899,19 @@ export async function scheduleAIReply(
       'sched.step1.unsendableManyChatRecipient',
       `platformUserId=${lead.platformUserId || 'null'} — waiting for real Instagram webhook recipient id`
     );
+    // IG parity day 2 (2026-09-11): this used to be a silent skip — a
+    // ManyChat-origin Instagram lead sat created-but-never-messaged with no
+    // operator signal. Surface it once per lead per 24h.
+    const { notifyOnce } = await import('@/lib/platform-not-connected-alert');
+    await notifyOnce({
+      accountId,
+      leadId: lead.id,
+      title: 'ManyChat lead cannot be messaged yet',
+      body:
+        `${lead.name || lead.handle || 'A ManyChat lead'} was handed off by ManyChat but Instagram has not ` +
+        `confirmed a sendable recipient id (got "${lead.platformUserId || 'none'}"). The AI will resume as soon as ` +
+        `the lead sends a DM through Instagram. If they never do, reply from the Instagram app.`
+    });
     await prisma.conversation
       .update({
         where: { id: conversationId },

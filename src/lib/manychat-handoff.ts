@@ -613,6 +613,18 @@ export async function processManyChatHandoff(params: {
     console.warn(
       `[manychat-handoff] Skipping AI schedule for conversation ${conversationId}: ManyChat instagramUserId="${payload.instagramUserId}" is not a Meta recipient ID. AI will resume when an Instagram webhook upgrades the lead by handle.`
     );
+    // IG parity day 2 (2026-09-11): surface the silent skip to the operator
+    // once per lead per 24h instead of leaving the lead created-but-mute.
+    const { notifyOnce } = await import('@/lib/platform-not-connected-alert');
+    await notifyOnce({
+      accountId: account.id,
+      leadId,
+      title: 'ManyChat lead cannot be messaged yet',
+      body:
+        `A ManyChat handoff created this lead but Instagram has not confirmed a sendable recipient id ` +
+        `(ManyChat sent "${payload.instagramUserId ?? 'none'}"). The AI will resume as soon as the lead DMs ` +
+        `through Instagram. If they never do, reply from the Instagram app.`
+    });
   } else if (leadResponseInserted) {
     console.log(
       `[manychat-handoff] Recorded ManyChat engagement for conversation ${conversationId}; scheduleAi=false so Convlo will wait for the lead's next Instagram reply.`

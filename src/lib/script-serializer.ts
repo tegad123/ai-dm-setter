@@ -701,13 +701,75 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
   // label-substring matching ("cta"/"manychat"/"warm") mis-picked daetradez's
   // "Default (ManyChat lead — already answered)" branch (no "cta") for a real
   // populated-metadata ManyChat lead and re-did the intro (Tega 2026-08-26).
-  const branchReintroduces = (branch: T): boolean =>
-    (branch.actions ?? []).some(
-      (a) => a.actionType === 'send_message' || a.actionType === 'ask_question'
-    );
+  //
+  // 2026-09-11 refinement (IG parity day 2, Tega): the first version of this
+  // predicate — "re-introduces = has ANY send_message or ask_question" — was
+  // too coarse. daetradez's pick-up branch is
+  //   runtime_judgment → ask_question ("where are you based?") → wait
+  // so it ALSO counted as re-introducing, both branches landed in the same
+  // bucket, and the choice fell through to the judge classifier, which
+  // mis-picked on real Instagram inbound (ARYAN SAHU cmtwkes0a…, turn 2).
+  // What actually distinguishes the two is what the branch OPENS with:
+  //   • warm / re-introduce: a send_message opener BEFORE the first wait.
+  //   • pick-up: the first substantive action is a runtime_judgment (read what
+  //     the lead already said) and there is no opener before the wait.
+  // Asks alone don't make an intro. The coarse predicate stays as a fallback
+  // for scripts whose branches carry no waits, and label hints are a LAST
+  // resort only when structure genuinely cannot split the branches.
+  const WAIT_TYPES = new Set(['wait_for_response', 'wait_duration']);
+  const SUBSTANTIVE = new Set([
+    'send_message',
+    'ask_question',
+    'runtime_judgment',
+    'send_link',
+    'send_video',
+    'send_voice_note'
+  ]);
+  const firstSubstantive = (branch: T) =>
+    (branch.actions ?? []).find((a) => SUBSTANTIVE.has(a.actionType));
+  const hasOpenerBeforeWait = (branch: T): boolean => {
+    for (const a of branch.actions ?? []) {
+      if (WAIT_TYPES.has(a.actionType)) return false;
+      if (a.actionType === 'send_message') return true;
+    }
+    return false;
+  };
+  const opensWithJudgment = (branch: T): boolean =>
+    firstSubstantive(branch)?.actionType === 'runtime_judgment' &&
+    !hasOpenerBeforeWait(branch);
 
-  const pickUpBranches = branches.filter((b) => !branchReintroduces(b));
-  const reintroduceBranches = branches.filter((b) => branchReintroduces(b));
+  let pickUpBranches = branches.filter(opensWithJudgment);
+  let reintroduceBranches = branches.filter(hasOpenerBeforeWait);
+
+  if (pickUpBranches.length === 0 && reintroduceBranches.length === 0) {
+    // Fallback: the original coarse predicate (branches without waits or
+    // openers — e.g. minimal scripts).
+    const branchReintroduces = (branch: T): boolean =>
+      (branch.actions ?? []).some(
+        (a) =>
+          a.actionType === 'send_message' || a.actionType === 'ask_question'
+      );
+    pickUpBranches = branches.filter((b) => !branchReintroduces(b));
+    reintroduceBranches = branches.filter((b) => branchReintroduces(b));
+  }
+
+  // Last resort, ONLY when structure still cannot single out the branch the
+  // mode needs: label hints. Never the primary signal (label matching mis-
+  // picked daetradez's "Default (ManyChat lead — already answered)" before).
+  const labelSaysPickUp = (b: T) =>
+    /manychat|already answered|pick ?up|cta/i.test(b.branchLabel ?? '');
+  const labelSaysWarm = (b: T) =>
+    /warm|inbound|direct|cold/i.test(b.branchLabel ?? '');
+  if (mode === 'manychat_cta' && pickUpBranches.length !== 1) {
+    const byLabel = branches.filter(labelSaysPickUp);
+    if (byLabel.length === 1) pickUpBranches = byLabel;
+  }
+  if (mode === 'warm_inbound' && reintroduceBranches.length !== 1) {
+    const byLabel = branches.filter(
+      (b) => labelSaysWarm(b) && !labelSaysPickUp(b)
+    );
+    if (byLabel.length === 1) reintroduceBranches = byLabel;
+  }
 
   // A ManyChat lead continues from where the opener left off (pick-up branch,
   // no re-intro). A direct/warm lead needs the full intro (re-introduce

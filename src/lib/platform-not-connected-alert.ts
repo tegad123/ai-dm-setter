@@ -24,6 +24,52 @@ const LABEL: Record<'INSTAGRAM' | 'FACEBOOK', string> = {
   FACEBOOK: 'Facebook'
 };
 
+/**
+ * Generic deduped operator notification: one SYSTEM row per account+title per
+ * `dedupeMs` (default 24h). Never throws. Used for the silent-drop classes
+ * that had no operator signal (IG parity day 2).
+ */
+export async function notifyOnce(params: {
+  accountId: string;
+  title: string;
+  body: string;
+  leadId?: string | null;
+  dedupeMs?: number;
+}): Promise<void> {
+  try {
+    const since = new Date(Date.now() - (params.dedupeMs ?? REMIND_MS));
+    const recent = await prisma.notification.findFirst({
+      where: {
+        accountId: params.accountId,
+        type: 'SYSTEM',
+        title: params.title,
+        ...(params.leadId ? { leadId: params.leadId } : {}),
+        createdAt: { gte: since }
+      },
+      select: { id: true }
+    });
+    if (recent) return;
+    await prisma.notification.create({
+      data: {
+        accountId: params.accountId,
+        type: 'SYSTEM',
+        title: params.title,
+        body: params.body,
+        leadId: params.leadId ?? undefined
+      }
+    });
+    broadcastNotification(params.accountId, {
+      type: 'SYSTEM',
+      title: params.title
+    });
+  } catch (err) {
+    console.error(
+      '[notify-once] notification failed (non-fatal):',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 export async function notifyPlatformNotConnected(
   accountId: string,
   platform: 'INSTAGRAM' | 'FACEBOOK'

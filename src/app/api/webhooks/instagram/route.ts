@@ -398,12 +398,24 @@ async function processInstagramEvents(payload: any): Promise<void> {
         // pass the audioUrl through so the admin handler can mark
         // the saved row as a voice note + cancel pending AI replies.
         if (!messageText && !audioUrl) continue;
-        // This message was sent by the business/admin, not the lead
-        const leadPlatformUserId = isEcho
-          ? recipientId
-          : recipientId || senderId;
+        // This message was sent by the business/admin, not the lead.
+        // IG parity day 2 (2026-09-11): ported from the Facebook route —
+        // the lead is whichever side of the echo is NOT one of our own ids.
+        // The old `isEcho ? recipientId : recipientId || senderId` could
+        // attribute an operator echo to the page itself when a stale id sat
+        // in credential metadata, so human takeover never paused the AI on
+        // Instagram. Candidates are passed through so the handler can fall
+        // back across them the same way it does on Facebook.
+        const candidateLeadIds = Array.from(
+          new Set(
+            [recipientId, senderId].filter((id) => id && !pageOwnIds.has(id))
+          )
+        );
+        const leadPlatformUserId =
+          candidateLeadIds[0] ||
+          (isEcho ? recipientId : recipientId || senderId);
         console.log(
-          `[instagram-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}, voiceNote=${Boolean(audioUrl)}), lead=${leadPlatformUserId}`
+          `[instagram-webhook] Admin message detected (is_echo=${isEcho}, sender=${senderId}, voiceNote=${Boolean(audioUrl)}), lead=${leadPlatformUserId}, candidates=[${candidateLeadIds.join(',')}]`
         );
         try {
           const { processAdminMessage } = await import(
@@ -415,7 +427,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
             platform: 'INSTAGRAM',
             messageText: messageText || (audioUrl ? '[Voice note]' : ''),
             audioUrl: audioUrl ?? undefined,
-            platformMessageId: platformMessageId || undefined
+            platformMessageId: platformMessageId || undefined,
+            candidatePlatformUserIds: candidateLeadIds
           });
         } catch (adminErr) {
           console.error(
