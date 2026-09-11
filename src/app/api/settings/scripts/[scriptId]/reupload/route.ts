@@ -5,6 +5,14 @@ import {
   parseScriptMarkdown,
   extractTextFromUpload
 } from '@/lib/script-parser';
+import {
+  compileScript,
+  formatCompileErrors,
+  hasCompileErrors,
+  parsedScriptToCompilable,
+  REJECT_ON_INVALID
+} from '@/lib/script-fsm/compiler';
+import { compileAndStoreScriptFsm } from '@/lib/script-fsm/store';
 
 export const maxDuration = 300;
 
@@ -163,6 +171,20 @@ export async function POST(
     // Parse new text
     const parsed = await parseScriptMarkdown(auth.accountId, scriptText);
 
+    // M5 compiler (item 2): validate as a state machine BEFORE replacing the
+    // live steps; reject with readable errors when the flag is on.
+    const precompiled = compileScript(parsedScriptToCompilable(parsed.steps));
+    if (REJECT_ON_INVALID && hasCompileErrors(precompiled)) {
+      return NextResponse.json(
+        {
+          error: 'Script cannot be compiled into a conversation flow',
+          errors: formatCompileErrors(precompiled),
+          diagnostics: precompiled.diagnostics
+        },
+        { status: 422 }
+      );
+    }
+
     // Re-create in transaction
     await prisma.$transaction(async (tx) => {
       // Delete all existing steps (cascades to branches + actions)
@@ -290,9 +312,13 @@ export async function POST(
       include: DEEP_INCLUDE
     });
 
+    const compiled = await compileAndStoreScriptFsm(scriptId);
+
     return NextResponse.json({
       script: fullScript,
-      parseWarnings: parsed.warnings
+      parseWarnings: parsed.warnings,
+      compileDiagnostics: compiled.diagnostics,
+      compileErrors: formatCompileErrors(compiled)
     });
   } catch (err: any) {
     if (err?.statusCode === 401) {

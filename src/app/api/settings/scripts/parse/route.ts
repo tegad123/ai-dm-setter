@@ -5,6 +5,14 @@ import {
   parseScriptMarkdown,
   extractTextFromUpload
 } from '@/lib/script-parser';
+import {
+  compileScript,
+  formatCompileErrors,
+  hasCompileErrors,
+  parsedScriptToCompilable,
+  REJECT_ON_INVALID
+} from '@/lib/script-fsm/compiler';
+import { compileAndStoreScriptFsm } from '@/lib/script-fsm/store';
 
 export const maxDuration = 300;
 
@@ -96,6 +104,23 @@ export async function POST(req: NextRequest) {
 
     // Parse
     const parsed = await parseScriptMarkdown(auth.accountId, scriptText);
+
+    // M5 compiler (item 2): validate the script as a state machine BEFORE
+    // persisting. Errors (ask without wait, duplicate branch labels, empty
+    // step, unreachable step) are readable and, when
+    // FIX_D_ROUTING_REJECT_ON_INVALID=true, reject the upload with 422.
+    // Advisory otherwise: persisted alongside parseWarnings and returned.
+    const precompiled = compileScript(parsedScriptToCompilable(parsed.steps));
+    if (REJECT_ON_INVALID && hasCompileErrors(precompiled)) {
+      return NextResponse.json(
+        {
+          error: 'Script cannot be compiled into a conversation flow',
+          errors: formatCompileErrors(precompiled),
+          diagnostics: precompiled.diagnostics
+        },
+        { status: 422 }
+      );
+    }
 
     // Create DB records in a transaction
     const script = await prisma.$transaction(async (tx) => {
@@ -202,8 +227,16 @@ export async function POST(req: NextRequest) {
       include: DEEP_INCLUDE
     });
 
+    // Compile + store the FSM from the persisted rows (source of truth).
+    const compiled = await compileAndStoreScriptFsm(script.id);
+
     return NextResponse.json(
-      { script: fullScript, parseWarnings: parsed.warnings },
+      {
+        script: fullScript,
+        parseWarnings: parsed.warnings,
+        compileDiagnostics: compiled.diagnostics,
+        compileErrors: formatCompileErrors(compiled)
+      },
       { status: 201 }
     );
   } catch (err: any) {

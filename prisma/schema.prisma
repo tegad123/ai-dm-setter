@@ -1938,6 +1938,10 @@ model Script {
   originalUploadText String?          @db.Text
   lastParsedAt       DateTime?
   parseWarnings      Json?
+  // M5 compiler (2026-09-11): the code-owned FSM compiled from this script
+  // at upload (src/lib/script-fsm). Null = not compiled yet → legacy routing.
+  compiledFsm        Json?
+  compiledFsmVersion Int?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -2382,4 +2386,28 @@ model InboundQualification {
 
   @@index([accountId, classifiedAt(sort: Desc)])
   @@index([accountId, finalStartStage])
+}
+
+// M5 compiler shadow ledger (2026-09-11): per generation turn, what the legacy
+// judge/computeSystemStage chose vs what the compiled FSM would choose.
+// branchAgreed=false / advanceAgreed=false rows are the review queue that
+// gates the per-account authoritative flip (daetradez flipped last).
+model RoutingShadowLog {
+  id                String   @id @default(cuid())
+  accountId         String
+  conversationId    String?
+  scriptId          String?
+  stepNumber        Int
+  legacyBranchLabel String?
+  fsmBranchLabel    String?
+  fsmReason         String?
+  legacyNextStep    Int?
+  fsmNextStep       Int?
+  branchAgreed      Boolean
+  advanceAgreed     Boolean?
+  createdAt         DateTime @default(now())
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([branchAgreed, createdAt(sort: Desc)])
+  @@index([conversationId])
 }
