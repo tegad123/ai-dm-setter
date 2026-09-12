@@ -5279,7 +5279,78 @@ export async function prepareScriptState(params: {
       reason: conditionalSkip.reason ?? systemStage.reason
     };
   }
-  const currentScriptStep = currentStep?.stepNumber ?? 1;
+  let currentScriptStep = currentStep?.stepNumber ?? 1;
+  // M5 item 4 (compiler, shadow-first): the compiled FSM's advancement from
+  // the persisted cursor on this lead turn, logged next to
+  // computeSystemStage's answer (RoutingShadowLog.advanceAgreed). When
+  // FIX_D_ROUTING_AUTHORITATIVE names this account the FSM OWNS the cursor:
+  // the step advances because the machine credits it, not because a
+  // history rescan inferred it. Fail-open: any error leaves legacy as is.
+  try {
+    const { getActiveScriptFsm } = await import('@/lib/script-fsm/store');
+    const { fsmTransition } = await import('@/lib/script-fsm/runtime');
+    const { recordRoutingShadow, isRoutingAuthoritative } = await import(
+      '@/lib/script-fsm/shadow'
+    );
+    const active = await getActiveScriptFsm(params.accountId);
+    if (active) {
+      const prior =
+        typeof conversation.currentScriptStep === 'number' &&
+        conversation.currentScriptStep > 0
+          ? conversation.currentScriptStep
+          : 1;
+      const last = params.history[params.history.length - 1];
+      const leadSpoke = last?.sender === 'LEAD';
+      const t = leadSpoke
+        ? fsmTransition(
+            active.fsm,
+            {
+              stepNumber: prior,
+              selectedBranchLabel: null,
+              completedSteps: [],
+              compilerVersion: active.fsm.compilerVersion
+            },
+            { type: 'LEAD_REPLIED', text: last?.content ?? '' }
+          )
+        : null;
+      const fsmNext = t ? t.cursor.stepNumber : prior;
+      await recordRoutingShadow({
+        accountId: params.accountId,
+        conversationId: params.conversationId,
+        scriptId: active.scriptId,
+        stepNumber: prior,
+        legacyBranchLabel: null,
+        fsmBranchLabel: null,
+        fsmReason: t ? t.reason : 'no_lead_turn',
+        legacyNextStep: currentScriptStep,
+        fsmNextStep: fsmNext
+      });
+      if (
+        script &&
+        isRoutingAuthoritative(params.accountId) &&
+        fsmNext !== currentScriptStep
+      ) {
+        const owned = script.steps.find((s) => s.stepNumber === fsmNext);
+        if (owned) {
+          const legacySaid = currentScriptStep;
+          currentStep = owned;
+          currentScriptStep = fsmNext;
+          systemStage = {
+            step: owned,
+            reason: `fsm:${t?.reason ?? 'hold'}`
+          };
+          console.warn(
+            `[script-fsm] AUTHORITATIVE advancement ${prior} → ${fsmNext} (${t?.reason}) on conv ${params.conversationId}; legacy said ${legacySaid}`
+          );
+        }
+      }
+    }
+  } catch (fsmErr) {
+    console.error(
+      '[script-fsm] shadow advancement failed (non-fatal, legacy stands):',
+      fsmErr instanceof Error ? fsmErr.message : fsmErr
+    );
+  }
   // F5.1 [4]: did the position advance >1 step this turn (provable catch-up)?
   const priorStep =
     typeof conversation.currentScriptStep === 'number'

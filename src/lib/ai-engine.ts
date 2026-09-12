@@ -3264,6 +3264,79 @@ export async function generateReply(
       `[ai-engine] single-branch step ${scriptStateSnapshot.currentStep.stepNumber} — deterministically selecting sole branch "${selectedCurrentJudgeBranch?.branchLabel}" (no classification ambiguity) on conv ${activeConversationId}`
     );
   }
+  // M5 items 3–4 (compiler, shadow-first): evaluate the compiled FSM's edge
+  // for this step next to the legacy choice above and log agreement to
+  // RoutingShadowLog. When FIX_D_ROUTING_AUTHORITATIVE names this account,
+  // the FSM OWNS the branch (judge output is advisory input only). Fail-open:
+  // any error here leaves the legacy choice untouched.
+  if (
+    scriptStateSnapshot?.currentStep &&
+    (scriptStateSnapshot.currentStep.branches?.length ?? 0) > 0
+  ) {
+    try {
+      const { getActiveScriptFsm } = await import('@/lib/script-fsm/store');
+      const { selectEdge, nodeForStep } = await import(
+        '@/lib/script-fsm/runtime'
+      );
+      const { recordRoutingShadow, isRoutingAuthoritative } = await import(
+        '@/lib/script-fsm/shadow'
+      );
+      const active = await getActiveScriptFsm(accountId);
+      const node = active
+        ? nodeForStep(active.fsm, scriptStateSnapshot.currentStep.stepNumber)
+        : null;
+      if (active && node) {
+        const latestLead = [...conversationHistory]
+          .reverse()
+          .find((m) => m.sender === 'LEAD');
+        const sel = selectEdge(node, {
+          source: (coldStartStep1Inbound
+            ? 'INBOUND'
+            : ((conversationCallState?.source as string | null) ?? null)) as
+            | 'INBOUND'
+            | 'MANYCHAT'
+            | 'OUTBOUND'
+            | 'MANUAL_UPLOAD'
+            | null,
+          latestLeadText: latestLead?.content ?? null,
+          dataPoints: (scriptStateSnapshot.capturedDataPoints ?? {}) as Record<
+            string,
+            unknown
+          >,
+          judgeLabel:
+            currentJudgeBranchMatch.confidence !== 'none'
+              ? (currentJudgeBranchMatch.branchLabel ?? null)
+              : null
+        });
+        const fsmLabel = sel.kind === 'edge' ? sel.edge.branchLabel : null;
+        await recordRoutingShadow({
+          accountId,
+          conversationId: activeConversationId ?? null,
+          scriptId: active.scriptId,
+          stepNumber: node.stepNumber,
+          legacyBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null,
+          fsmBranchLabel: fsmLabel,
+          fsmReason: sel.kind === 'edge' ? sel.reason : `hold:${sel.reason}`
+        });
+        if (isRoutingAuthoritative(accountId) && sel.kind === 'edge') {
+          const owned = scriptStateSnapshot.currentStep.branches.find(
+            (b) => b.branchLabel === sel.edge.branchLabel
+          );
+          if (owned) {
+            selectedCurrentJudgeBranch = owned;
+            console.warn(
+              `[script-fsm] AUTHORITATIVE branch "${owned.branchLabel}" (${sel.reason}) on step ${node.stepNumber}, conv ${activeConversationId}`
+            );
+          }
+        }
+      }
+    } catch (fsmErr) {
+      console.error(
+        '[script-fsm] shadow branch evaluation failed (non-fatal, legacy choice stands):',
+        fsmErr instanceof Error ? fsmErr.message : fsmErr
+      );
+    }
+  }
   if (scriptStateSnapshot) {
     scriptStateSnapshot = {
       ...scriptStateSnapshot,
