@@ -152,3 +152,24 @@ Every item closes on Tega's standard: **commit hash** (`/api/version` `fullCommi
 4. **Ledger fold mis-places a live daetradez lead** → lazy per-turn derivation, legacy authoritative until per-account cutover, mismatch alert.
 5. **Capital rewrite regresses a currently-passing case** → keep the old classifier as a shadow comparator during soak; the fact store makes the decision auditable.
 6. **Timeline:** the capital-classifier rewrite (user-chosen over patching) adds real scope to Sep 20 — flag to Tega the day it looks tight, per his "flag slips the day you know" rule.
+
+---
+
+## Status addendum — 2026-09-13 (compiler slices A–C live in shadow)
+
+**Shipped (all deployed to prod, all in shadow unless stated):**
+
+- Item 1 (Wait-boundary gate): closed live on FB conv `cmtws9qly0009l504abico3xr` (intro + ask delivered, "That's awesome, I'm over in here in Texas." withheld, reason `WAIT_BOUNDARY`). Guard registry `src/lib/state-machine/egress-guards.ts`; matcher extracted to `state-machine/copy-match.ts`.
+- Item 2 (compiler + upload validation): `src/lib/script-fsm/{types,compiler,store}.ts`, `Script.compiledFsm/compiledFsmVersion` (migration `20260911150000_script_fsm_compiled`), 422 on `parse`/`reupload` when `FIX_D_ROUTING_REJECT_ON_INVALID`. Daniel compiles 14 nodes / 0 errors; Ali's junk script is rejected (empty step). `COMPILER_VERSION = 2`.
+- Item 3 (routing): `runtime.ts selectEdge` (verbatim > structural > judge advisory > default > typed hold; never null). Shadowed in `ai-engine.ts` right after the single-branch determinism block; `RoutingShadowLog.branchAgreed`.
+- Item 4 (advancement): position is a **pure fold of the full conversation history** through the machine (`foldHistory`). Credit rules: a lead reply counts only after we (AI/HUMAN, never ManyChat) spoke in the step; a branch with N wait boundaries needs N credited replies; routing-only / send-only complete on our outbound; branch = judge ledger → structural (source/always/data) → delivered-copy inference (exactly one owner) → default. Shadowed in `prepareScriptState`; `RoutingShadowLog.advanceAgreed`; cursor stashed at `capturedDataPoints.fsmCursor`.
+- Flags: `FIX_D_ROUTING_SHADOW` (default on), `FIX_D_ROUTING_AUTHORITATIVE=<accountId,…|ALL>` (branch + position owned by the FSM; **not set for anyone yet**), `FIX_D_ROUTING_REJECT_ON_INVALID`.
+
+**Evidence tooling (`scripts/verify/`, all read-only, run with `DATABASE_URL="$PROD_DATABASE_URL"`):**
+`routing-shadow-status.ts` (migration/compiled state + agreement counts), `routing-disagreements.ts` (transcripts behind disagreements + step shapes, `--script` to list steps), `routing-fold-replay.ts` (fold every real conversation of an account and compare with legacy `currentScriptStep`, Meta-free).
+
+**Replay on Daniel, last 7 days (2026-09-13, 255 conversations):** 232 were human-run / generate-only (legacy never evaluated them); of the 23 legacy-evaluated: 11 agree, 5 FSM ahead, 7 FSM behind.
+- All 7 "behind" = the warm step-1 branch has TWO asks (location, then new/experienced); the script says two replies, legacy credits one and moves on. Legacy's shortcut is why `cmty12h1b000ol904lfj38qxy` (lead opened with "I'm a beginner") got routed into "Already in markets" at step 2. The FSM reading is the script's reading; keep it.
+- "Ahead": ManyChat conversations where legacy lags a turn (`cmtx9x3aj0003l804lg0ir73z`), and one known limitation: `cmtws66km0003l504a5toczil`, where the engine freelanced a question at step 11 instead of the $200 qualification ask; both algorithms credit "any outbound + reply", legacy only held because of the Daniel-hardcoded capital-question detector. The generic fix is the required-ask egress guard (item 7), not a heuristic in the tracker.
+
+**Not yet done:** authoritative flips (per account, daetradez last); fixture seeder + shadow driver (WS6) for a non-daetradez proof; items 5, 6, 7 consolidation; retiring the hardcoded detectors (Phase 3).
