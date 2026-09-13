@@ -191,9 +191,7 @@ export function inferEdgeFromCopy(node: FsmNode, text: string): FsmEdge | null {
  *  Credit rules (M5 item 4): a lead reply counts toward a branch only if we
  *  spoke in the step first (`spokeInStep`); a branch with N wait boundaries
  *  needs N credited replies. Routing-only and send-only branches complete on
- *  our own outbound turn (the judgment reaction / the deliverables went out)
- *  and carry `spokeInStep` into the next step because that same turn usually
- *  delivered the next step's opener. */
+ *  our own outbound turn (the judgment reaction / the deliverables went out). */
 export function fsmTransition(
   fsm: CompiledScriptFsm,
   cursor: FsmCursor,
@@ -242,11 +240,15 @@ export function fsmTransition(
       if (inferred) c = { ...c, selectedBranchLabel: inferred.branchLabel };
     }
     const completion = completionAt(node, c);
+    // Routing-only / send-only complete on this outbound. Nothing is carried
+    // into the next node: the next step's opener/ask arrives as its own
+    // message and marks `spokeInStep` there. (Carrying it credited a freelance
+    // question as the next step's ask — conv cmtws66km0003l504a5toczil.)
     if (completion.kind === 'send_only') {
-      return { ...advance('send_only', true), reason: 'send_only' };
+      return advance('send_only', false);
     }
     if (completion.kind === 'routing_only') {
-      return advance('routing_only_outbound', true);
+      return advance('routing_only_outbound', false);
     }
     return {
       cursor: { ...c, spokeInStep: true },
@@ -317,7 +319,13 @@ export interface FoldOptions {
   /** Start the machine at this step instead of the entry node (a history
    *  whose frame begins mid-script, or a cursor seeded from legacy). */
   startStep?: number;
+  /** Structural facts that decide edges without a judge: the lead's source
+   *  (step-1 ManyChat pick-up vs warm inbound) and captured data points. */
+  source?: LeadFacts['source'];
+  dataPoints?: LeadFacts['dataPoints'];
 }
+
+const STRUCTURAL_REASONS = new Set(['source', 'always', 'data']);
 
 export function foldHistory(
   fsm: CompiledScriptFsm,
@@ -338,11 +346,24 @@ export function foldHistory(
     else if (sender === 'AI' || sender === 'HUMAN')
       event = { type: 'OUTBOUND', text: m.content, sender };
     if (!event) return;
-    if (!cursor.selectedBranchLabel && labelForStep) {
-      const label = labelForStep(cursor.stepNumber);
+    if (!cursor.selectedBranchLabel) {
       const node = nodeForStep(fsm, cursor.stepNumber);
+      // 1. The branch the judge actually selected (ledger), if it exists.
+      const label = labelForStep?.(cursor.stepNumber) ?? null;
       if (label && node?.edges.some((e) => sameLabel(e.branchLabel, label))) {
         cursor = { ...cursor, selectedBranchLabel: label };
+      } else if (node && node.edges.length > 1) {
+        // 2. A structurally decidable edge (source / always / data) — never
+        //    the judge or the default, which would fix a guess as a fact.
+        const sel = selectEdge(node, {
+          source: opts.source ?? null,
+          latestLeadText: null,
+          dataPoints: opts.dataPoints ?? {},
+          judgeLabel: null
+        });
+        if (sel.kind === 'edge' && STRUCTURAL_REASONS.has(sel.reason)) {
+          cursor = { ...cursor, selectedBranchLabel: sel.edge.branchLabel };
+        }
       }
     }
     const from = cursor.stepNumber;

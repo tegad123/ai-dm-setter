@@ -87,7 +87,11 @@ async function main() {
         .at(-1);
       return ev?.selectedBranchLabel ?? null;
     };
-    const fold = foldHistory(fsm, c.messages, { labelForStep });
+    const fold = foldHistory(fsm, c.messages, {
+      labelForStep,
+      source: c.source,
+      dataPoints: points
+    });
     const legacy = c.currentScriptStep ?? 1;
     const fsmStep = fold.cursor.stepNumber;
     const delta = fsmStep - legacy;

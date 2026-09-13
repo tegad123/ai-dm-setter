@@ -3,7 +3,7 @@
 // can be judged by hand. Read-only.
 //
 // Run (prod):
-//   DATABASE_URL="$PROD_DATABASE_URL" NODE_PATH=$PWD/node_modules npx tsx scripts/verify/routing-disagreements.ts [--since 24h] [--conv <id>,<id>] [--steps 1,7,8]
+//   DATABASE_URL="$PROD_DATABASE_URL" NODE_PATH=$PWD/node_modules npx tsx scripts/verify/routing-disagreements.ts [--since 24h] [--conv <id>,<id>] [--steps 1,7,8] [--script <scriptId>]
 import 'dotenv/config';
 import prisma from '@/lib/prisma';
 
@@ -45,6 +45,7 @@ async function main() {
     .map(Number)
     .filter((n) => !Number.isNaN(n));
   const scriptIds = new Set<string>();
+  if (arg('script')) scriptIds.add(arg('script') as string);
 
   for (const id of convIds) {
     const c = await prisma.conversation.findUnique({

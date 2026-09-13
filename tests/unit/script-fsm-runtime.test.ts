@@ -368,7 +368,7 @@ describe('fsmTransition credit rules', () => {
     });
     assert.equal(b.advanced, true);
     assert.equal(b.cursor.stepNumber, 2);
-    assert.equal(b.cursor.spokeInStep, true);
+    assert.equal(b.cursor.spokeInStep, false);
   });
   it('is monotonic and terminal-safe', () => {
     const term = { ...start, stepNumber: 5, spokeInStep: true };
@@ -463,17 +463,46 @@ describe('foldHistory (position as a pure function of the conversation)', () => 
     assert.equal(r.cursor.stepNumber, 4);
     assert.equal(r.advances[0]?.reason, 'lead_reply_after_ask');
   });
-  it('routing-only default passes through on our outbound and carries spoke into the next step', () => {
+  it('routing-only default passes through on our outbound; the next step needs its own outbound before a reply counts', () => {
     const r = foldHistory(
       fsm,
       [AI('makes sense, a lot of people feel that way'), LEAD('yeah')],
       { startStep: 3 }
     );
-    // outbound at 3 matched no branch copy → default (routing-only) → 4 with spoke carried; the reply credits step 4 (1 wait) → 5
+    // outbound at 3 matched no branch copy → default (routing-only) → 4; the
+    // reply at 4 arrives before step 4 spoke → no credit.
     assert.deepEqual(
       r.advances.map((a) => `${a.from}>${a.to}`),
+      ['3>4']
+    );
+    assert.equal(r.lastReason, 'reply_before_outbound');
+    const r2 = foldHistory(
+      fsm,
+      [
+        AI('makes sense, a lot of people feel that way'),
+        AI(
+          'So why is now so important for you to let go of these obstacles and overcome them bro? why now?'
+        ),
+        LEAD('yeah')
+      ],
+      { startStep: 3 }
+    );
+    assert.deepEqual(
+      r2.advances.map((a) => `${a.from}>${a.to}`),
       ['3>4', '4>5']
     );
+  });
+  it('a ManyChat lead takes the one-wait pick-up branch by SOURCE, not the two-wait warm default', () => {
+    const history = [
+      AI('Where are you currently based out of?'),
+      LEAD('Houston')
+    ];
+    const warm = foldHistory(fsm, history, { source: 'INBOUND' });
+    assert.equal(warm.cursor.stepNumber, 1);
+    assert.equal(warm.cursor.repliesInStep, 1);
+    const mc = foldHistory(fsm, history, { source: 'MANYCHAT' });
+    assert.equal(mc.cursor.stepNumber, 2);
+    assert.equal(mc.advances[0]?.reason, 'lead_reply_after_ask');
   });
   it('a human operator message counts as our outbound', () => {
     const r = foldHistory(fsm, [

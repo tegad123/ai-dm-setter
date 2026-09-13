@@ -5179,7 +5179,8 @@ export async function prepareScriptState(params: {
         capturedDataPoints: true,
         capitalVerificationStatus: true,
         capitalVerifiedAmount: true,
-        currentScriptStep: true
+        currentScriptStep: true,
+        source: true
       }
     }),
     prisma.script.findFirst({
@@ -5306,7 +5307,9 @@ export async function prepareScriptState(params: {
         params.history.map((m) => ({ sender: m.sender, content: m.content })),
         {
           labelForStep: (stepNumber) =>
-            branchHistorySelectedLabelForStep(capturedDataPoints, stepNumber)
+            branchHistorySelectedLabelForStep(capturedDataPoints, stepNumber),
+          source: conversation.source ?? null,
+          dataPoints: capturedDataPoints as Record<string, unknown>
         }
       );
       const fsmNext = fold.cursor.stepNumber;
