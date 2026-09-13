@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { normalizeForVerbatim } from '@/lib/verbatim-normalize';
+import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import type {
   CompiledPredicate,
   CompiledScriptFsm,
@@ -152,7 +153,47 @@ export interface TransitionResult {
   reason: string;
 }
 
-/** Advance at most one step per event. Monotonic: never moves backwards. */
+export function initialCursor(fsm: CompiledScriptFsm): FsmCursor {
+  const first = fsm.nodes[0]?.stepNumber ?? 1;
+  return {
+    stepNumber: first,
+    selectedBranchLabel: null,
+    completedSteps: [],
+    compilerVersion: fsm.compilerVersion,
+    repliesInStep: 0,
+    spokeInStep: false
+  };
+}
+
+function deliverableTexts(edge: FsmEdge): string[] {
+  const out: string[] = [];
+  for (const d of edge.deliverables) {
+    if (d.kind === 'send_message' || d.kind === 'ask') out.push(d.text);
+  }
+  return out;
+}
+
+/** Which branch did we actually deliver? When the judge's pick is unknown
+ *  (history fold, shadow), the branch whose scripted copy went out is the
+ *  branch we are on — structural, script-independent, no label guessing. */
+export function inferEdgeFromCopy(node: FsmNode, text: string): FsmEdge | null {
+  if (node.edges.length < 2) return null;
+  // Exactly one branch must own the copy: an ask shared by two branches
+  // (Daniel's step 1 asks "where are you based" on both) proves nothing.
+  const hits = node.edges.filter((e) =>
+    matchScriptedCopy(text, deliverableTexts(e))
+  );
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** Advance at most one step per event. Monotonic: never moves backwards.
+ *
+ *  Credit rules (M5 item 4): a lead reply counts toward a branch only if we
+ *  spoke in the step first (`spokeInStep`); a branch with N wait boundaries
+ *  needs N credited replies. Routing-only and send-only branches complete on
+ *  our own outbound turn (the judgment reaction / the deliverables went out)
+ *  and carry `spokeInStep` into the next step because that same turn usually
+ *  delivered the next step's opener. */
 export function fsmTransition(
   fsm: CompiledScriptFsm,
   cursor: FsmCursor,
@@ -161,7 +202,7 @@ export function fsmTransition(
   const node = nodeForStep(fsm, cursor.stepNumber);
   if (!node) return { cursor, advanced: false, reason: 'unknown_step' };
 
-  const advance = (why: string): TransitionResult => {
+  const advance = (why: string, carrySpoke: boolean): TransitionResult => {
     const next = nextStepNumber(fsm, cursor.stepNumber);
     if (next === null) return { cursor, advanced: false, reason: 'terminal' };
     return {
@@ -171,7 +212,9 @@ export function fsmTransition(
         selectedBranchLabel: null,
         completedSteps: cursor.completedSteps.includes(cursor.stepNumber)
           ? cursor.completedSteps
-          : [...cursor.completedSteps, cursor.stepNumber]
+          : [...cursor.completedSteps, cursor.stepNumber],
+        repliesInStep: 0,
+        spokeInStep: carrySpoke
       },
       advanced: true,
       reason: why
@@ -179,43 +222,135 @@ export function fsmTransition(
   };
 
   if (event.type === 'EDGE_SELECTED') {
-    const next: FsmCursor = {
-      ...cursor,
-      selectedBranchLabel: event.branchLabel
-    };
     const edge = node.edges.find((e) =>
       sameLabel(e.branchLabel, event.branchLabel)
     );
     if (edge?.completion.kind === 'routing_only') {
-      return {
-        ...advance('routing_only_edge_selected'),
-        cursor: { ...advance('x').cursor, selectedBranchLabel: null }
-      };
+      return advance('routing_only_edge_selected', false);
     }
-    return { cursor: next, advanced: false, reason: 'edge_selected' };
+    return {
+      cursor: { ...cursor, selectedBranchLabel: event.branchLabel },
+      advanced: false,
+      reason: 'edge_selected'
+    };
   }
 
-  const completion = completionAt(node, cursor);
-  if (event.type === 'LEAD_REPLIED') {
-    if (
-      completion.kind === 'lead_reply_after_ask' ||
-      completion.kind === 'judgment_after_wait'
-    ) {
-      return advance(completion.kind);
+  if (event.type === 'OUTBOUND') {
+    let c = cursor;
+    if (!c.selectedBranchLabel) {
+      const inferred = inferEdgeFromCopy(node, event.text);
+      if (inferred) c = { ...c, selectedBranchLabel: inferred.branchLabel };
+    }
+    const completion = completionAt(node, c);
+    if (completion.kind === 'send_only') {
+      return { ...advance('send_only', true), reason: 'send_only' };
+    }
+    if (completion.kind === 'routing_only') {
+      return advance('routing_only_outbound', true);
     }
     return {
-      cursor,
+      cursor: { ...c, spokeInStep: true },
       advanced: false,
-      reason: `lead_reply_does_not_complete_${completion.kind}`
+      reason:
+        c.selectedBranchLabel && !cursor.selectedBranchLabel
+          ? 'outbound_branch_inferred'
+          : 'outbound'
     };
   }
-  if (event.type === 'DELIVERABLES_SENT') {
-    if (completion.kind === 'send_only') return advance('send_only');
+
+  // LEAD_REPLIED
+  const completion = completionAt(node, cursor);
+  if (!cursor.spokeInStep) {
+    return { cursor, advanced: false, reason: 'reply_before_outbound' };
+  }
+  if (
+    completion.kind === 'lead_reply_after_ask' ||
+    completion.kind === 'judgment_after_wait'
+  ) {
+    const replies = cursor.repliesInStep + 1;
+    if (replies >= completion.waits) return advance(completion.kind, false);
     return {
-      cursor,
+      cursor: { ...cursor, repliesInStep: replies, spokeInStep: false },
       advanced: false,
-      reason: `sent_does_not_complete_${completion.kind}`
+      reason: `awaiting_more_replies_${replies}_of_${completion.waits}`
     };
   }
-  return { cursor, advanced: false, reason: 'no_op' };
+  return {
+    cursor,
+    advanced: false,
+    reason: `lead_reply_does_not_complete_${completion.kind}`
+  };
+}
+
+// ── History fold ─────────────────────────────────────────────────────────────
+
+export interface FoldMessage {
+  sender: string;
+  content: string;
+}
+
+export interface FoldStep {
+  index: number;
+  from: number;
+  to: number;
+  reason: string;
+}
+
+export interface FoldResult {
+  cursor: FsmCursor;
+  /** Every advance, in order (for traces / shadow review). */
+  advances: FoldStep[];
+  /** Reason of the last event applied (advance or not). */
+  lastReason: string;
+}
+
+/** The machine's position as a pure function of the conversation so far:
+ *  fold every message through `fsmTransition` from the entry node. LEAD
+ *  messages are replies; AI and HUMAN messages are our outbound turns;
+ *  everything else (ManyChat automations, system rows) is not a script
+ *  deliverable and is skipped. `labelForStep` (optional) supplies the branch
+ *  the judge actually selected for a step — the legacy ledger during shadow,
+ *  the FSM's own selection once authoritative — and is consulted only while
+ *  the cursor has no selection for that step. */
+export interface FoldOptions {
+  labelForStep?: (stepNumber: number) => string | null;
+  /** Start the machine at this step instead of the entry node (a history
+   *  whose frame begins mid-script, or a cursor seeded from legacy). */
+  startStep?: number;
+}
+
+export function foldHistory(
+  fsm: CompiledScriptFsm,
+  messages: FoldMessage[],
+  opts: FoldOptions = {}
+): FoldResult {
+  const { labelForStep, startStep } = opts;
+  let cursor = initialCursor(fsm);
+  if (startStep != null && nodeForStep(fsm, startStep)) {
+    cursor = { ...cursor, stepNumber: startStep };
+  }
+  const advances: FoldStep[] = [];
+  let lastReason = 'empty_history';
+  messages.forEach((m, index) => {
+    const sender = (m.sender ?? '').toUpperCase();
+    let event: FsmEvent | null = null;
+    if (sender === 'LEAD') event = { type: 'LEAD_REPLIED', text: m.content };
+    else if (sender === 'AI' || sender === 'HUMAN')
+      event = { type: 'OUTBOUND', text: m.content, sender };
+    if (!event) return;
+    if (!cursor.selectedBranchLabel && labelForStep) {
+      const label = labelForStep(cursor.stepNumber);
+      const node = nodeForStep(fsm, cursor.stepNumber);
+      if (label && node?.edges.some((e) => sameLabel(e.branchLabel, label))) {
+        cursor = { ...cursor, selectedBranchLabel: label };
+      }
+    }
+    const from = cursor.stepNumber;
+    const t = fsmTransition(fsm, cursor, event);
+    cursor = t.cursor;
+    lastReason = t.reason;
+    if (t.advanced)
+      advances.push({ index, from, to: cursor.stepNumber, reason: t.reason });
+  });
+  return { cursor, advances, lastReason };
 }

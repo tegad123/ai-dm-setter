@@ -15,7 +15,9 @@
 // shadow-then-authoritative rollout, daetradez flipped last (it's the oracle).
 // ---------------------------------------------------------------------------
 
-export const COMPILER_VERSION = 1;
+// v2: CompletionSpec carries `waits` (credit rules). Stored v1 blobs recompile
+// lazily on first use (store.ts getActiveScriptFsm).
+export const COMPILER_VERSION = 2;
 
 export type LeadSource = 'INBOUND' | 'MANYCHAT' | 'OUTBOUND' | 'MANUAL_UPLOAD';
 
@@ -37,11 +39,15 @@ export type Deliverable =
   | { kind: 'runtime_judgment'; text: string };
 
 export type CompletionSpec =
-  // The step asked something and waits; the lead's next message completes it.
-  | { kind: 'lead_reply_after_ask' }
+  // The step asked something and waits; the lead's reply to OUR ask completes
+  // it. `waits` = number of wait boundaries on the branch: a branch that asks
+  // twice (ask → wait → ask → wait) needs two credited replies, each after we
+  // spoke in the step. A reply that arrives before we spoke (cold start,
+  // generate-only with nothing sent, a double text) credits nothing.
+  | { kind: 'lead_reply_after_ask'; waits: number }
   // A runtime_judgment sits after a wait (or the branch is judgment + wait):
   // completes when the lead replies (Tega items 4/5 — the "fresh lead" stall).
-  | { kind: 'judgment_after_wait' }
+  | { kind: 'judgment_after_wait'; waits: number }
   // Judgment with no ask and no wait: pure routing, completes once an edge is
   // selected (no lead turn needed).
   | { kind: 'routing_only' }
@@ -136,9 +142,16 @@ export interface FsmCursor {
   selectedBranchLabel: string | null;
   completedSteps: number[];
   compilerVersion: number;
+  /** Lead replies credited toward the current branch's `waits`. */
+  repliesInStep: number;
+  /** We (AI or a human operator) have sent something since entering the step
+   *  / since the last credited reply — the precondition for crediting one. */
+  spokeInStep: boolean;
 }
 
 export type FsmEvent =
   | { type: 'LEAD_REPLIED'; text: string }
   | { type: 'EDGE_SELECTED'; branchLabel: string }
-  | { type: 'DELIVERABLES_SENT' };
+  // An outbound message from us (AI or HUMAN operator; never ManyChat
+  // automations, which are not this script's deliverables).
+  | { type: 'OUTBOUND'; text: string; sender: 'AI' | 'HUMAN' };

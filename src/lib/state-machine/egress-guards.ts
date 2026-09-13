@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
-import { normalizeForVerbatim } from '@/lib/verbatim-normalize';
+import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 
 export type GuardAction = 'allow' | 'block';
 
@@ -95,39 +95,14 @@ export function collectPostWaitContents(step: StepLike): string[] {
   return out;
 }
 
-const MIN_CHARS = 20;
-const MIN_TOKENS = 4;
-const JACCARD_THRESHOLD = 0.75;
-
-function tokens(s: string): Set<string> {
-  return new Set(normalizeForVerbatim(s).split(' ').filter(Boolean));
-}
-
 /** Returns the matching scripted block when `bubble` is (a drift of) one of
- *  `postWaitContents`: normalized equality, containment either way, or token
- *  Jaccard ≥ 0.75. Short/generic lines never match (≥20 chars, ≥4 tokens). */
+ *  `postWaitContents`. The matcher lives in state-machine/copy-match.ts so the
+ *  script-FSM fold can share it without pulling in the DB glue below. */
 export function matchPostWaitCopy(
   bubble: string,
   postWaitContents: string[]
 ): string | null {
-  const nb = normalizeForVerbatim(bubble);
-  if (nb.length < MIN_CHARS) return null;
-  const tb = tokens(bubble);
-  if (tb.size < MIN_TOKENS) return null;
-  for (const c of postWaitContents) {
-    const nc = normalizeForVerbatim(c);
-    if (nc.length < MIN_CHARS) continue;
-    if (nb === nc || nb.includes(nc) || nc.includes(nb)) return c;
-    const tc = tokens(c);
-    if (tc.size < MIN_TOKENS) continue;
-    let inter = 0;
-    tb.forEach((t) => {
-      if (tc.has(t)) inter++;
-    });
-    const union = tb.size + tc.size - inter;
-    if (union > 0 && inter / union >= JACCARD_THRESHOLD) return c;
-  }
-  return null;
+  return matchScriptedCopy(bubble, postWaitContents);
 }
 
 // ── DB glue ────────────────────────────────────────────────────────────────

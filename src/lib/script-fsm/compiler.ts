@@ -119,13 +119,16 @@ export function toDeliverables(actions: CompilableAction[]): Deliverable[] {
 export function deriveCompletion(actions: CompilableAction[]): CompletionSpec {
   const seq = sorted(actions);
   const hasAsk = seq.some((a) => a.actionType === 'ask_question');
-  const hasWait = seq.some((a) => WAIT_TYPES.has(a.actionType));
+  const waitCount = seq.filter((a) => WAIT_TYPES.has(a.actionType)).length;
+  const hasWait = waitCount > 0;
+  const waits = Math.max(1, waitCount);
   const hasJudgment = seq.some((a) => a.actionType === 'runtime_judgment');
-  if (hasWait && hasJudgment && !hasAsk) return { kind: 'judgment_after_wait' };
-  if (hasWait && hasAsk) return { kind: 'lead_reply_after_ask' };
-  if (hasWait) return { kind: 'judgment_after_wait' };
+  if (hasWait && hasJudgment && !hasAsk)
+    return { kind: 'judgment_after_wait', waits };
+  if (hasWait && hasAsk) return { kind: 'lead_reply_after_ask', waits };
+  if (hasWait) return { kind: 'judgment_after_wait', waits };
   if (hasJudgment && !hasAsk) return { kind: 'routing_only' };
-  if (hasAsk) return { kind: 'lead_reply_after_ask' }; // ask without wait → validator flags it
+  if (hasAsk) return { kind: 'lead_reply_after_ask', waits }; // ask without wait → validator flags it
   return { kind: 'send_only' };
 }
 

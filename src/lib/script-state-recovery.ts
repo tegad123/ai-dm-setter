@@ -5280,15 +5280,17 @@ export async function prepareScriptState(params: {
     };
   }
   let currentScriptStep = currentStep?.stepNumber ?? 1;
-  // M5 item 4 (compiler, shadow-first): the compiled FSM's advancement from
-  // the persisted cursor on this lead turn, logged next to
-  // computeSystemStage's answer (RoutingShadowLog.advanceAgreed). When
-  // FIX_D_ROUTING_AUTHORITATIVE names this account the FSM OWNS the cursor:
-  // the step advances because the machine credits it, not because a
-  // history rescan inferred it. Fail-open: any error leaves legacy as is.
+  // M5 item 4 (compiler, shadow-first): the compiled FSM's position is a pure
+  // fold of the full conversation history through the machine (a lead reply
+  // is credited only after we spoke in the step; a branch with N waits needs
+  // N credited replies; routing-only / send-only branches complete on our own
+  // outbound turn). Logged next to computeSystemStage's answer
+  // (RoutingShadowLog.advanceAgreed) and stashed on capturedDataPoints.fsmCursor
+  // for traces. When FIX_D_ROUTING_AUTHORITATIVE names this account the FSM
+  // OWNS currentScriptStep. Fail-open: any error leaves legacy as is.
   try {
     const { getActiveScriptFsm } = await import('@/lib/script-fsm/store');
-    const { fsmTransition } = await import('@/lib/script-fsm/runtime');
+    const { foldHistory } = await import('@/lib/script-fsm/runtime');
     const { recordRoutingShadow, isRoutingAuthoritative } = await import(
       '@/lib/script-fsm/shadow'
     );
@@ -5299,21 +5301,32 @@ export async function prepareScriptState(params: {
         conversation.currentScriptStep > 0
           ? conversation.currentScriptStep
           : 1;
+      const fold = foldHistory(
+        active.fsm,
+        params.history.map((m) => ({ sender: m.sender, content: m.content })),
+        {
+          labelForStep: (stepNumber) =>
+            branchHistorySelectedLabelForStep(capturedDataPoints, stepNumber)
+        }
+      );
+      const fsmNext = fold.cursor.stepNumber;
+      const lastAdvance = fold.advances.at(-1);
+      const fsmReason = `${fold.lastReason}|advances=${fold.advances.length}${
+        lastAdvance
+          ? `|last=${lastAdvance.from}>${lastAdvance.to}:${lastAdvance.reason}`
+          : ''
+      }`;
       const last = params.history[params.history.length - 1];
-      const leadSpoke = last?.sender === 'LEAD';
-      const t = leadSpoke
-        ? fsmTransition(
-            active.fsm,
-            {
-              stepNumber: prior,
-              selectedBranchLabel: null,
-              completedSteps: [],
-              compilerVersion: active.fsm.compilerVersion
-            },
-            { type: 'LEAD_REPLIED', text: last?.content ?? '' }
-          )
-        : null;
-      const fsmNext = t ? t.cursor.stepNumber : prior;
+      (capturedDataPoints as Record<string, unknown>).fsmCursor = {
+        ...fold.cursor,
+        scriptId: active.scriptId,
+        asOf:
+          last?.timestamp instanceof Date
+            ? last.timestamp.toISOString()
+            : (last?.timestamp ?? null),
+        reason: fsmReason,
+        legacyStep: currentScriptStep
+      };
       await recordRoutingShadow({
         accountId: params.accountId,
         conversationId: params.conversationId,
@@ -5321,7 +5334,7 @@ export async function prepareScriptState(params: {
         stepNumber: prior,
         legacyBranchLabel: null,
         fsmBranchLabel: null,
-        fsmReason: t ? t.reason : 'no_lead_turn',
+        fsmReason,
         legacyNextStep: currentScriptStep,
         fsmNextStep: fsmNext
       });
@@ -5337,10 +5350,10 @@ export async function prepareScriptState(params: {
           currentScriptStep = fsmNext;
           systemStage = {
             step: owned,
-            reason: `fsm:${t?.reason ?? 'hold'}`
+            reason: `fsm:${fold.lastReason}`
           };
           console.warn(
-            `[script-fsm] AUTHORITATIVE advancement ${prior} → ${fsmNext} (${t?.reason}) on conv ${params.conversationId}; legacy said ${legacySaid}`
+            `[script-fsm] AUTHORITATIVE position ${fsmNext} (${fsmReason}) on conv ${params.conversationId}; legacy said ${legacySaid}`
           );
         }
       }
