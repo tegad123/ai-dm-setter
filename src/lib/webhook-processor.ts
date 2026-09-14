@@ -78,6 +78,7 @@ import {
   VERBATIM_REPEAT_REASON,
   WAIT_BOUNDARY_REASON
 } from '@/lib/state-machine/egress-guards';
+import { shadowRequiredAskCheck } from '@/lib/state-machine/required-ask';
 import {
   enqueueInboundMediaProcessing,
   extractAttachmentDurationSeconds,
@@ -4008,6 +4009,13 @@ async function deliverBubbleGroup(params: {
   const sanitizedBubbles = bubbles.map((bubble) =>
     sanitizeDashCharacters(bubble)
   );
+  // M5 item 7 (shadow): does this turn contain the scripted ask of the step
+  // it was generated at? Observes and logs REQUIRED_ASK_MISSING; never blocks.
+  await shadowRequiredAskCheck({
+    accountId: lead.accountId,
+    conversationId,
+    bubbles: sanitizedBubbles
+  });
   const totalCharacters = sanitizedBubbles.reduce(
     (sum, b) => sum + b.length,
     0

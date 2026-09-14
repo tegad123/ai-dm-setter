@@ -738,7 +738,7 @@ function stepCompletionPaths(
   }));
 }
 
-function branchHistorySelectedLabelForStep(
+export function branchHistorySelectedLabelForStep(
   points: CapturedDataPoints,
   stepNumber: number
 ): string | null {

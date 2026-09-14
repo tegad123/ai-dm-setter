@@ -15,6 +15,14 @@ function tokens(s: string): Set<string> {
   return new Set(normalizeForVerbatim(s).split(' ').filter(Boolean));
 }
 
+/** Can this line ever be matched by the matchers below? (≥20 chars, ≥4
+ *  tokens after normalization.) Short generic lines are deliberately outside
+ *  the matchers' reach, so callers must not treat them as "never sent". */
+export function isMatchableCopy(text: string): boolean {
+  const n = normalizeForVerbatim(text);
+  return n.length >= MIN_CHARS && tokens(text).size >= MIN_TOKENS;
+}
+
 /** Is `bubble` a repeat of something we already sent? Normalized equality,
  *  or token Jaccard ≥ 0.75 on lines of ≥20 chars / ≥4 tokens. Containment is
  *  deliberately NOT a repeat here: a short new question that happens to sit
