@@ -74,7 +74,10 @@ import {
 } from '@/lib/generate-only';
 import { shadowEgressCheck } from '@/lib/state-machine/shadow';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
-import { WAIT_BOUNDARY_REASON } from '@/lib/state-machine/egress-guards';
+import {
+  VERBATIM_REPEAT_REASON,
+  WAIT_BOUNDARY_REASON
+} from '@/lib/state-machine/egress-guards';
 import {
   enqueueInboundMediaProcessing,
   extractAttachmentDurationSeconds,
@@ -4033,9 +4036,14 @@ async function deliverBubbleGroup(params: {
   // there cleanly — earlier bubbles stand, later ones are dropped, the group
   // completes (not fails) so stale-bubble recovery never re-ships them.
   let stoppedAtWaitBoundary: number | null = null;
+  // M5 item 7: bubbles the verbatim-repeat guard refused (already delivered
+  // in this conversation). Skipped, the rest of the group still ships.
+  const skippedRepeatBubbles: number[] = [];
 
   for (let i = 0; i < sanitizedBubbles.length; i++) {
-    const isFirst = i === 0;
+    // "First" = first bubble that actually ships (a skipped repeat at index
+    // 0 must not swallow the turn's stage metadata / firstMessageId).
+    const isFirst = delivered === 0;
     const bubble = sanitizedBubbles[i];
 
     // Mid-group interrupt check (skip on the first bubble — we already passed
@@ -4098,6 +4106,16 @@ async function deliverBubbleGroup(params: {
         };
 
     if (!ship.messageId) {
+      if (
+        ship.error instanceof EgressBlockedError &&
+        ship.error.reason === VERBATIM_REPEAT_REASON
+      ) {
+        skippedRepeatBubbles.push(i);
+        console.warn(
+          `[webhook-processor] Multi-bubble group ${group.id} skipped bubble ${i + 1}/${sanitizedBubbles.length}: verbatim repeat of delivered content (${ship.error.message}) conv ${conversationId}`
+        );
+        continue;
+      }
       if (
         ship.error instanceof EgressBlockedError &&
         ship.error.reason === WAIT_BOUNDARY_REASON
@@ -4255,6 +4273,14 @@ async function deliverBubbleGroup(params: {
     notes.reason = 'wait_boundary_stop';
     notes.stoppedAtBubble = stoppedAtWaitBoundary;
     notes.droppedBubbles = sanitizedBubbles.length - stoppedAtWaitBoundary;
+  }
+  if (skippedRepeatBubbles.length > 0) {
+    notes.skippedRepeatBubbles = skippedRepeatBubbles;
+    if (delivered === 0 && !failedAt && stoppedAtWaitBoundary === null) {
+      // Every bubble was something we already said: the turn is suppressed,
+      // not failed. The reply cron reads this and closes its row quietly.
+      notes.reason = 'all_bubbles_repeat';
+    }
   }
   // Prisma's InputJsonValue requires an object literal cast through
   // unknown because its union type excludes arbitrary index signatures.

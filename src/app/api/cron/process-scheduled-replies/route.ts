@@ -466,6 +466,67 @@ export async function GET(req: NextRequest) {
             );
             continue;
           }
+          // Another path already answered this lead turn after the row was
+          // created (inline after(), a sibling row, a recovery sweep):
+          // processScheduledReply correctly found nothing to do. That is a
+          // delivered turn, not a failure — 2026-09-14 this raised five
+          // "Delivery Failed" alerts and five regenerations on one delivered
+          // reply (conv cmu0zhsp40003lh043d9f0ndt).
+          const deliveredByOtherPath = await prisma.message.findFirst({
+            where: {
+              conversationId: reply.conversationId,
+              sender: 'AI',
+              platformMessageId: { not: null },
+              timestamp: { gte: reply.createdAt }
+            },
+            select: { id: true, timestamp: true }
+          });
+          if (deliveredByOtherPath) {
+            console.log(
+              `[cron] reply ${reply.id} already answered by another path at ${deliveredByOtherPath.timestamp.toISOString()} (convo ${reply.conversationId}) — marking SENT`
+            );
+            await prisma.scheduledReply.update({
+              where: { id: reply.id },
+              data: {
+                status: 'SENT',
+                processedAt: new Date(),
+                lastError:
+                  'delivered by another path before this row ran (no duplicate sent)'
+              }
+            });
+            sent++;
+            continue;
+          }
+          // Every bubble of the generated turn was a verbatim repeat of
+          // content already delivered — the egress guard suppressed the
+          // whole group (deliveryNotes.reason = 'all_bubbles_repeat'). Not a
+          // delivery failure: nothing new to say, nothing to retry.
+          const suppressedGroup = await prisma.messageGroup.findFirst({
+            where: {
+              conversationId: reply.conversationId,
+              completedAt: { gte: processingStartedAt }
+            },
+            orderBy: { completedAt: 'desc' },
+            select: { id: true, deliveryNotes: true }
+          });
+          const suppressedReason = (
+            suppressedGroup?.deliveryNotes as { reason?: string } | null
+          )?.reason;
+          if (suppressedReason === 'all_bubbles_repeat') {
+            console.warn(
+              `[cron] reply ${reply.id} suppressed: every bubble was a verbatim repeat (group ${suppressedGroup?.id}, convo ${reply.conversationId})`
+            );
+            await prisma.scheduledReply.update({
+              where: { id: reply.id },
+              data: {
+                status: 'CANCELLED',
+                processedAt: new Date(),
+                lastError:
+                  'suppressed: every bubble repeated already-delivered content (VERBATIM_REPEAT guard)'
+              }
+            });
+            continue;
+          }
           throw new Error(
             'ScheduledReply completed without delivering an AI Message'
           );
@@ -545,9 +606,12 @@ export async function GET(req: NextRequest) {
             where: { id: reply.id },
             data: {
               status: 'FAILED',
-              attempts: errorInfo.permanent
-                ? SCHEDULED_REPLY_MAX_ATTEMPTS
-                : failedAttempt,
+              // Terminal means terminal: the picker claims FAILED rows with
+              // attempts < MAX, so a non-retryable failure stamped with its
+              // real attempt count was re-picked every tick until it hit
+              // MAX — five alerts for one failure (2026-09-14). Stamp MAX so
+              // it is never re-picked; lastError keeps the real story.
+              attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
               scheduledFor: failedAt,
               processedAt: failedAt,
               lastError: errorMessage,

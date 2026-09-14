@@ -15,6 +15,34 @@ function tokens(s: string): Set<string> {
   return new Set(normalizeForVerbatim(s).split(' ').filter(Boolean));
 }
 
+/** Is `bubble` a repeat of something we already sent? Normalized equality,
+ *  or token Jaccard ≥ 0.75 on lines of ≥20 chars / ≥4 tokens. Containment is
+ *  deliberately NOT a repeat here: a short new question that happens to sit
+ *  inside an earlier long message is new content. Returns the prior text. */
+export function findVerbatimRepeat(
+  bubble: string,
+  priorOutbound: string[]
+): string | null {
+  const nb = normalizeForVerbatim(bubble);
+  if (nb.length < MIN_CHARS) return null;
+  const tb = tokens(bubble);
+  if (tb.size < MIN_TOKENS) return null;
+  for (const p of priorOutbound) {
+    const np = normalizeForVerbatim(p);
+    if (np.length < MIN_CHARS) continue;
+    if (nb === np) return p;
+    const tp = tokens(p);
+    if (tp.size < MIN_TOKENS) continue;
+    let inter = 0;
+    tb.forEach((t) => {
+      if (tp.has(t)) inter++;
+    });
+    const union = tb.size + tp.size - inter;
+    if (union > 0 && inter / union >= JACCARD_THRESHOLD) return p;
+  }
+  return null;
+}
+
 /** Returns the matching scripted block when `bubble` is (a drift of) one of
  *  `candidates`: normalized equality, containment either way, or token
  *  Jaccard ≥ 0.75. Short/generic lines never match (≥20 chars, ≥4 tokens). */

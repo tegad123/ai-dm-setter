@@ -24,7 +24,10 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
-import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
+import {
+  findVerbatimRepeat,
+  matchScriptedCopy
+} from '@/lib/state-machine/copy-match';
 
 export type GuardAction = 'allow' | 'block';
 
@@ -175,7 +178,53 @@ export const waitBoundaryGuard: EgressGuard = {
   }
 };
 
-export const EGRESS_GUARDS: EgressGuard[] = [waitBoundaryGuard];
+// ── Guard 2: verbatim repeat ────────────────────────────────────────────────
+// A bubble that is (a drift of) something we already DELIVERED in this
+// conversation does not ship again. Seen live 2026-09-14 on Daniel's Facebook
+// (conv cmu0zhsp40003lh043d9f0ndt): the step-12 "No worries bro! I appreciate
+// you being real about it." and "Probably the best place for you to start…"
+// went out twice, 6 and 82 minutes apart, re-injected by a later turn. The
+// ship-time battery only ran on the webhook path; this runs at the send.
+// Only delivered outbound counts (platformMessageId set): a bubble whose
+// earlier attempt failed to deliver is not a repeat of itself.
+
+export const VERBATIM_REPEAT_REASON = 'VERBATIM_REPEAT';
+const REPEAT_LOOKBACK = 40;
+
+export const verbatimRepeatGuard: EgressGuard = {
+  name: 'verbatim_repeat',
+  async run(ctx) {
+    if (!ctx.conversationId) return ALLOW;
+    const prior = await prisma.message.findMany({
+      where: {
+        conversationId: ctx.conversationId,
+        sender: { in: ['AI', 'HUMAN'] },
+        platformMessageId: { not: null },
+        deletedAt: null
+      },
+      orderBy: { timestamp: 'desc' },
+      take: REPEAT_LOOKBACK,
+      select: { content: true, timestamp: true }
+    });
+    if (prior.length === 0) return ALLOW;
+    const hit = findVerbatimRepeat(
+      ctx.bubble,
+      prior.map((m) => m.content)
+    );
+    if (!hit) return ALLOW;
+    const when = prior.find((m) => m.content === hit)?.timestamp;
+    return {
+      action: 'block',
+      reason: VERBATIM_REPEAT_REASON,
+      detail: `already delivered${when ? ` at ${when.toISOString()}` : ''}: "${hit.slice(0, 80)}"`
+    };
+  }
+};
+
+export const EGRESS_GUARDS: EgressGuard[] = [
+  waitBoundaryGuard,
+  verbatimRepeatGuard
+];
 
 /** First block wins. A guard that throws is skipped (fail-open for that guard). */
 export async function runEgressGuards(

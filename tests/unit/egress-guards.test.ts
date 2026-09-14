@@ -134,3 +134,67 @@ describe('matchPostWaitCopy', () => {
     assert.equal(matchPostWaitCopy('bet bro, i got you', post), null);
   });
 });
+
+// ── M5 item 7: verbatim repeat matcher (pure) ─────────────────────────────
+import { findVerbatimRepeat } from '../../src/lib/state-machine/copy-match';
+
+describe('findVerbatimRepeat', () => {
+  const prior = [
+    'No worries bro! I appreciate you being real about it.',
+    'Probably the best place for you to start right now would be my YouTube channel, everything is free there',
+    'https://daetradingaccelerator.com/landing-page',
+    'yo bro, no stress'
+  ];
+  it('blocks an exact repeat and a punctuation/case drift of delivered copy (conv cmu0zhsp40003lh043d9f0ndt)', () => {
+    assert.equal(
+      findVerbatimRepeat(
+        'No worries bro! I appreciate you being real about it.',
+        prior
+      ),
+      prior[0]
+    );
+    assert.equal(
+      findVerbatimRepeat(
+        'no worries bro, i appreciate you being real about it',
+        prior
+      ),
+      prior[0]
+    );
+    assert.equal(
+      findVerbatimRepeat(
+        'Probably the best place for you to start right now would be my YouTube channel, everything is free there.',
+        prior
+      ),
+      prior[1]
+    );
+  });
+  it('does not treat a new short question as a repeat just because its words appear in an old long message', () => {
+    assert.equal(
+      findVerbatimRepeat('what platform are you on right now?', prior),
+      null
+    );
+    assert.equal(
+      findVerbatimRepeat(
+        'where do you want to start, entries or exits?',
+        prior
+      ),
+      null
+    );
+  });
+  it('ignores short generic lines on both sides', () => {
+    assert.equal(findVerbatimRepeat('yo bro, no stress', prior), null);
+    assert.equal(
+      findVerbatimRepeat('bet bro, here you go', ['bet bro, here you go']),
+      null
+    );
+  });
+  it('a bare URL is too short to match by tokens: links are governed by the link guard, not this one', () => {
+    assert.equal(
+      findVerbatimRepeat(
+        'https://daetradingaccelerator.com/landing-page',
+        prior
+      ),
+      null
+    );
+  });
+});
