@@ -67,11 +67,31 @@ export async function PUT(
     const data: {
       generateOnlyInstagram?: boolean;
       generateOnlyFacebook?: boolean;
+      awayModeInstagram?: boolean;
+      awayModeInstagramEnabledAt?: Date;
+      awayModeFacebook?: boolean;
+      awayModeFacebookEnabledAt?: Date;
     } = {};
-    if (typeof body.generateOnlyInstagram === 'boolean')
+    const now = new Date();
+    // "Live" needs BOTH generate-only off AND away mode on: new leads get
+    // aiActive from (awayMode || generateOnly) and auto-send is gated by
+    // awayMode (generate-only.ts / shouldAutoSendReply). Flipping only
+    // generate-only off on an account with away mode off is silence, not
+    // go-live. "Stop" leaves away mode alone so the flip back is one click.
+    if (typeof body.generateOnlyInstagram === 'boolean') {
       data.generateOnlyInstagram = body.generateOnlyInstagram;
-    if (typeof body.generateOnlyFacebook === 'boolean')
+      if (!body.generateOnlyInstagram) {
+        data.awayModeInstagram = true;
+        data.awayModeInstagramEnabledAt = now;
+      }
+    }
+    if (typeof body.generateOnlyFacebook === 'boolean') {
       data.generateOnlyFacebook = body.generateOnlyFacebook;
+      if (!body.generateOnlyFacebook) {
+        data.awayModeFacebook = true;
+        data.awayModeFacebookEnabledAt = now;
+      }
+    }
     if (Object.keys(data).length === 0) {
       return NextResponse.json(
         {

@@ -70,6 +70,17 @@ async function main() {
         `Turn Away Mode OFF for ${platform} so replies stay suggestions (the send choke point blocks delivery either way).`
     );
   }
+  if (state === 'off' && !(updated as any)[awayField]) {
+    console.warn(
+      `WARNING: ${awayField} is OFF — generate-only is off but the AI will NOT auto-send on ${platform} ` +
+        `(new leads get aiActive=false). Run scripts/set-away-mode.ts ${accountId} ${platform} on for go-live.`
+    );
+  }
+  if (state === 'off' && (updated as any)[awayField]) {
+    console.log(
+      `LIVE: generate-only off and Away Mode on — the AI now auto-sends on ${platform}.`
+    );
+  }
   if (state === 'on' && updated.defaultAiActive === false) {
     console.warn(
       'WARNING: defaultAiActive is false — new leads will still start with AI off, so nothing will generate.'
