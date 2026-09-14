@@ -11,6 +11,7 @@ import {
   IconLayoutDashboard,
   IconUserPlus,
   IconHeartbeat,
+  IconBroadcast,
   IconCreditCard,
   IconSettings
 } from '@tabler/icons-react';
@@ -32,6 +33,12 @@ const NAV_ITEMS: Array<{
     label: 'Onboard New Client',
     href: '/admin/onboard',
     icon: IconUserPlus,
+    enabled: true
+  },
+  {
+    label: 'Live delivery feed',
+    href: '/admin/live-feed',
+    icon: IconBroadcast,
     enabled: true
   },
   {

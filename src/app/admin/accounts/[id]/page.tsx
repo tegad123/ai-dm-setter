@@ -6,6 +6,7 @@ import { requirePlatformAdmin } from '@/lib/auth-guard';
 import { AccountInfoCard } from '@/features/admin/components/account-info-card';
 import { HealthMonitor } from '@/features/admin/components/health-monitor';
 import { ActivityStats } from '@/features/admin/components/activity-stats';
+import { AiDeliveryCard } from '@/features/admin/components/ai-delivery-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,6 +57,7 @@ export default async function AdminAccountDetailPage({
         </div>
       </div>
 
+      <AiDeliveryCard accountId={id} />
       <AccountInfoCard sectionA={data.sectionA} />
       <HealthMonitor sectionB={data.sectionB} />
       <ActivityStats sectionC={data.sectionC} />
