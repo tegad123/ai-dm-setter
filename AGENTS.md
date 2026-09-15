@@ -6,6 +6,10 @@
 > generic dashboard starter (the template notes below are historical). Before
 > doing anything, read in this order:
 >
+> 0. **`docs/HANDOFF_2026-09-15.md` — START HERE. Newest. Covers the Instagram
+>    go-live in flight, the DAETRADEZ v2 script, the NULL-branch failure family,
+>    the two position-keepers, local testing on port 3005, and every open item.
+>    Where it disagrees with the 09-09 handover, it wins.**
 > 1. `docs/HANDOVER_2026-09-09.md` — product, people (Tega verifies everything,
 >    Daniel is the client), money/dates, M1–M4 history, what shipped Sept 5–9,
 >    **current prod state**, M5 status per item, decisions pending, next steps,
@@ -21,6 +25,11 @@
 > secrets; no em-dashes or AI-sounding prose in messages to Tega; flag slips the
 > day you know; never claim "fixed" without a prod proof; `TEGA_OPEN_ITEMS_TRACKER.md`
 > is internal. Ask before writing settings on a client's prod rows.
+>
+> Two traps that have each cost a live incident: (a) a fix in `src/lib/script-fsm/*`
+> alone changes NOTHING in prod — the FSM is shadow-only, the legacy
+> `computeSystemStage` owns the cursor; (b) turning generate-only OFF while away
+> mode is OFF produces silence, not go-live.
 
 This file provides essential information for AI coding agents working on this project. It contains project-specific details, conventions, and guidelines that complement the README.
 
