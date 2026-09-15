@@ -1514,15 +1514,22 @@ export async function selectJudgeBranchForLead(
       tokenScoreError
     });
 
-    // Classify whenever the step FORKS (2+ branches), not only when it
-    // carries a runtime_judgment action. Daniel v1/v2 step 2 ("Already in
-    // markets" / "New to markets") has plain ask+wait branches and no
-    // judgment action, so the classifier was never consulted, the branch
-    // stayed null and smart mode improvised a re-ask of the experience
-    // question the lead had just answered (Tega's class 1, 2026-09-14/15).
+    // Classify when the step carries a runtime_judgment action (the original
+    // rule) OR when it simply FORKS (2+ branches). Daniel v1/v2 step 2
+    // ("Already in markets" / "New to markets") has plain ask+wait branches
+    // and no judgment action, so the classifier was never consulted, the
+    // branch stayed null and smart mode improvised a re-ask of the
+    // experience question the lead had just answered (Tega's class 1,
+    // 2026-09-14/15). The two conditions are an OR, not a replacement:
+    // single-branch judgment steps still classify, which is what
+    // detectJudgeBranchViolation relies on to catch an off-script turn on a
+    // one-branch step (e.g. step 16 "Call Proposal").
+    const stepNeedsClassification =
+      !!step &&
+      (hasRuntimeJudgmentAction(step) || (step.branches?.length ?? 0) >= 2);
     if (
       !step ||
-      (step.branches?.length ?? 0) < 2 ||
+      !stepNeedsClassification ||
       !leadMessage?.trim() ||
       tokenMatch.confidence === 'high'
     ) {
