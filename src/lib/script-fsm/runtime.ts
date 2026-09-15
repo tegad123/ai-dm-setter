@@ -192,6 +192,32 @@ export function inferEdgeFromCopy(node: FsmNode, text: string): FsmEdge | null {
  *  spoke in the step first (`spokeInStep`); a branch with N wait boundaries
  *  needs N credited replies. Routing-only and send-only branches complete on
  *  our own outbound turn (the judgment reaction / the deliverables went out). */
+/** Does a lead reply carry content that can answer an ask? Media-only
+ *  placeholders ("[Image]", "[Voice note]"), bare punctuation and lone emoji
+ *  do not. Deliberately narrow: anything with a letter or a digit counts, so
+ *  a terse but real answer ("NY", "2y", "no") still credits the ask. */
+export function isAnswerableReply(text: string | null | undefined): boolean {
+  const t = (text ?? '').trim();
+  if (t.length === 0) return false;
+  // Platform placeholders for media we could not read.
+  if (
+    /^\[(image|images|photo|video|voice note|voice message|audio|sticker|gif|attachment|file)\]$/i.test(
+      t
+    )
+  )
+    return false;
+  // Needs at least one letter or digit to be an answer. ES5 target, so no
+  // unicode property escapes. Latin/digits are the common case; for other
+  // scripts we EXCLUDE only the ranges that are definitively not text
+  // (emoji, symbols, ASCII/general punctuation, whitespace) and treat what
+  // remains as a letter — a lead answering in Arabic, Cyrillic or CJK must
+  // still credit the ask.
+  if (/[A-Za-z0-9]/.test(t)) return true;
+  const NON_TEXT =
+    /[\s!-\/:-@\[-`{-~\u00A1-\u00BF\u2000-\u206F\u2190-\u2BFF\u3000-\u303F\uFE00-\uFE0F\uFF00-\uFF0F]|[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
+  return t.replace(NON_TEXT, '').length > 0;
+}
+
 export function fsmTransition(
   fsm: CompiledScriptFsm,
   cursor: FsmCursor,
@@ -264,6 +290,18 @@ export function fsmTransition(
   const completion = completionAt(node, cursor);
   if (!cursor.spokeInStep) {
     return { cursor, advanced: false, reason: 'reply_before_outbound' };
+  }
+  // A reply that carries NO answerable content does not credit our ask. An
+  // unreadable image, a bare emoji or a lone "?" is not an answer to
+  // "where you based out of?" — the step has not been completed and we must
+  // stay here (a script's own "No signal" branch exists for exactly this).
+  // Local run 2026-09-15: an image reply to the step-1 No-signal ask credited
+  // the ask, advanced to step 2, and step 2's "love to see it, most people
+  // don't even take the first step" shipped onto an image the AI had just
+  // said it could not read (Tega, 2026-09-15 — another branch's copy landing
+  // in the wrong branch).
+  if (!isAnswerableReply(event.text)) {
+    return { cursor, advanced: false, reason: 'reply_carries_no_signal' };
   }
   if (
     completion.kind === 'lead_reply_after_ask' ||

@@ -5281,6 +5281,47 @@ export async function prepareScriptState(params: {
     };
   }
   let currentScriptStep = currentStep?.stepNumber ?? 1;
+
+  // No-signal hold (Tega, 2026-09-15). A lead turn that carries no answerable
+  // content — an unreadable image, a bare emoji, a lone "?" — does not answer
+  // our ask, so it must not move the cursor. The legacy detector credits it,
+  // advances a step, and the NEXT step's copy ships on top of a message the AI
+  // has just said it cannot read ("love to see it, most people don't even take
+  // the first step" onto an image). Same family as the decline bug: another
+  // branch's text landing in the wrong branch. The compiled FSM already holds
+  // correctly here (reply_carries_no_signal); this applies the same rule to
+  // the legacy position while the FSM is still shadow-only.
+  try {
+    const lastMsg = params.history[params.history.length - 1];
+    if (lastMsg?.sender === 'LEAD') {
+      const { isAnswerableReply } = await import('@/lib/script-fsm/runtime');
+      const priorStep =
+        typeof conversation.currentScriptStep === 'number' &&
+        conversation.currentScriptStep > 0
+          ? conversation.currentScriptStep
+          : 1;
+      if (
+        !isAnswerableReply(lastMsg.content) &&
+        currentScriptStep > priorStep
+      ) {
+        const held = script?.steps.find((st) => st.stepNumber === priorStep);
+        console.warn(
+          `[script-state] no-signal hold — lead turn carries no answerable content (${JSON.stringify((lastMsg.content ?? '').slice(0, 40))}); holding step ${priorStep} instead of advancing to ${currentScriptStep} (conv ${params.conversationId})`
+        );
+        currentScriptStep = priorStep;
+        if (held) {
+          currentStep = held;
+          systemStage = { step: held, reason: 'no_signal_hold' };
+        }
+      }
+    }
+  } catch (holdErr) {
+    console.error(
+      '[script-state] no-signal hold check failed (non-fatal):',
+      holdErr instanceof Error ? holdErr.message : holdErr
+    );
+  }
+
   // M5 item 4 (compiler, shadow-first): the compiled FSM's position is a pure
   // fold of the full conversation history through the machine (a lead reply
   // is credited only after we spoke in the step; a branch with N waits needs

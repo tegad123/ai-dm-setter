@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
@@ -4265,7 +4266,38 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     ? `\n\n===== LEAD CONTINUATION SIGNAL =====\nThe lead just sent a brief continuation phrase ("${(lastLeadMsg?.content ?? '').trim()}"). This is an invitation to keep talking — it is NOT doubt, skepticism, or an objection.\n\nYour previous message was:\n"${(lastAiMsg?.content ?? '').trim()}"\n\nContinue DIRECTLY from that point. Do NOT ask the lead what they want to hear more about — they already told you to continue. Do NOT open with trust-recovery language ("I'm genuinely trying to help", "I'm not here to sell", etc.). Pick up the thread from your last message and keep moving forward.\n=====`
     : '';
 
+  // Unreadable-media turn (Tega, 2026-09-15). The lead's last turn carries no
+  // answerable content (an image/voice note we cannot read, a bare emoji), so
+  // the step is HELD — we did not get our answer. Without a directive the
+  // model regenerates the step's ask verbatim, the duplicate suppressor
+  // correctly refuses to send the same question twice, and the lead gets
+  // SILENCE. Tell it to acknowledge what it cannot see and ask for it in
+  // words instead, which is the same conversational move the script's own
+  // "No signal" branch describes.
+  const unreadableMediaDirective = (() => {
+    // NOT lastLeadMsg: that one is filtered by isLeadCapitalParseCandidate
+    // (parseable text only), so a bare "[Image]" is excluded by design and
+    // this directive would never fire. Use the true last LEAD turn.
+    const trueLastLead = [...conversationHistory]
+      .reverse()
+      .find((m) => m.sender === 'LEAD');
+    const t = (trueLastLead?.content ?? '').trim();
+    if (!t) return '';
+    const isPlaceholder =
+      /^\[(image|images|photo|video|voice note|voice message|audio|sticker|gif|attachment|file)\]$/i.test(
+        t
+      );
+    if (!isPlaceholder) return '';
+    return (
+      `\n\nUNREADABLE MEDIA: the lead's last message is media you cannot open (${t}). ` +
+      `Do NOT repeat your previous question word for word — they have already seen it. ` +
+      `Say briefly that it did not come through on your end and ask them to tell you in words. ` +
+      `One short message. Do not guess or invent what the media contains.`
+    );
+  })();
+
   const baseSystemPrompt =
+    unreadableMediaDirective +
     continuationDirective +
     qualificationCompleteDirective +
     coldStartStep1Directive +
@@ -7236,6 +7268,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             if (appended >= 2) break; // cap: at most 2 injected bubbles
             // already present (verbatim or near-verbatim)? skip.
             if (isVerbatimRepeatBubble(required, bubbles)) continue;
+            // Also skip when the model PARAPHRASED it into a bubble it
+            // already shipped. isVerbatimRepeatBubble needs near-exact text,
+            // so a reworded "i got a free discord where i drop my setups..."
+            // slipped past it and the scripted sentence was appended on top —
+            // the same line twice in one turn, which reads like a bot
+            // (Tega, 2026-09-15, bridge step).
+            if (matchScriptedCopy(required, bubbles)) continue;
             bubbles.push(required);
             appended += 1;
           }
