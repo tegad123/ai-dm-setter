@@ -16,6 +16,7 @@
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
+import { resolvePlatformGenerateOnly } from '@/lib/generate-only';
 import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -61,6 +62,8 @@ export async function GET(
       select: {
         awayModeInstagram: true,
         awayModeFacebook: true,
+        generateOnlyInstagram: true,
+        generateOnlyFacebook: true,
         showSuggestionBanner: true
       }
     });
@@ -80,6 +83,7 @@ export async function GET(
           ? (account?.awayModeFacebook ?? false)
           : false;
     const wouldAutoSend =
+      !resolvePlatformGenerateOnly(account, conversation.lead.platform) &&
       conversation.aiActive &&
       (awayModeForPlatform || conversation.autoSendOverride);
     if (wouldAutoSend) {

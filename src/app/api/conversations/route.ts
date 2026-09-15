@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { resolvePlatformGenerateOnly } from '@/lib/generate-only';
 import { requireAuth, AuthError, scopedAccountId } from '@/lib/auth-guard';
 import { QUALIFIED_LEAD_STAGES_ARR } from '@/lib/lead-state-sets';
 import { leadDisplayName } from '@/lib/lead-name';
@@ -96,6 +97,8 @@ export async function GET(request: NextRequest) {
       select: {
         awayModeInstagram: true,
         awayModeFacebook: true,
+        generateOnlyInstagram: true,
+        generateOnlyFacebook: true,
         showSuggestionBanner: true
       }
     });
@@ -165,7 +168,9 @@ export async function GET(request: NextRequest) {
             ? awayModeFacebook
             : false;
       const wouldAutoSend =
-        c.aiActive && (awayModeForPlatform || c.autoSendOverride);
+        !resolvePlatformGenerateOnly(account, c.lead.platform) &&
+        c.aiActive &&
+        (awayModeForPlatform || c.autoSendOverride);
       return {
         id: c.id,
         leadId: c.lead.id,
