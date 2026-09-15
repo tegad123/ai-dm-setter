@@ -87,17 +87,31 @@ leads afterwards (every proof script has `--cleanup`/`restore`).
 webhook's `after()`; longer goes to the per-minute cron. Expect a reply
 ~1–4 min after the inbound. Poll the DB; don't `sleep` in the foreground.
 
-## 5. Local pipeline (optional, for iterating on generation)
+## 5. Local pipeline (test a client's script end to end without touching prod)
 
 ```
-npx tsx scripts/clone-prod-to-local.ts      # copies creds + persona prod → local (same encryption key)
-npx tsx scripts/reset-local-test.ts         # refuses unless DATABASE_URL is localhost; truncates + 1–3s delay
-npm run dev                                  # localhost:3000
-./scripts/simulate-fb-dm.sh "msg" | ./scripts/simulate-ig-dm.sh "msg"   # signed webhook → localhost; reply hits the REAL inbox
+npx prisma migrate deploy                                   # local DB catches up on migrations
+NODE_PATH=$PWD/node_modules npx tsx scripts/clone-script-to-local.ts <prodScriptId>   # client's script → local shazim workspace, activated
+NODE_PATH=$PWD/node_modules npx tsx scripts/reset-local-test.ts                        # truncate leads/convs/messages, 1–3s reply delay
+DISABLE_META_BACKFILL=true META_SEND_DRY_RUN=true FIX_D_CANSEND_AUTHORITATIVE=FACEBOOK,INSTAGRAM pnpm exec next dev -p 3005
+./scripts/drive-local-flow.sh 9100000000000061 "brand new to trading" "Houston" "..."   # one flow, fresh synthetic lead
+./scripts/run-v2-flows.sh                                    # Tega's six go-live runs → /private/tmp/v2-flows/
 ```
-Local IG business id `17841445698923309` (SK Trades), FB page `1100557749811046`.
-The local DB is behind prod on migrations — run `npx prisma migrate deploy`
-against local before expecting new columns.
+- Port 3000 belongs to another project on this machine; use 3005 (`WEBHOOK_BASE`).
+- `DISABLE_META_BACKFILL=true`: otherwise the processor imports the REAL Messenger
+  thread of the sender PSID and the engine sees a months-old conversation.
+- `META_SEND_DRY_RUN=true` (dev-only, NODE_ENV-guarded): gate + guards run for
+  real, only the Meta call is skipped. Without it a simulated inbound cannot be
+  answered (Meta #10: no open 24h window) and the flow cannot progress.
+- Real delivery instead: DM the SK Trades page from Messenger first; Instagram
+  additionally needs a valid sk_trade17 token (expired 2026-08-02).
+- `scripts/drive-local-turn.ts` prints bubbles, flags, gate rows and
+  routing-shadow rows per turn; `SETTLE_S` (25s) is the silence after the last
+  bubble before the turn ends. Flows must run sequentially.
+- If the client's persona has `minimumCapitalRequired` but the script has no
+  capital step (Daniel v2), the Fix B gate blocks the link: blank it locally.
+Local IG business id `17841445698923309` (SK Trades), FB page `1100557749811046`,
+FB sender PSID `27262754836683290`, IG sender `1474847644133208`.
 
 ## 6. Tests
 

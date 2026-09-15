@@ -198,3 +198,27 @@ describe('findVerbatimRepeat', () => {
     );
   });
 });
+
+describe('findVerbatimRepeat — containment direction', () => {
+  it('a delivered line repeated whole inside a longer new bubble is a repeat (Daniel v2 local run, 2026-09-15)', () => {
+    const prior = [
+      'yo wassup, respect for reaching out!',
+      "let's see if I can help you out here 🙏🏽 where you based out of?"
+    ];
+    assert.equal(
+      findVerbatimRepeat(
+        "yo wassup, respect for reaching out! let's see if I can help you out here 🙏🏽",
+        prior
+      ),
+      prior[0]
+    );
+  });
+  it('a short new question that appears inside an old long message is still new', () => {
+    assert.equal(
+      findVerbatimRepeat('where you based out of?', [
+        "let's see if I can help you out here 🙏🏽 where you based out of? and what do you trade"
+      ]),
+      null
+    );
+  });
+});

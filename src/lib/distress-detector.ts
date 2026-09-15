@@ -375,11 +375,19 @@ export async function detectDistress(
       lowTicketFunnel: opts.lowTicketFunnel === true,
       accountId: opts.accountId ?? null
     });
+    // Retry EVERY transient no-verdict, not only timeout/parse: a credential
+    // lookup blip (pooler) returned classifier_error on 2026-09-13 for FAVOUR
+    // (conv cmu02ja3i000hl904j3eisq94, "lost all my capital… my mom is old"),
+    // the regex-only fallback saw no ideation, and the lead got the cold
+    // greeting. Offline the classifier calls that text severe_hardship.
+    // Kill-switch / no-key / disabled are permanent for this call: no retry.
+    const permanentNoVerdict =
+      /disabled|kill|no.?key|not configured|unsupported/i;
     for (
       let attempt = 1;
       attempt < CLASSIFIER_AUTH_ATTEMPTS &&
       !c.ok &&
-      /timeout|parse/i.test(c.reason);
+      !permanentNoVerdict.test(c.reason ?? '');
       attempt++
     ) {
       c = await classifyDistress(text, {

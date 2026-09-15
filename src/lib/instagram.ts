@@ -153,6 +153,20 @@ export async function sendDM(
     `[instagram] Sending DM via ${isIGToken ? 'instagram' : 'facebook'} graph: /${igBusinessAccountId}/messages to ${recipientId}`
   );
 
+  // Dev-only harness knob: gate + guards have already run above; skip only the
+  // Meta call so local multi-turn flows can progress. Never set in production.
+  if (
+    process.env.META_SEND_DRY_RUN === 'true' &&
+    process.env.NODE_ENV !== 'production'
+  ) {
+    console.warn(
+      `[instagram] META_SEND_DRY_RUN: not calling Meta for ${recipientId}; synthetic message id returned`
+    );
+    return {
+      messageId: `dryrun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    };
+  }
+
   const MAX_RETRIES = 3;
   let lastError: Error | null = null;
 

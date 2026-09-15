@@ -1219,10 +1219,14 @@ function buildJudgeBranchLLMPrompt(
       (branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`
     )
     .join('\n');
+  const multi = /\nLatest: /.test(leadMessage);
+  const leadBlock = multi
+    ? `Lead's recent messages, oldest first ("Latest" is the reply to our last message). Route on what the lead has actually stated across these lines; an answer given an earlier line still counts:\n${leadMessage}`
+    : `Lead message: ${leadMessage}`;
   return `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
 
-Lead message: ${leadMessage}
+${leadBlock}
 
 Branches:
 ${branchLines}
@@ -1510,9 +1514,15 @@ export async function selectJudgeBranchForLead(
       tokenScoreError
     });
 
+    // Classify whenever the step FORKS (2+ branches), not only when it
+    // carries a runtime_judgment action. Daniel v1/v2 step 2 ("Already in
+    // markets" / "New to markets") has plain ask+wait branches and no
+    // judgment action, so the classifier was never consulted, the branch
+    // stayed null and smart mode improvised a re-ask of the experience
+    // question the lead had just answered (Tega's class 1, 2026-09-14/15).
     if (
       !step ||
-      !hasRuntimeJudgmentAction(step) ||
+      (step.branches?.length ?? 0) < 2 ||
       !leadMessage?.trim() ||
       tokenMatch.confidence === 'high'
     ) {
@@ -3182,9 +3192,30 @@ export async function generateReply(
       ? scriptStateSnapshot.currentScriptStep
       : (scriptStateSnapshot?.currentStep?.stepNumber ?? null);
   const judgeBranchSelectionCache: JudgeBranchSelectionCache = new Map();
+  // The judge classifies the lead's RECENT messages, not only the latest.
+  // Daniel v2 (2026-09-15, local run): step 1 "brand new to trading", then
+  // "Houston" answering the location ask; at step 2 the classifier saw only
+  // "Houston", returned null, and the engine re-asked the experience
+  // question the lead had answered one message earlier (Tega's class 1,
+  // "92 re-asked the experience question"). Last three lead messages, older
+  // first, latest marked, so a fact stated a turn ago still routes.
+  const recentLeadMessages = conversationHistory
+    .filter((m) => m.sender === 'LEAD' && (m.content ?? '').trim())
+    .slice(-3)
+    .map((m) => m.content.trim());
+  const judgeLeadText =
+    recentLeadMessages.length > 1
+      ? recentLeadMessages
+          .map((t, i) =>
+            i === recentLeadMessages.length - 1
+              ? `Latest: ${t}`
+              : `Earlier: ${t}`
+          )
+          .join('\n')
+      : (lastLeadMsg?.content ?? null);
   const currentJudgeBranchMatch = await selectJudgeBranchForLead(
     scriptStateSnapshot?.currentStep ?? null,
-    lastLeadMsg?.content ?? null,
+    judgeLeadText,
     {
       accountId,
       cache: judgeBranchSelectionCache
@@ -3326,6 +3357,49 @@ export async function generateReply(
             selectedCurrentJudgeBranch = owned;
             console.warn(
               `[script-fsm] AUTHORITATIVE branch "${owned.branchLabel}" (${sel.reason}) on step ${node.stepNumber}, conv ${activeConversationId}`
+            );
+          }
+        } else if (
+          !selectedCurrentJudgeBranch &&
+          sel.kind === 'edge' &&
+          fsmLabel &&
+          (currentJudgeBranchMatch.branchLabel === fsmLabel ||
+            // The judge abstained entirely (no label at any confidence) and
+            // the FSM made a STRUCTURAL pick — source / always / data / the
+            // node's explicit default. There is no competing opinion to
+            // defer to, and leaving the branch null is not neutral: it widens
+            // the required-[MSG] set to the whole step and the injectors ship
+            // other branches' copy. Daniel v2 local flow 6, 2026-09-15: at
+            // step 7 (Follow-Up) the judge returned nothing, the branch
+            // stayed null, and a lead who had declined twice was told "you
+            // make it into the discord?" and "let's go 🔥 drop an intro" —
+            // asserting a join that never happened. A judge label that
+            // DISAGREES with the FSM still adopts nothing (above).
+            (currentJudgeBranchMatch.branchLabel === null &&
+              (sel.reason === 'default' ||
+                sel.reason === 'source' ||
+                sel.reason === 'always' ||
+                sel.reason === 'data')))
+        ) {
+          // Shadow mode, but the two INDEPENDENT routers agree: the judge
+          // named this branch and the compiled FSM selected it too. Two
+          // agreeing signals beat one classifier's confidence score, and a
+          // null branch here is what blinds the gate (empty required-message
+          // set). Daniel v2 local run 2026-09-15 flow 3: the judge said
+          // "Solicitation / non-lead" (a runtime_judgment-only, send-nothing
+          // branch) without locking, the branch stayed null, and the gate
+          // demanded a question on a branch scripted to stay silent.
+          const owned = scriptStateSnapshot.currentStep.branches.find(
+            (b) => b.branchLabel === fsmLabel
+          );
+          if (owned) {
+            selectedCurrentJudgeBranch = owned;
+            console.warn(
+              `[script-fsm] branch "${owned.branchLabel}" adopted (${
+                currentJudgeBranchMatch.branchLabel === fsmLabel
+                  ? `judge+FSM agreement, judge confidence ${currentJudgeBranchMatch.confidence}`
+                  : 'judge abstained, FSM structural pick'
+              }, fsm ${sel.reason}) on step ${node.stepNumber}, conv ${activeConversationId}`
             );
           }
         }
@@ -4415,6 +4489,13 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     currentStepHasSilentBranch,
     currentStepSilentBranchLabels,
     currentStepScriptedQuestions: currentStepScriptedQuestionsForGate,
+    // Script verbatim beats phrasing rules: the step's own copy is exempt
+    // from hard-fails that would fail the script's words (link-promise on
+    // Daniel v2 "want me to send you the link?", 2026-09-15).
+    scriptedCopy: [
+      ...currentStepScriptedQuestionsForGate,
+      ...currentStepRequiredMessagesForGate
+    ],
     activeBranchScriptedQuestions,
     currentStepRequiredMessages: currentStepRequiredMessagesForGate,
     activeBranchRequiredMessages,
@@ -8457,8 +8538,18 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // stay with the verbatim-violation append — this fires only on total skips.
   {
     const stepHasAsk = currentStepShape?.hasAnyAskAction ?? false;
-    const requiredResolved = currentStepRequiredMessagesForGate
-      .map((m) => (m ?? '').trim())
+    // 2026-09-15 (Daniel v2, local flow 6 second decline): scope to the
+    // SELECTED branch when one is known. v2 step 7 "Follow-Up" has three
+    // branches — Check-in, They joined, No response (a silent end-of-script
+    // judgment). Injecting the whole step's [MSG]s told a lead who had just
+    // declined twice "you make it into the discord?" and "let's go 🔥 drop an
+    // intro", asserting a join that never happened. A selected branch with no
+    // required [MSG]s of its own injects nothing.
+    const requiredSource = selectedCurrentJudgeBranch
+      ? (activeBranchRequiredMessages ?? [])
+      : currentStepRequiredMessagesForGate;
+    const requiredResolved = requiredSource
+      .map((m) => (typeof m === 'string' ? m : (m?.content ?? '')).trim())
       .filter((m) => m.length > 0 && !/\{\{[^}]+\}\}/.test(m));
     if (!stepHasAsk && requiredResolved.length > 0) {
       const bubbles = Array.isArray(parsed.messages)
@@ -8527,12 +8618,40 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // Pool step-level AND branch-level actions — production scripts keep all
     // actions on branches (the daetradez script has ZERO step-level actions),
     // so reading only currentStep.actions silently disabled this enforcement.
-    const currentStepAllActions = [
-      ...(scriptStateSnapshot?.currentStep?.actions ?? []),
-      ...(scriptStateSnapshot?.currentStep?.branches ?? []).flatMap(
-        (b) => b?.actions ?? []
+    //
+    // 2026-09-15 (Daniel v2, local flow 6): scope to the SELECTED branch when
+    // one is known. v2 step 6 "Send the Link" puts the link on the YES branch
+    // only; Hesitant and Soft exit deliberately carry none. Pooling every
+    // branch appended the Discord link to a lead who had just said no, twice.
+    // Only when no branch is selected do we fall back to the whole step (the
+    // v1 single-branch shape this enforcement was written for).
+    const linkScopeBranch = selectedCurrentJudgeBranch;
+    const currentStepAllActions = linkScopeBranch
+      ? [
+          ...(scriptStateSnapshot?.currentStep?.actions ?? []),
+          ...(linkScopeBranch.actions ?? [])
+        ]
+      : [
+          ...(scriptStateSnapshot?.currentStep?.actions ?? []),
+          ...(scriptStateSnapshot?.currentStep?.branches ?? []).flatMap(
+            (b) => b?.actions ?? []
+          )
+        ];
+    if (
+      linkScopeBranch &&
+      !(linkScopeBranch.actions ?? []).some(
+        (a: { actionType?: string }) => a.actionType === 'send_link'
+      ) &&
+      (scriptStateSnapshot?.currentStep?.branches ?? []).some((b) =>
+        (b?.actions ?? []).some(
+          (a: { actionType?: string }) => a.actionType === 'send_link'
+        )
       )
-    ];
+    ) {
+      console.log(
+        `[ai-engine] N1 link enforcement scoped out: selected branch "${linkScopeBranch.branchLabel}" carries no [LINK] on a step where another branch does — not appending a URL (conv ${activeConversationId})`
+      );
+    }
     const sendLinkActions = currentStepAllActions.filter(
       (a: {
         actionType?: string;
@@ -9539,7 +9658,9 @@ export function normalizeLeadTimezone(raw: string | null): string | null {
   }
 }
 
-function parseAIResponse(raw: string): ParsedAIResponse {
+// Exported for unit tests (tests/unit/silent-branch-parse.test.ts): the
+// silent-branch contract — an intentionally empty message ships no bubbles.
+export function parseAIResponse(raw: string): ParsedAIResponse {
   const defaults: ParsedAIResponse = {
     format: 'text',
     message: raw,
@@ -9588,10 +9709,21 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     // wrap message (single-message). Both paths end with a populated
     // `messages: string[]` — downstream never has to branch on format.
     const fromArray = normaliseBubbles(obj.messages);
+    // A DELIBERATELY empty message is a valid answer: a silent branch
+    // ("Send nothing. Do not greet…" — Daniel v2 step 1 Solicitation) returns
+    // {"message": ""}. Falling back to `raw` there shipped the model's own
+    // JSON scaffolding to the lead as four bubbles (```json / "format":
+    // "text" / "message": "" / "stage": "OPENING") — local run 2026-09-15,
+    // flow 3. `raw` is only a fallback when the JSON carried NO message field
+    // at all, which InvalidLLMOutputError already rejects above.
+    const explicitlyEmptyMessage =
+      typeof obj.message === 'string' && obj.message.trim().length === 0;
     const fromString =
       typeof obj.message === 'string' && obj.message.trim().length > 0
         ? obj.message
-        : raw;
+        : explicitlyEmptyMessage
+          ? ''
+          : raw;
 
     // Auto-split fallback (daetradez 2026-04-24, widened 2026-04-28):
     // gpt-5.x minis frequently ignore the messages[] schema and emit
@@ -9611,6 +9743,10 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     let messages: string[];
     if (fromArray !== null) {
       messages = fromArray;
+    } else if (explicitlyEmptyMessage) {
+      // Silent turn: no bubbles at all. Downstream (sendAIReply's empty
+      // gate) treats this as "nothing to send" rather than escalating.
+      messages = [];
     } else {
       const split: string[] = fromString
         .split(/\n+/)
@@ -9634,7 +9770,7 @@ function parseAIResponse(raw: string): ParsedAIResponse {
         messages = ackQuestionSplit ?? [fromString];
       }
     }
-    const message = messages[0] ?? fromString;
+    const message = messages[0] ?? (explicitlyEmptyMessage ? '' : fromString);
     const joinedMessageBody = messages.join('\n');
     const lowerMessageBody = joinedMessageBody.toLowerCase();
     const forbiddenTerm = FORBIDDEN_MESSAGE_METADATA_TERMS.find((term) =>
@@ -9666,9 +9802,14 @@ function parseAIResponse(raw: string): ParsedAIResponse {
     const allEmpty = messages.every(
       (m) => typeof m !== 'string' || m.trim().length === 0
     );
-    if (allEmpty) {
+    if (allEmpty && !explicitlyEmptyMessage) {
       console.warn(
         `[ai-engine] parseAIResponse produced empty messages[] — downstream will escalate. Raw first 500 chars: ${raw.slice(0, 500)}`
+      );
+    }
+    if (explicitlyEmptyMessage) {
+      console.log(
+        '[ai-engine] parseAIResponse: model returned an intentionally empty message (silent branch) — no bubbles will ship'
       );
     }
 

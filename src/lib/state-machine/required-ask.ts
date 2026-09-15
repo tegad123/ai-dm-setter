@@ -169,3 +169,36 @@ export async function shadowRequiredAskCheck(params: {
     return null;
   }
 }
+
+/** The current step's scripted send/ask texts for a conversation (all
+ *  branches), from the compiled FSM. Used by ship-time phrasing rules to
+ *  waive a hard-fail on the script's own words. Empty on any failure. */
+export async function scriptedCopyForConversation(params: {
+  accountId: string;
+  conversationId: string;
+}): Promise<string[]> {
+  try {
+    const { getActiveScriptFsm } = await import('@/lib/script-fsm/store');
+    const { nodeForStep } = await import('@/lib/script-fsm/runtime');
+    const active = await getActiveScriptFsm(params.accountId);
+    if (!active) return [];
+    const conv = await prisma.conversation.findUnique({
+      where: { id: params.conversationId },
+      select: { currentScriptStep: true }
+    });
+    const node = nodeForStep(active.fsm, conv?.currentScriptStep ?? 1);
+    if (!node) return [];
+    const out: string[] = [];
+    const push = (d: { kind: string }) => {
+      if (d.kind === 'send_message' || d.kind === 'ask') {
+        const t = (d as unknown as { text?: string }).text;
+        if (t?.trim()) out.push(t);
+      }
+    };
+    node.deliverables.forEach(push);
+    for (const e of node.edges) e.deliverables.forEach(push);
+    return out;
+  } catch {
+    return [];
+  }
+}

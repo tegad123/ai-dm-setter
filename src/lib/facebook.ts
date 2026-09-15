@@ -122,6 +122,21 @@ export async function sendMessage(
   }
   const url = `${GRAPH_API_BASE}/${pageId}/messages`;
 
+  // Dev-only harness knob: everything up to here (gate, guards, hold state)
+  // has run for real; skip only the Meta call so multi-turn local flows can
+  // progress without an open 24h window. Never set in production.
+  if (
+    process.env.META_SEND_DRY_RUN === 'true' &&
+    process.env.NODE_ENV !== 'production'
+  ) {
+    console.warn(
+      `[facebook] META_SEND_DRY_RUN: not calling Meta for ${recipientId}; synthetic message id returned`
+    );
+    return {
+      messageId: `dryrun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    };
+  }
+
   const MAX_RETRIES = 3;
   let lastError: Error | null = null;
 

@@ -78,7 +78,11 @@ import {
   VERBATIM_REPEAT_REASON,
   WAIT_BOUNDARY_REASON
 } from '@/lib/state-machine/egress-guards';
-import { shadowRequiredAskCheck } from '@/lib/state-machine/required-ask';
+import {
+  scriptedCopyForConversation,
+  shadowRequiredAskCheck
+} from '@/lib/state-machine/required-ask';
+import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import {
   enqueueInboundMediaProcessing,
   extractAttachmentDurationSeconds,
@@ -5399,11 +5403,36 @@ async function sendAIReply(
     /\b(send|drop|shoot)\s+you\s+the\s+link\b/i
   ];
   const hasUrlAtShip = /\bhttps?:\/\/\S+|\bwww\.\S+\.\S+/i.test(joinedAtShip);
-  const linkPromiseMatch = !hasUrlAtShip
+  let linkPromiseMatch = !hasUrlAtShip
     ? LINK_PROMISE_AT_SHIP.map((pat) => joinedAtShip.match(pat)).find(
         (m) => m !== null
       )
     : null;
+  // Script verbatim beats phrasing rules: if the bubble carrying the
+  // "promise" is the current step's scripted copy (Daniel v2 step 5 asks
+  // "want me to send you the link?" and scripts the link for the next step
+  // after a YES), it is an offer written by the script author, not an
+  // improvised promise. Waive; an unscripted promise still blocks.
+  if (linkPromiseMatch) {
+    const scripted = await scriptedCopyForConversation({
+      accountId: lead.accountId,
+      conversationId
+    });
+    const phrase = linkPromiseMatch[0].toLowerCase();
+    const promisingBubble = bubblesForEmptyCheck.find((b) =>
+      b.toLowerCase().includes(phrase)
+    );
+    if (
+      promisingBubble &&
+      scripted.length > 0 &&
+      matchScriptedCopy(promisingBubble, scripted)
+    ) {
+      console.log(
+        `[webhook-processor] link_promise_without_url_at_ship waived for conv ${conversationId}: the promising bubble is the step's scripted copy`
+      );
+      linkPromiseMatch = null;
+    }
+  }
   if (linkPromiseMatch) {
     console.error(
       `[webhook-processor] link_promise_without_url_at_ship for conv ${conversationId} — AI output announced "${linkPromiseMatch[0]}" but no URL is present. Pausing AI, notifying operator, no platform send.`

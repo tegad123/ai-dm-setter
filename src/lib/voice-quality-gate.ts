@@ -5,6 +5,7 @@
 // trigger regeneration.
 // ---------------------------------------------------------------------------
 
+import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import {
   checkCallProposalPrereqs,
   checkCapitalQuestionPrereqs,
@@ -683,6 +684,10 @@ export function callLogisticsAlreadyDeliveredInRecentHistory(
 // ---------------------------------------------------------------------------
 
 export interface VoiceQualityOptions {
+  /** The current script step's send_message / ask_question texts. A bubble
+   *  that is (a drift of) scripted copy is exempt from PHRASING rules that
+   *  would otherwise fail the script's own words (script verbatim > rules). */
+  scriptedCopy?: string[];
   /**
    * Smart mode is used only when the branch router cannot confidently
    * lock a script branch. In that mode we keep safety/platform gates hard
@@ -4720,6 +4725,43 @@ export function scoreVoiceQualityGroup(
     );
   }
 
+  // Script verbatim (M5 item 6 precedence; Daniel v2 local runs 2026-09-15):
+  // when the step has scripted question(s), the turn's question must BE one
+  // of them (paraphrase-tolerant, 60% token overlap), not an improvised
+  // question. "what made you decide to reach out?" at the goal step and "you
+  // wanna step away from the warehouse completely, or extra income?" at the
+  // obstacle step both passed the any-question check above and the funnel
+  // drifted off-script. Regenerate with the scripted ask quoted; on retry
+  // exhaustion this fail is NOT unshippable — an improvised question still
+  // beats silence.
+  const scriptedAsksForStep =
+    (options?.activeBranchScriptedQuestions?.length
+      ? options.activeBranchScriptedQuestions
+      : options?.currentStepScriptedQuestions) ?? [];
+  if (
+    options?.smartMode !== true &&
+    groupCurrentStepHasAskBranch === true &&
+    groupReplyQuestionCount > 0 &&
+    scriptedAsksForStep.length > 0 &&
+    options?.currentStepActiveBranchIsSilent !== true &&
+    options?.currentStepActiveBranchIsJudgeOnly !== true &&
+    !groupIsBookingOrLinkStep
+  ) {
+    const present = scriptedAsksForStep.some((ask) =>
+      scriptAskMatchesText(ask, joined)
+    );
+    if (!present) {
+      console.warn('[voice-quality-gate] scripted_ask_missing:', {
+        stepNumber: groupStepNumber,
+        expected: scriptedAsksForStep[0].slice(0, 100),
+        replyFirst100: joined.slice(0, 100)
+      });
+      hardFails.push(
+        `[group] scripted_ask_missing: the question in this turn is not the script's question for this step. Keep at most one short reaction line, then ask the script's question verbatim: "${scriptedAsksForStep[0]}"`
+      );
+    }
+  }
+
   const requiredQuestionValueViolation =
     options?.smartMode !== true
       ? detectRequiredQuestionValueViolation(
@@ -4771,7 +4813,29 @@ export function scoreVoiceQualityGroup(
   // is in bubble 1 and the announcement is in bubble 0 doesn't fire.
   const linkPromiseFailure = checkLinkPromiseWithoutUrl(joined);
   if (linkPromiseFailure) {
-    hardFails.push(`[group] ${linkPromiseFailure}`);
+    // Script verbatim beats phrasing rules (M5 item 6 precedence). Daniel v2
+    // step 5 ASKS "want me to send you the link?" and the link is scripted
+    // for the next step after a YES: the promise pattern matched the
+    // script's own copy and hard-failed three regenerations (2026-09-15).
+    // A bubble that is (a drift of) the current step's scripted copy is
+    // exempt from this rule; an improvised promise still fails.
+    const promiseMatch = /matched "([^"]+)"/.exec(linkPromiseFailure)?.[1];
+    const promisingBubble = promiseMatch
+      ? messages.find((b) =>
+          b.toLowerCase().includes(promiseMatch.toLowerCase())
+        )
+      : undefined;
+    const scripted =
+      !!promisingBubble &&
+      !!options?.scriptedCopy?.length &&
+      matchScriptedCopy(promisingBubble, options.scriptedCopy) !== null;
+    if (scripted) {
+      console.log(
+        `[voice-quality-gate] link_promise_without_url waived: the promising bubble is the step's scripted copy ("${promisingBubble!.slice(0, 80)}")`
+      );
+    } else {
+      hardFails.push(`[group] ${linkPromiseFailure}`);
+    }
   }
 
   const fabricatedUrlViolation = detectFabricatedUrlInReply(

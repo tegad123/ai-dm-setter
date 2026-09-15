@@ -26,6 +26,7 @@ import {
   type ScriptVariableResolutionMap
 } from '@/lib/script-variable-resolver';
 import { isRuntimePlaceholderOnly } from '@/lib/script-step-progression';
+import { stepIsSourceRouted } from '@/lib/script-fsm/compiler';
 
 // Action type → prompt tag mapping
 const ACTION_TAG: Record<string, string> = {
@@ -682,6 +683,30 @@ export function selectStep1BranchesForPrompt<T extends SerializableBranch>(
       mode: null,
       selectedBranch: branches.map((branch) => branch.branchLabel).join(' | ')
     });
+    return branches;
+  }
+
+  // 2026-09-15 (Daniel v2, Tega's 28 misroutes): source routing is only the
+  // rule when the script's first step is WRITTEN around the lead's origin (a
+  // branch that names ManyChat / flow origin / "DM'd directly"). A first step
+  // whose branches key on message CONTENT ("Already answered", "Cold inbound",
+  // "Solicitation", "Distress", "No signal") must show every branch to the
+  // judge; forcing the structural split there hid the content branches and
+  // every inbound lead got the cold greeting.
+  if (
+    !stepIsSourceRouted(
+      branches.map((b) => ({
+        branchLabel: b.branchLabel ?? '',
+        conditionDescription:
+          (b as { conditionDescription?: string | null })
+            .conditionDescription ?? null
+      }))
+    )
+  ) {
+    console.log(
+      '[branch-debug] Step 1 is content-routed (no ManyChat / flow-origin branch): all branches presented to the judge',
+      { mode, branches: branches.map((b) => b.branchLabel).join(' | ') }
+    );
     return branches;
   }
 

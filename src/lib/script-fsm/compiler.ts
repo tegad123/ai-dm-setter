@@ -132,6 +132,22 @@ export function deriveCompletion(actions: CompilableAction[]): CompletionSpec {
   return { kind: 'send_only' };
 }
 
+const SOURCE_ROUTED_RE =
+  /\b(manychat|many chat|flow origin|came in through|from the flow|comment automation|dm'?d directly|direct dm)\b/i;
+
+/** Does step 1 route on where the lead came FROM (ManyChat pick-up vs direct
+ *  DM)? True only when a branch label or condition says so in words. */
+export function stepIsSourceRouted(
+  branches: Array<{
+    branchLabel: string;
+    conditionDescription?: string | null;
+  }>
+): boolean {
+  return branches.some((b) =>
+    SOURCE_ROUTED_RE.test(`${b.branchLabel} ${b.conditionDescription ?? ''}`)
+  );
+}
+
 const ALWAYS_RE =
   /\b(always taken|taken on entry|always on entry|unconditional)\b/i;
 const DEFAULT_LABEL_RE = /^\s*default\b/i;
@@ -220,8 +236,14 @@ export function compileScript(steps: CompilableStep[]): CompiledScriptFsm {
       }
     }
 
-    // Edges.
-    const isStep1 = idx === 0;
+    // Edges. Source routing (ManyChat pick-up vs direct DM) is a STRUCTURAL
+    // rule only when the script's first step is actually written that way —
+    // a branch that names ManyChat / flow origin. A first step whose branches
+    // key on message CONTENT (Daniel v2: "Already answered", "Cold inbound",
+    // "Solicitation", "Distress", "No signal") is routed by content: verbatim
+    // label, then the advisory judge. Forcing source routing there hid every
+    // content branch behind "Cold inbound" (Tega's 28 misroutes, Sept 14).
+    const isStep1 = idx === 0 && stepIsSourceRouted(branches);
     const edges: FsmEdge[] = branches.map((b, bi) => {
       const cond = b.conditionDescription ?? '';
       const structural = opensWith(b.actions);

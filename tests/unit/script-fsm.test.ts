@@ -2,6 +2,7 @@
 // Run: npx tsx --test tests/unit/script-fsm.test.ts
 
 import { strict as assert } from 'node:assert';
+import { selectEdge } from '../../src/lib/script-fsm/runtime';
 import { describe, it } from 'node:test';
 
 import {
@@ -284,6 +285,147 @@ describe('deriveCompletion', () => {
     assert.equal(
       deriveCompletion([A('send_message', 'm'), A('send_link')]).kind,
       'send_only'
+    );
+  });
+});
+
+describe('step-1 routing mode (v1 source-routed vs v2 content-routed)', () => {
+  const A2 = (actionType: string, content = '') => ({ actionType, content });
+  it('Daniel v2: content-keyed first step gets NO source predicates; every branch is judge/verbatim-routed', () => {
+    const fsm = compileScript([
+      {
+        stepNumber: 1,
+        title: 'Open and Classify',
+        branches: [
+          {
+            branchLabel: 'Already answered',
+            conditionDescription:
+              'The lead\'s first message already states their experience level or intent. Examples: "starting", "brand new", "I\'m in the markets"',
+            actions: [
+              A2('runtime_judgment', 'Classify'),
+              A2(
+                'ask_question',
+                'yo wassup, respect for reaching out 🙏🏽 where you based out of?'
+              ),
+              A2('wait_for_response')
+            ]
+          },
+          {
+            branchLabel: 'Cold inbound',
+            conditionDescription:
+              'The lead DMd with a greeting, a compliment, a question, or anything that shows real interest but does not yet state their experience level.',
+            actions: [
+              A2(
+                'send_message',
+                "yo wassup, respect for reaching out! let's see if I can help you out here"
+              ),
+              A2('ask_question', 'where you based out of?'),
+              A2('wait_for_response')
+            ]
+          },
+          {
+            branchLabel: 'Solicitation / non-lead',
+            conditionDescription: 'The message is a pitch, promotion, bot spam',
+            actions: [A2('runtime_judgment', 'Send nothing.')]
+          },
+          {
+            branchLabel: 'Distress',
+            conditionDescription:
+              'The lead describes financial crisis, total loss of capital',
+            actions: [
+              A2('runtime_judgment', 'One short human line'),
+              A2('runtime_judgment', 'Flag for human review.')
+            ]
+          },
+          {
+            branchLabel: 'No signal',
+            conditionDescription:
+              'The message carries no answerable content: a lone emoji, "[Image]"',
+            actions: [
+              A2(
+                'ask_question',
+                "yo what's good bro, what you tryna figure out?"
+              ),
+              A2('wait_for_response')
+            ]
+          }
+        ]
+      },
+      {
+        stepNumber: 2,
+        title: 'Experience',
+        branches: [
+          {
+            branchLabel: 'Default',
+            conditionDescription: 'always taken',
+            actions: [
+              A2('ask_question', 'how long you been in the markets?'),
+              A2('wait_for_response')
+            ]
+          }
+        ]
+      }
+    ]);
+    const s1 = fsm.nodes[0];
+    assert.equal(
+      s1.edges.some((e) => JSON.stringify(e.predicate).includes('source_is')),
+      false,
+      'no source predicates on a content-keyed step 1'
+    );
+    // The judge (advisory) decides: with judgeLabel "Already answered" that branch wins over Cold inbound.
+    const pick = selectEdge(s1, {
+      source: 'INBOUND',
+      latestLeadText: 'brand new to trading',
+      dataPoints: {},
+      judgeLabel: 'Already answered'
+    });
+    assert.equal(pick.kind, 'edge');
+    if (pick.kind === 'edge')
+      assert.equal(pick.edge.branchLabel, 'Already answered');
+  });
+  it('Daniel v1: a first step that names ManyChat keeps source routing', () => {
+    const fsm = compileScript([
+      {
+        stepNumber: 1,
+        title: 'Pick Up From ManyChat',
+        branches: [
+          {
+            branchLabel: 'Default (ManyChat lead — already answered)',
+            conditionDescription: 'Lead came in through ManyChat',
+            actions: [
+              A2('runtime_judgment', 'read'),
+              A2('ask_question', 'Where are you currently based out of?'),
+              A2('wait_for_response')
+            ]
+          },
+          {
+            branchLabel: "Warm Inbound (DM'd directly — no ManyChat)",
+            conditionDescription: 'DMd directly',
+            actions: [
+              A2('send_message', 'yo wassup'),
+              A2('ask_question', 'Where are you currently based out of?'),
+              A2('wait_for_response')
+            ]
+          }
+        ]
+      },
+      {
+        stepNumber: 2,
+        title: 'x',
+        branches: [
+          {
+            branchLabel: 'Default',
+            conditionDescription: 'always taken',
+            actions: [A2('ask_question', 'q?'), A2('wait_for_response')]
+          }
+        ]
+      }
+    ]);
+    assert.equal(
+      fsm.nodes[0].edges.some((e) =>
+        JSON.stringify(e.predicate).includes('source_is')
+      ),
+      true
     );
   });
 });

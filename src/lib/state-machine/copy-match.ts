@@ -41,6 +41,11 @@ export function findVerbatimRepeat(
     if (nb === np) return p;
     const tp = tokens(p);
     if (tp.size < MIN_TOKENS) continue;
+    // A delivered line repeated whole INSIDE the new bubble is a repeat (the
+    // engine re-sent the opener glued to more text: "yo wassup, respect for
+    // reaching out! let's see…" after "yo wassup, respect for reaching out!").
+    // The other direction (new short line inside an old long one) stays new.
+    if (nb.includes(np)) return p;
     let inter = 0;
     tb.forEach((t) => {
       if (tp.has(t)) inter++;

@@ -15,9 +15,10 @@
 // shadow-then-authoritative rollout, daetradez flipped last (it's the oracle).
 // ---------------------------------------------------------------------------
 
-// v2: CompletionSpec carries `waits` (credit rules). Stored v1 blobs recompile
+// v3: step-1 source routing only for scripts that name ManyChat/flow origin.
+// v2: CompletionSpec carries `waits` (credit rules). Stored older blobs recompile
 // lazily on first use (store.ts getActiveScriptFsm).
-export const COMPILER_VERSION = 2;
+export const COMPILER_VERSION = 3;
 
 export type LeadSource = 'INBOUND' | 'MANYCHAT' | 'OUTBOUND' | 'MANUAL_UPLOAD';
 
