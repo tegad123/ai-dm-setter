@@ -257,3 +257,96 @@ describe('judge + FSM agreement selects the branch', () => {
     );
   });
 });
+
+// N1c: a branch whose only actions are runtime_judgment carries no
+// lead-facing deliverable, so whatever the model emits there is improvised.
+// Local flow 3, 2026-09-15: the Solicitation branch was selected correctly
+// and the model still produced "gimme a sec bro, looking into this" — a
+// promise of a follow-up that will never come, sent to a spam account.
+describe('send-nothing branch suppression (N1c)', () => {
+  const branchHasRuntimeJudgmentOnly = (actions: { actionType: string }[]) =>
+    actions.length > 0 &&
+    actions.every((a) => a.actionType === 'runtime_judgment');
+
+  it('a runtime_judgment-only branch is send-nothing', () => {
+    assert.equal(
+      branchHasRuntimeJudgmentOnly([
+        { actionType: 'runtime_judgment' },
+        { actionType: 'runtime_judgment' }
+      ]),
+      true
+    );
+  });
+
+  it('a branch with any send or ask action is NOT send-nothing', () => {
+    assert.equal(
+      branchHasRuntimeJudgmentOnly([
+        { actionType: 'runtime_judgment' },
+        { actionType: 'send_message' }
+      ]),
+      false
+    );
+    assert.equal(
+      branchHasRuntimeJudgmentOnly([
+        { actionType: 'ask_question' },
+        { actionType: 'wait_for_response' }
+      ]),
+      false
+    );
+  });
+
+  it('an empty branch is not treated as send-nothing (nothing to assert about it)', () => {
+    assert.equal(branchHasRuntimeJudgmentOnly([]), false);
+  });
+
+  it("v2's Solicitation branch compiles to a send-nothing shape with no deliverables", () => {
+    const compiled = compileScript([
+      {
+        stepNumber: 1,
+        title: 'Open and Classify',
+        branches: [
+          {
+            branchLabel: 'Cold inbound',
+            conditionDescription: 'a greeting',
+            actions: [
+              A('send_message', 'yo wassup, respect for reaching out!'),
+              A('ask_question', 'where you based out of?'),
+              A('wait_for_response')
+            ]
+          },
+          {
+            branchLabel: 'Solicitation / non-lead',
+            conditionDescription: 'a pitch, promotion or bot spam',
+            actions: [
+              A(
+                'runtime_judgment',
+                'Send nothing. Do not greet, do not ask location.'
+              )
+            ]
+          }
+        ]
+      },
+      {
+        stepNumber: 2,
+        title: 'Experience',
+        branches: [
+          {
+            branchLabel: 'Default',
+            conditionDescription: 'always taken',
+            actions: [A('ask_question', 'how long?'), A('wait_for_response')]
+          }
+        ]
+      }
+    ]);
+    const solicitation = nodeForStep(compiled, 1)!.edges.find(
+      (e) => e.branchLabel === 'Solicitation / non-lead'
+    )!;
+    assert.deepEqual(
+      solicitation.deliverables.filter(
+        (d) => d.kind === 'send_message' || d.kind === 'ask'
+      ),
+      []
+    );
+    assert.equal(solicitation.completion.kind, 'routing_only');
+  });
+});
