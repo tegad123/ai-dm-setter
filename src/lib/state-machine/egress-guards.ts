@@ -64,7 +64,7 @@ export interface StepActionLike {
 }
 export interface StepLike {
   actions?: StepActionLike[];
-  branches?: { actions?: StepActionLike[] }[];
+  branches?: { branchLabel?: string | null; actions?: StepActionLike[] }[];
 }
 
 const DELIVERABLE = new Set(['send_message', 'ask_question']);
@@ -98,6 +98,22 @@ export function collectPostWaitContents(step: StepLike): string[] {
   return out;
 }
 
+/** Scope a step to the branch that produced the current generation turn.
+ * A text can be pre-Wait on one branch and post-Wait on another, so pooling
+ * every branch can block valid bubbles from the selected branch. */
+export function scopeStepToBranch(
+  step: StepLike,
+  branchLabel: string | null
+): StepLike {
+  if (!branchLabel) return step;
+  const selected = (step.branches ?? []).filter(
+    (branch) => branch.branchLabel === branchLabel
+  );
+  return selected.length > 0
+    ? { actions: step.actions, branches: selected }
+    : step;
+}
+
 /** Returns the matching scripted block when `bubble` is (a drift of) one of
  *  `postWaitContents`. The matcher lives in state-machine/copy-match.ts so the
  *  script-FSM fold can share it without pulling in the DB glue below. */
@@ -125,6 +141,7 @@ async function loadStepsForGuard(
           },
           branches: {
             select: {
+              branchLabel: true,
               actions: {
                 select: { actionType: true, content: true, sortOrder: true }
               }
@@ -162,11 +179,26 @@ export const waitBoundaryGuard: EgressGuard = {
     // shipped (advancement is computed before generation), so check the
     // current step and the one before it.
     const cur = conv.currentScriptStep ?? 1;
-    const steps = await loadStepsForGuard(
-      ctx.accountId,
-      [cur, cur - 1].filter((n) => n >= 1)
+    const trace = await prisma.generationTurnTrace.findFirst({
+      where: { conversationId: ctx.conversationId },
+      orderBy: { createdAt: 'desc' },
+      select: { stepNumber: true, branchSelected: true }
+    });
+    const relevantStepNumbers = [cur, cur - 1].filter((n) => n >= 1);
+    const traceIsRelevant =
+      typeof trace?.stepNumber === 'number' &&
+      relevantStepNumbers.includes(trace.stepNumber);
+    const stepNumbers = traceIsRelevant
+      ? [trace.stepNumber as number]
+      : relevantStepNumbers;
+    const steps = await loadStepsForGuard(ctx.accountId, stepNumbers);
+    const postWait = steps.flatMap((step) =>
+      collectPostWaitContents(
+        traceIsRelevant
+          ? scopeStepToBranch(step, trace?.branchSelected ?? null)
+          : step
+      )
     );
-    const postWait = steps.flatMap(collectPostWaitContents);
     if (postWait.length === 0) return ALLOW;
     const hit = matchPostWaitCopy(ctx.bubble, postWait);
     if (!hit) return ALLOW;

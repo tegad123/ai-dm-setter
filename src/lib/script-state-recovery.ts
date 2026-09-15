@@ -751,6 +751,45 @@ export function branchHistorySelectedLabelForStep(
   return events.at(-1)?.selectedBranchLabel ?? null;
 }
 
+export function isNoSignalRecoveryBranch(
+  branch: Pick<
+    ScriptBranchWithRecovery,
+    'branchLabel' | 'conditionDescription'
+  > | null
+): boolean {
+  if (!branch) return false;
+  const text =
+    `${branch.branchLabel} ${branch.conditionDescription ?? ''}`.toLowerCase();
+  return (
+    /\bno[ -]?signal\b/.test(text) || /\bno answerable content\b/.test(text)
+  );
+}
+
+export function shouldHoldNoSignalRecoveryAdvance(params: {
+  priorStep: number;
+  computedStep: number;
+  selectedBranch: Pick<
+    ScriptBranchWithRecovery,
+    'branchLabel' | 'conditionDescription'
+  > | null;
+}): boolean {
+  return (
+    params.computedStep > params.priorStep &&
+    isNoSignalRecoveryBranch(params.selectedBranch)
+  );
+}
+
+function removeNoSignalStepCompletion(
+  points: CapturedDataPoints,
+  stepNumber: number
+): void {
+  const events = readBranchHistoryEvents(points).filter(
+    (event) =>
+      !(event.eventType === 'step_completed' && event.stepNumber === stepNumber)
+  );
+  (points as Record<string, unknown>).branchHistory = events;
+}
+
 function branchHistorySelectionForStep(
   points: CapturedDataPoints,
   stepNumber: number
@@ -5281,6 +5320,42 @@ export async function prepareScriptState(params: {
     };
   }
   let currentScriptStep = currentStep?.stepNumber ?? 1;
+
+  // A No-signal branch is a recovery loop, not completion of the step. Its
+  // question asks the lead to provide a usable intent. The next real reply
+  // must be classified again on the same step; crediting it as the branch's
+  // answer skips the normal branch requirements (live v2 skipped location).
+  const priorStepForNoSignal =
+    typeof conversation.currentScriptStep === 'number' &&
+    conversation.currentScriptStep > 0
+      ? conversation.currentScriptStep
+      : 1;
+  const priorSelectedLabel = branchHistorySelectedLabelForStep(
+    capturedDataPoints,
+    priorStepForNoSignal
+  );
+  const priorStepRow = script?.steps.find(
+    (step) => step.stepNumber === priorStepForNoSignal
+  );
+  const priorSelectedBranch =
+    priorStepRow?.branches.find(
+      (branch) => branch.branchLabel === priorSelectedLabel
+    ) ?? null;
+  if (
+    shouldHoldNoSignalRecoveryAdvance({
+      priorStep: priorStepForNoSignal,
+      computedStep: currentScriptStep,
+      selectedBranch: priorSelectedBranch
+    })
+  ) {
+    removeNoSignalStepCompletion(capturedDataPoints, priorStepForNoSignal);
+    currentScriptStep = priorStepForNoSignal;
+    currentStep = priorStepRow ?? currentStep;
+    systemStage = { step: currentStep, reason: 'no_signal_reclassify_hold' };
+    console.warn(
+      `[script-state] no-signal recovery hold — reclassifying the lead's usable reply on step ${priorStepForNoSignal} instead of advancing (conv ${params.conversationId})`
+    );
+  }
 
   // No-signal hold (Tega, 2026-09-15). A lead turn that carries no answerable
   // content — an unreadable image, a bare emoji, a lone "?" — does not answer

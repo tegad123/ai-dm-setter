@@ -6,7 +6,8 @@ import { describe, it } from 'node:test';
 
 import {
   collectPostWaitContents,
-  matchPostWaitCopy
+  matchPostWaitCopy,
+  scopeStepToBranch
 } from '../../src/lib/state-machine/egress-guards';
 
 // Shape of the daetradez step-1 "Warm Inbound" branch that produced the
@@ -132,6 +133,45 @@ describe('matchPostWaitCopy', () => {
   it('never matches short or generic bubbles', () => {
     assert.equal(matchPostWaitCopy("that's awesome", post), null);
     assert.equal(matchPostWaitCopy('bet bro, i got you', post), null);
+  });
+});
+
+describe('scopeStepToBranch', () => {
+  it('does not treat a selected branch pre-Wait ASK as post-Wait copy from another branch', () => {
+    const step = {
+      actions: [],
+      branches: [
+        {
+          branchLabel: 'New to markets',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'love to see it',
+              sortOrder: 0
+            },
+            {
+              actionType: 'ask_question',
+              content: 'what got you looking into trading?',
+              sortOrder: 1
+            },
+            { actionType: 'wait_for_response', content: '', sortOrder: 2 }
+          ]
+        },
+        {
+          branchLabel: 'Other path',
+          actions: [
+            { actionType: 'wait_for_response', content: '', sortOrder: 0 },
+            {
+              actionType: 'ask_question',
+              content: 'what got you looking into trading?',
+              sortOrder: 1
+            }
+          ]
+        }
+      ]
+    };
+    const selected = scopeStepToBranch(step, 'New to markets');
+    assert.deepEqual(collectPostWaitContents(selected), []);
   });
 });
 

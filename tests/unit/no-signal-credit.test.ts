@@ -22,6 +22,10 @@ import {
   nodeForStep
 } from '../../src/lib/script-fsm/runtime';
 import type { FsmCursor } from '../../src/lib/script-fsm/types';
+import {
+  isNoSignalRecoveryBranch,
+  shouldHoldNoSignalRecoveryAdvance
+} from '../../src/lib/script-state-recovery';
 
 const A = (actionType: string, content = '') => ({ actionType, content });
 
@@ -148,6 +152,42 @@ describe('the No-signal step does not advance on an unreadable reply', () => {
     assert.ok(
       !texts.some((t) => t.includes('love to see it')),
       "step 2's new-to-markets copy is not reachable from the held cursor"
+    );
+  });
+});
+
+describe('No-signal recovery branch detection', () => {
+  it('recognizes the live v2 recovery branch from its label and condition', () => {
+    assert.equal(
+      isNoSignalRecoveryBranch({
+        branchLabel: 'No signal',
+        conditionDescription: 'The message carries no answerable content.'
+      } as never),
+      true
+    );
+  });
+
+  it('does not hold a normal inbound branch', () => {
+    assert.equal(
+      isNoSignalRecoveryBranch({
+        branchLabel: 'Cold inbound',
+        conditionDescription: 'The lead shows real interest.'
+      } as never),
+      false
+    );
+  });
+
+  it('holds a legacy cursor advance so the usable reply is reclassified on the same step', () => {
+    assert.equal(
+      shouldHoldNoSignalRecoveryAdvance({
+        priorStep: 1,
+        computedStep: 2,
+        selectedBranch: {
+          branchLabel: 'No signal',
+          conditionDescription: 'The message carries no answerable content.'
+        } as never
+      }),
+      true
     );
   });
 });
