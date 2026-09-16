@@ -28,6 +28,15 @@ import prisma from '@/lib/prisma';
 // ~75s for generation + send. Longer delays take the durable cron path.
 const INLINE_DELAY_THRESHOLD_SECONDS = 45;
 
+// Only failures before any event has been processed are safe to request as a
+// whole-batch retry here. Per-event handlers can already have committed writes.
+class InstagramCredentialLookupError extends Error {
+  constructor(cause: unknown) {
+    super('Instagram credential lookup failed', { cause });
+    this.name = 'InstagramCredentialLookupError';
+  }
+}
+
 function afterCallbackErrorDetails(err: unknown) {
   if (err instanceof Error) {
     return {
@@ -153,17 +162,39 @@ export async function POST(request: NextRequest) {
     console.warn('[instagram-webhook] Skipping signature check in dev mode');
   }
 
-  // Return 200 immediately — Meta requires a fast response.
-  const payload = JSON.parse(rawBody);
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  if (
+    !payload ||
+    Array.isArray(payload) ||
+    typeof payload !== 'object' ||
+    typeof payload.object !== 'string' ||
+    (payload.object === 'instagram' && !Array.isArray(payload.entry))
+  ) {
+    return NextResponse.json(
+      { error: 'Invalid webhook payload' },
+      { status: 400 }
+    );
+  }
 
-  // Process the events fully BEFORE returning 200.
-  // This ensures AI generation + Instagram send completes within the function lifecycle.
-  // Vercel keeps the function alive until we return the response.
+  // Persist inbound events and enqueue durable reply work before acknowledging.
+  // A credential lookup failure occurs before any event is touched: return a
+  // failure so Meta may redeliver instead of permanently acknowledging a loss.
   try {
     await processInstagramEvents(payload);
     console.log('[instagram-webhook] Processing complete');
   } catch (err) {
     console.error('[instagram-webhook] Event processing error:', err);
+    if (err instanceof InstagramCredentialLookupError) {
+      return NextResponse.json(
+        { error: 'Webhook processing temporarily unavailable' },
+        { status: 503 }
+      );
+    }
   }
 
   return NextResponse.json({ received: true }, { status: 200 });
@@ -187,9 +218,13 @@ async function processInstagramEvents(payload: any): Promise<void> {
 
   // Fetch all active META and INSTAGRAM integration credentials for account lookup
   console.log('[instagram-webhook] fetching credentials');
-  const allCredentials = await prisma.integrationCredential.findMany({
-    where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
-  });
+  const allCredentials = await prisma.integrationCredential
+    .findMany({
+      where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
+    })
+    .catch((cause: unknown) => {
+      throw new InstagramCredentialLookupError(cause);
+    });
   console.log(
     `[instagram-webhook] credentials fetched: ${allCredentials.length}`
   );
