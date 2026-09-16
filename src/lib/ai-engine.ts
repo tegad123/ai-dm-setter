@@ -1781,6 +1781,32 @@ function branchHasRuntimeJudgmentOnly(
   );
 }
 
+export function runtimeJudgmentOnlyBranchShouldStaySilent(params: {
+  branch: JudgeBranchLike | null | undefined;
+  conversationHistory: Array<{ sender: string }>;
+}): boolean {
+  if (!branchHasRuntimeJudgmentOnly(params.branch)) return false;
+
+  const routeText = `${params.branch?.branchLabel ?? ''} ${params.branch?.conditionDescription ?? ''}`;
+  const requiresLeadSilence =
+    /\bno[ -]?(?:response|reply)\b|\b(?:has not|hasn'?t|did not|didn'?t|never)\s+(?:respond(?:ed)?|repl(?:y|ied))\b/i.test(
+      routeText
+    );
+  if (!requiresLeadSilence) return true;
+
+  const latestExternalMessage = [...params.conversationHistory]
+    .reverse()
+    .find((message) =>
+      ['LEAD', 'AI', 'HUMAN', 'MANYCHAT'].includes(message.sender)
+    );
+
+  // A fresh lead message makes a "No response" route structurally
+  // impossible. Keep the model's contextual answer instead of applying the
+  // runtime-judgment-only silence rule. Solicitation and distress branches
+  // remain silent because their route conditions do not require no reply.
+  return latestExternalMessage?.sender !== 'LEAD';
+}
+
 function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
   if (!branch) return false;
   return (
@@ -4585,7 +4611,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       : []
     : (currentStepShape?.silentBranchLabels ?? []);
   const currentStepActiveBranchIsJudgeOnly = selectedCurrentJudgeBranch
-    ? branchHasRuntimeJudgmentOnly(selectedCurrentJudgeBranch)
+    ? runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: selectedCurrentJudgeBranch,
+        conversationHistory
+      })
     : false;
   const currentStepActiveBranchLabel =
     selectedCurrentJudgeBranch?.branchLabel ?? null;
@@ -8780,7 +8809,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // not. Interrupts are applied after this point and can still speak.
   if (
     selectedCurrentJudgeBranch &&
-    branchHasRuntimeJudgmentOnly(selectedCurrentJudgeBranch)
+    runtimeJudgmentOnlyBranchShouldStaySilent({
+      branch: selectedCurrentJudgeBranch,
+      conversationHistory
+    })
   ) {
     const bubblesBefore = Array.isArray(parsed.messages)
       ? parsed.messages

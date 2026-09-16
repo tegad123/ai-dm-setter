@@ -25,7 +25,8 @@ import {
 import { nodeForStep, selectEdge } from '../../src/lib/script-fsm/runtime';
 import {
   enforceOfferBranchPreconditions,
-  enforceSendThenAskSequence
+  enforceSendThenAskSequence,
+  runtimeJudgmentOnlyBranchShouldStaySilent
 } from '../../src/lib/ai-engine';
 
 const A = (actionType: string, content = '') => ({ actionType, content });
@@ -460,5 +461,54 @@ describe('send-nothing branch suppression (N1c)', () => {
       []
     );
     assert.equal(solicitation.completion.kind, 'routing_only');
+  });
+
+  it('does not silence a fresh lead reply routed to a No response branch', () => {
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'No response',
+          conditionDescription: 'The lead has not replied to the check-in.',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content: 'End the script and hand off to follow-up cadence.'
+            }
+          ]
+        },
+        conversationHistory: [{ sender: 'AI' }, { sender: 'LEAD' }]
+      }),
+      false
+    );
+  });
+
+  it('keeps No response silent when the lead has not replied', () => {
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'No response',
+          conditionDescription: 'The lead did not reply.',
+          actions: [{ actionType: 'runtime_judgment', content: 'End.' }]
+        },
+        conversationHistory: [{ sender: 'AI' }]
+      }),
+      true
+    );
+  });
+
+  it('keeps solicitation branches silent after a lead message', () => {
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'Solicitation / non-lead',
+          conditionDescription: 'A pitch, promotion, or bot spam.',
+          actions: [
+            { actionType: 'runtime_judgment', content: 'Send nothing.' }
+          ]
+        },
+        conversationHistory: [{ sender: 'LEAD' }]
+      }),
+      true
+    );
   });
 });
