@@ -23,7 +23,10 @@ import {
   type CompilableStep
 } from '../../src/lib/script-fsm/compiler';
 import { nodeForStep, selectEdge } from '../../src/lib/script-fsm/runtime';
-import { enforceOfferBranchPreconditions } from '../../src/lib/ai-engine';
+import {
+  enforceOfferBranchPreconditions,
+  enforceSendThenAskSequence
+} from '../../src/lib/ai-engine';
 
 const A = (actionType: string, content = '') => ({ actionType, content });
 
@@ -306,6 +309,64 @@ describe('offer branch preconditions', () => {
       priorSelectedBranchLabels: ['Hesitant']
     });
     assert.equal(selected?.branchLabel, 'Soft exit');
+  });
+});
+
+describe('selected branch SEND plus ASK sequence', () => {
+  const required = [
+    "love to see it, most people don't even take the first step."
+  ];
+  const asks = ['what got you looking into trading in the first place?'];
+
+  it('inserts a dropped SEND before the emitted ASK', () => {
+    const result = enforceSendThenAskSequence({
+      bubbles: ['so what got you looking into trading in the first place?'],
+      requiredMessages: required,
+      scriptedQuestions: asks,
+      priorAiMessages: []
+    });
+    assert.deepEqual(result.bubbles, [
+      required[0],
+      'so what got you looking into trading in the first place?'
+    ]);
+    assert.deepEqual(result.injected, required);
+  });
+
+  it('does not duplicate a SEND already delivered in this turn or history', () => {
+    for (const priorAiMessages of [[], required]) {
+      const bubbles =
+        priorAiMessages.length === 0 ? [...required, asks[0]] : [asks[0]];
+      const result = enforceSendThenAskSequence({
+        bubbles,
+        requiredMessages: required,
+        scriptedQuestions: asks,
+        priorAiMessages
+      });
+      assert.deepEqual(result.bubbles, bubbles);
+      assert.deepEqual(result.injected, []);
+    }
+  });
+
+  it('does not split a combined bubble that already contains SEND plus ASK', () => {
+    const combined = `${required[0]} ${asks[0]}`;
+    const result = enforceSendThenAskSequence({
+      bubbles: [combined],
+      requiredMessages: required,
+      scriptedQuestions: asks,
+      priorAiMessages: []
+    });
+    assert.deepEqual(result.bubbles, [combined]);
+    assert.deepEqual(result.injected, []);
+  });
+
+  it('does nothing for a branch without an ASK', () => {
+    const result = enforceSendThenAskSequence({
+      bubbles: ['model copy'],
+      requiredMessages: required,
+      scriptedQuestions: [],
+      priorAiMessages: []
+    });
+    assert.deepEqual(result, { bubbles: ['model copy'], injected: [] });
   });
 });
 

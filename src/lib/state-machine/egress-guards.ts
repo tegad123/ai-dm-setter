@@ -98,6 +98,26 @@ export function collectPostWaitContents(step: StepLike): string[] {
   return out;
 }
 
+/** Deliverables that occur before the first Wait, including the ASK directly
+ * before that Wait. A bubble explicitly authored in this part of the selected
+ * branch is valid in the current turn even if identical copy appears after a
+ * Wait elsewhere in the step. */
+export function collectPreWaitContents(step: StepLike): string[] {
+  const out: string[] = [];
+  const scan = (actions: StepActionLike[] | undefined) => {
+    if (!actions?.length) return;
+    for (const action of [...actions].sort(bySort)) {
+      if (WAIT.has(action.actionType)) break;
+      if (!DELIVERABLE.has(action.actionType)) continue;
+      const content = (action.content ?? '').trim();
+      if (content) out.push(content);
+    }
+  };
+  scan(step.actions);
+  for (const branch of step.branches ?? []) scan(branch.actions);
+  return out;
+}
+
 /** Scope a step to the branch that produced the current generation turn.
  * A text can be pre-Wait on one branch and post-Wait on another, so pooling
  * every branch can block valid bubbles from the selected branch. */
@@ -192,13 +212,14 @@ export const waitBoundaryGuard: EgressGuard = {
       ? [trace.stepNumber as number]
       : relevantStepNumbers;
     const steps = await loadStepsForGuard(ctx.accountId, stepNumbers);
-    const postWait = steps.flatMap((step) =>
-      collectPostWaitContents(
-        traceIsRelevant
-          ? scopeStepToBranch(step, trace?.branchSelected ?? null)
-          : step
-      )
+    const scopedSteps = steps.map((step) =>
+      traceIsRelevant
+        ? scopeStepToBranch(step, trace?.branchSelected ?? null)
+        : step
     );
+    const preWait = scopedSteps.flatMap(collectPreWaitContents);
+    if (matchScriptedCopy(ctx.bubble, preWait)) return ALLOW;
+    const postWait = scopedSteps.flatMap(collectPostWaitContents);
     if (postWait.length === 0) return ALLOW;
     const hit = matchPostWaitCopy(ctx.bubble, postWait);
     if (!hit) return ALLOW;

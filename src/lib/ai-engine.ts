@@ -840,6 +840,46 @@ export function requiredMsgAlreadyDeliveredInHistory(
   );
 }
 
+export function enforceSendThenAskSequence(params: {
+  bubbles: string[];
+  requiredMessages: string[];
+  scriptedQuestions: string[];
+  priorAiMessages: string[];
+}): { bubbles: string[]; injected: string[] } {
+  if (
+    params.requiredMessages.length === 0 ||
+    params.scriptedQuestions.length === 0
+  ) {
+    return { bubbles: params.bubbles, injected: [] };
+  }
+
+  const missing = params.requiredMessages.filter(
+    (message) =>
+      message.trim().length > 0 &&
+      !/\{\{[^}]+\}\}/.test(message) &&
+      !requiredMsgAlreadyDeliveredInHistory(message, params.priorAiMessages) &&
+      !matchScriptedCopy(message, params.bubbles)
+  );
+  if (missing.length === 0) {
+    return { bubbles: params.bubbles, injected: [] };
+  }
+
+  const firstAskIndex = params.bubbles.findIndex((bubble) =>
+    params.scriptedQuestions.some((question) =>
+      scriptAskMatchesText(question, bubble)
+    )
+  );
+  const insertAt = firstAskIndex >= 0 ? firstAskIndex : 0;
+  return {
+    bubbles: [
+      ...params.bubbles.slice(0, insertAt),
+      ...missing,
+      ...params.bubbles.slice(insertAt)
+    ],
+    injected: missing
+  };
+}
+
 // Routing text must be CONDITION-ONLY (2026-07-27, Tega item 1): operator
 // judgment blocks mix the trigger condition with response instructions —
 // "They asked about price. Answer it directly and honestly — the link's
@@ -8699,6 +8739,32 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           );
         }
       }
+    }
+  }
+
+  // A selected branch may intentionally carry consecutive SEND_MESSAGE and
+  // ASK_QUESTION actions before its WAIT. The model often emits only the ask,
+  // and the older deterministic injector deliberately skipped every step that
+  // contained an ask. Preserve the authored sequence here: insert any missing
+  // literal sends before the ask, scoped only to the selected branch.
+  if (selectedCurrentJudgeBranch) {
+    const bubbles = Array.isArray(parsed.messages)
+      ? [...parsed.messages]
+      : [parsed.message];
+    const sequence = enforceSendThenAskSequence({
+      bubbles,
+      requiredMessages: (activeBranchRequiredMessages ?? [])
+        .filter((message) => !message.isPlaceholder)
+        .map((message) => message.content.trim()),
+      scriptedQuestions: activeBranchScriptedQuestions ?? [],
+      priorAiMessages: priorAIMessages.map((message) => message.content)
+    });
+    if (sequence.injected.length > 0) {
+      parsed.messages = sequence.bubbles;
+      parsed.message = sequence.bubbles[0] ?? '';
+      console.warn(
+        `[ai-engine] selected branch SEND+ASK enforcement — inserted ${sequence.injected.length} missing scripted message(s) before the ask (conv ${activeConversationId})`
+      );
     }
   }
 

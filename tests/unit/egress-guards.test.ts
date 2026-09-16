@@ -5,6 +5,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  collectPreWaitContents,
   collectPostWaitContents,
   matchPostWaitCopy,
   scopeStepToBranch
@@ -94,6 +95,36 @@ describe('collectPostWaitContents', () => {
       ]
     });
     assert.deepEqual(post, ['this is the react after the wait block']);
+  });
+});
+
+describe('collectPreWaitContents', () => {
+  it('keeps consecutive SEND plus ASK actions before the Wait', () => {
+    const step = {
+      branches: [
+        {
+          branchLabel: 'New to markets',
+          actions: [
+            {
+              actionType: 'send_message',
+              content: 'love to see it',
+              sortOrder: 0
+            },
+            {
+              actionType: 'ask_question',
+              content: 'what got you looking into trading?',
+              sortOrder: 1
+            },
+            { actionType: 'wait_for_response', sortOrder: 2 }
+          ]
+        }
+      ]
+    };
+    assert.deepEqual(collectPreWaitContents(step), [
+      'love to see it',
+      'what got you looking into trading?'
+    ]);
+    assert.deepEqual(collectPostWaitContents(step), []);
   });
 });
 
