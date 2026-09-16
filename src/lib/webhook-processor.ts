@@ -1003,6 +1003,19 @@ function looksLikeOngoingConversation(messageText: string): boolean {
 // Resolves or creates the lead + conversation automatically.
 // ---------------------------------------------------------------------------
 
+export function shouldResumeInterruptedInbound(params: {
+  messageTimestamp: Date;
+  now: Date;
+  hasReplyWork: boolean;
+  hasOutboundAfter: boolean;
+}): boolean {
+  return (
+    params.now.getTime() - params.messageTimestamp.getTime() >= 60_000 &&
+    !params.hasReplyWork &&
+    !params.hasOutboundAfter
+  );
+}
+
 export async function processIncomingMessage(
   params: IncomingMessageParams
 ): Promise<ProcessResult> {
@@ -1371,6 +1384,51 @@ export async function processIncomingMessage(
       }
     });
     if (existing) {
+      const [replyWork, outboundAfter] = await Promise.all([
+        prisma.scheduledReply.findFirst({
+          where: {
+            conversationId,
+            createdAt: { gte: existing.timestamp },
+            status: { not: 'CANCELLED' }
+          },
+          select: { id: true }
+        }),
+        prisma.message.findFirst({
+          where: {
+            conversationId,
+            sender: { in: ['AI', 'HUMAN'] },
+            timestamp: { gt: existing.timestamp }
+          },
+          select: { id: true }
+        })
+      ]);
+      if (
+        shouldResumeInterruptedInbound({
+          messageTimestamp: existing.timestamp,
+          now: new Date(),
+          hasReplyWork: !!replyWork,
+          hasOutboundAfter: !!outboundAfter
+        })
+      ) {
+        await prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            lastMessageAt: existing.timestamp,
+            awaitingAiResponse: true,
+            awaitingSince: existing.timestamp
+          }
+        });
+        console.warn(
+          `[webhook-processor] Duplicate inbound ${params.platformMessageId} resumes interrupted processing: message was saved but no reply work or outbound was created`
+        );
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: existing.id,
+          isNewLead: false,
+          skipReply: false
+        };
+      }
       console.log(
         `[webhook-processor] Duplicate message skipped: ${params.platformMessageId}`
       );
