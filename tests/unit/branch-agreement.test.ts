@@ -23,6 +23,7 @@ import {
   type CompilableStep
 } from '../../src/lib/script-fsm/compiler';
 import { nodeForStep, selectEdge } from '../../src/lib/script-fsm/runtime';
+import { enforceOfferBranchPreconditions } from '../../src/lib/ai-engine';
 
 const A = (actionType: string, content = '') => ({ actionType, content });
 
@@ -255,6 +256,56 @@ describe('judge + FSM agreement selects the branch', () => {
       [],
       'a send-nothing branch has no lead-facing copy to require'
     );
+  });
+});
+
+describe('offer branch preconditions', () => {
+  const step = v2[0] as never;
+
+  it('locks YES when an acceptance appears anywhere in the post-offer lead burst', () => {
+    const selected = enforceOfferBranchPreconditions({
+      step,
+      history: [
+        {
+          sender: 'AI',
+          content: 'want me to send you the link?'
+        },
+        { sender: 'LEAD', content: 'Yessir' },
+        {
+          sender: 'LEAD',
+          content: "I'll start looking into incorporating it frfr"
+        }
+      ],
+      selectedBranch: v2[0].branches[2] as never,
+      priorSelectedBranchLabels: []
+    });
+    assert.equal(selected?.branchLabel, 'YES');
+  });
+
+  it('routes a first decline to Hesitant because Soft exit requires Hesitant first', () => {
+    const selected = enforceOfferBranchPreconditions({
+      step,
+      history: [
+        { sender: 'AI', content: 'want me to send you the link?' },
+        { sender: 'LEAD', content: 'nah not right now' }
+      ],
+      selectedBranch: v2[0].branches[2] as never,
+      priorSelectedBranchLabels: []
+    });
+    assert.equal(selected?.branchLabel, 'Hesitant');
+  });
+
+  it('allows Soft exit after the Hesitant branch already ran', () => {
+    const selected = enforceOfferBranchPreconditions({
+      step,
+      history: [
+        { sender: 'AI', content: 'worth a look?' },
+        { sender: 'LEAD', content: 'no thanks' }
+      ],
+      selectedBranch: v2[0].branches[2] as never,
+      priorSelectedBranchLabels: ['Hesitant']
+    });
+    assert.equal(selected?.branchLabel, 'Soft exit');
   });
 });
 

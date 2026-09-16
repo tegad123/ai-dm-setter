@@ -44,6 +44,7 @@ import {
 import {
   applyStageOverride,
   appendBranchHistoryEvent,
+  readBranchHistoryEvents,
   attemptSelfRecovery,
   attemptStepSkipRecovery,
   deriveCallProposalPrereqs,
@@ -559,6 +560,57 @@ type JudgeStepLike = {
   actions: JudgeActionLike[];
   branches: JudgeBranchLike[];
 };
+
+export function enforceOfferBranchPreconditions(params: {
+  step: JudgeStepLike | null | undefined;
+  history: Array<{ sender: string; content: string }>;
+  selectedBranch: JudgeBranchLike | null | undefined;
+  priorSelectedBranchLabels: string[];
+}): JudgeBranchLike | null | undefined {
+  const branches = params.step?.branches ?? [];
+  const yesBranch = branches.find(
+    (branch) =>
+      /^yes$/i.test(branch.branchLabel.trim()) ||
+      /\blead says yes\b|\bclear interest\b/i.test(
+        branch.conditionDescription ?? ''
+      )
+  );
+  const hesitantBranch = branches.find((branch) =>
+    /hesitant|unsure|non-committal/i.test(
+      `${branch.branchLabel} ${branch.conditionDescription ?? ''}`
+    )
+  );
+  const softExitBranch = branches.find((branch) =>
+    /soft[ -]?exit/i.test(branch.branchLabel)
+  );
+  if (!yesBranch || !hesitantBranch || !softExitBranch) {
+    return params.selectedBranch;
+  }
+
+  const lastAiIndex = params.history.findLastIndex(
+    (message) => message.sender === 'AI'
+  );
+  const lastAi = lastAiIndex >= 0 ? params.history[lastAiIndex] : null;
+  const leadBurst = params.history
+    .slice(lastAiIndex + 1)
+    .filter((message) => message.sender === 'LEAD');
+  if (
+    lastAi &&
+    aiPromisedArtifact(lastAi.content) &&
+    leadBurst.some((message) => isExplicitAcceptance(message.content))
+  ) {
+    return yesBranch;
+  }
+
+  if (params.selectedBranch?.branchLabel === softExitBranch.branchLabel) {
+    const hesitantAlreadyRan = params.priorSelectedBranchLabels.some(
+      (label) => label === hesitantBranch.branchLabel
+    );
+    if (!hesitantAlreadyRan) return hesitantBranch;
+  }
+
+  return params.selectedBranch;
+}
 
 type JudgeBranchConfidence =
   | 'high'
@@ -3417,6 +3469,34 @@ export async function generateReply(
         '[script-fsm] shadow branch evaluation failed (non-fatal, legacy choice stands):',
         fsmErr instanceof Error ? fsmErr.message : fsmErr
       );
+    }
+  }
+  if (scriptStateSnapshot?.currentStep) {
+    const guardedBranch = enforceOfferBranchPreconditions({
+      step: scriptStateSnapshot.currentStep,
+      history: conversationHistory,
+      selectedBranch: selectedCurrentJudgeBranch,
+      priorSelectedBranchLabels: readBranchHistoryEvents(
+        scriptStateSnapshot.capturedDataPoints
+      )
+        .filter(
+          (event) =>
+            event.stepNumber === scriptStateSnapshot?.currentStep?.stepNumber &&
+            (event.eventType === 'branch_selected' ||
+              event.eventType === 'smart_mode_response')
+        )
+        .map((event) => event.selectedBranchLabel)
+        .filter((label): label is string => !!label)
+    });
+    if (guardedBranch !== selectedCurrentJudgeBranch) {
+      console.warn(
+        `[ai-engine] offer-branch precondition changed ${JSON.stringify(selectedCurrentJudgeBranch?.branchLabel ?? null)} to ${JSON.stringify(guardedBranch?.branchLabel ?? null)} on step ${scriptStateSnapshot.currentStep.stepNumber}, conv ${activeConversationId}`
+      );
+      selectedCurrentJudgeBranch = guardedBranch
+        ? scriptStateSnapshot.currentStep.branches.find(
+            (branch) => branch.branchLabel === guardedBranch.branchLabel
+          )
+        : guardedBranch;
     }
   }
   if (scriptStateSnapshot) {

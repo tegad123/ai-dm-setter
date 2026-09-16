@@ -1692,6 +1692,7 @@ function escapeRegExpChars(input: string): string {
 // and forces the AI to deliver.
 
 const R37_ACCEPTANCE_PATTERNS: RegExp[] = [
+  /^ye+s+(?:\s*(?:sir+|bro|man))?$/i,
   // Bare yes/affirmation — anchored start of trimmed message OR
   // immediately preceding a comma/period/end-of-text.
   /^(yes|yea|yeah|yep|yup|y)\b/i,
