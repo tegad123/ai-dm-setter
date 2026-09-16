@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
 import prisma from '@/lib/prisma';
+import { classifyMetaDeliveryError } from '@/lib/meta-delivery-errors';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -210,6 +211,9 @@ export async function sendDM(
         `[instagram] Send DM attempt ${attempt}/${MAX_RETRIES} failed:`,
         err.message
       );
+      if (!classifyMetaDeliveryError(err).retryable) {
+        break;
+      }
       if (attempt < MAX_RETRIES) {
         // Exponential backoff: 1s, 2s, 4s
         await new Promise((r) =>

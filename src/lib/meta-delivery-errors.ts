@@ -14,6 +14,7 @@ export interface MetaDeliveryErrorInfo {
   rawMessage: string;
   httpStatus: number | null;
   metaCode: number | null;
+  metaSubcode: number | null;
   metaType: string | null;
   isTransientFlag: boolean | null;
   retryable: boolean;
@@ -45,6 +46,7 @@ export function classifyMetaDeliveryError(
   const httpStatus = extractHttpStatus(rawMessage);
   const parsed = extractMetaErrorPayload(rawMessage);
   const metaCode = parsed?.code ?? extractMetaCode(rawMessage);
+  const metaSubcode = parsed?.error_subcode ?? extractMetaSubcode(rawMessage);
   const metaType = parsed?.type ?? extractMetaType(rawMessage);
   const isTransientFlag =
     typeof parsed?.is_transient === 'boolean'
@@ -63,6 +65,7 @@ export function classifyMetaDeliveryError(
     rawMessage,
     httpStatus,
     metaCode,
+    metaSubcode,
     metaType,
     isTransientFlag,
     retryable,
@@ -70,6 +73,7 @@ export function classifyMetaDeliveryError(
     meaning: describeMetaDeliveryError({
       httpStatus,
       metaCode,
+      metaSubcode,
       metaType,
       isTransientFlag,
       permanent,
@@ -81,11 +85,15 @@ export function classifyMetaDeliveryError(
 function describeMetaDeliveryError(params: {
   httpStatus: number | null;
   metaCode: number | null;
+  metaSubcode: number | null;
   metaType: string | null;
   isTransientFlag: boolean | null;
   permanent: boolean;
   transient: boolean;
 }): string {
+  if (params.metaSubcode === 2534037) {
+    return 'Instagram thread ownership belongs to another app (usually ManyChat). Transfer thread control to Convlo before retrying.';
+  }
   if (params.metaCode === 190) {
     return 'Instagram token is invalid or expired. Reconnect Instagram before retrying.';
   }
@@ -124,6 +132,11 @@ function extractMetaCode(message: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function extractMetaSubcode(message: string): number | null {
+  const match = message.match(/["']?error_subcode["']?\s*[:=]\s*(\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
 function extractMetaType(message: string): string | null {
   const match = message.match(/["']?type["']?\s*[:=]\s*["']([^"']+)["']/i);
   return match?.[1] ?? null;
@@ -135,15 +148,23 @@ function extractTransientFlag(message: string): boolean | null {
   return match[1].toLowerCase() === 'true';
 }
 
-function extractMetaErrorPayload(
-  message: string
-): { code?: number; type?: string; is_transient?: boolean } | null {
+function extractMetaErrorPayload(message: string): {
+  code?: number;
+  error_subcode?: number;
+  type?: string;
+  is_transient?: boolean;
+} | null {
   const firstBrace = message.indexOf('{');
   if (firstBrace < 0) return null;
   const jsonText = message.slice(firstBrace);
   try {
     const parsed = JSON.parse(jsonText) as {
-      error?: { code?: number; type?: string; is_transient?: boolean };
+      error?: {
+        code?: number;
+        error_subcode?: number;
+        type?: string;
+        is_transient?: boolean;
+      };
     };
     return parsed.error ?? null;
   } catch {

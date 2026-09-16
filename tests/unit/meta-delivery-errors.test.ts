@@ -35,6 +35,19 @@ describe('classifyMetaDeliveryError', () => {
       assert.equal(info.permanent, true);
     }
   });
+
+  it('identifies Instagram thread ownership failures', () => {
+    const info = classifyMetaDeliveryError(
+      new Error(
+        'Instagram send DM failed: 400 {"error":{"message":"The app is not the thread owner","type":"OAuthException","code":100,"error_subcode":2534037,"is_transient":false}}'
+      )
+    );
+
+    assert.equal(info.metaCode, 100);
+    assert.equal(info.metaSubcode, 2534037);
+    assert.equal(info.retryable, false);
+    assert.match(info.meaning, /Transfer thread control to Convlo/);
+  });
 });
 
 describe('getScheduledReplyRetryDelayMs', () => {

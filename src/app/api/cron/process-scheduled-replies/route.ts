@@ -185,6 +185,7 @@ async function alertTerminalScheduledReplyFailure(params: {
   errorMessage: string;
   errorMeaning: string;
   metaCode: number | null;
+  metaSubcode: number | null;
   httpStatus: number | null;
   generatedResult: unknown;
 }): Promise<void> {
@@ -198,7 +199,7 @@ async function alertTerminalScheduledReplyFailure(params: {
   const replyText = generatedReplyText(params.generatedResult);
   const codeLabel =
     params.metaCode !== null
-      ? `Meta code ${params.metaCode}`
+      ? `Meta code ${params.metaCode}${params.metaSubcode !== null ? ` / subcode ${params.metaSubcode}` : ''}`
       : params.httpStatus !== null
         ? `HTTP ${params.httpStatus}`
         : 'unknown error code';
@@ -625,6 +626,7 @@ export async function GET(req: NextRequest) {
             errorMessage,
             errorMeaning: errorInfo.meaning,
             metaCode: errorInfo.metaCode,
+            metaSubcode: errorInfo.metaSubcode,
             httpStatus: errorInfo.httpStatus,
             generatedResult: storedGeneratedResult ?? reply.generatedResult
           });
