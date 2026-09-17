@@ -41,6 +41,15 @@ class InstagramCredentialLookupError extends Error {
   }
 }
 
+// All audit rows are persisted before any normal event handler runs. Retrying
+// after a failure here can only repeat deduplicated audit inserts.
+class InstagramOwnershipPersistenceError extends Error {
+  constructor(cause: unknown) {
+    super('Instagram ownership audit persistence failed', { cause });
+    this.name = 'InstagramOwnershipPersistenceError';
+  }
+}
+
 function afterCallbackErrorDetails(err: unknown) {
   if (err instanceof Error) {
     return {
@@ -186,14 +195,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Persist inbound events and enqueue durable reply work before acknowledging.
-  // A credential lookup failure occurs before any event is touched: return a
-  // failure so Meta may redeliver instead of permanently acknowledging a loss.
+  // Credential lookup and audit preflight failures precede normal processing:
+  // request redelivery rather than permanently acknowledging a lost event.
   try {
     await processInstagramEvents(payload);
     console.log('[instagram-webhook] Processing complete');
   } catch (err) {
     console.error('[instagram-webhook] Event processing error:', err);
-    if (err instanceof InstagramCredentialLookupError) {
+    if (
+      err instanceof InstagramCredentialLookupError ||
+      err instanceof InstagramOwnershipPersistenceError
+    ) {
       return NextResponse.json(
         { error: 'Webhook processing temporarily unavailable' },
         { status: 503 }
@@ -233,6 +245,52 @@ async function processInstagramEvents(payload: any): Promise<void> {
     `[instagram-webhook] credentials fetched: ${allCredentials.length}`
   );
 
+  const matchCredential = (entryId: string) =>
+    allCredentials.find((cred) => {
+      const meta = cred.metadata as any;
+      return (
+        meta?.pageId === entryId ||
+        meta?.igUserId === entryId ||
+        meta?.instagramAccountId === entryId ||
+        meta?.igBusinessAccountId === entryId ||
+        meta?.igProfessionalAccountId === entryId
+      );
+    });
+
+  // Preflight the entire delivery, including later entries, before any message,
+  // deletion, notification, or queue side effects. A failed audit write returns
+  // 503; createMany(skipDuplicates) makes already-saved audit rows replay-safe.
+  for (const entry of payload.entry ?? []) {
+    const ownershipEvents = extractInstagramOwnershipEvents(entry);
+    if (ownershipEvents.length === 0) continue;
+    const entryId: string = entry.id ?? '';
+    const matchedCred = matchCredential(entryId);
+    if (
+      !matchedCred ||
+      !allCredentials.some(
+        (cred) =>
+          cred.accountId === matchedCred.accountId &&
+          cred.provider === 'INSTAGRAM'
+      )
+    ) {
+      // Preserve the normal loop's account/connection rejection policy.
+      continue;
+    }
+    try {
+      const inserted = await recordInstagramOwnershipEvents({
+        accountId: matchedCred.accountId,
+        credentialId: matchedCred.id,
+        entryId,
+        events: ownershipEvents
+      });
+      console.log(
+        `[instagram-webhook] ownership events observed=${ownershipEvents.length} inserted=${inserted} entryId=${entryId}`
+      );
+    } catch (cause) {
+      throw new InstagramOwnershipPersistenceError(cause);
+    }
+  }
+
   for (const entry of payload.entry ?? []) {
     console.log(
       `[instagram-webhook] entry-loop: id=${entry.id} hasMessaging=${!!entry.messaging} ` +
@@ -250,16 +308,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
     //     igProfessionalAccountId (2026-09-06). The app-scoped igUserId that
     //     the OAuth response returns is NOT what arrives in entry.id, so an
     //     IG-Login connection with only igUserId stored never matched.
-    const matchedCred = allCredentials.find((cred) => {
-      const meta = cred.metadata as any;
-      return (
-        meta?.pageId === entryId ||
-        meta?.igUserId === entryId ||
-        meta?.instagramAccountId === entryId ||
-        meta?.igBusinessAccountId === entryId ||
-        meta?.igProfessionalAccountId === entryId
-      );
-    });
+    const matchedCred = matchCredential(entryId);
 
     console.log(
       `[instagram-webhook] entryId=${entryId}, matchedCred=${matchedCred?.id ?? 'NONE'}, ` +
@@ -335,30 +384,6 @@ async function processInstagramEvents(payload: any): Promise<void> {
       ].filter(Boolean)
     );
 
-    // Conversation Routing / handover notifications are audit-only here.
-    // In particular, standby messages mean another app owns the thread. Log
-    // them, but never pass them through processIncomingMessage, mutate the
-    // conversation cursor, or schedule a reply.
-    const ownershipEvents = extractInstagramOwnershipEvents(entry);
-    if (ownershipEvents.length > 0) {
-      try {
-        const inserted = await recordInstagramOwnershipEvents({
-          accountId,
-          credentialId: matchedCred?.id,
-          entryId,
-          events: ownershipEvents
-        });
-        console.log(
-          `[instagram-webhook] ownership events observed=${ownershipEvents.length} inserted=${inserted} entryId=${entryId}`
-        );
-      } catch (ownershipErr) {
-        console.error(
-          '[instagram-webhook] ownership event logging failed (message processing continues):',
-          ownershipErr
-        );
-      }
-    }
-
     // ── Handle top-level message_deletions array ───────────────────────
     // Newer Meta IG webhook deliveries include an explicit
     // `message_deletions` array on the entry when a user unsends a DM.
@@ -394,10 +419,8 @@ async function processInstagramEvents(payload: any): Promise<void> {
     }
 
     // ── Handle messaging events (new DM received) ──────────────────────
-    // IG parity day 3 (2026-09-11): Instagram handover-protocol / inbox
-    // events can arrive under `standby` instead of `messaging`, exactly as
-    // on Facebook. Treat both as first-class so native-app operator replies
-    // still hit the admin echo path (ported from facebook/route.ts).
+    // Standby events were persisted in the audit preflight. They must not
+    // reach inbound/admin processing or mutate conversation state.
     const igEvents = (entry.messaging ?? []) as any[];
     for (const event of igEvents) {
       // Some IG webhook variants nest the deletion inside the messaging

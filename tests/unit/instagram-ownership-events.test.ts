@@ -77,3 +77,16 @@ describe('Instagram ownership event extraction', () => {
     );
   });
 });
+
+for (const channel of ['messaging', 'standby', 'changes'] as const) {
+  it(`does not turn an ownership request into a new owner on ${channel}`, () => {
+    const request = { requested_owner_app_id: 'requester' };
+    const entry =
+      channel === 'changes'
+        ? { changes: [{ field: 'messaging_handover', value: request }] }
+        : { [channel]: [{ request_thread_control: request }] };
+    const [event] = extractInstagramOwnershipEvents(entry);
+    assert.equal(event.newOwnerAppId, null);
+    assert.ok(JSON.stringify(event.payload).includes('requester'));
+  });
+}

@@ -10,6 +10,7 @@ export interface InstagramOwnershipEvent {
   senderId: string | null;
   recipientId: string | null;
   previousOwnerAppId: string | null;
+  // A request is not a transfer; requested_owner_app_id stays in raw payload.
   newOwnerAppId: string | null;
   eventTimestamp: Date | null;
   payload: UnknownRecord;
@@ -76,10 +77,7 @@ function normalizeEvent(
     recipientId: id(recipient.id),
     previousOwnerAppId:
       id(value.previous_owner_app_id) ?? id(value.previousOwnerAppId),
-    newOwnerAppId:
-      id(value.new_owner_app_id) ??
-      id(value.requested_owner_app_id) ??
-      id(value.newOwnerAppId),
+    newOwnerAppId: id(value.new_owner_app_id) ?? id(value.newOwnerAppId),
     eventTimestamp: timestamp(event.timestamp),
     payload: event
   };
@@ -109,10 +107,7 @@ export function extractInstagramOwnershipEvents(
       recipientId: id(value.recipient_id) ?? id(record(value.recipient).id),
       previousOwnerAppId:
         id(value.previous_owner_app_id) ?? id(value.previousOwnerAppId),
-      newOwnerAppId:
-        id(value.new_owner_app_id) ??
-        id(value.requested_owner_app_id) ??
-        id(value.newOwnerAppId),
+      newOwnerAppId: id(value.new_owner_app_id) ?? id(value.newOwnerAppId),
       eventTimestamp: timestamp(value.timestamp) ?? timestamp(entry.time),
       payload: change
     });
