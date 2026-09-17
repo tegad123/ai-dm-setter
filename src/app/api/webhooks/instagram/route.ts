@@ -15,6 +15,10 @@ import {
   isQualityGateEscalationError
 } from '@/lib/quality-gate-escalation';
 import { SCHEDULED_REPLY_MAX_ATTEMPTS } from '@/lib/meta-delivery-errors';
+import {
+  extractInstagramOwnershipEvents,
+  recordInstagramOwnershipEvents
+} from '@/lib/instagram-ownership-events';
 import prisma from '@/lib/prisma';
 
 // Short delays bypass the per-minute cron queue and run inline via after().
@@ -27,6 +31,24 @@ import prisma from '@/lib/prisma';
 // AI Message (every daetradez reply since 2026-09-05 07:28 UTC). 45s leaves
 // ~75s for generation + send. Longer delays take the durable cron path.
 const INLINE_DELAY_THRESHOLD_SECONDS = 45;
+
+// Only failures before any event has been processed are safe to request as a
+// whole-batch retry here. Per-event handlers can already have committed writes.
+class InstagramCredentialLookupError extends Error {
+  constructor(cause: unknown) {
+    super('Instagram credential lookup failed', { cause });
+    this.name = 'InstagramCredentialLookupError';
+  }
+}
+
+// All audit rows are persisted before any normal event handler runs. Retrying
+// after a failure here can only repeat deduplicated audit inserts.
+class InstagramOwnershipPersistenceError extends Error {
+  constructor(cause: unknown) {
+    super('Instagram ownership audit persistence failed', { cause });
+    this.name = 'InstagramOwnershipPersistenceError';
+  }
+}
 
 function afterCallbackErrorDetails(err: unknown) {
   if (err instanceof Error) {
@@ -153,17 +175,42 @@ export async function POST(request: NextRequest) {
     console.warn('[instagram-webhook] Skipping signature check in dev mode');
   }
 
-  // Return 200 immediately — Meta requires a fast response.
-  const payload = JSON.parse(rawBody);
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  if (
+    !payload ||
+    Array.isArray(payload) ||
+    typeof payload !== 'object' ||
+    typeof payload.object !== 'string' ||
+    (payload.object === 'instagram' && !Array.isArray(payload.entry))
+  ) {
+    return NextResponse.json(
+      { error: 'Invalid webhook payload' },
+      { status: 400 }
+    );
+  }
 
-  // Process the events fully BEFORE returning 200.
-  // This ensures AI generation + Instagram send completes within the function lifecycle.
-  // Vercel keeps the function alive until we return the response.
+  // Persist inbound events and enqueue durable reply work before acknowledging.
+  // Credential lookup and audit preflight failures precede normal processing:
+  // request redelivery rather than permanently acknowledging a lost event.
   try {
     await processInstagramEvents(payload);
     console.log('[instagram-webhook] Processing complete');
   } catch (err) {
     console.error('[instagram-webhook] Event processing error:', err);
+    if (
+      err instanceof InstagramCredentialLookupError ||
+      err instanceof InstagramOwnershipPersistenceError
+    ) {
+      return NextResponse.json(
+        { error: 'Webhook processing temporarily unavailable' },
+        { status: 503 }
+      );
+    }
   }
 
   return NextResponse.json({ received: true }, { status: 200 });
@@ -187,12 +234,62 @@ async function processInstagramEvents(payload: any): Promise<void> {
 
   // Fetch all active META and INSTAGRAM integration credentials for account lookup
   console.log('[instagram-webhook] fetching credentials');
-  const allCredentials = await prisma.integrationCredential.findMany({
-    where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
-  });
+  const allCredentials = await prisma.integrationCredential
+    .findMany({
+      where: { provider: { in: ['META', 'INSTAGRAM'] }, isActive: true }
+    })
+    .catch((cause: unknown) => {
+      throw new InstagramCredentialLookupError(cause);
+    });
   console.log(
     `[instagram-webhook] credentials fetched: ${allCredentials.length}`
   );
+
+  const matchCredential = (entryId: string) =>
+    allCredentials.find((cred) => {
+      const meta = cred.metadata as any;
+      return (
+        meta?.pageId === entryId ||
+        meta?.igUserId === entryId ||
+        meta?.instagramAccountId === entryId ||
+        meta?.igBusinessAccountId === entryId ||
+        meta?.igProfessionalAccountId === entryId
+      );
+    });
+
+  // Preflight the entire delivery, including later entries, before any message,
+  // deletion, notification, or queue side effects. A failed audit write returns
+  // 503; createMany(skipDuplicates) makes already-saved audit rows replay-safe.
+  for (const entry of payload.entry ?? []) {
+    const ownershipEvents = extractInstagramOwnershipEvents(entry);
+    if (ownershipEvents.length === 0) continue;
+    const entryId: string = entry.id ?? '';
+    const matchedCred = matchCredential(entryId);
+    if (
+      !matchedCred ||
+      !allCredentials.some(
+        (cred) =>
+          cred.accountId === matchedCred.accountId &&
+          cred.provider === 'INSTAGRAM'
+      )
+    ) {
+      // Preserve the normal loop's account/connection rejection policy.
+      continue;
+    }
+    try {
+      const inserted = await recordInstagramOwnershipEvents({
+        accountId: matchedCred.accountId,
+        credentialId: matchedCred.id,
+        entryId,
+        events: ownershipEvents
+      });
+      console.log(
+        `[instagram-webhook] ownership events observed=${ownershipEvents.length} inserted=${inserted} entryId=${entryId}`
+      );
+    } catch (cause) {
+      throw new InstagramOwnershipPersistenceError(cause);
+    }
+  }
 
   for (const entry of payload.entry ?? []) {
     console.log(
@@ -211,16 +308,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
     //     igProfessionalAccountId (2026-09-06). The app-scoped igUserId that
     //     the OAuth response returns is NOT what arrives in entry.id, so an
     //     IG-Login connection with only igUserId stored never matched.
-    const matchedCred = allCredentials.find((cred) => {
-      const meta = cred.metadata as any;
-      return (
-        meta?.pageId === entryId ||
-        meta?.igUserId === entryId ||
-        meta?.instagramAccountId === entryId ||
-        meta?.igBusinessAccountId === entryId ||
-        meta?.igProfessionalAccountId === entryId
-      );
-    });
+    const matchedCred = matchCredential(entryId);
 
     console.log(
       `[instagram-webhook] entryId=${entryId}, matchedCred=${matchedCred?.id ?? 'NONE'}, ` +
@@ -331,14 +419,9 @@ async function processInstagramEvents(payload: any): Promise<void> {
     }
 
     // ── Handle messaging events (new DM received) ──────────────────────
-    // IG parity day 3 (2026-09-11): Instagram handover-protocol / inbox
-    // events can arrive under `standby` instead of `messaging`, exactly as
-    // on Facebook. Treat both as first-class so native-app operator replies
-    // still hit the admin echo path (ported from facebook/route.ts).
-    const igEvents = [
-      ...((entry.messaging ?? []) as any[]),
-      ...(((entry as any).standby ?? []) as any[])
-    ];
+    // Standby events were persisted in the audit preflight. They must not
+    // reach inbound/admin processing or mutate conversation state.
+    const igEvents = (entry.messaging ?? []) as any[];
     for (const event of igEvents) {
       // Some IG webhook variants nest the deletion inside the messaging
       // event itself with `message.is_deleted: true` rather than the

@@ -2203,6 +2203,30 @@ model EgressShadowLog {
   @@index([agreed, createdAt(sort: Desc)])
 }
 
+// Read-only audit ledger for Instagram Conversation Routing and legacy
+// handover notifications. These events must never mutate conversation state
+// or trigger an AI reply.
+model InstagramOwnershipEventLog {
+  id                 String   @id @default(cuid())
+  accountId          String
+  credentialId       String?
+  entryId            String
+  eventType          String
+  channel            String // messaging | standby | changes
+  senderId           String?
+  recipientId        String?
+  previousOwnerAppId String?
+  newOwnerAppId      String?
+  eventTimestamp     DateTime?
+  payloadHash        String   @unique
+  payload            Json
+  createdAt          DateTime @default(now())
+
+  @@index([accountId, createdAt(sort: Desc)])
+  @@index([recipientId, createdAt(sort: Desc)])
+  @@index([previousOwnerAppId, newOwnerAppId])
+}
+
 model VoiceQualityFailure {
   id          String   @id @default(cuid())
   accountId   String

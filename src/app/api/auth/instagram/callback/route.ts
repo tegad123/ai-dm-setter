@@ -198,7 +198,8 @@ export async function GET(req: NextRequest) {
         username,
         name,
         profilePicture,
-        followersCount: String(followersCount)
+        followersCount: String(followersCount),
+        connectedVia: 'INSTAGRAM_LOGIN'
       }
     );
 
@@ -247,6 +248,7 @@ export async function GET(req: NextRequest) {
         name,
         profilePicture,
         followersCount: String(followersCount),
+        connectedVia: 'INSTAGRAM_LOGIN',
         webhookSubscribed: igLoginSubscribed,
         webhookSubscribedAt: new Date().toISOString()
       }
