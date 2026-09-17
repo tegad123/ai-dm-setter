@@ -27,6 +27,7 @@ function harness(
     validSignature?: boolean;
   } = {}
 ) {
+  const ownershipRecords: unknown[] = [];
   const calls = {
     credentials: 0,
     incoming: 0,
@@ -103,7 +104,23 @@ function harness(
     '@/lib/webhook-processor': processor,
     '@/lib/platform-not-connected-alert': {},
     '@/lib/quality-gate-escalation': {},
-    '@/lib/meta-delivery-errors': {}
+    '@/lib/meta-delivery-errors': {},
+    '@/lib/instagram-ownership-events': {
+      extractInstagramOwnershipEvents(entry: any) {
+        const controls = (entry.messaging ?? []).filter(
+          (event: any) =>
+            event.pass_thread_control ||
+            event.take_thread_control ||
+            event.request_thread_control ||
+            event.messaging_handover
+        );
+        return [...controls, ...(entry.standby ?? [])];
+      },
+      async recordInstagramOwnershipEvents(params: unknown) {
+        ownershipRecords.push(params);
+        return 1;
+      }
+    }
   };
   const exports: Record<string, any> = {};
   runInNewContext(routeCode, {
@@ -120,6 +137,7 @@ function harness(
   });
   return {
     calls,
+    ownershipRecords,
     post: (body: unknown, raw = false) =>
       exports.POST({
         text: async () => (raw ? body : JSON.stringify(body)),
@@ -259,5 +277,58 @@ test('failure after event processing starts retains existing acknowledgement', a
   assert.equal((await h.post(inbound)).status, 200);
   assert.equal(h.calls.credentials, 1);
   assert.equal(h.calls.incoming, 1);
+  assert.equal(h.calls.scheduled, 0);
+});
+
+test('standby messages are logged without entering the reply pipeline', async () => {
+  const h = harness();
+  const payload = {
+    object: 'instagram',
+    entry: [
+      {
+        id: 'business',
+        standby: [
+          {
+            sender: { id: 'lead' },
+            recipient: { id: 'business' },
+            timestamp: 1789600000000,
+            message: { mid: 'standby-mid', text: 'hello secondary app' }
+          }
+        ]
+      }
+    ]
+  };
+  assert.equal((await h.post(payload)).status, 200);
+  assert.equal(h.ownershipRecords.length, 1);
+  assert.equal(h.calls.incoming, 0);
+  assert.equal(h.calls.admin, 0);
+  assert.equal(h.calls.scheduled, 0);
+});
+
+test('standalone control events are logged without changing conversation state', async () => {
+  const h = harness();
+  const payload = {
+    object: 'instagram',
+    entry: [
+      {
+        id: 'business',
+        messaging: [
+          {
+            sender: { id: 'lead' },
+            recipient: { id: 'business' },
+            timestamp: 1789600000000,
+            pass_thread_control: {
+              previous_owner_app_id: '532160876956612',
+              new_owner_app_id: '2027287141168190'
+            }
+          }
+        ]
+      }
+    ]
+  };
+  assert.equal((await h.post(payload)).status, 200);
+  assert.equal(h.ownershipRecords.length, 1);
+  assert.equal(h.calls.incoming, 0);
+  assert.equal(h.calls.conversation, 0);
   assert.equal(h.calls.scheduled, 0);
 });

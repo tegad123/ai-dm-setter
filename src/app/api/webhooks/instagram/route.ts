@@ -15,6 +15,10 @@ import {
   isQualityGateEscalationError
 } from '@/lib/quality-gate-escalation';
 import { SCHEDULED_REPLY_MAX_ATTEMPTS } from '@/lib/meta-delivery-errors';
+import {
+  extractInstagramOwnershipEvents,
+  recordInstagramOwnershipEvents
+} from '@/lib/instagram-ownership-events';
 import prisma from '@/lib/prisma';
 
 // Short delays bypass the per-minute cron queue and run inline via after().
@@ -331,6 +335,30 @@ async function processInstagramEvents(payload: any): Promise<void> {
       ].filter(Boolean)
     );
 
+    // Conversation Routing / handover notifications are audit-only here.
+    // In particular, standby messages mean another app owns the thread. Log
+    // them, but never pass them through processIncomingMessage, mutate the
+    // conversation cursor, or schedule a reply.
+    const ownershipEvents = extractInstagramOwnershipEvents(entry);
+    if (ownershipEvents.length > 0) {
+      try {
+        const inserted = await recordInstagramOwnershipEvents({
+          accountId,
+          credentialId: matchedCred?.id,
+          entryId,
+          events: ownershipEvents
+        });
+        console.log(
+          `[instagram-webhook] ownership events observed=${ownershipEvents.length} inserted=${inserted} entryId=${entryId}`
+        );
+      } catch (ownershipErr) {
+        console.error(
+          '[instagram-webhook] ownership event logging failed (message processing continues):',
+          ownershipErr
+        );
+      }
+    }
+
     // ── Handle top-level message_deletions array ───────────────────────
     // Newer Meta IG webhook deliveries include an explicit
     // `message_deletions` array on the entry when a user unsends a DM.
@@ -370,10 +398,7 @@ async function processInstagramEvents(payload: any): Promise<void> {
     // events can arrive under `standby` instead of `messaging`, exactly as
     // on Facebook. Treat both as first-class so native-app operator replies
     // still hit the admin echo path (ported from facebook/route.ts).
-    const igEvents = [
-      ...((entry.messaging ?? []) as any[]),
-      ...(((entry as any).standby ?? []) as any[])
-    ];
+    const igEvents = (entry.messaging ?? []) as any[];
     for (const event of igEvents) {
       // Some IG webhook variants nest the deletion inside the messaging
       // event itself with `message.is_deleted: true` rather than the

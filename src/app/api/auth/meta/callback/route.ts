@@ -1,5 +1,7 @@
 import { saveCredentials } from '@/lib/credential-store';
+import { shouldPreserveDirectInstagramCredential } from '@/lib/meta-instagram-credential-policy';
 import { verifyState } from '@/lib/oauth-state';
+import prisma from '@/lib/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 30;
@@ -11,6 +13,47 @@ export const maxDuration = 30;
 // ---------------------------------------------------------------------------
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0';
+
+async function savePageLinkedInstagramCredential(params: {
+  accountId: string;
+  accessToken: string;
+  igAccountId: string;
+  igUsername: string | null;
+}): Promise<boolean> {
+  const existing = await prisma.integrationCredential.findUnique({
+    where: {
+      accountId_provider: {
+        accountId: params.accountId,
+        provider: 'INSTAGRAM'
+      }
+    },
+    select: { metadata: true }
+  });
+  const existingMetadata = existing?.metadata as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  if (shouldPreserveDirectInstagramCredential(existingMetadata)) {
+    console.warn(
+      `[meta-oauth] Preserving direct Instagram-login credential for account ${params.accountId}; Facebook reconnect will update META only.`
+    );
+    return false;
+  }
+
+  await saveCredentials(
+    params.accountId,
+    'INSTAGRAM',
+    { accessToken: params.accessToken },
+    {
+      igUserId: params.igAccountId,
+      username: params.igUsername || '',
+      name: params.igUsername || '',
+      instagramAccountId: params.igAccountId,
+      connectedVia: 'META_OAUTH'
+    }
+  );
+  return true;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -362,18 +405,12 @@ export async function GET(req: NextRequest) {
 
         // If we resolved an IG link, also write the INSTAGRAM credential row
         if (resolvedIgId) {
-          await saveCredentials(
-            state.accountId,
-            'INSTAGRAM',
-            { accessToken: finalAccessToken },
-            {
-              igUserId: resolvedIgId,
-              username: resolvedIgUsername || '',
-              name: resolvedIgUsername || '',
-              instagramAccountId: resolvedIgId,
-              connectedVia: 'META_OAUTH'
-            }
-          );
+          await savePageLinkedInstagramCredential({
+            accountId: state.accountId,
+            accessToken: finalAccessToken,
+            igAccountId: resolvedIgId,
+            igUsername: resolvedIgUsername
+          });
         }
 
         // Subscribe the page to webhooks. Prefer the resolved page token
@@ -481,18 +518,12 @@ export async function GET(req: NextRequest) {
     // Step 4c: Also save INSTAGRAM credential if IG account is linked
     // This ensures the integrations page shows Instagram as "Connected" too
     if (igAccountId) {
-      await saveCredentials(
-        state.accountId,
-        'INSTAGRAM',
-        { accessToken: pageAccessToken },
-        {
-          igUserId: igAccountId,
-          username: igUsername || '',
-          name: igUsername || '',
-          instagramAccountId: igAccountId,
-          connectedVia: 'META_OAUTH'
-        }
-      );
+      await savePageLinkedInstagramCredential({
+        accountId: state.accountId,
+        accessToken: pageAccessToken,
+        igAccountId,
+        igUsername
+      });
       console.log(
         `[meta-oauth] Also saved INSTAGRAM credential for @${igUsername} (${igAccountId})`
       );
