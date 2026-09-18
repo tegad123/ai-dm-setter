@@ -1286,6 +1286,21 @@ traffic, but does not prove its exact scope or duration. It also means the Step
 Facebook reconciliation corrections have not yet received fresh live production
 proof.
 
+Platform-specific checks agree with the quiet database window:
+
+- Meta returned the 100 most recent Facebook Page conversations and none had an
+  update after the functional commit. The newest Page thread update was
+  2026-09-18 10:07:52 UTC.
+- Setter app `1441437191008347` remains subscribed to Facebook `messages`,
+  `message_echoes`, `messaging_postbacks`, `messaging_optins`,
+  `message_deliveries`, and `message_reads`. The quiet window is therefore not
+  evidence that the Facebook webhook subscription disconnected.
+- Convlo currently renders `@squirrel.8425393` with zero messages, zero lead
+  messages, and zero AI messages. It remains failed ManyChat opener evidence.
+- The latest unproven ManyChat-planned row was `@nivekiser` at
+  2026-09-18 18:24:11.378 UTC. It has no provider ID, Meta ID, lead reply,
+  receipt, or reply job.
+
 The closest pre-deploy controls separate three failure locations:
 
 - `@a_m_hussein_` reached Convlo with a native Meta ID at
