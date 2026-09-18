@@ -14,10 +14,12 @@ during the audit.
 
 ## Current production baseline
 
-- Production contains application release
-  `c80fb8c195056d0a359e7548f9bab616f9f74359`. GitHub marked the Vercel
-  deployment successful and `/api/version` reported that exact commit on
-  2026-09-18.
+- Production currently reports release
+  `16f97ee9d9d32c0d871516074d171993f63d8483`. This release adds the incident
+  audit only; the latest functional application correction remains
+  `c80fb8c195056d0a359e7548f9bab616f9f74359` for reciprocal location answers.
+  GitHub marked both Vercel deployments successful and `/api/version` reported
+  `16f97ee` on 2026-09-18.
 - Production code baseline for the ManyChat delivery-truth release:
   `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
@@ -89,8 +91,24 @@ There is no single cause for all unanswered messages. The confirmed classes are:
     risks. These are documented separately below. They are not all proven causes
     of a current silent conversation and must not be represented as production
     incidents without the listed controlled proof.
+19. Some script branches use `runtime_judgment` to mean "write a response," but
+    a shared guard interprets every runtime-only branch as "send nothing." This
+    suppressed valid replies for `danny.6rown`, `syed_10129`, and
+    `richest_puppi` before Meta was called.
+20. Step 8 uses `runtime_judgment + wait_for_response` to ask the urgency
+    question. Recovery does not recognize that untyped ask as a completion
+    signal, so `lifeofjacklin` and `aloysx7` remained on Step 8 and regenerated
+    the question they had already answered.
+21. The duplicate-send guard correctly stopped those repeated questions, but it
+    returned no structured outcome. The cron then mislabeled intentional
+    suppression as a delivery failure and set `attempts=5` even though Meta was
+    never called.
+22. A ManyChat trigger is not opener-delivery proof. Squirrel's automation
+    triggered, but ManyChat showed no outbound bubble, Instagram showed no
+    opener, no matching Meta/standby echo existed, and Convlo received no durable
+    receipt. The missing opener is upstream of Convlo's first-reply worker.
 
-## Immediate incident ledger at 2026-09-18 19:18 UTC
+## Immediate incident ledger at 2026-09-18 19:54 UTC
 
 This is the current operational state. It distinguishes what is live, what is
 only prepared in code, and what still lacks production proof.
@@ -173,6 +191,15 @@ only prepared in code, and what still lacks production proof.
 - Distress, human-review, AI-off, and terminal quality cases will remain silent
   until an operator explicitly resolves or closes them. They are not general
   webhook failures.
+- The Step 7/12 runtime-action suppression, Step 8 cursor recovery, and truthful
+  suppression-outcome corrections are under local review. They are not
+  committed or deployed and must not be counted as production fixes yet.
+- The Facebook native-message reconciliation and stricter ManyChat first-reply
+  evidence corrections are also under local review. They are not deployed.
+- A production read-only recheck at 19:44 UTC still found zero
+  `ManyChatHandoffReceipt` rows and no new reply jobs in the preceding two
+  hours. The recent Daniel Instagram inputs in that interval belonged to an
+  AI-off account and correctly created no work.
 
 ## Current status at a glance
 
@@ -191,6 +218,9 @@ only prepared in code, and what still lacks production proof.
 | Script suppression               | Guard deployed                                    | Rob's historical turn remains unrecovered                                                 |
 | Safety and review holds          | Working as designed                               | Monitored operator queue and explicit respond, resume, or close action                    |
 | Historical failures              | Preserved, not replayed                           | Dry-run eligibility list and separate approval before any replay                          |
+| Runtime-only response branches   | Confirmed pre-send suppression defect             | Review, test, deploy, and prove Step 7 and Step 12 responses                              |
+| Step 8 recovery                  | Confirmed action-model defect                     | Recognize the semantic ask, advance after an answer, and prove no repeated question       |
+| Suppression status               | Duplicate guard works; cron status is misleading  | Persist a structured non-delivery outcome without a false provider/delivery alert         |
 | Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment          | A fresh authorized test is still required                                                 |
 
 ## Read-only 24-hour production audit at 2026-09-18 19:30 UTC
@@ -252,6 +282,14 @@ This table is an investigation and recovery ledger. It is not authorization to
 clear holds or replay any message. Each candidate needs messaging-window,
 ownership, duplicate, later-outbound, scheduled-work, and safety checks before a
 separately approved recovery.
+
+At 2026-09-18 19:40:50 and 19:40:54 UTC, an operator manually answered
+`richest_puppi` with two HUMAN messages carrying Meta message IDs. That
+conversation is no longer currently unanswered. Its original job remains in
+the table because the job itself failed before egress and is evidence for the
+runtime-action suppression defect. The other four generic no-delivery jobs in
+this audit remained unanswered after their triggering inbound at the 19:54 UTC
+recheck.
 
 ### ManyChat delivery evidence
 
@@ -320,6 +358,24 @@ Convlo showed the opener as sent. The real Instagram thread was empty on both
 sides. ManyChat showed the new-follower automation trigger but no opener message
 record, and the contact was inactive.
 
+The later direct ManyChat UI inspection made this more specific:
+
+- the contact page showed subscriber `2078481927` and recorded that
+  `Say hi to new followers` triggered at 12:08 local time;
+- the conversation contained no outbound opener bubble;
+- the contact had no `Convlo - Awaiting first reply` tag;
+- ManyChat displayed `User hasn’t responded to your Private Reply Automation
+yet, so you can’t message them in Inbox`;
+- the Squirrel Instagram inbox still contained no opener;
+- production still contained no receipt, reply job, generation trace, egress
+  event, or matching native Meta echo for this contact.
+
+An Instagram standby event near the same minute was inspected and rejected as
+evidence because its payload belonged to a different `Copy Trade 101 Tracker`
+template. App-scoped Instagram identifiers also cannot be equated between
+ManyChat and Setter without a verified mapping. No standby event in the scanned
+window contained Squirrel's `Thanks for following` opener text.
+
 The same comparison on `@xo8nx` showed an empty Instagram thread while Convlo
 displayed an outbound ManyChat opener.
 
@@ -375,6 +431,11 @@ The Actions node reported 67 unique contacts. The reused Send Message node showe
 large aggregate historical metrics and 100% delivery, but the UI did not provide
 a per-contact Meta message ID tying Squirrel to a delivery. Those aggregate
 metrics therefore do not override the empty authoritative Instagram thread.
+
+The same live flow later showed `Sends 71 times` and `Unique Contacts 0` for the
+selected send node. These are aggregate or internally inconsistent flow-builder
+metrics, not per-contact evidence. They cannot prove that Squirrel received the
+message.
 
 For this flow, the safe behavior is to keep the pre-send callback as metadata
 only. If Meta later sends a native echo, Convlo can show a confirmed opener. If
@@ -1043,6 +1104,128 @@ continuation. Separate fixture tests should cover postback, delivery, read,
 same-name users, repeated text with different MIDs, and a crash immediately
 after Meta accepts a send.
 
+## Issue 20: script action types suppress or repeat valid responses
+
+**Status:** Confirmed production code defects. Corrections are under local
+review and are not committed or deployed.
+
+Five recent jobs generated drafts but stopped before egress. Every trigger had
+a native Meta message ID. Account settings permitted sending. Every job had a
+`GenerationTurnTrace` and `AISuggestion`, but none had an AI `Message`,
+`MessageGroup`, or `EgressShadowLog`. Meta was never called.
+
+| Handle          | Script branch                  | Generated behavior                                    | Actual pre-send stop                                                 |
+| --------------- | ------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `danny.6rown`   | Step 7, vague obstacle default | Acknowledgement plus a probe                          | N1c cleared all bubbles because the only action was runtime judgment |
+| `syed_10129`    | Step 7, vague obstacle default | Acknowledgement plus a probe                          | Same runtime-only suppression                                        |
+| `richest_puppi` | Step 12, qualified             | Price acknowledgement and advance toward product link | Same runtime-only suppression; manually answered later               |
+| `lifeofjacklin` | Step 8, alternative            | Repeated the already delivered urgency question       | Duplicate guard stopped it before egress                             |
+| `aloysx7`       | Step 8, default                | Repeated the already delivered urgency question       | Duplicate guard stopped it before egress                             |
+
+The shared defect is that `runtime_judgment` describes several different
+behaviors in the script:
+
+- Step 7 uses it to mean react to the lead and ask a specific follow-up;
+- Step 8 uses it with `wait_for_response` to mean ask the urgency question;
+- Step 12 uses it to mean acknowledge and immediately advance to the product
+  link;
+- true solicitation or terminal branches use it to mean stay silent.
+
+The engine infers behavior from the action shape instead of an explicit branch
+disposition. N1c treats every runtime-only branch as silent and clears a valid
+model response. Step recovery also treats `runtime_judgment + wait` as having no
+question completion signal, even when the instruction explicitly tells the AI
+to ask a question. That leaves the cursor on Step 8 and causes a repeat after the
+lead has answered.
+
+Detailed examples:
+
+- `danny.6rown` sent `so where do we go from here`. The model produced
+  `yo bro, we can keep it simple from here` and
+  `what's been the main thing holding you back so far?`; both bubbles passed
+  quality and were then cleared.
+- `syed_10129` sent `and to see family`. The model produced an acknowledgement
+  and `what's been holding you back the most so far?`; all bubbles were then
+  cleared.
+- `lifeofjacklin` corrected the AI's gendered language. Recovery stayed on Step
+  8 and regenerated the same gendered urgency question already delivered.
+- `aloysx7` answered why now mattered. Recovery stayed on Step 8 and regenerated
+  the urgency question with 0.9444 similarity to the earlier delivered message.
+- `richest_puppi` asked what the $200 purchase included before paying. The
+  deterministic router selected `Qualified` even though the lead had not
+  confirmed affordability. The branch output was then cleared. This exposes a
+  second script-model gap: Step 12 has no branch for a product-details objection
+  before payment.
+
+Required correction and proof:
+
+1. Stop using action type alone as silence semantics. Only an explicitly silent
+   branch may clear generated bubbles.
+2. Preserve lead-facing output for instructions that require an acknowledgement,
+   reaction, probe, question, reply, or advance-and-send action.
+3. Treat Step 8's semantic ask as a completion signal, or compile it as an
+   explicit `ask_question + wait_for_response` sequence.
+4. Keep solicitation and explicit `send nothing` branches silent.
+5. Add a Step 12 representation for a lead asking for product details before
+   confirming payment ability.
+6. Prove Step 7, Step 8, Step 12, and the solicitation control in focused tests
+   and in fresh production conversations before closing the issue.
+
+## Issue 21: intentional suppression is recorded as a delivery failure
+
+**Status:** Confirmed observability and job-state defect. A structured outcome
+correction is under local review and is not deployed.
+
+`sendAIReply()` can intentionally return before delivery for an empty response,
+a repeated question, intentional silence, human takeover, or a safety/review
+condition. Its caller receives no typed result. The cron therefore checks only
+whether a new AI message exists. When none exists, it throws the generic reason
+`ScheduledReply completed without delivering an AI Message`.
+
+This creates several false signals:
+
+- a correct duplicate suppression looks like a Meta/provider delivery failure;
+- `attempts=5` can mean one permanent first-attempt decision because the cron
+  stamps the maximum to make the generic error terminal;
+- the failure notification can quote an unrelated older suggestion because the
+  fallback query can select stale draft content;
+- `AI produced empty response` says AI is paused even though these conversations
+  remain `aiActive=true`;
+- operators cannot tell `suppressed_duplicate`, `intentional_silence`,
+  `blocked_empty`, `held_for_review`, and a real send failure apart.
+
+Required correction:
+
+1. Return and persist a structured processing outcome such as `delivered`,
+   `suggestion`, `suppressed_duplicate`, `intentional_silence`, `blocked_empty`,
+   `held_for_review`, or `skipped_human_takeover`.
+2. Mark an intentional duplicate suppression as a truthful non-delivery outcome,
+   not a provider failure, and do not send a false delivery alert.
+3. Keep the current attempt count truthful and store the current suggestion ID
+   and suppression reason on the job.
+4. Never use an unrelated historical suggestion as the terminal notification
+   body.
+5. Preserve safety and human-review behavior; better status reporting must not
+   resume or send a held conversation.
+
+## Pending local corrections not yet in production
+
+The working tree currently contains two additional reviewed directions:
+
+1. **Authoritative ManyChat first-reply evidence.** Planned opener text alone
+   will no longer make a direct inbound look like a ManyChat first reply. The
+   turn must be linked to the exact durable receipt or to an exact opener row
+   with provider-reported or Meta-confirmed delivery evidence.
+2. **Facebook callback/native reconciliation parity.** A native Facebook first
+   reply will reconcile with the same platform-specific receipt path used by
+   Instagram, preventing a queued callback and native webhook from creating two
+   lead rows or two reply jobs.
+
+These local changes passed their focused unit and integration checks in the
+isolated development environment. They remain uncommitted and undeployed until
+the combined diff, migration state, full build, and interaction with Issues 20
+and 21 are reviewed together.
+
 ## Working production controls
 
 ### Penguin
@@ -1086,29 +1269,36 @@ flow in which ManyChat actually sends the opener.
 
 ## Remaining work in order
 
-1. Run the controlled Instagram proof from a fresh follower. Confirm the opener
+1. Finish and review the runtime-action and structured-suppression corrections.
+   Deploy only after focused regressions, TypeScript, Prisma validation, and the
+   production build pass. Then prove Step 7, Step 8, and Step 12 on fresh turns.
+2. Run the controlled Instagram proof from a fresh follower. Confirm the opener
    in both Instagram inboxes, add `Convlo - Awaiting first reply` only to that
    authorized test contact, then send the first reply.
-2. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+3. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
    ManyChat send node exposes a next action, place `/manychat-message` after the
    send and supply a stable provider operation ID.
-3. Complete the fresh Instagram first-reply production proof from opener through
+4. Complete the fresh Instagram first-reply production proof from opener through
    one normal continuation, including Meta message IDs and duplicate checks.
-4. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
+5. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
    Meta-confirmed echo.
-5. Prove the deployed delayed ManyChat first-reply routing correction on a real
+6. Deploy and prove the stricter causal ManyChat first-reply evidence check so
+   planned context cannot route a turn without a receipt or delivered opener.
+7. Deploy and prove Facebook callback/native receipt reconciliation with one
+   lead row and one active job under the callback/native race.
+8. Prove the deployed delayed ManyChat first-reply routing correction on a real
    delayed first reply.
-6. Run the deployed Facebook durable `queued_first_reply` path with a real
+9. Run the deployed Facebook durable `queued_first_reply` path with a real
    authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
    and normal continuation.
-7. Prove the deployed Facebook terminal-quality reconciliation on a real
-   conversation.
-8. Complete the separate Facebook callback/completion production proof.
-9. Add an operator recovery flow for safety/review holds and separately approved
-   historical failures.
-10. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+10. Prove the deployed Facebook terminal-quality reconciliation on a real
+    conversation.
+11. Complete the separate Facebook callback/completion production proof.
+12. Add an operator recovery flow for safety/review holds and separately approved
+    historical failures.
+13. Produce a dry-run eligibility list for the 59 stranded ownership failures and
     other historical no-delivery turns. Review before any replay.
-11. Prove the deployed location-answer correction with a fresh reciprocal
+14. Prove the deployed location-answer correction with a fresh reciprocal
     answer. Review Hussein separately before clearing its human-review hold or
     replaying its failed turn.
 
@@ -1139,6 +1329,19 @@ flow in which ManyChat actually sends the opener.
   contact until the proof passes.
 - **Queued intake evidence:** production contains zero handoff receipts. The
   first-reply worker is deployed but has not completed a live production intake.
+- **Runtime-only branch suppression:** three current jobs prove that valid
+  Step 7/12 replies can be cleared before egress. The correction is local only.
+- **Step 8 repeat:** two current jobs prove that the semantic ask can leave the
+  cursor behind and regenerate an answered question. The correction is local
+  only.
+- **Suppression truth:** duplicate suppression works, but the cron records a
+  false generic delivery failure. The structured-outcome correction is local
+  only.
+- **Squirrel:** ManyChat proves only that the automation triggered. There is no
+  opener bubble, Instagram message, receipt, matching echo, or job. It remains
+  a failed production proof and must not be counted as a delivered opener.
+- **Manual recovery:** `richest_puppi` received two later Meta-confirmed HUMAN
+  messages. Its original automated failure remains evidence and was not replayed.
 - **General rollout:** queued first-reply mode remains restricted to the
   controlled path until both production proofs pass.
 - **Historical recovery:** 59 ownership failures, Rob's suppressed turn, Rade's
