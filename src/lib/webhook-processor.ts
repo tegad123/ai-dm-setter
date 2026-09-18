@@ -1567,25 +1567,51 @@ export async function processIncomingMessage(
   });
   let message;
   try {
-    message = await prisma.message.create({
-      data: {
+    const messageData = {
+      conversationId,
+      sender: 'LEAD' as const,
+      content: messageText,
+      imageUrl: persistedImageUrl,
+      hasImage: Boolean(persistedImageUrl),
+      mediaType: inboundMediaType,
+      mediaUrl: shouldProcessInboundMedia ? null : persistedImageUrl,
+      // Voice note (FAILURE B 2026-05-02): persist the Meta CDN URL
+      // so a future transcription job can read it. isVoiceNote
+      // drives the dashboard 🎙️ indicator + the ai-prompt
+      // voice_note_received directive.
+      isVoiceNote: Boolean(inboundAudioUrl),
+      voiceNoteUrl: inboundAudioUrl,
+      timestamp: now,
+      platformMessageId: params.platformMessageId || null
+    };
+    if (
+      platform === 'INSTAGRAM' &&
+      lead.conversation!.source === 'MANYCHAT' &&
+      !inboundMediaType
+    ) {
+      const { persistManyChatNativeInbound } = await import(
+        '@/lib/manychat-inbound-reconciliation'
+      );
+      const persisted = await persistManyChatNativeInbound(
+        accountId,
         conversationId,
-        sender: 'LEAD',
-        content: messageText,
-        imageUrl: persistedImageUrl,
-        hasImage: Boolean(persistedImageUrl),
-        mediaType: inboundMediaType,
-        mediaUrl: shouldProcessInboundMedia ? null : persistedImageUrl,
-        // Voice note (FAILURE B 2026-05-02): persist the Meta CDN URL
-        // so a future transcription job can read it. isVoiceNote
-        // drives the dashboard 🎙️ indicator + the ai-prompt
-        // voice_note_received directive.
-        isVoiceNote: Boolean(inboundAudioUrl),
-        voiceNoteUrl: inboundAudioUrl,
-        timestamp: now,
-        platformMessageId: params.platformMessageId || null
+        messageData
+      );
+      message = persisted.message;
+      if (persisted.skipReply) {
+        // The receipt worker already persisted this first input and owns its
+        // durable scheduling, or the native copy is ambiguous and held for review.
+        return {
+          leadId: lead.id,
+          conversationId,
+          messageId: message.id,
+          isNewLead: false,
+          skipReply: true
+        };
       }
-    });
+    } else {
+      message = await prisma.message.create({ data: messageData });
+    }
   } catch (err: any) {
     // DB-level unique constraint catch (race condition safety net)
     if (err?.code === 'P2002' && params.platformMessageId) {
@@ -2598,8 +2624,32 @@ export async function processIncomingMessage(
 export async function scheduleAIReply(
   conversationId: string,
   accountId: string,
-  options?: { skipDelayQueue?: boolean }
+  options?: {
+    skipDelayQueue?: boolean;
+    queueOnly?: boolean;
+    handoffReceiptId?: string;
+    handoffLeaseToken?: string;
+  }
 ): Promise<void> {
+  if (options?.queueOnly) {
+    if (
+      !options.handoffReceiptId ||
+      !options.handoffLeaseToken ||
+      options.skipDelayQueue
+    ) {
+      throw new Error('HANDOFF_REVIEW: invalid queue-only request');
+    }
+    const { queueManyChatFirstReply } = await import(
+      '@/lib/manychat-handoff-queue'
+    );
+    await queueManyChatFirstReply(
+      conversationId,
+      accountId,
+      options.handoffReceiptId,
+      options.handoffLeaseToken
+    );
+    return;
+  }
   const _pipelineStart = Date.now();
   // Diagnostic checkpoint logging — every step prints a tag with the convo id
   // so we can see exactly where the function silently exits in production logs.

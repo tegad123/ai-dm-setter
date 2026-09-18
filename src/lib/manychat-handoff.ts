@@ -95,7 +95,11 @@ const manyChatHandoffFields = z.object({
   // only a context sync and Convlo should wait for the next real
   // lead DM before AI takes over. Set scheduleAi=true only for flows
   // where this request is the final handoff point.
-  scheduleAi: manyChatBoolean.optional().default(false)
+  scheduleAi: manyChatBoolean.optional().default(false),
+  processingMode: z
+    .enum(['legacy', 'queued_first_reply'])
+    .optional()
+    .default('legacy')
 });
 
 // Platform inference (2026-08-04): when the External Request body doesn't set

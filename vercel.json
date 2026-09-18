@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/process-manychat-handoffs",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/process-scheduled-replies",
       "schedule": "* * * * *"
     },

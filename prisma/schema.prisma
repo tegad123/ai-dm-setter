@@ -1624,6 +1624,35 @@ enum ScheduledReplyStatus {
   FAILED_QUALITY_GATE
 }
 
+// Durable intake for opt-in ManyChat first replies. IDs link audit records without
+// cascading message deletion into the receipt. No webhook key is stored here.
+model ManyChatHandoffReceipt {
+  id                  String   @id @default(cuid())
+  accountId           String
+  platform            Platform
+  subscriberId        String
+  payload             Json
+  payloadHash         String
+  status              String   @default("PENDING")
+  attempts            Int      @default(0)
+  nextAttemptAt       DateTime @default(now())
+  leaseToken          String?
+  leaseUntil          DateTime?
+  conversationId      String?
+  openerMessageId     String?
+  leadMessageId       String?
+  scheduledReplyId    String?
+  schedulingStartedAt DateTime?
+  nativeInboundOwned  Boolean  @default(false)
+  lastError           String?
+  receivedAt          DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([accountId, platform, subscriberId])
+  @@index([status, nextAttemptAt])
+  @@index([conversationId])
+}
+
 model ScheduledReply {
   id              String               @id @default(cuid())
   conversationId  String
