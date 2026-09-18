@@ -115,6 +115,12 @@ There is no single cause for all unanswered messages. The confirmed classes are:
     separately observed Meta action-block class. The exact restriction scope and
     start/end times have not yet been read back from Meta, so it is a reported
     external incident rather than a fully verified root cause.
+24. Instagram Meta-history backfill could label a real ManyChat opener as `AI`
+    because it used the Facebook Page ID to infer direction. That false earlier
+    setter message made the queued first-reply router reject the ManyChat Step 1
+    path. The prepared integration correction identifies the lead by its known
+    Instagram platform ID and records an exact, time-correlated opener with a
+    native Meta message ID as `MANYCHAT / MANYCHAT_FLOW / META_CONFIRMED`.
 
 ## Immediate incident ledger at 2026-09-18 19:54 UTC
 

@@ -96,6 +96,7 @@ import {
 import { randomUUID } from 'crypto';
 import { persistMetaEchoWithManyChatReconciliation } from '@/lib/manychat-delivery-evidence';
 import {
+  classifyInstagramMetaHistoryMessage,
   isWithinManyChatEchoCorrelationWindow,
   looksLikeManyChatAutomationEcho
 } from '@/lib/manychat-echo-classifier';
@@ -7218,6 +7219,119 @@ function isMetaContextLine(text: string): boolean {
   );
 }
 
+export interface MetaHistoryBackfillMessage {
+  id: string;
+  message: string;
+  from: { id?: string; name?: string };
+  createdTime: string;
+}
+
+export interface MetaHistoryBackfillDependencies {
+  findExistingMessages: (conversationId: string) => Promise<
+    Array<{
+      content: string;
+      timestamp: Date;
+      platformMessageId: string | null;
+    }>
+  >;
+  createMessage: (data: Prisma.MessageUncheckedCreateInput) => Promise<unknown>;
+  persistManyChatEcho: typeof persistMetaEchoWithManyChatReconciliation;
+}
+
+const metaHistoryBackfillDependencies: MetaHistoryBackfillDependencies = {
+  findExistingMessages: (conversationId) =>
+    prisma.message.findMany({
+      where: { conversationId },
+      select: { content: true, timestamp: true, platformMessageId: true }
+    }),
+  createMessage: (data) => prisma.message.create({ data }),
+  persistManyChatEcho: persistMetaEchoWithManyChatReconciliation
+};
+
+/**
+ * Merge already-fetched Meta history into local durable history. Kept separate
+ * from the network lookup so first-reply attribution and persistence can be
+ * regression-tested without contacting Meta.
+ */
+export async function mergeMetaHistoryBackfill(
+  params: {
+    conversationId: string;
+    platform: string;
+    platformUserId: string;
+    pageId: string | null;
+    conversation: {
+      source?: string | null;
+      manyChatOpenerMessage?: string | null;
+      manyChatFiredAt?: Date | null;
+    };
+    resetAtMs: number;
+    apiMessages: MetaHistoryBackfillMessage[];
+  },
+  dependencies: MetaHistoryBackfillDependencies = metaHistoryBackfillDependencies
+): Promise<void> {
+  const existingMessages = await dependencies.findExistingMessages(
+    params.conversationId
+  );
+  const existingSet = new Set(
+    existingMessages.map(
+      (message) => `${message.content}|${message.timestamp.getTime()}`
+    )
+  );
+  const existingPlatformIds = new Set(
+    existingMessages.flatMap((message) =>
+      message.platformMessageId ? [message.platformMessageId] : []
+    )
+  );
+
+  for (const apiMsg of [...params.apiMessages].reverse()) {
+    const timestamp = new Date(apiMsg.createdTime);
+    const key = `${apiMsg.message}|${timestamp.getTime()}`;
+
+    if (!apiMsg.message) continue;
+    if (params.resetAtMs && timestamp.getTime() < params.resetAtMs) continue;
+    if (isMetaContextLine(apiMsg.message)) continue;
+
+    const sender =
+      params.platform === 'INSTAGRAM'
+        ? classifyInstagramMetaHistoryMessage({
+            conversation: params.conversation,
+            messageText: apiMsg.message,
+            platformMessageId: apiMsg.id,
+            fromId: apiMsg.from?.id,
+            platformUserId: params.platformUserId,
+            timestamp
+          })
+        : apiMsg.from?.id === params.pageId
+          ? 'AI'
+          : 'LEAD';
+
+    if (sender === 'MANYCHAT') {
+      await dependencies.persistManyChatEcho({
+        conversationId: params.conversationId,
+        messageText: apiMsg.message,
+        platformMessageId: apiMsg.id,
+        classifyAsManyChat: true,
+        receivedAt: timestamp
+      });
+      existingPlatformIds.add(apiMsg.id);
+      continue;
+    }
+
+    if (existingPlatformIds.has(apiMsg.id)) continue;
+    if (existingSet.has(key)) continue;
+
+    await dependencies.createMessage({
+      conversationId: params.conversationId,
+      sender,
+      content: apiMsg.message,
+      platformMessageId: apiMsg.id,
+      timestamp
+    });
+    existingSet.add(key);
+    existingPlatformIds.add(apiMsg.id);
+  }
+}
+
 async function backfillFromMetaAPI(
   accountId: string,
   conversationId: string,
@@ -7228,12 +7342,7 @@ async function backfillFromMetaAPI(
   // For now, we'll fetch messages using the platform-specific API
   // and merge with our local database
 
-  let apiMessages: Array<{
-    id: string;
-    message: string;
-    from: { id: string; name?: string };
-    createdTime: string;
-  }> = [];
+  let apiMessages: MetaHistoryBackfillMessage[] = [];
 
   try {
     if (platform === 'INSTAGRAM') {
@@ -7281,61 +7390,41 @@ async function backfillFromMetaAPI(
     });
   }
 
-  // Get the page ID to determine which messages are "ours" vs "theirs"
+  // Facebook history identifies the business with the Page id. Instagram
+  // direction is resolved against the known lead participant below because its
+  // business-side `from.id` may instead be the Instagram professional account.
   const { getMetaPageId } = await import('@/lib/credential-store');
-  const pageId = await getMetaPageId(accountId);
+  const pageId =
+    platform === 'FACEBOOK' ? await getMetaPageId(accountId) : null;
 
   // Reset watermark: if this conversation was reset via "clear conversation",
   // do NOT re-import Meta history from before the reset (that re-import is what
   // made the reset appear not to work). Only backfill messages newer than it.
   const convoForReset = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { capturedDataPoints: true }
+    select: {
+      capturedDataPoints: true,
+      source: true,
+      manyChatOpenerMessage: true,
+      manyChatFiredAt: true
+    }
   });
   const resetAtRaw = (convoForReset?.capturedDataPoints as any)?.__resetAt;
   const resetAtMs = resetAtRaw ? new Date(resetAtRaw).getTime() : 0;
 
-  // Merge API messages with local DB (avoid duplicates)
-  const existingMessages = await prisma.message.findMany({
-    where: { conversationId },
-    select: { content: true, timestamp: true }
+  await mergeMetaHistoryBackfill({
+    conversationId,
+    platform,
+    platformUserId,
+    pageId,
+    conversation: {
+      source: convoForReset?.source,
+      manyChatOpenerMessage: convoForReset?.manyChatOpenerMessage,
+      manyChatFiredAt: convoForReset?.manyChatFiredAt
+    },
+    resetAtMs,
+    apiMessages
   });
-
-  const existingSet = new Set(
-    existingMessages.map((m) => `${m.content}|${m.timestamp.getTime()}`)
-  );
-
-  const newMessages = [];
-  for (const apiMsg of apiMessages.reverse()) {
-    // Reverse to get chronological order
-    const timestamp = new Date(apiMsg.createdTime);
-    const key = `${apiMsg.message}|${timestamp.getTime()}`;
-
-    if (existingSet.has(key)) continue;
-    if (!apiMsg.message) continue;
-    // Honor the "clear conversation" reset watermark — skip pre-reset history.
-    if (resetAtMs && timestamp.getTime() < resetAtMs) continue;
-    // Skip Meta-generated context lines. When a DM originates from a comment
-    // on a reel/post, Meta's conversation history includes a system template
-    // ("You are responding to a user comment to a post on your Page. View
-    // comment. (https://facebook.com/reel/.../?comment_id=...)"). It is NOT a
-    // real message — ingesting it (attributed to the page side) made it land
-    // as a `sender: 'AI'` row that leaked into the thread. Drop it.
-    if (isMetaContextLine(apiMsg.message)) continue;
-
-    const isOurMessage = apiMsg.from?.id === pageId;
-    const sender = isOurMessage ? 'AI' : 'LEAD';
-
-    const msg = await prisma.message.create({
-      data: {
-        conversationId,
-        sender: sender as any,
-        content: apiMsg.message,
-        timestamp
-      }
-    });
-    newMessages.push(msg);
-  }
 
   // Return all messages in chronological order
   return prisma.message.findMany({

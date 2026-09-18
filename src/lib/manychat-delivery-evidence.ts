@@ -45,6 +45,34 @@ export async function persistMetaEchoWithManyChatReconciliation(params: {
         }
       });
       if (alreadyLinked) {
+        // Older Meta-history backfill attributed every account-side Instagram
+        // message to AI. When the bounded caller has positively identified the
+        // exact ManyChat opener, repair that stale attribution in place so a
+        // queued first reply is not mistaken for an already-answered turn.
+        if (
+          params.classifyAsManyChat &&
+          alreadyLinked.sender === 'AI' &&
+          alreadyLinked.content.trim() === content
+        ) {
+          const message = await tx.message.update({
+            where: { id: alreadyLinked.id },
+            data: {
+              sender: 'MANYCHAT',
+              deliveryStatus: 'META_CONFIRMED',
+              deliveryConfirmedAt:
+                alreadyLinked.deliveryConfirmedAt ?? receivedAt,
+              deliveryFailedAt: null,
+              deliveryErrorCode: null,
+              systemPromptVersion: 'manychat-automation',
+              msgSource: 'MANYCHAT_FLOW'
+            }
+          });
+          return {
+            message,
+            classification: 'MANYCHAT',
+            disposition: 'RECONCILED'
+          };
+        }
         return {
           message: alreadyLinked,
           classification:

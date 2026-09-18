@@ -515,6 +515,73 @@ test('native Meta echo upgrades the provider row instead of inserting a duplicat
   assert.equal(f.locks, 1);
 });
 
+test('native Meta opener evidence persists one confirmed ManyChat flow row', async () => {
+  const f = fixture();
+  const persistEcho = load(
+    'src/lib/manychat-delivery-evidence.ts',
+    f.prisma
+  ).persistMetaEchoWithManyChatReconciliation;
+  const confirmedAt = new Date('2026-09-18T18:02:00Z');
+  const result = await persistEcho({
+    conversationId: 'conversation-1',
+    messageText: payload.messageText,
+    platformMessageId: 'meta-native-opener',
+    classifyAsManyChat: true,
+    receivedAt: confirmedAt
+  });
+
+  assert.equal(result.disposition, 'CREATED');
+  assert.equal(result.classification, 'MANYCHAT');
+  assert.equal(f.messages.length, 1);
+  assert.equal(f.messages[0].sender, 'MANYCHAT');
+  assert.equal(f.messages[0].msgSource, 'MANYCHAT_FLOW');
+  assert.equal(f.messages[0].platformMessageId, 'meta-native-opener');
+  assert.equal(f.messages[0].deliveryStatus, 'META_CONFIRMED');
+  assert.equal(f.messages[0].deliveryConfirmedAt, confirmedAt);
+});
+
+test('confirmed opener backfill repairs an older AI-attributed row in place', async () => {
+  const originalTimestamp = new Date('2026-09-18T18:01:00Z');
+  const f = fixture([
+    {
+      id: 'old-backfill-row',
+      conversationId: 'conversation-1',
+      sender: 'AI',
+      content: payload.messageText,
+      timestamp: originalTimestamp,
+      deletedAt: null,
+      platformMessageId: 'meta-native-opener',
+      providerMessageId: null,
+      deliveryStatus: null,
+      deliveryConfirmedAt: null,
+      deliveryFailedAt: null,
+      deliveryErrorCode: null,
+      msgSource: 'UNKNOWN'
+    }
+  ]);
+  const persistEcho = load(
+    'src/lib/manychat-delivery-evidence.ts',
+    f.prisma
+  ).persistMetaEchoWithManyChatReconciliation;
+  const confirmedAt = new Date('2026-09-18T18:02:00Z');
+  const result = await persistEcho({
+    conversationId: 'conversation-1',
+    messageText: payload.messageText,
+    platformMessageId: 'meta-native-opener',
+    classifyAsManyChat: true,
+    receivedAt: confirmedAt
+  });
+
+  assert.equal(result.disposition, 'RECONCILED');
+  assert.equal(result.classification, 'MANYCHAT');
+  assert.equal(f.messages.length, 1);
+  assert.equal(f.messages[0].sender, 'MANYCHAT');
+  assert.equal(f.messages[0].msgSource, 'MANYCHAT_FLOW');
+  assert.equal(f.messages[0].platformMessageId, 'meta-native-opener');
+  assert.equal(f.messages[0].deliveryStatus, 'META_CONFIRMED');
+  assert.equal(f.messages[0].deliveryConfirmedAt, confirmedAt);
+});
+
 test('unknown native echo is durable and source-pending until provider correlation', async () => {
   const f = fixture();
   const persistEcho = load(

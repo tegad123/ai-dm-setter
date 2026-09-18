@@ -102,6 +102,35 @@ The count of 64 is the size of the unverified population, not proof that all 64
 failed delivery. The two browser comparisons prove at least Squirrel and xo8nx
 were false sent-looking messages.
 
+## Instagram Meta-history reconciliation correction
+
+The next integration release corrects a separate first-reply failure discovered
+while tracing the missing-opener cases. When the queued first-reply worker had
+saved only the lead's answer, the normal reply scheduler fetched the missing
+thread history from Meta. That backfill previously used the Facebook Page ID to
+decide message direction on Instagram and labelled every business-side message
+as `AI`. A real ManyChat opener could therefore look like an earlier Convlo
+answer, causing the first-reply router to reject the ManyChat Step 1 path.
+
+The correction is limited to the Instagram/ManyChat integration:
+
+- identify a lead-side Instagram history item only when its sender ID matches
+  the known lead platform ID;
+- recognize the exact configured opener as ManyChat only when it has a native
+  Meta message ID and its timestamp falls inside the existing bounded
+  automation window;
+- persist that opener once as `MANYCHAT`, `MANYCHAT_FLOW`, and
+  `META_CONFIRMED`, with the native Meta message ID and confirmation time;
+- preserve unrelated business-side history as `AI` and preserve lead-side
+  history as `LEAD`;
+- repair an older AI-attributed opener in place when the same native Meta
+  message ID later proves it was the ManyChat opener.
+
+This change does not make ManyChat send an opener and does not turn Squirrel's
+failed Ref URL attempt into a delivery. It ensures that when Meta does contain a
+real opener, Convlo records the delivery truthfully and keeps the lead's first
+answer on the ManyChat-specific script route.
+
 A later read-only recheck found 71 Daniel Instagram conversations with source
 `MANYCHAT` since September 17. All 71 are marked `new_follower`; 69 contain a
 historical opener row. Every one of those 69 rows has no provider ID, Meta
