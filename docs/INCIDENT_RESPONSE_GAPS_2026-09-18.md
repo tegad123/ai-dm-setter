@@ -14,12 +14,14 @@ during the audit.
 
 ## Current production baseline
 
-- Production currently reports release
-  `16f97ee9d9d32c0d871516074d171993f63d8483`. This release adds the incident
-  audit only; the latest functional application correction remains
-  `c80fb8c195056d0a359e7548f9bab616f9f74359` for reciprocal location answers.
-  GitHub marked both Vercel deployments successful and `/api/version` reported
-  `16f97ee` on 2026-09-18.
+- The latest verified functional application release is
+  `6e481f350b50cc291429f709b1df7c70f1198e8d`. GitHub marked the Vercel
+  deployment successful and `/api/version` reported `6e481f3` at approximately
+  2026-09-18 20:16 UTC. A later documentation-only commit may become the version
+  endpoint's repository head without changing this application behavior.
+- Release `6e481f3` includes the reciprocal-location correction from `c80fb8c`,
+  the scripted-response, Step 8 recovery, suppression-status, ManyChat evidence,
+  and Facebook reconciliation changes documented below.
 - Production code baseline for the ManyChat delivery-truth release:
   `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
@@ -123,9 +125,10 @@ only prepared in code, and what still lacks production proof.
 
 - PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
   shown as a delivered message, and the durable receipt/worker code exists.
-- Production contains application commit
-  `c80fb8c195056d0a359e7548f9bab616f9f74359`. GitHub reports its Vercel
-  deployment succeeded and the production version endpoint confirms it.
+- Production contains functional application commit
+  `6e481f350b50cc291429f709b1df7c70f1198e8d`. GitHub reports its Vercel
+  deployment succeeded and the production version endpoint confirmed it at
+  approximately 20:16 UTC.
 - The connected Facebook Page subscription now includes both `messages` and
   `message_echoes`. Graph API readback verified the expected field set after the
   repair at approximately 2026-09-18 18:54 UTC.
@@ -197,11 +200,10 @@ only prepared in code, and what still lacks production proof.
 - Distress, human-review, AI-off, and terminal quality cases will remain silent
   until an operator explicitly resolves or closes them. They are not general
   webhook failures.
-- The Step 7/12 runtime-action suppression, Step 8 cursor recovery, and truthful
-  suppression-outcome corrections are under local review. They are not
-  committed or deployed and must not be counted as production fixes yet.
-- The Facebook native-message reconciliation and stricter ManyChat first-reply
-  evidence corrections are also under local review. They are not deployed.
+- The Step 7/12 runtime-action suppression, Step 8 cursor recovery, truthful
+  suppression outcome, Facebook native-message reconciliation, and stricter
+  ManyChat first-reply evidence corrections are deployed in `6e481f3`. They
+  still require fresh conversation-level production proof.
 - A production read-only recheck at 19:44 UTC still found zero
   `ManyChatHandoffReceipt` rows and no new reply jobs in the preceding two
   hours. The recent Daniel Instagram inputs in that interval belonged to an
@@ -228,9 +230,9 @@ only prepared in code, and what still lacks production proof.
 | Script suppression               | Guard deployed                                    | Rob's historical turn remains unrecovered                                                 |
 | Safety and review holds          | Working as designed                               | Monitored operator queue and explicit respond, resume, or close action                    |
 | Historical failures              | Preserved, not replayed                           | Dry-run eligibility list and separate approval before any replay                          |
-| Runtime-only response branches   | Confirmed pre-send suppression defect             | Review, test, deploy, and prove Step 7 and Step 12 responses                              |
-| Step 8 recovery                  | Confirmed action-model defect                     | Recognize the semantic ask, advance after an answer, and prove no repeated question       |
-| Suppression status               | Duplicate guard works; cron status is misleading  | Persist a structured non-delivery outcome without a false provider/delivery alert         |
+| Runtime-only response branches   | Correction deployed in `6e481f3`                  | Prove fresh Step 7 and Step 12 responses                                                  |
+| Step 8 recovery                  | Correction deployed in `6e481f3`                  | Prove an answered urgency turn advances without a repeated question                       |
+| Suppression status               | Correction deployed in `6e481f3`                  | Prove duplicate suppression ends as a truthful cancellation without a false alert         |
 | Instagram account restriction    | Reported by Daniel; exact window unverified       | Capture Meta Account Status evidence and compare it with action-block/send timestamps     |
 | Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment          | A fresh authorized test is still required                                                 |
 
@@ -1145,8 +1147,9 @@ after Meta accepts a send.
 
 ## Issue 20: script action types suppress or repeat valid responses
 
-**Status:** Confirmed production code defects. Corrections are under local
-review and are not committed or deployed.
+**Status:** Confirmed production code defects. Corrections are deployed in
+`6e481f350b50cc291429f709b1df7c70f1198e8d`; fresh conversation-level proof is
+still required.
 
 Five recent jobs generated drafts but stopped before egress. Every trigger had
 a native Meta message ID. Account settings permitted sending. Every job had a
@@ -1212,8 +1215,9 @@ Required correction and proof:
 
 ## Issue 21: intentional suppression is recorded as a delivery failure
 
-**Status:** Confirmed observability and job-state defect. A structured outcome
-correction is under local review and is not deployed.
+**Status:** Confirmed observability and job-state defect. The structured outcome
+correction is deployed in `6e481f350b50cc291429f709b1df7c70f1198e8d`;
+fresh production proof is still required.
 
 `sendAIReply()` can intentionally return before delivery for an empty response,
 a repeated question, intentional silence, human takeover, or a safety/review
@@ -1247,7 +1251,7 @@ Required correction:
 5. Preserve safety and human-review behavior; better status reporting must not
    resume or send a held conversation.
 
-## Pending local corrections not yet in production
+## Additional corrections deployed in `6e481f3`
 
 The working tree currently contains two additional reviewed directions:
 
@@ -1260,10 +1264,11 @@ The working tree currently contains two additional reviewed directions:
    Instagram, preventing a queued callback and native webhook from creating two
    lead rows or two reply jobs.
 
-These local changes passed their focused unit and integration checks in the
-isolated development environment. They remain uncommitted and undeployed until
-the combined diff, migration state, full build, and interaction with Issues 20
-and 21 are reviewed together.
+These changes passed their focused unit and integration checks in the isolated
+development environment, TypeScript, Prisma validation, formatting, and the
+production build. GitHub and `/api/version` confirm the combined release is
+live. Their production closure still requires the controlled evidence described
+above; deployment alone is not proof that a real contact completed each path.
 
 ## Working production controls
 
@@ -1311,9 +1316,9 @@ flow in which ManyChat actually sends the opener.
 1. Capture the `@daetradez` restriction evidence from Meta Account Status and
    record the exact start, lift time, reason, and affected Instagram actions.
    Do not run the fresh ManyChat proof while the account remains restricted.
-2. Finish and review the runtime-action and structured-suppression corrections.
-   Deploy only after focused regressions, TypeScript, Prisma validation, and the
-   production build pass. Then prove Step 7, Step 8, and Step 12 on fresh turns.
+2. Prove the deployed runtime-action and structured-suppression corrections on
+   fresh Step 7, Step 8, and Step 12 turns. Confirm Meta IDs for real sends and a
+   truthful `CANCELLED` marker for an answered near-duplicate.
 3. Run the controlled Instagram proof from a fresh follower after the
    restriction is confirmed lifted. Confirm the opener
    in both Instagram inboxes, add `Convlo - Awaiting first reply` only to that
@@ -1373,13 +1378,14 @@ flow in which ManyChat actually sends the opener.
 - **Queued intake evidence:** production contains zero handoff receipts. The
   first-reply worker is deployed but has not completed a live production intake.
 - **Runtime-only branch suppression:** three current jobs prove that valid
-  Step 7/12 replies can be cleared before egress. The correction is local only.
+  Step 7/12 replies can be cleared before egress. The correction is deployed in
+  `6e481f3` and needs fresh production proof.
 - **Step 8 repeat:** two current jobs prove that the semantic ask can leave the
-  cursor behind and regenerate an answered question. The correction is local
-  only.
+  cursor behind and regenerate an answered question. The correction is deployed
+  in `6e481f3` and needs fresh production proof.
 - **Suppression truth:** duplicate suppression works, but the cron records a
-  false generic delivery failure. The structured-outcome correction is local
-  only.
+  false generic delivery failure. The structured-outcome correction is deployed
+  in `6e481f3` and needs fresh production proof.
 - **Squirrel:** ManyChat proves only that the automation triggered. There is no
   opener bubble, Instagram message, receipt, matching echo, or job. It remains
   a failed production proof and must not be counted as a delivered opener.
@@ -1395,9 +1401,12 @@ flow in which ManyChat actually sends the opener.
   stranded message, and other old no-delivery turns have not been replayed.
 - **Human operations:** distress and human-review holds still need an actively
   monitored queue and an explicit resume/close workflow.
-- **Test limitation:** 126 focused tests, TypeScript, Prisma validation, and the
-  production build passed. The receipt integration suite was not run because no
-  isolated local PostgreSQL test database was configured.
+- **Validation:** 94 focused unit cases and 11 isolated PostgreSQL receipt
+  integration cases passed, along with TypeScript, Prisma validation,
+  formatting, and the production build. The broader script-state recovery file
+  still contains one pre-existing unrelated failure in
+  `bug-58-target-income-must-be-captured-by-its-own-ask`; all new Step 8 recovery
+  cases pass.
 
 ## Production closure standard
 
