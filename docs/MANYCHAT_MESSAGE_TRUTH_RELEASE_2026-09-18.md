@@ -135,6 +135,19 @@ due rows per run and uses the same advisory lock as the provider callback.
 5. Keep queued first-reply mode restricted to the controlled test path until
    both Instagram and Facebook production proofs pass.
 
+### Confirmed live configuration gap
+
+The published `Say hi to new followers` flow does not add the tag
+`Convlo - Awaiting first reply`. The published `Instagram Default Reply` flow
+requires that exact tag before it calls the `queued_first_reply` callback; its
+false branch does nothing. A normal fresh follower's answer therefore bypasses
+Convlo even if the Opening DM was delivered.
+
+For the controlled test, confirm the opener exists in Instagram, manually add
+the tag, and only then send the first reply. After that test passes, add the tag
+to the new-follower flow before the Opening DM for general rollout and repeat
+the test without manual intervention.
+
 ## Validation completed before deployment
 
 - 126 focused tests passed across handoff intake, worker recovery, callback
@@ -175,6 +188,40 @@ reply job, one delivered Meta message ID, and normal continuation.
   the additive migration and application are compatible.
 - This is deployment proof, not closure proof. The fresh Instagram and Facebook
   controlled flows remain required.
+
+## Post-deployment audit
+
+- `/api/version` now reports documentation commit `a37f280`, which contains the
+  unchanged PR #50 code release `c962f78`.
+- The delivery-evidence migration completed successfully at
+  2026-09-18 18:27:15 to 18:27:17 UTC.
+- Since that deployment, Daniel's Instagram workspace has recorded no new lead,
+  message, ScheduledReply, receipt, generation trace, egress event, ownership
+  event, or Meta `2534037`/`368` error.
+- Production contains zero `ManyChatHandoffReceipt` rows across all workspaces.
+  The queued first-reply code is deployed but has never completed a live intake.
+- A phone-originated echo in another workspace was persisted as
+  `META_CONFIRMED`, proving the new columns and runtime are active. It does not
+  prove the ManyChat handoff.
+- A fresh post-deploy dashboard load of the historical Squirrel conversation
+  showed zero visible messages and no opener bubble, proving that the planned
+  opener is no longer presented as sent.
+
+## Known gaps outside this release
+
+- The live Facebook Page is missing its `message_echoes` subscription, so
+  Facebook, phone, and ManyChat outbound echoes can be absent from Convlo even
+  while lead inbound continues.
+- Durable `queued_first_reply` receipt intake remains Instagram-only. PR #50
+  made the message and completion callbacks platform-aware; it did not extend
+  the PR #49 receipt model to Facebook.
+- The current script serializer changes a `MANYCHAT` conversation to the warm
+  direct branch after two hours. Delayed first replies can therefore repeat the
+  greeting or enter a quality hold.
+- Facebook terminal-quality handling can leave a job failed and under human
+  review after a Meta-confirmed AI message was already delivered.
+- These gaps require their own code or configuration corrections and production
+  proof. They do not invalidate the deployed message-truth migration.
 
 ## Rollback
 

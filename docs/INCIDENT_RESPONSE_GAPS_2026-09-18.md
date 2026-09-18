@@ -14,7 +14,10 @@ during the audit.
 
 ## Current production baseline
 
-- Application commit: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`
+- Runtime version currently reported by `/api/version`:
+  `a37f2809d80e5297f8da14ccc676de6b1a1fea0a`. This is a documentation-only
+  commit on top of the production code release below.
+- Production code release: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
   2026-09-18 18:26:58 UTC and deployed successfully by Vercel.
 - The production dashboard completed a fresh authenticated reload after the
@@ -25,6 +28,8 @@ during the audit.
   intake and worker.
 - Receipt migration `20260918170000_manychat_handoff_receipts` completed at
   2026-09-18 17:02:19 UTC.
+- Delivery-evidence migration `20260918193000_message_delivery_evidence`
+  completed between 2026-09-18 18:27:15 and 18:27:17 UTC.
 - Daniel's account currently has Instagram and Facebook Away Mode enabled,
   generate-only disabled on both channels, default AI enabled, response delay
   45-120 seconds, and debounce 3 seconds.
@@ -35,8 +40,9 @@ during the audit.
 
 There is no single cause for all unanswered messages. The confirmed classes are:
 
-1. Convlo displays planned ManyChat opener context as a sent message even when
-   Instagram has no message.
+1. Convlo historically displayed planned ManyChat opener context as a sent
+   message even when Instagram had no message. PR #50 corrected the display and
+   AI-history behavior for current production.
 2. The ManyChat first-reply callback cannot run when the lead never receives the
    opener and therefore never answers.
 3. Historical Instagram sends failed because Convlo was not the Meta thread
@@ -47,12 +53,49 @@ There is no single cause for all unanswered messages. The confirmed classes are:
 5. Distress and human-review holds intentionally prevent automatic delivery.
 6. Some individual conversations have AI disabled.
 7. Some reply jobs failed without producing a delivered outbound message.
-8. Facebook ManyChat callbacks contain Instagram-only lookup logic and can fail
-   to finish the Facebook handoff correctly.
+8. Facebook ManyChat message and completion callbacks historically contained
+   Instagram-only lookup logic. PR #50 corrected that path, but no live
+   Facebook callback proof exists yet.
 9. Instagram standby events are visible to Convlo's audit logger but are not
    safe to process as normal lead messages until ownership is proven.
-10. Historical planned ManyChat opener rows can still enter AI history and raw
-    database counts even after the dashboard stops rendering them as sent.
+10. Historical planned ManyChat opener rows previously entered AI history and
+    raw database counts even when the dashboard did not render them as sent.
+    PR #50 now excludes them while preserving the audit rows.
+11. The live ManyChat new-follower flow does not add the tag required by the
+    live Instagram Default Reply flow. A normal first reply therefore takes the
+    false branch and never invokes Convlo's queued first-reply callback.
+12. The queued first-reply path has never completed a production intake. There
+    are currently zero `ManyChatHandoffReceipt` rows in production, so the code
+    is deployed but has no live success proof.
+13. The connected Facebook Page is not subscribed to `message_echoes`. Lead
+    inbound still arrives through `messages`, but Page, phone, and ManyChat
+    outbound echoes are missing from Convlo.
+14. ManyChat conversations whose first reply arrives more than two hours after
+    the opener are currently reclassified as warm direct inbound. This can run
+    the wrong opening branch, repeat introductions, and end in a quality hold.
+15. Facebook queued first-reply receipt intake is still Instagram-only, even
+    though the message and completion callbacks are now platform-aware.
+16. The Facebook inline webhook resets terminal quality exceptions to pending,
+    and the cron can preserve a failed quality job even when a Meta-confirmed AI
+    message was delivered through another path.
+
+## Current status at a glance
+
+| Area | Current status | What remains |
+| --- | --- | --- |
+| ManyChat opener truth | Code correction deployed | Fresh opener and native Meta echo proof |
+| Instagram first-reply intake | Durable worker deployed | Fix or manually satisfy the ManyChat tag gate, then run a fresh test |
+| ManyChat new-follower automation | Confirmed configuration mismatch | Add `Convlo - Awaiting first reply` before the opener for rollout, after controlled proof |
+| Facebook callback parity | Code correction deployed | Fresh Facebook callback, one job, Meta message ID, and continuation proof |
+| Facebook outbound echoes | Page subscription missing `message_echoes` | Re-subscribe the field and verify one phone/ManyChat echo enters Convlo |
+| Delayed ManyChat first replies | Confirmed current code defect | Preserve ManyChat routing beyond the two-hour heuristic and test delayed replies |
+| Facebook queued first reply | Intake remains Instagram-only | Extend receipt identity handling and obtain a real Facebook receipt proof |
+| Facebook terminal-quality state | Confirmed contradictory-state defect | Align inline handling with Instagram and reconcile delivered Meta messages before failure |
+| Meta thread ownership | No new `2534037` after 2026-09-17 20:00 UTC | Identify or document routing owner and separately review 59 stranded failures |
+| Script suppression | Guard deployed | Rob's historical turn remains unrecovered |
+| Safety and review holds | Working as designed | Monitored operator queue and explicit respond, resume, or close action |
+| Historical failures | Preserved, not replayed | Dry-run eligibility list and separate approval before any replay |
+| Post-deploy Instagram traffic | No Daniel events since PR #50 deployment | A fresh authorized test is still required |
 
 ## Issue 1: phantom ManyChat opener bubbles
 
@@ -246,6 +289,34 @@ later received native lead replies and delivered AI responses, which proves the
 conversation continued but still does not prove the stored opener row itself was
 delivered.
 
+### Current 72-hour Facebook audit
+
+Global Facebook settings are healthy: Away Mode is on, generate-only is off,
+default AI is active, response delay is 45 to 120 seconds, and debounce is 3
+seconds with a 120-second maximum. No account-wide flag currently explains the
+missing replies.
+
+Nineteen conversations received lead inbound. Nine later received AI responses;
+all 18 resulting outbound AI rows have Meta message IDs. Ten ended on a lead
+message with no later outbound:
+
+| Lead | Conversation | Current cause |
+| --- | --- | --- |
+| Ashy Elbowz | `cmu554cg4000gl00494i0tzqv` | Distress and human-review hold |
+| Ifeanyi Chukwu | `cmu4jgmrd000wjv043j65u1um` | Distress and human-review hold |
+| Dessy Browñ | `cmu5izhew0030jg044lkgm3vd` | Five-attempt terminal quality failure: off-script low-ticket question |
+| Kada Dubois | `cmu4i4u4c0063jy04ycom87m8` | Five-attempt repeated urgency-question failure |
+| Isreal Ibrahim | `cmu4om1ko000ai804slhglgej` | Five-attempt repeated-question guard failure |
+| Man-zan Koua-dio | `cmu3wl6oq002kle04w7q8k57w` | Conversation AI disabled |
+| Michael Keekae | `cmu3tr3gj000skz0433hprvyt` | Conversation AI disabled |
+| Itz Michael | `cmu3flg3h0003jv04wufth00q` | Conversation AI disabled |
+| Chris Duke | `cmu3nyuyg000klc04yuf2uq2b` | Historical No-response suppression; guard later deployed |
+| Achuma Ngxola | `cmu35ml3y003vjq04ba6u260r` | Terminal quality failure and human review |
+
+There is currently no active Facebook ScheduledReply backlog: no pending or
+processing job and no retryable failed job below five attempts. This means the
+current silent cases will not self-recover through the scheduler.
+
 ## Issue 7: Facebook ManyChat callback mismatch
 
 **Status:** Confirmed code defect. The fix is deployed in PR #50. Facebook
@@ -395,6 +466,245 @@ store a ManyChat operation ID there.
 - Make dashboard counts, previews, and AI context follow the same delivery-truth
   rule so an invisible phantom cannot still steer the engine.
 
+## Issue 12: live ManyChat tag gate bypasses Convlo
+
+**Status:** Confirmed configuration defect. No configuration was changed during
+this audit.
+
+The two published Instagram automations do not currently connect end to end.
+
+### Published new-follower flow
+
+The live `Say hi to new followers` flow runs in this exact order:
+
+1. `User follows your account` / Follow-to-DM trigger.
+2. Actions node calls
+   `POST https://qualifydms.io/api/webhooks/manychat-handoff` with
+   `scheduleAi:false`.
+3. The special Instagram Opening DM node attempts to send
+   `Hey there! Thanks for following me are you in the markets rn? or starting?`.
+
+The Actions node does not add the tag `Convlo - Awaiting first reply`. The
+special Opening DM node has no ordinary action after the send, so this graph
+cannot call `/manychat-message` after the opener.
+
+### Published Default Reply flow
+
+The live `Instagram Default Reply` flow runs:
+
+1. User sends a direct message.
+2. Check whether the contact has tag `Convlo - Awaiting first reply`.
+3. On the true branch, reset the response field, call
+   `/api/webhooks/manychat-handoff` with
+   `processingMode:"queued_first_reply"`, `scheduleAi:true`, and
+   `leadResponseText:Last Text Input`.
+4. Map `$.handoffAccepted` into the `Convlo handoff accepted` field.
+5. Remove the tag after the accepted response.
+
+The false tag branch does nothing. Therefore a fresh follower can receive the
+opener and answer it, yet the answer still bypasses Convlo because the first
+flow never adds the tag required by the second flow.
+
+### Safe correction and test order
+
+- For the controlled proof, first confirm the opener exists in both Instagram
+  inboxes, manually add the exact tag to that ManyChat contact, and only then
+  send the first reply.
+- For general rollout, after the controlled proof passes, add the tag in the
+  new-follower flow before the Opening DM or replace the tag gate with the
+  approved rollout condition.
+- Do not add `/manychat-complete` before the lead reply. The
+  `queued_first_reply` callback is already the takeover signal for this path.
+- Keep the early pre-send callback context-only. Because the special opener has
+  no post-send callback, its delivery must be confirmed by a native Meta echo
+  or by authoritative Instagram history.
+
+## Issue 13: no live receipt or post-deploy first-reply proof
+
+**Status:** Open proof gap, confirmed by a read-only production audit.
+
+Since the PR #50 deployment boundary at 2026-09-18 18:27 UTC, Daniel's
+Instagram workspace has recorded:
+
+- zero new leads;
+- zero messages;
+- zero ScheduledReply jobs;
+- zero ManyChat handoff receipts;
+- zero generation traces;
+- zero egress attempts;
+- zero ownership events;
+- zero new Meta `2534037` or `368` failures.
+
+Across all production workspaces, `ManyChatHandoffReceipt` still has exactly
+zero rows. The durable queued path has therefore never accepted and completed a
+real production intake. A separate workspace did save one phone-originated echo
+as `META_CONFIRMED` after deployment, which proves the new delivery fields and
+runtime are active. It does not prove the ManyChat handoff.
+
+Five Daniel Instagram follower callbacks immediately before PR #50 created
+legacy planned opener rows with no provider ID, no Meta message ID, no lead
+reply, no job, and no receipt:
+
+| Handle | Conversation | Planned opener row | Time UTC |
+| --- | --- | --- | --- |
+| `@squirrel.8425393` | `cmu77pjjb0003lb04vrwwnh26` | `cmu77pjqi0005lb04s3di3sz5` | 17:08:12 |
+| `@deepak_parthu` | `cmu78cm6i0003lh04jipvv8tq` | `cmu78cmca0005lh0457ubb8ly` | 17:26:08 |
+| `@park.her` | `cmu7987z80009lh04rqhiww2v` | `cmu79885d000blh04rkrrk4ji` | 17:50:43 |
+| `@nkdesigns_gh` | `cmu7a289o000flh04sachhssy` | `cmu7a28g5000hlh042j7z1jxa` | 18:14:03 |
+| `@nivekiser` | `cmu7af9bz000llh04i55ho8ne` | `cmu7af9if000nlh04jba6i1to` | 18:24:11 |
+
+These are opener-delivery discrepancies, not AI nonresponse cases. Convlo never
+received a lead answer, so the AI, scheduler, egress, and ownership paths never
+started for them.
+
+After PR #50, a fresh dashboard load of Squirrel correctly showed zero visible
+messages and no opener bubble. This proves the deployed UI no longer presents
+that legacy planned opener as sent. It does not prove a new ManyChat opener or
+first-reply flow.
+
+## Unresolved upstream causes of a missing Follow-to-DM opener
+
+The exact Squirrel opener-send failure is still unproven. The following are
+current platform constraints or hypotheses, not confirmed root causes for that
+specific contact:
+
+- ManyChat documents that Follow-to-DM triggers only once per follower.
+  Unfollowing and following again does not rerun it.
+- Meta limits a person to one Follow-to-DM message per week across Instagram
+  accounts. Only the first followed account can send during that period.
+- Follow-to-DM is a Meta-controlled beta and eligibility may change.
+- ManyChat documents that the feature requires its current Unified Instagram
+  onboarding connection; older connection methods may require reconnection.
+- The opener must be visible and interacted with before the normal 24-hour
+  messaging window and first-reply handoff can proceed.
+
+Reference: [ManyChat Follow-to-DM documentation](https://help.manychat.com/hc/en-us/articles/23096654243740-Follow-to-DM-on-Instagram-Say-Hi-to-New-Followers-BETA).
+
+## Issue 14: Facebook outbound echo subscription is missing
+
+**Status:** Confirmed live Meta configuration defect. No subscription was
+changed during this audit.
+
+The connected Facebook Page `708196295710896` is subscribed to `messages`,
+postbacks, opt-ins, deliveries, and reads, but it is not subscribed to
+`message_echoes`. The production token is valid and app `1441437191008347` is
+present on the Page subscription.
+
+### Consequence
+
+- Lead inbound still reaches Convlo because `messages` is present.
+- Messages sent from the Facebook Page, a phone, or ManyChat can exist on
+  Facebook without an echo reaching Convlo.
+- Convlo can then show an incomplete thread, schedule from stale history, or
+  misattribute the next event.
+- A 72-hour production sample contained zero Facebook HUMAN/PHONE echo rows.
+- The health cron emitted 62 repeated alerts between September 15 at 19:30 UTC
+  and September 18 at 18:00 UTC.
+
+The current alert wording is misleading. It states that inbound DMs will not
+reach Convlo even when `messages` is present and only `message_echoes` is
+missing. The alert should identify the missing field and explain the actual
+impact.
+
+### Correction and proof
+
+1. Re-subscribe the Page to `message_echoes` through the existing authenticated
+   subscription route or reconnect flow.
+2. Read the Page subscription back and verify the field is present.
+3. Send one authorized Page or phone message and verify one Facebook echo row
+   appears in Convlo with the Meta message ID.
+4. Correct the health-alert body so it distinguishes inbound-message loss from
+   outbound-echo loss.
+
+## Issue 15: delayed ManyChat replies are routed as direct inbound
+
+**Status:** Confirmed current code defect. It is not corrected by PR #50.
+
+`src/lib/script-serializer.ts` treats a conversation as ManyChat-routed only
+while `manyChatFiredAt` is less than two hours old. After that window,
+`resolveStep1BranchMode` explicitly returns `warm_inbound` even when the stored
+conversation source is still `MANYCHAT`.
+
+Production examples selected the branch
+`Warm Inbound (DM'd directly — no ManyChat)` despite a ManyChat source:
+
+- `@gero`: first reply approximately 95.45 hours after the opener;
+- `@kenny`: approximately 47.71 hours;
+- `@nico`: approximately 24.84 hours;
+- `@lloyd`: approximately 4.98 hours.
+
+Kenny then received duplicate or re-introduction behavior and ended in
+`FAILED_QUALITY_GATE` with human review. These leads did reach Convlo. Their
+problem is branch selection after ingestion, not a missing Meta webhook.
+
+### Required code correction
+
+- Preserve the ManyChat first-reply branch when the conversation source and
+  durable handoff state prove it originated from ManyChat, regardless of an
+  arbitrary two-hour age.
+- Use real completion, prior-response, and durable receipt/message state to
+  decide whether the handoff is still at the first-reply stage.
+- Do not use age alone to relabel a ManyChat lead as a direct inbound lead.
+- Add tests at just under two hours, just over two hours, 24 hours, and multiple
+  days, plus a case that has already completed the ManyChat handoff.
+- Prove one delayed controlled first reply selects the ManyChat branch and does
+  not repeat the greeting or enter a quality hold.
+
+## Issue 16: Facebook queued first-reply intake remains Instagram-only
+
+**Status:** Confirmed code and proof gap.
+
+PR #50 made `/manychat-message` and `/manychat-complete` platform-aware, but
+`src/lib/manychat-handoff-receipt.ts` still rejects queued receipt intake unless
+the platform is Instagram. Facebook therefore does not yet have parity for the
+durable `queued_first_reply` path released in PR #49.
+
+Production evidence:
+
+- 18 historical Facebook ManyChat opener rows since September 14 have no
+  provider ID, Meta message ID, or delivery status;
+- 7 later received native lead replies and 7 received AI replies with Meta
+  message IDs;
+- 11 never received a lead reply, so opener delivery remains unproven;
+- production contains zero Facebook `ManyChatHandoffReceipt` rows;
+- no post-PR #50 Facebook lead or callback exists to serve as live proof.
+
+If Facebook must use the same durable first-reply contract, receipt validation,
+identity resolution, uniqueness, and worker processing must support a Facebook
+PSID. This needs tests and a separate real Facebook callback proof. Message and
+completion callback parity alone does not close this gap.
+
+## Issue 17: Facebook can report terminal failure after delivery
+
+**Status:** Confirmed current code defect.
+
+The inline Facebook webhook catches every processing exception and resets the
+job to `PENDING`, including terminal `QualityGateEscalationError` cases. The
+Instagram webhook has dedicated terminal-quality handling. Later, the reply cron
+checks for delivery through another path only in its no-error path, then marks a
+terminal quality failure without first reconciling whether an AI message with a
+Meta message ID was already delivered.
+
+Kenny is the production contradiction:
+
+- the conversation contains three AI messages with Meta message IDs;
+- its scheduled job is `FAILED_QUALITY_GATE`;
+- `awaitingHumanReview=true` remains set.
+
+The operator therefore sees a terminal failure and review hold even though Meta
+accepted outbound AI messages.
+
+### Required code correction
+
+- Handle terminal quality exceptions inline on Facebook with the same explicit
+  semantics as Instagram.
+- Before committing a terminal failure in the cron, reconcile any AI outbound
+  delivered after the triggering lead message.
+- Do not clear a legitimate review hold merely because an unrelated or older
+  outbound exists; the reconciliation must link ordering and trigger context.
+- Add a regression test for a delivered Meta message followed by a terminal
+  quality exception and assert one truthful final state.
+
 ## Working production controls
 
 ### Penguin
@@ -438,15 +748,28 @@ flow in which ManyChat actually sends the opener.
 
 ## Remaining work in order
 
-1. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+1. Run the controlled Instagram proof by confirming a real opener, manually
+   adding `Convlo - Awaiting first reply`, and then sending the first reply.
+2. If that proof passes, add the same tag to the published new-follower flow
+   before its Opening DM for general rollout, then repeat the proof without the
+   manual step.
+3. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
    ManyChat send node exposes a next action, place `/manychat-message` after the
    send and supply a stable provider operation ID.
-2. Complete the fresh Instagram first-reply production proof from opener through
+4. Complete the fresh Instagram first-reply production proof from opener through
    one normal continuation, including Meta message IDs and duplicate checks.
-3. Complete the separate Facebook callback/completion production proof.
-4. Add an operator recovery flow for safety/review holds and separately approved
+5. Restore the Facebook Page `message_echoes` subscription and prove one
+   authorized outbound echo reaches Convlo.
+6. Correct delayed ManyChat first-reply routing so source and durable handoff
+   state remain authoritative after two hours.
+7. Decide whether Facebook uses durable `queued_first_reply`; if yes, extend the
+   receipt path beyond Instagram and test it with a real Facebook PSID.
+8. Align Facebook terminal-quality handling with Instagram and reconcile a
+   delivered Meta message before committing terminal failure.
+9. Complete the separate Facebook callback/completion production proof.
+10. Add an operator recovery flow for safety/review holds and separately approved
    historical failures.
-5. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+11. Produce a dry-run eligibility list for the 59 stranded ownership failures and
    other historical no-delivery turns. Review before any replay.
 
 ## Open items as of the PR #50 deployment
@@ -456,9 +779,21 @@ flow in which ManyChat actually sends the opener.
   lead reply or receipt.
 - **Fresh Facebook proof:** still required for platform-aware message and
   completion callbacks.
+- **Facebook subscription:** `message_echoes` is absent on the live Page. This
+  creates incomplete Facebook history even while lead inbound continues.
+- **Delayed first-reply routing:** ManyChat conversations older than two hours
+  are still relabelled as direct inbound by the current script serializer.
+- **Facebook receipt parity:** message and completion callbacks are
+  platform-aware, but durable queued receipt intake remains Instagram-only.
+- **Facebook contradictory terminal state:** a Meta-confirmed AI message and a
+  `FAILED_QUALITY_GATE` job can coexist for the same processing sequence.
 - **ManyChat configuration:** ordinary send nodes should report after the send;
   the special Follow-to-DM opener has no normal post-send action, so its early
-  callback must remain context-only.
+  callback must remain context-only. The new-follower flow also lacks the exact
+  tag required by the Default Reply flow, so general first replies currently
+  bypass the queued callback.
+- **Queued intake evidence:** production contains zero handoff receipts. The
+  first-reply worker is deployed but has not completed a live production intake.
 - **General rollout:** queued first-reply mode remains restricted to the
   controlled path until both production proofs pass.
 - **Historical recovery:** 59 ownership failures, Rob's suppressed turn, Rade's

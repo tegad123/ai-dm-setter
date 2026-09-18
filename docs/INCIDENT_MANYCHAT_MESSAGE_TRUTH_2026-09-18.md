@@ -252,6 +252,13 @@ the opener truth problem is corrected and the closure proof above passes. The
 currently published queued mode remains restricted to the existing controlled
 test-tag path.
 
+The live graphs contain a confirmed tag mismatch. `Say hi to new followers`
+does not add `Convlo - Awaiting first reply`, while `Instagram Default Reply`
+requires that tag before it invokes `queued_first_reply`. Untagged first replies
+take a no-action branch. For the controlled proof, confirm the opener in
+Instagram, add the tag manually, and only then reply. After proof, add the tag
+before the Opening DM for general rollout.
+
 ## Deployment verification
 
 - PR: `#50`
@@ -261,4 +268,8 @@ test-tag path.
 - Fresh authenticated production reload: successful; the conversation API and
   dashboard returned current channel data using the additive delivery-evidence
   schema.
+- A fresh post-deployment load of Squirrel showed zero visible messages and no
+  opener bubble. The UI correction is live for the historical phantom row.
+- Production still contains zero `ManyChatHandoffReceipt` rows, so no live
+  first-reply callback has yet exercised the queued worker.
 - Full closure remains gated on the fresh Instagram proof listed above.
