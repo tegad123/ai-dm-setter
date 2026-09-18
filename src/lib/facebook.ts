@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
+import { assertHumanAgentTagIsOperatorInitiated } from '@/lib/meta-messaging-window';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -38,14 +39,10 @@ export function verifyWebhookSignature(
 // ---------------------------------------------------------------------------
 
 /**
- * Options for outbound sends. By default a message goes out as
- * messaging_type=RESPONSE, which Meta only permits inside the 24-hour
- * standard messaging window. For follow-ups that legitimately land OUTSIDE
- * that window, pass tag:'HUMAN_AGENT' — Meta's Human Agent tag opens a 7-day
- * window for human/agent follow-up. Requires the Human Agent feature to be
- * approved on the Meta app; without it Meta rejects the tagged send (same
- * outcome as today's untagged out-of-window send, so this is safe to ship
- * before the permission is granted).
+ * Options for outbound sends. Automated messages use Meta's normal response
+ * path inside the standard messaging window. HUMAN_AGENT is reserved for a
+ * genuine operator reply and also requires Meta approval; the send choke point
+ * rejects any attempt to attach that tag to an automated job.
  */
 export interface MetaSendOptions {
   tag?: 'HUMAN_AGENT';
@@ -73,6 +70,11 @@ export async function sendMessage(
   messageText: string,
   opts?: MetaSendOptions
 ): Promise<{ messageId: string }> {
+  assertHumanAgentTagIsOperatorInitiated({
+    tag: opts?.tag,
+    operatorInitiated: opts?.operatorInitiated
+  });
+
   // Fix D Phase 0: shadow-compare the canSend machine at the physical send
   // choke point. Awaited so the write survives serverless teardown; the
   // try/catch keeps it from ever breaking a send. This is the FACEBOOK

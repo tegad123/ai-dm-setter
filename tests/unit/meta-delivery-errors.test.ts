@@ -48,6 +48,21 @@ describe('classifyMetaDeliveryError', () => {
     assert.equal(info.retryable, false);
     assert.match(info.meaning, /Transfer thread control to Convlo/);
   });
+
+  it('explains a HUMAN_AGENT approval rejection distinctly', () => {
+    const info = classifyMetaDeliveryError(
+      new Error(
+        'Instagram send DM failed: 403 {"error":{"message":"This app has not been reviewed and approved for use of the Human Agent endpoint.","type":"IGApiException","code":10}}'
+      )
+    );
+
+    assert.equal(info.retryable, false);
+    assert.equal(info.permanent, true);
+    assert.match(
+      info.meaning,
+      /Automated messages must use the standard window/
+    );
+  });
 });
 
 describe('getScheduledReplyRetryDelayMs', () => {

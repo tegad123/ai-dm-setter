@@ -1322,6 +1322,70 @@ The absence of new traffic after deployment cannot close or disprove any
 correction. The next valid proof must occur after Meta confirms the restriction
 is lifted.
 
+### Later traffic and the restriction boundary
+
+Daniel subsequently confirmed that Instagram had restricted `@daetradez` on
+the morning of September 18. That can explain an upstream pause, especially for
+Follow-to-DM or ManyChat opener delivery, but the exact restricted features,
+start time, and lift time are still not documented from Meta Account Status.
+
+Later production traffic proves the account was not under a complete inbound or
+outbound block by approximately 20:30 UTC:
+
+- `@bobbyd5566` produced a native Instagram inbound at
+  2026-09-18 20:30:06.186 UTC with a Meta message ID.
+- Convlo created job `cmu7exhta000ml304jw265k6a`, marked it `SENT`, and stored
+  an AI reply with a Meta message ID at 20:32:51.931 UTC.
+- Two later human messages to `@richest_puppi` also have Meta message IDs.
+
+This proves that ordinary Instagram traffic and Convlo delivery resumed. It
+does not prove that Follow-to-DM was unrestricted. Since the PR #50 cutoff,
+there are still zero durable ManyChat receipts, zero provider-confirmed openers,
+zero Meta-confirmed ManyChat openers, and zero queued first-reply jobs.
+`@zdottxx` received planned ManyChat context at 20:13:47 UTC, but the Instagram
+thread is empty and there is no receipt, message row, delivery proof, or job.
+
+### Automated follow-up rejected by Meta Human Agent policy
+
+A separate Convlo defect was exposed after the account resumed ordinary
+traffic. This failure is not explained by the account restriction:
+
+- Lead: `@taylorbtradin`
+- Conversation: `cmu6oun2p0003jm0450n0weyq`
+- Scheduled message: `cmu6ozmus000kl004e0o2l8j1`
+- Type: `FOLLOW_UP_1`
+- Due: 2026-09-18 20:24:10.612 UTC
+- Body: `yo bro you still there?`
+- Latest lead inbound: 2026-09-18 08:20:37.471 UTC, with a Meta message ID
+- Previous AI reply: 2026-09-18 08:23:49.643 UTC, with a Meta message ID
+
+The follow-up was only about 12 hours after the lead's last inbound, so it was
+inside Meta's normal 24-hour messaging window. Convlo nevertheless attached the
+`HUMAN_AGENT` tag. Meta rejected all three attempts with HTTP 403, code `10`,
+and `This app has not been reviewed and approved for use of the Human Agent
+endpoint.` No outbound Message row or Meta message ID was created.
+
+Root cause: commit `20157ee9b2635b348f0f156e04d5ca79a3d1cd8d`
+made the scheduled-message cron attach `HUMAN_AGENT` to every follow-up in the
+cascade. The cron also retried permanent Meta rejections, did not notify an
+operator, and discarded Meta's message ID after a successful scheduled send.
+
+The reviewed correction currently awaiting deployment:
+
+- sends automated scheduled messages through the normal Meta response path
+  while the latest lead inbound is less than 24 hours old;
+- cancels out-of-window automation truthfully and notifies the operator for
+  manual review;
+- prevents any automated caller from attaching `HUMAN_AGENT` at the Instagram
+  and Facebook send choke points;
+- makes permanent Meta delivery errors terminal on the first attempt and sends
+  an operator notification;
+- persists the returned Meta message ID for successful scheduled sends.
+
+The focused 12-test suite, TypeScript, formatting, and production build pass.
+This is not closed until the commit is deployed and a fresh in-window scheduled
+follow-up produces one Meta message ID. Taylor has not been replayed.
+
 ## Working production controls
 
 ### Penguin
@@ -1368,37 +1432,41 @@ flow in which ManyChat actually sends the opener.
 1. Capture the `@daetradez` restriction evidence from Meta Account Status and
    record the exact start, lift time, reason, and affected Instagram actions.
    Do not run the fresh ManyChat proof while the account remains restricted.
-2. Prove the deployed runtime-action and structured-suppression corrections on
+2. Deploy the scheduled-message window correction and prove one fresh
+   in-window follow-up uses the standard response path and receives a Meta
+   message ID. Confirm an out-of-window row cancels with an operator
+   notification. Do not replay Taylor automatically.
+3. Prove the deployed runtime-action and structured-suppression corrections on
    fresh Step 7, Step 8, and Step 12 turns. Confirm Meta IDs for real sends and a
    truthful `CANCELLED` marker for an answered near-duplicate.
-3. Run the controlled Instagram proof from a fresh follower after the
+4. Run the controlled Instagram proof from a fresh follower after the
    restriction is confirmed lifted. Confirm the opener
    in both Instagram inboxes, add `Convlo - Awaiting first reply` only to that
    authorized test contact, then send the first reply.
-4. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+5. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
    ManyChat send node exposes a next action, place `/manychat-message` after the
    send and supply a stable provider operation ID.
-5. Complete the fresh Instagram first-reply production proof from opener through
+6. Complete the fresh Instagram first-reply production proof from opener through
    one normal continuation, including Meta message IDs and duplicate checks.
-6. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
+7. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
    Meta-confirmed echo.
-7. Deploy and prove the stricter causal ManyChat first-reply evidence check so
+8. Deploy and prove the stricter causal ManyChat first-reply evidence check so
    planned context cannot route a turn without a receipt or delivered opener.
-8. Deploy and prove Facebook callback/native receipt reconciliation with one
+9. Deploy and prove Facebook callback/native receipt reconciliation with one
    lead row and one active job under the callback/native race.
-9. Prove the deployed delayed ManyChat first-reply routing correction on a real
-   delayed first reply.
-10. Run the deployed Facebook durable `queued_first_reply` path with a real
+10. Prove the deployed delayed ManyChat first-reply routing correction on a real
+    delayed first reply.
+11. Run the deployed Facebook durable `queued_first_reply` path with a real
     authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
     and normal continuation.
-11. Prove the deployed Facebook terminal-quality reconciliation on a real
+12. Prove the deployed Facebook terminal-quality reconciliation on a real
     conversation.
-12. Complete the separate Facebook callback/completion production proof.
-13. Add an operator recovery flow for safety/review holds and separately approved
+13. Complete the separate Facebook callback/completion production proof.
+14. Add an operator recovery flow for safety/review holds and separately approved
     historical failures.
-14. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+15. Produce a dry-run eligibility list for the 59 stranded ownership failures and
     other historical no-delivery turns. Review before any replay.
-15. Prove the deployed location-answer correction with a fresh reciprocal
+16. Prove the deployed location-answer correction with a fresh reciprocal
     answer. Review Hussein separately before clearing its human-review hold or
     replaying its failed turn.
 
@@ -1442,9 +1510,14 @@ flow in which ManyChat actually sends the opener.
   opener bubble, Instagram message, receipt, matching echo, or job. It remains
   a failed production proof and must not be counted as a delivered opener.
 - **Instagram restriction:** Daniel reported an account restriction on the
-  morning of September 18. Its scope and timing still need Meta Account Status
-  evidence. Do not use a test during the restriction as evidence against the
-  Convlo worker or ManyChat callback.
+  morning of September 18. Later native inbound and Meta-confirmed Convlo sends
+  prove the account was no longer completely blocked by 20:30 UTC. The scope,
+  timing, and whether Follow-to-DM remains restricted still need Meta Account
+  Status evidence.
+- **Scheduled follow-up delivery:** Taylor's in-window `FOLLOW_UP_1` was sent
+  with the wrong `HUMAN_AGENT` mode and Meta rejected it three times. The code
+  correction passes local validation and still needs deployment plus fresh live
+  proof.
 - **Manual recovery:** `richest_puppi` received two later Meta-confirmed HUMAN
   messages. Its original automated failure remains evidence and was not replayed.
 - **General rollout:** queued first-reply mode remains restricted to the

@@ -3,6 +3,7 @@ import { getMetaAccessToken } from '@/lib/credential-store';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
 import prisma from '@/lib/prisma';
 import { classifyMetaDeliveryError } from '@/lib/meta-delivery-errors';
+import { assertHumanAgentTagIsOperatorInitiated } from '@/lib/meta-messaging-window';
 
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -73,6 +74,11 @@ export async function sendDM(
     distressSupportive?: boolean;
   }
 ): Promise<{ messageId: string }> {
+  assertHumanAgentTagIsOperatorInitiated({
+    tag: opts?.tag,
+    operatorInitiated: opts?.operatorInitiated
+  });
+
   // Fix D egress gate at the physical send choke point. Awaited so the write
   // survives serverless teardown. IG stays SHADOW-only until its own window
   // (cutover condition 3), so gate.block is false here today — but the block
@@ -183,10 +189,9 @@ export async function sendDM(
         body: JSON.stringify({
           recipient: { id: recipientId },
           message: { text: messageText },
-          // HUMAN_AGENT tag opens a 7-day follow-up window (vs the 24h
-          // RESPONSE window). Works on both IG and Messenger; requires the
-          // Human Agent feature approved on the Meta app, else Meta rejects
-          // the send (same as today's untagged out-of-window send).
+          // HUMAN_AGENT is only for a genuine operator-initiated reply and
+          // requires Meta approval. Automated jobs are rejected above before
+          // they can use this tag.
           ...(opts?.tag === 'HUMAN_AGENT'
             ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' }
             : isIGToken

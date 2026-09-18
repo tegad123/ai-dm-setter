@@ -71,6 +71,7 @@ export function classifyMetaDeliveryError(
     retryable,
     permanent,
     meaning: describeMetaDeliveryError({
+      rawMessage,
       httpStatus,
       metaCode,
       metaSubcode,
@@ -83,6 +84,7 @@ export function classifyMetaDeliveryError(
 }
 
 function describeMetaDeliveryError(params: {
+  rawMessage: string;
   httpStatus: number | null;
   metaCode: number | null;
   metaSubcode: number | null;
@@ -96,6 +98,12 @@ function describeMetaDeliveryError(params: {
   }
   if (params.metaCode === 190) {
     return 'Instagram token is invalid or expired. Reconnect Instagram before retrying.';
+  }
+  if (
+    params.metaCode === 10 &&
+    /human[ _-]?agent|human agent endpoint/i.test(params.rawMessage)
+  ) {
+    return 'Meta rejected the HUMAN_AGENT send mode. Automated messages must use the standard window; Human Agent access is reserved for approved human replies.';
   }
   if (params.metaCode === 10 || params.metaCode === 200) {
     return 'Instagram permissions are missing or revoked. Reconnect Instagram and confirm messaging permissions.';

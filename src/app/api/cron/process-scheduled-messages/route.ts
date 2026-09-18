@@ -17,6 +17,12 @@ import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { scheduleNextInCascade } from '@/lib/follow-up-sequence';
 import { transitionLeadStage } from '@/lib/lead-stage';
 import { sanitizeDashCharacters } from '@/lib/voice-quality-gate';
+import {
+  decideAutomatedMessageWindow,
+  OUTSIDE_STANDARD_WINDOW_MARKER
+} from '@/lib/meta-messaging-window';
+import { notifyOnce } from '@/lib/platform-not-connected-alert';
+import { classifyMetaDeliveryError } from '@/lib/meta-delivery-errors';
 import { NextRequest, NextResponse } from 'next/server';
 import type { LeadContext } from '@/lib/ai-prompts';
 
@@ -63,6 +69,13 @@ export async function GET(req: NextRequest) {
         status: 'PENDING',
         scheduledFor: { lte: now },
         attempts: { lt: 3 }
+      },
+      include: {
+        conversation: {
+          select: {
+            lead: { select: { id: true, handle: true, name: true } }
+          }
+        }
       },
       orderBy: { scheduledFor: 'asc' },
       take: 20
@@ -155,14 +168,26 @@ export async function GET(req: NextRequest) {
               lastError: 'skipped:held_for_review'
             }
           });
+        } else if (outcome === 'skipped_outside_messaging_window') {
+          await prisma.scheduledMessage.update({
+            where: { id: row.id },
+            data: {
+              status: 'CANCELLED',
+              lastError: OUTSIDE_STANDARD_WINDOW_MARKER
+            }
+          });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const deliveryError = classifyMetaDeliveryError(err);
         console.error(
           `[cron/scheduled-messages] Failed to fire ${row.id}:`,
           msg
         );
-        const nextAttempts = row.attempts + 1;
+        // Permission/token/policy failures cannot heal on the next minute.
+        // Make them terminal on the first cron attempt instead of hitting Meta
+        // three times with the same permanent request.
+        const nextAttempts = deliveryError.permanent ? 3 : row.attempts + 1;
         await prisma.scheduledMessage.update({
           where: { id: row.id },
           data: {
@@ -171,6 +196,19 @@ export async function GET(req: NextRequest) {
             lastError: msg.slice(0, 500)
           }
         });
+        if (deliveryError.permanent) {
+          const failedLead = row.conversation.lead;
+          await notifyOnce({
+            accountId: row.accountId,
+            title: 'Scheduled message delivery failed',
+            body:
+              `${failedLead.handle ? `@${failedLead.handle}` : failedLead.name || 'Lead'} did not receive ` +
+              `${row.messageType}. ScheduledMessage ${row.id} was rejected permanently by Meta. ` +
+              `${deliveryError.meaning}\n\n${msg.slice(0, 500)}`,
+            leadId: failedLead.id,
+            dedupeMs: 24 * 60 * 60 * 1000
+          });
+        }
         failed++;
       }
     }
@@ -190,8 +228,8 @@ export async function GET(req: NextRequest) {
 
 // ---------------------------------------------------------------------------
 // Core: generate + send ONE scheduled message
-// Returns 'sent' | 'deduped' | 'skipped_ai_inactive' | 'skipped_held_for_review'. Throws on
-// platform send failure so the caller can bump attempts + set status.
+// Returns a durable delivery/no-send outcome. Throws on platform send failure
+// so the caller can bump attempts + set status.
 //
 // CRITICAL ORDER: platform send FIRST, then Message row + broadcast.
 // The old order (create row → broadcast → send) meant a failed send
@@ -204,7 +242,11 @@ export async function GET(req: NextRequest) {
 async function fireScheduledMessage(
   scheduledMessageId: string
 ): Promise<
-  'sent' | 'deduped' | 'skipped_ai_inactive' | 'skipped_held_for_review'
+  | 'sent'
+  | 'deduped'
+  | 'skipped_ai_inactive'
+  | 'skipped_held_for_review'
+  | 'skipped_outside_messaging_window'
 > {
   const row = await prisma.scheduledMessage.findUnique({
     where: { id: scheduledMessageId },
@@ -332,6 +374,36 @@ async function fireScheduledMessage(
     }
   }
 
+  // Every ScheduledMessage is an automated outbound. Use Meta's standard
+  // response path while the lead's 24-hour window is open. Once it is closed,
+  // do not disguise an automated cascade as a HUMAN_AGENT reply. Preserve the
+  // row as a truthful cancellation and tell the operator that manual review is
+  // required.
+  const windowDecision = decideAutomatedMessageWindow({
+    messages: conversation.messages
+  });
+  if (windowDecision.action === 'cancel_outside_window') {
+    const latestInboundLabel = windowDecision.latestLeadInboundAt
+      ? windowDecision.latestLeadInboundAt.toISOString()
+      : 'none recorded';
+    console.warn(
+      `[cron/scheduled-messages] ${row.id}: outside Meta standard messaging window; ` +
+        `latest lead inbound=${latestInboundLabel}, cancelling ${row.messageType}`
+    );
+    await notifyOnce({
+      accountId: row.accountId,
+      title: 'Scheduled message needs manual review',
+      body:
+        `${lead.handle ? `@${lead.handle}` : lead.name || 'Lead'} did not receive ` +
+        `${row.messageType}. The automated Meta messaging window is closed ` +
+        `(latest lead inbound: ${latestInboundLabel}). Review the conversation ` +
+        `before contacting the lead manually. ScheduledMessage: ${row.id}`,
+      leadId: lead.id,
+      dedupeMs: 24 * 60 * 60 * 1000
+    });
+    return 'skipped_outside_messaging_window';
+  }
+
   let messageBody = row.messageBody;
 
   if (CALL_CONFIRMATION_TYPES.includes(row.messageType)) {
@@ -447,44 +519,40 @@ async function fireScheduledMessage(
     throw new Error('no platformUserId on lead');
   }
 
-  // Follow-up rows can fire past the 24h Meta messaging window (FOLLOW_UP_2 at
-  // ~24h, FOLLOW_UP_3 at ~36h). Send those with the HUMAN_AGENT tag so they're
-  // policy-compliant (7-day window) instead of an out-of-window RESPONSE that
-  // Meta rejects. Requires the Human Agent feature on the Meta app; if it's not
-  // granted Meta rejects the tagged send — same outcome as before, no regression.
-  const isFollowUp =
-    row.messageType === 'FOLLOW_UP_1' ||
-    row.messageType === 'FOLLOW_UP_2' ||
-    row.messageType === 'FOLLOW_UP_3' ||
-    row.messageType === 'FOLLOW_UP_SOFT_EXIT' ||
-    row.messageType === 'BOOKING_LINK_FOLLOWUP';
   // Thread the exact conversationId to the egress gate (Test 4 fix) so it
   // checks THIS conversation's hold state, not a heuristic guess. This is an
   // AUTOMATED send — operatorInitiated stays false, so a held conversation
   // is correctly blocked.
   const sendOpts = {
-    ...(isFollowUp ? { tag: 'HUMAN_AGENT' as const } : {}),
     conversationId: conversation.id,
     operatorInitiated: false
   };
 
+  let platformMessageId: string;
   try {
     if (lead.platform === 'INSTAGRAM') {
-      await sendInstagramDM(
+      const result = await sendInstagramDM(
         lead.accountId,
         lead.platformUserId,
         messageBody,
         sendOpts
       );
+      platformMessageId = result.messageId;
     } else if (lead.platform === 'FACEBOOK') {
-      await sendFacebookMessage(
+      const result = await sendFacebookMessage(
         lead.accountId,
         lead.platformUserId,
         messageBody,
         sendOpts
       );
+      platformMessageId = result.messageId;
     } else {
       throw new Error(`unsupported platform: ${lead.platform}`);
+    }
+    if (!platformMessageId?.trim()) {
+      throw new Error(
+        `${lead.platform} send returned without a platform message ID`
+      );
     }
   } catch (err) {
     console.error(
@@ -501,7 +569,8 @@ async function fireScheduledMessage(
       conversationId: conversation.id,
       sender: 'AI',
       content: messageBody,
-      timestamp: now
+      timestamp: now,
+      platformMessageId
     }
   });
 
@@ -526,7 +595,8 @@ async function fireScheduledMessage(
   });
 
   console.log(
-    `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} (${lead.platform}/${lead.name})`
+    `[cron/scheduled-messages] fired ${row.messageType} on ${row.id} ` +
+      `(${lead.platform}/${lead.name}, mid=${platformMessageId})`
   );
 
   // ── Silent-lead cascade bookkeeping ──────────────────────────────
