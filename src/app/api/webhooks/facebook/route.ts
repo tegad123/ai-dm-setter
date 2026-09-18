@@ -11,6 +11,11 @@ import {
 } from '@/lib/webhook-processor';
 import { notifyPlatformNotConnected } from '@/lib/platform-not-connected-alert';
 import prisma from '@/lib/prisma';
+import {
+  FAILED_QUALITY_GATE_STATUS,
+  isQualityGateEscalationError
+} from '@/lib/quality-gate-escalation';
+import { reconcileScheduledReplyAfterError } from '@/lib/scheduled-reply-delivery-reconciliation';
 
 // Vercel Hobby defaults to 10s — AI generation + send needs more time.
 // Bumped to 120s to fit the inline-delay-then-reply path.
@@ -424,6 +429,8 @@ async function processFacebookEvents(payload: any): Promise<void> {
                 `(${delaySeconds}s, threshold ${INLINE_DELAY_THRESHOLD_SECONDS}s, scheduledReply=${scheduledReply.id})`
             );
             after(async () => {
+              let processingStartedAt: Date | null = null;
+              let reviewHoldExistedBeforeAttempt: boolean | null = null;
               try {
                 const waitMs =
                   scheduledReply.scheduledFor.getTime() - Date.now();
@@ -497,7 +504,7 @@ async function processFacebookEvents(payload: any): Promise<void> {
                 }
                 const fresh = await prisma.conversation.findUnique({
                   where: { id: targetConvoId },
-                  select: { aiActive: true }
+                  select: { aiActive: true, awaitingHumanReview: true }
                 });
                 if (!fresh?.aiActive) {
                   console.log(
@@ -513,7 +520,9 @@ async function processFacebookEvents(payload: any): Promise<void> {
                   });
                   return;
                 }
-                const processingStartedAt = new Date();
+                reviewHoldExistedBeforeAttempt =
+                  fresh.awaitingHumanReview === true;
+                processingStartedAt = new Date();
                 await processScheduledReply(targetConvoId, accountId);
                 const deliveredMessage = await prisma.message.findFirst({
                   where: {
@@ -550,13 +559,67 @@ async function processFacebookEvents(payload: any): Promise<void> {
                   `[facebook-webhook] inline reply delivered for ${targetConvoId}`
                 );
               } catch (afterErr) {
-                // Reset to PENDING so the cron retries — never leave it stuck
-                // in PROCESSING (that would strand the reply).
+                if (processingStartedAt) {
+                  const reconciled = await reconcileScheduledReplyAfterError({
+                    scheduledReplyId: scheduledReply.id,
+                    conversationId: targetConvoId,
+                    scheduledReplyCreatedAt: scheduledReply.createdAt,
+                    reviewHoldExistedBeforeAttempt,
+                    error: afterErr
+                  }).catch((reconciliationError) => {
+                    console.error(
+                      `[facebook-webhook] inline delivery reconciliation failed for ${targetConvoId}:`,
+                      reconciliationError
+                    );
+                    return null;
+                  });
+                  if (reconciled) {
+                    console.warn(
+                      `[facebook-webhook] inline reply ${scheduledReply.id} raised after Meta delivery ` +
+                        `(message=${reconciled.deliveredMessage.id}); reconciled as SENT`
+                    );
+                    return;
+                  }
+                }
+
+                // A terminal quality-gate result must never be reset to
+                // PENDING. The generation path already created the review
+                // hold and operator evidence; persist the matching terminal
+                // job state just like the Instagram inline path and cron.
+                if (isQualityGateEscalationError(afterErr)) {
+                  await prisma.scheduledReply
+                    .update({
+                      where: { id: scheduledReply.id },
+                      data: {
+                        status: FAILED_QUALITY_GATE_STATUS,
+                        attempts: scheduledReply.attempts + 1,
+                        scheduledFor: new Date(),
+                        processedAt: new Date(),
+                        lastError: afterErr.message.slice(0, 2000),
+                        ...(afterErr.generatedResult
+                          ? { generatedResult: afterErr.generatedResult }
+                          : {})
+                      }
+                    })
+                    .catch(() => null);
+                  console.warn(
+                    `[facebook-webhook] inline reply ${scheduledReply.id} escalated to human review after terminal quality failure`
+                  );
+                  return;
+                }
+
+                // Retry only non-terminal failures. The status predicate
+                // prevents this handler from reviving a row another worker
+                // has already finalized.
                 await prisma.scheduledReply
-                  .update({
-                    where: { id: scheduledReply.id },
+                  .updateMany({
+                    where: {
+                      id: scheduledReply.id,
+                      status: 'PROCESSING'
+                    },
                     data: {
                       status: 'PENDING',
+                      scheduledFor: new Date(),
                       lastError:
                         afterErr instanceof Error
                           ? afterErr.message.slice(0, 500)

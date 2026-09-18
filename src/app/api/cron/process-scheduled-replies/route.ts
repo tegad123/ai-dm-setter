@@ -9,6 +9,7 @@ import {
   processScheduledReply,
   scheduledReplyCompletedAsSuggestion
 } from '@/lib/webhook-processor';
+import { reconcileScheduledReplyAfterError } from '@/lib/scheduled-reply-delivery-reconciliation';
 import {
   FAILED_QUALITY_GATE_STATUS,
   isQualityGateEscalationError,
@@ -442,8 +443,15 @@ export async function GET(req: NextRequest) {
       console.log(
         `[cron] processing reply ${reply.id} convo=${reply.conversationId}`
       );
+      const processingStartedAt = new Date();
+      let reviewHoldExistedBeforeAttempt: boolean | null = null;
       try {
-        const processingStartedAt = new Date();
+        const conversationBeforeAttempt = await prisma.conversation.findUnique({
+          where: { id: reply.conversationId },
+          select: { awaitingHumanReview: true }
+        });
+        reviewHoldExistedBeforeAttempt =
+          conversationBeforeAttempt?.awaitingHumanReview ?? null;
         await processScheduledReply(reply.conversationId, reply.accountId, {
           messageType: reply.messageType,
           generatedResult: reply.generatedResult,
@@ -544,6 +552,27 @@ export async function GET(req: NextRequest) {
           `[cron] Failed to process scheduled reply ${reply.id}:`,
           err
         );
+        const reconciled = await reconcileScheduledReplyAfterError({
+          scheduledReplyId: reply.id,
+          conversationId: reply.conversationId,
+          scheduledReplyCreatedAt: reply.createdAt,
+          reviewHoldExistedBeforeAttempt,
+          error: err
+        }).catch((reconciliationError) => {
+          console.error(
+            `[cron] delivery reconciliation failed for reply ${reply.id}:`,
+            reconciliationError
+          );
+          return null;
+        });
+        if (reconciled) {
+          console.warn(
+            `[cron] reply ${reply.id} raised after Meta delivery ` +
+              `(message=${reconciled.deliveredMessage.id}); reconciled as SENT`
+          );
+          sent++;
+          continue;
+        }
         if (isQualityGateEscalationError(err)) {
           const failedAt = new Date();
           await prisma.scheduledReply.update({

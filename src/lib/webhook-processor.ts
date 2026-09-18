@@ -349,7 +349,7 @@ async function escalateQualityGateFailure(params: {
   };
   result: GenerateReplyResult;
   latestLeadTimestamp?: Date | null;
-}): Promise<void> {
+}): Promise<Date> {
   const { conversationId, accountId, lead, result, latestLeadTimestamp } =
     params;
   const hardFails = result.qualityGateHardFails ?? [];
@@ -361,6 +361,7 @@ async function escalateQualityGateFailure(params: {
     .filter((message): message is string => typeof message === 'string')
     .join('\n')
     .slice(0, 1200);
+  const escalatedAt = new Date();
 
   if (result.suggestionId) {
     await prisma.aISuggestion
@@ -384,7 +385,7 @@ async function escalateQualityGateFailure(params: {
       awaitingHumanReview: true,
       awaitingAiResponse: true,
       awaitingSince: latestLeadTimestamp ?? new Date(),
-      lastSilentStopAt: new Date()
+      lastSilentStopAt: escalatedAt
     }
   });
   await prisma.scheduledReply
@@ -429,6 +430,8 @@ async function escalateQualityGateFailure(params: {
       err
     );
   }
+
+  return escalatedAt;
 }
 
 async function notifyDeliveryFailure(params: {
@@ -3813,7 +3816,7 @@ export async function scheduleAIReply(
   }
 
   if (isTerminalQualityGateResult(result)) {
-    await escalateQualityGateFailure({
+    const escalatedAt = await escalateQualityGateFailure({
       conversationId,
       accountId,
       lead,
@@ -3826,7 +3829,8 @@ export async function scheduleAIReply(
       suggestionId: result.suggestionId,
       generatedResult: buildQualityGateGeneratedResult(result),
       hardFails: result.qualityGateHardFails,
-      awaitingSince: latestLeadMessage?.timestamp ?? null
+      awaitingSince: latestLeadMessage?.timestamp ?? null,
+      escalatedAt
     });
   }
 
@@ -7667,7 +7671,7 @@ async function deliverStoredReply(
       orderBy: { timestamp: 'desc' },
       select: { timestamp: true }
     });
-    await escalateQualityGateFailure({
+    const escalatedAt = await escalateQualityGateFailure({
       conversationId,
       accountId,
       lead,
@@ -7680,7 +7684,8 @@ async function deliverStoredReply(
       suggestionId: result.suggestionId ?? null,
       generatedResult: buildQualityGateGeneratedResult(result),
       hardFails: result.qualityGateHardFails ?? [],
-      awaitingSince: latestLead?.timestamp ?? null
+      awaitingSince: latestLead?.timestamp ?? null,
+      escalatedAt
     });
   }
 

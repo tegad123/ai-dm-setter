@@ -75,6 +75,7 @@ export class QualityGateEscalationError extends Error {
   readonly generatedResult?: Prisma.InputJsonValue;
   readonly hardFails: string[];
   readonly awaitingSince: Date | null;
+  readonly escalatedAt: Date | null;
 
   constructor(input: {
     conversationId?: string;
@@ -83,6 +84,7 @@ export class QualityGateEscalationError extends Error {
     generatedResult?: Prisma.InputJsonValue;
     hardFails?: string[] | null;
     awaitingSince?: Date | null;
+    escalatedAt?: Date | null;
     message?: string;
   }) {
     super(input.message ?? QUALITY_GATE_FAILURE_LAST_ERROR);
@@ -93,6 +95,7 @@ export class QualityGateEscalationError extends Error {
     this.generatedResult = input.generatedResult;
     this.hardFails = input.hardFails ?? [];
     this.awaitingSince = input.awaitingSince ?? null;
+    this.escalatedAt = input.escalatedAt ?? null;
   }
 }
 
