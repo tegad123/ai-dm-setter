@@ -23,7 +23,7 @@
 export function replyAnswersAsk(reply: string | null | undefined): boolean {
   const t = (reply ?? '').trim();
   if (t.length === 0) return false;
-  const lower = t.toLowerCase();
+  const lower = t.toLowerCase().replace(/[’‘]/g, "'");
   const core = lower
     .replace(
       /^(and|but|so|ok(ay)?|yeah?|yes|yep|yup|nah?|nope|sure|hmm+|well|bro|man)[\s,]+/i,
@@ -36,6 +36,20 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
   // also asks something.
   const hasAnswerSubstance =
     /\b(i|we|my|i'?m|i'?ve|im|ive)\s+(want|wanna|need|make|makin|earn|been|have|got|do|did|am|feel|just|already|trade|traded|started|work|working|use|used)\b/i.test(
+      core
+    ) ||
+    // Location replies commonly answer the setter and then ask the same
+    // question back: "I'm based in Nairobi, Kenya, you?". The generic
+    // interrogative check below used to classify those as pure questions,
+    // leaving the script on the location step and making the next generation
+    // repeat the greeting and location ask.
+    /\b(i'?m|im|we'?re)\s+(?:currently\s+)?(?:based|located|living|staying)\b/i.test(
+      core
+    ) ||
+    /\b(i|we)\s+(?:currently\s+)?(?:live|reside|stay)\s+(?:in|at|near)\b/i.test(
+      core
+    ) ||
+    /\b(i'?m|im|we'?re)\s+(?:currently\s+)?(?:from|in|at|near)\s+\S/i.test(
       core
     ) ||
     /\b\d/.test(core) ||
@@ -60,16 +74,36 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
     (core.endsWith('?') || startsInterrogative) &&
     core.split(/\s+/).length <= 20;
 
+  // A concise answer followed by a reciprocal question still answers the
+  // setter. This also covers terse location replies such as "Nairobi, you?"
+  // that do not include a first-person verb. Explicit deferrals and pricing
+  // questions remain blocked below.
+  const reciprocalQuestion = core.match(
+    /^(.+?)[,;]?\s*(?:and\s+)?(?:you|u|wbu|hbu|what about you)\?$/i
+  );
+  const isPureReciprocalQuestion =
+    /^(?:and\s+)?(?:you|u|wbu|hbu|what about you)\?$/i.test(core);
+  const hasAnswerBeforeReciprocalQuestion =
+    !!reciprocalQuestion?.[1]?.trim() &&
+    !/^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should|whats?|hows?)\b/i.test(
+      reciprocalQuestion[1].trim()
+    );
+
   // A concrete quantity/number/duration wins even over a deferral clause
   // ("not yet, but i've got 5k ready" answers the capital ask). A BARE deferral
   // has no such substance and still blocks.
   const hasConcreteAnswer =
     /\b\d/.test(core) ||
     /\b(a\s+)?(month|year|week|day)s?\b/i.test(core) ||
-    /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core);
+    /\b(enough|plenty)\b/i.test(core) ||
+    /\b(about|around|like|roughly|maybe)\s+(?:\$?\d|one|two|three|four|five|six|seven|eight|nine|ten|a few|a couple)\b/i.test(
+      core
+    );
   if (hasConcreteAnswer) return true;
   if (deferral) return false;
   if (pricingQuestion) return false;
+  if (isPureReciprocalQuestion) return false;
+  if (hasAnswerBeforeReciprocalQuestion) return true;
   if (hasAnswerSubstance) return true;
   if (isPureQuestion) return false;
   return true;

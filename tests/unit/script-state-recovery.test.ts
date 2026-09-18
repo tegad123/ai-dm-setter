@@ -75,6 +75,31 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 2);
   });
 
+  it('advances after a location answer that includes a reciprocal question', () => {
+    const locationScript = {
+      id: 'location_sequence',
+      steps: [
+        askStep(1, 'Location', 'Where are you currently based out of?'),
+        askStep(2, 'Experience', 'How long have you been trading?')
+      ]
+    } as any;
+
+    const stage = computeSystemStage(locationScript, {}, [
+      {
+        sender: 'AI',
+        content: 'Where are you currently based out of?',
+        timestamp: new Date('2026-09-18T16:27:11Z')
+      },
+      {
+        sender: 'LEAD',
+        content: "I'm based in Nairobi, Kenya🇰🇪,You?",
+        timestamp: new Date('2026-09-18T16:33:31Z')
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 2);
+  });
+
   it('advances past the +1 cap when every intervening step is PROVABLY complete (F5.1 1b)', () => {
     // Steps 1 AND 2 were both asked + answered in history → both provably
     // complete → true candidate is step 3. Pre-1b, this was wrongly capped to

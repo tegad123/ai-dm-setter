@@ -81,6 +81,14 @@ There is no single cause for all unanswered messages. The confirmed classes are:
     pending, and the cron could preserve a failed quality job after a confirmed
     delivery. The reconciliation correction is deployed; historical
     contradictory rows remain unrecovered.
+17. A valid location answer ending in a reciprocal question, such as
+    `I'm based in Nairobi, Kenya, you?`, can be classified as a non-answer. The
+    script then repeats its earlier question and the quality gate holds the
+    duplicate instead of sending it.
+18. The Facebook ingress path still has several code-level parity and durability
+    risks. These are documented separately below. They are not all proven causes
+    of a current silent conversation and must not be represented as production
+    incidents without the listed controlled proof.
 
 ## Immediate incident ledger at 2026-09-18 19:18 UTC
 
@@ -150,6 +158,9 @@ only prepared in code, and what still lacks production proof.
   message ID, and a correct continuation.
 - The delayed ManyChat and Facebook terminal-state corrections need
   conversation-level production proof.
+- A valid location answer that ends with a reciprocal question can be
+  misclassified as a non-answer, causing a duplicate draft and terminal quality
+  hold. The correction is under validation and has not been deployed yet.
 - Historical ownership failures, Rob's suppressed turn, Rade's stranded event,
   and existing terminal failures remain preserved and unreplayed.
 - Distress, human-review, AI-off, and terminal quality cases will remain silent
@@ -158,21 +169,116 @@ only prepared in code, and what still lacks production proof.
 
 ## Current status at a glance
 
-| Area | Current status | What remains |
-| --- | --- | --- |
-| ManyChat opener truth | Code correction deployed | Fresh opener and native Meta echo proof |
-| Instagram first-reply intake | Durable worker deployed | Fix or manually satisfy the ManyChat tag gate, then run a fresh test |
-| ManyChat new-follower automation | Pre-test flow restored; no general tag rollout | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
-| Facebook callback parity | Code correction deployed | Fresh Facebook callback, one job, Meta message ID, and continuation proof |
-| Facebook outbound echoes | `message_echoes` restored at 2026-09-18 18:54 UTC | Verify one phone/ManyChat echo enters Convlo |
-| Delayed ManyChat first replies | Code correction deployed | Prove delayed first-reply routing with no duplicate |
-| Facebook queued first reply | Code correction deployed | Obtain a real Facebook receipt, one reply job, Meta message ID, and continuation proof |
-| Facebook terminal-quality state | Code correction deployed | Prove a delivered reply cannot remain terminally failed |
-| Meta thread ownership | No new `2534037` after 2026-09-17 20:00 UTC | Identify or document routing owner and separately review 59 stranded failures |
-| Script suppression | Guard deployed | Rob's historical turn remains unrecovered |
-| Safety and review holds | Working as designed | Monitored operator queue and explicit respond, resume, or close action |
-| Historical failures | Preserved, not replayed | Dry-run eligibility list and separate approval before any replay |
-| Post-deploy Instagram traffic | No Daniel events since PR #50 deployment | A fresh authorized test is still required |
+| Area                             | Current status                                     | What remains                                                                              |
+| -------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| ManyChat opener truth            | Code correction deployed                           | Fresh opener and native Meta echo proof                                                   |
+| Instagram first-reply intake     | Durable worker deployed                            | Fix or manually satisfy the ManyChat tag gate, then run a fresh test                      |
+| ManyChat new-follower automation | Pre-test flow restored; no general tag rollout     | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
+| Facebook callback parity         | Code correction deployed                           | Fresh Facebook callback, one job, Meta message ID, and continuation proof                 |
+| Facebook outbound echoes         | `message_echoes` restored at 2026-09-18 18:54 UTC  | Verify one phone/ManyChat echo enters Convlo                                              |
+| Delayed ManyChat first replies   | Code correction deployed                           | Prove delayed first-reply routing with no duplicate                                       |
+| Facebook queued first reply      | Code correction deployed                           | Obtain a real Facebook receipt, one reply job, Meta message ID, and continuation proof    |
+| Facebook terminal-quality state  | Code correction deployed                           | Prove a delivered reply cannot remain terminally failed                                   |
+| Location answer with `you?`      | Live defect confirmed; correction under validation | Deploy, prove correct advancement, then separately review Hussein                         |
+| Meta thread ownership            | No new `2534037` after 2026-09-17 20:00 UTC        | Identify or document routing owner and separately review 59 stranded failures             |
+| Script suppression               | Guard deployed                                     | Rob's historical turn remains unrecovered                                                 |
+| Safety and review holds          | Working as designed                                | Monitored operator queue and explicit respond, resume, or close action                    |
+| Historical failures              | Preserved, not replayed                            | Dry-run eligibility list and separate approval before any replay                          |
+| Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment           | A fresh authorized test is still required                                                 |
+
+## Read-only 24-hour production audit at 2026-09-18 19:30 UTC
+
+This audit covered `2026-09-17 19:30 UTC` through `2026-09-18 19:30 UTC`. It
+used persisted production records only. No conversation, job, hold, setting, or
+message was changed.
+
+### Traffic and scheduler health
+
+- 154 inbound lead messages entered 47 conversations.
+- 31 conversations ended on an inbound message with no later Meta-confirmed
+  outbound message.
+- 20 of those 31 had no scheduled reply. Seventeen were `nickdoesfutures`
+  Instagram conversations with AI intentionally off, one was Daniel Instagram
+  conversation `@ss.approved` with AI off, and two were Daniel Facebook distress
+  or human-review holds (`Ifeanyi` and `Ashy`).
+- 11 of the 31 ended in a terminal reply job with no later delivered message.
+- At audit time, there were zero `PROCESSING` jobs and zero overdue `PENDING`
+  jobs. The system was not blocked by a global scheduler backlog.
+- Five recent conversations were in active human review. The recent Instagram
+  quality holds were `@hxmzxx`, `@lukooyafarid`, and `@a_m_hussein_`; the two
+  Facebook holds were the distress/review cases above.
+- Facebook received three inbound messages in three Daniel conversations. One
+  received a delivered reply and two were the known intentional holds. Facebook
+  had no terminal jobs and no outbound rows missing Meta message IDs in this
+  window.
+
+### Job outcomes
+
+There were 97 reply jobs: 56 `SENT`, 23 `CANCELLED`, 14 `FAILED`, and 4
+`FAILED_QUALITY_GATE`. A terminal database status alone is not sufficient proof
+that a message was absent:
+
+- 11 terminal jobs remain the current unanswered turn;
+- 3 terminal jobs later recovered in a newer processing sequence;
+- 4 terminal jobs conflict with a same-window AI message carrying a Meta message
+  ID and must be treated as historical state contradictions;
+- 7 apparently undelivered rows were normal debounce or supersession
+  cancellations, not failures.
+
+### Current terminal unanswered turns
+
+| Handle           | Conversation                | Triggering inbound          | Reply job                   | Persisted reason                                          |
+| ---------------- | --------------------------- | --------------------------- | --------------------------- | --------------------------------------------------------- |
+| `aiden.tradez`   | `cmu5xk7rr000ejk04gggqzkup` | `cmu5xk80m000gjk04x8ggzk4f` | `cmu5xkgmp000hjk04qq42dpt5` | Meta `2534037`, Convlo was not thread owner               |
+| `mashudu_mafela` | `cmu5xzwk5000ljk04y6qwgx7y` | `cmu5xzwt4000njk04vjbml811` | `cmu5y05dq000ojk04yak0xexc` | Meta `2534037`, Convlo was not thread owner               |
+| `tegaumukoro_`   | `cmpygxm7h001li804ohiovrlo` | `cmu5z60kt0009jq041zp9xt49` | `cmu5z69u1000ajq04zhjfqg5m` | AI provider or credential error                           |
+| `danny.6rown`    | `cmu5kulks000el504ktg3vuqf` | `cmu64twmj001skt044o86wg93` | `cmu64u5nc001tkt04fvxw6zfj` | Processing completed without delivery                     |
+| `lifeofjacklin`  | `cmu59vj7r000ijs04rbk63x85` | `cmu667cn1003nkt04wot3io4e` | `cmu667m91003rkt0476efoyxm` | Processing completed without delivery                     |
+| `hxmzxx`         | `cmu66335j0033kt0416ylu41q` | `cmu668x2j003xkt04ecc2l6fb` | `cmu6695gf003ykt04iu17q5a0` | Quality gate and human review                             |
+| `aloysx7`        | `cmu64am8k0018kt046uocss96` | `cmu66cx2q0040kt04unuwfats` | `cmu66d5nh0041kt04ck3anmam` | Processing completed without delivery                     |
+| `syed_10129`     | `cmu5r29ji003tl204d9ual197` | `cmu6cagsm0014l7046hm7qnzp` | `cmu6capvg0015l704g7g8jf9v` | Processing completed without delivery                     |
+| `lukooyafarid`   | `cmu6eijcz001fl704l8q7a6mm` | `cmu6g3m070004if04qzisc83t` | `cmu6g3urb0005if04zz3mz2iv` | Quality gate and human review                             |
+| `richest_puppi`  | `cmu5fshmo000slb04w3ktf0g`  | `cmu729jr40001js041jpnqj4q` | `cmu729sit0002js04lzfzncy5` | Processing completed without delivery                     |
+| `a_m_hussein_`   | `cmu7668hq002ijs0459w4kr91` | `cmu76gy0h002sjs04h2vie5ns` | `cmu76h6mz002tjs04ezfxjho8` | Valid location answer misclassified; duplicate draft held |
+
+This table is an investigation and recovery ledger. It is not authorization to
+clear holds or replay any message. Each candidate needs messaging-window,
+ownership, duplicate, later-outbound, scheduled-work, and safety checks before a
+separately approved recovery.
+
+### ManyChat delivery evidence
+
+- Production contains zero `ManyChatHandoffReceipt` rows on either platform.
+  The durable worker is deployed but has never processed a real production
+  receipt.
+- 69 historical Daniel Instagram outbound rows were stored as
+  `MANYCHAT`/`MANYCHAT_FLOW` without a provider ID, Meta message ID, or delivery
+  status. All are planned opener context and cannot be counted as sent.
+- No new missing-ID opener row appeared after the PR #50 deployment boundary.
+  This is evidence that the delivery-truth correction stopped creating new
+  false sent-history rows.
+- The 69 audit rows remain preserved. They must not be replayed merely because
+  they lack delivery evidence.
+
+### Hussein ManyChat chronology
+
+ManyChat records that Hussein's `Say hi to new followers` automation fired on
+2026-09-07 at 09:49, while the lead did not reply until 2026-09-18 at 11:25.
+The old opener predates the current queued first-reply configuration. The same
+conversation therefore proves a delayed legacy-context gap and the location
+answer defect; it does not prove that the currently published callback failed.
+
+The currently published follower flow is:
+
+1. Follow-to-DM trigger;
+2. context-only external request to `/api/webhooks/manychat-handoff` with
+   `scheduleAi:false`;
+3. Instagram Opening DM.
+
+It does not add the `Convlo - Awaiting first reply` tag. The Instagram Default
+Reply invokes queued first-reply mode only when that tag exists. Until the
+controlled proof passes, add the tag manually only to the authorized fresh test
+contact after the opener is visibly delivered in both Instagram inboxes.
 
 ## Issue 1: phantom ManyChat opener bubbles
 
@@ -377,18 +483,18 @@ Nineteen conversations received lead inbound. Nine later received AI responses;
 all 18 resulting outbound AI rows have Meta message IDs. Ten ended on a lead
 message with no later outbound:
 
-| Lead | Conversation | Current cause |
-| --- | --- | --- |
-| Ashy Elbowz | `cmu554cg4000gl00494i0tzqv` | Distress and human-review hold |
-| Ifeanyi Chukwu | `cmu4jgmrd000wjv043j65u1um` | Distress and human-review hold |
-| Dessy Browñ | `cmu5izhew0030jg044lkgm3vd` | Five-attempt terminal quality failure: off-script low-ticket question |
-| Kada Dubois | `cmu4i4u4c0063jy04ycom87m8` | Five-attempt repeated urgency-question failure |
-| Isreal Ibrahim | `cmu4om1ko000ai804slhglgej` | Five-attempt repeated-question guard failure |
-| Man-zan Koua-dio | `cmu3wl6oq002kle04w7q8k57w` | Conversation AI disabled |
-| Michael Keekae | `cmu3tr3gj000skz0433hprvyt` | Conversation AI disabled |
-| Itz Michael | `cmu3flg3h0003jv04wufth00q` | Conversation AI disabled |
-| Chris Duke | `cmu3nyuyg000klc04yuf2uq2b` | Historical No-response suppression; guard later deployed |
-| Achuma Ngxola | `cmu35ml3y003vjq04ba6u260r` | Terminal quality failure and human review |
+| Lead             | Conversation                | Current cause                                                         |
+| ---------------- | --------------------------- | --------------------------------------------------------------------- |
+| Ashy Elbowz      | `cmu554cg4000gl00494i0tzqv` | Distress and human-review hold                                        |
+| Ifeanyi Chukwu   | `cmu4jgmrd000wjv043j65u1um` | Distress and human-review hold                                        |
+| Dessy Browñ      | `cmu5izhew0030jg044lkgm3vd` | Five-attempt terminal quality failure: off-script low-ticket question |
+| Kada Dubois      | `cmu4i4u4c0063jy04ycom87m8` | Five-attempt repeated urgency-question failure                        |
+| Isreal Ibrahim   | `cmu4om1ko000ai804slhglgej` | Five-attempt repeated-question guard failure                          |
+| Man-zan Koua-dio | `cmu3wl6oq002kle04w7q8k57w` | Conversation AI disabled                                              |
+| Michael Keekae   | `cmu3tr3gj000skz0433hprvyt` | Conversation AI disabled                                              |
+| Itz Michael      | `cmu3flg3h0003jv04wufth00q` | Conversation AI disabled                                              |
+| Chris Duke       | `cmu3nyuyg000klc04yuf2uq2b` | Historical No-response suppression; guard later deployed              |
+| Achuma Ngxola    | `cmu35ml3y003vjq04ba6u260r` | Terminal quality failure and human review                             |
 
 There is currently no active Facebook ScheduledReply backlog: no pending or
 processing job and no retryable failed job below five attempts. This means the
@@ -642,13 +748,13 @@ Five Daniel Instagram follower callbacks immediately before PR #50 created
 legacy planned opener rows with no provider ID, no Meta message ID, no lead
 reply, no job, and no receipt:
 
-| Handle | Conversation | Planned opener row | Time UTC |
-| --- | --- | --- | --- |
+| Handle              | Conversation                | Planned opener row          | Time UTC |
+| ------------------- | --------------------------- | --------------------------- | -------- |
 | `@squirrel.8425393` | `cmu77pjjb0003lb04vrwwnh26` | `cmu77pjqi0005lb04s3di3sz5` | 17:08:12 |
-| `@deepak_parthu` | `cmu78cm6i0003lh04jipvv8tq` | `cmu78cmca0005lh0457ubb8ly` | 17:26:08 |
-| `@park.her` | `cmu7987z80009lh04rqhiww2v` | `cmu79885d000blh04rkrrk4ji` | 17:50:43 |
-| `@nkdesigns_gh` | `cmu7a289o000flh04sachhssy` | `cmu7a28g5000hlh042j7z1jxa` | 18:14:03 |
-| `@nivekiser` | `cmu7af9bz000llh04i55ho8ne` | `cmu7af9if000nlh04jba6i1to` | 18:24:11 |
+| `@deepak_parthu`    | `cmu78cm6i0003lh04jipvv8tq` | `cmu78cmca0005lh0457ubb8ly` | 17:26:08 |
+| `@park.her`         | `cmu7987z80009lh04rqhiww2v` | `cmu79885d000blh04rkrrk4ji` | 17:50:43 |
+| `@nkdesigns_gh`     | `cmu7a289o000flh04sachhssy` | `cmu7a28g5000hlh042j7z1jxa` | 18:14:03 |
+| `@nivekiser`        | `cmu7af9bz000llh04i55ho8ne` | `cmu7af9if000nlh04jba6i1to` | 18:24:11 |
 
 These are opener-delivery discrepancies, not AI nonresponse cases. Convlo never
 received a lead answer, so the AI, scheduler, egress, and ownership paths never
@@ -821,6 +927,114 @@ accepted outbound AI messages.
 - Add a regression test for a delivered Meta message followed by a terminal
   quality exception and assert one truthful final state.
 
+## Issue 18: a valid location answer with a question-back can stall the script
+
+**Status:** Confirmed live code defect. A correction is prepared and under
+validation; production proof remains open.
+
+At 2026-09-18 16:33:31 UTC, Instagram lead `@a_m_hussein_` sent:
+
+> I'm based in Nairobi, Kenya🇰🇪,You?
+
+The message is visible in both the native `@daetradez` Instagram thread and
+Convlo. It has a native Meta message ID, so this is not an inbound or ownership
+failure.
+
+Exact production chain:
+
+- lead `cmu7668hp002gjs04etkfg6aw`;
+- conversation `cmu7668hq002ijs0459w4kr91`;
+- inbound message `cmu76gy0h002sjs04h2vie5ns`;
+- scheduled reply `cmu76h6mz002tjs04ezfxjho8`;
+- final job state `FAILED_QUALITY_GATE`;
+- `awaitingAiResponse=true` and `awaitingHumanReview=true`;
+- no outbound was sent for this turn.
+
+The shared `replyAnswersAsk` predicate treated the whole message as a pure
+question because it ended in `You?`; it did not recognize `I'm based in ...`
+as answer substance. The legacy position keeper therefore recorded
+`ask_reply_did_not_answer`, kept the conversation on Step 1, and generated the
+old greeting and location question again. The quality gate correctly rejected
+that duplicate instead of sending it.
+
+The correction expands answer detection for location declarations and for a
+substantive answer followed by a reciprocal `you?`, `wbu?`, or `hbu?`. It keeps
+pure question-backs, pricing questions, and explicit deferrals classified as
+non-answers. Regression coverage includes the exact Hussein message and asserts
+that the legacy position keeper advances to the next step.
+
+Hussein also exposes a separate ManyChat context discrepancy. Instagram shows
+the Follow-to-DM opener, while this Convlo conversation is `source=INBOUND`, has
+no stored ManyChat handoff time, and has no receipt. Convlo therefore selected
+the direct warm-inbound branch and repeated an introduction that ManyChat had
+already shown in Instagram. This conversation predates the latest published
+follower-flow configuration and cannot prove that the current callback now
+works. A fresh controlled contact is still required.
+
+## Issue 19: unresolved Facebook ingress and reconciliation risks
+
+**Status:** Confirmed by code audit; production impact is unproven unless stated
+below. No correction for these items is included in the location-answer change.
+
+The following risks remain after the deployed Facebook parity work:
+
+1. **Queued callback and native message race.** Instagram reconciles a queued
+   synthetic first reply with the later native Meta message. Facebook does not
+   enter that reconciliation path. A Facebook queued callback can therefore
+   create a synthetic lead and job, then the native Messenger webhook can create
+   a second lead message, cancel the first job, and schedule another. Closure
+   requires a Facebook `queued_first_reply` followed by the same native MID,
+   with exactly one lead row, one active job, and the receipt linked to it.
+2. **No immediate durable Facebook webhook receipt.** The Facebook route awaits
+   profile lookup, database work, and scheduling before returning HTTP 200.
+   There is no raw durable ingress record before that work. A slow or terminated
+   request can therefore leave a native Facebook message absent from Convlo.
+   Closure requires an intentionally delayed controlled webhook test and proof
+   that the event survives request interruption.
+3. **Display-name identity fallback.** When exact Facebook PSID lookup misses,
+   shared ingress can fall back to a case-insensitive display name and overwrite
+   that lead's platform ID. Two people named `John Smith` can be merged. The
+   production audit found no current duplicate Facebook PSID or display-name
+   group, so this is a verified latent defect rather than a proven current
+   collision.
+4. **Postbacks and delivery/read events are subscribed but ignored.** The route
+   processes only events containing `event.message`. A Messenger button click,
+   delivery receipt, or read receipt can therefore succeed in Meta without
+   advancing or reconciling Convlo. Signed fixtures for `postback`,
+   `delivery.mids`, and `read.watermark` currently produce no persisted action.
+5. **Some valid Facebook echoes are discarded.** Image-only Page/admin echoes,
+   unsupported attachment-only echoes, and outbound echoes for a contact absent
+   from Convlo are dropped. Content fallback can also collapse two legitimate
+   identical messages sent within ten minutes even when they have different
+   Meta message IDs.
+6. **Meta send and local persistence are not atomic.** Convlo sends to Meta
+   before creating its outbound message row. If the process stops after Meta
+   accepts the send but before the database insert, Facebook can show the reply
+   while Convlo does not. A retry can duplicate it because reconciliation has no
+   stored Meta ID to match.
+7. **Concurrent lead creation lacks a database uniqueness guarantee.** Ingress
+   reads and later creates a lead without a unique
+   `(accountId, platform, platformUserId)` constraint. Concurrent retries or a
+   callback/native race can create duplicate Facebook leads and conversations.
+8. **The conversation screen hides the stop reason.** Its list payload does not
+   include `awaitingHumanReview`, distress state, `awaitingAiResponse`, or the
+   latest reply-job status/error. Operators can see AI enabled while the thread
+   is actually held or terminally failed.
+9. **Receipt re-entry contract is undefined.** Receipt uniqueness currently
+   permits one queued first reply per account, platform, and subscriber for all
+   time. A legitimate later campaign or re-entry with a different payload
+   conflicts unless a versioned reset policy is defined.
+10. **Legacy button deduplication is lifetime content-only.** Repeating a valid
+    label such as `Yes` later can be discarded as a duplicate even when it is a
+    new turn.
+
+The minimum Facebook closure exercise is one real Page or phone echo plus one
+real queued callback/native race. It must prove one identity, one lead message,
+one active job, one receipt link, one Meta message ID, and one normal next-turn
+continuation. Separate fixture tests should cover postback, delivery, read,
+same-name users, repeated text with different MIDs, and a crash immediately
+after Meta accepts a send.
+
 ## Working production controls
 
 ### Penguin
@@ -874,18 +1088,21 @@ flow in which ManyChat actually sends the opener.
    one normal continuation, including Meta message IDs and duplicate checks.
 4. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
    Meta-confirmed echo.
-5. Correct delayed ManyChat first-reply routing so source and durable handoff
-   state remain authoritative after two hours.
+5. Prove the deployed delayed ManyChat first-reply routing correction on a real
+   delayed first reply.
 6. Run the deployed Facebook durable `queued_first_reply` path with a real
    authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
    and normal continuation.
-7. Align Facebook terminal-quality handling with Instagram and reconcile a
-   delivered Meta message before committing terminal failure.
+7. Prove the deployed Facebook terminal-quality reconciliation on a real
+   conversation.
 8. Complete the separate Facebook callback/completion production proof.
 9. Add an operator recovery flow for safety/review holds and separately approved
    historical failures.
 10. Produce a dry-run eligibility list for the 59 stranded ownership failures and
-   other historical no-delivery turns. Review before any replay.
+    other historical no-delivery turns. Review before any replay.
+11. Deploy and prove the location-answer correction with a fresh reciprocal
+    answer. Review Hussein separately before clearing its human-review hold or
+    replaying its failed turn.
 
 ## Open items as of the PR #50 deployment
 
@@ -896,13 +1113,16 @@ flow in which ManyChat actually sends the opener.
   completion callbacks.
 - **Facebook subscription proof:** `message_echoes` is restored on the live
   Page. One real outbound echo must still prove the end-to-end path.
-- **Delayed first-reply routing:** ManyChat conversations older than two hours
-  are still relabelled as direct inbound by the current script serializer.
+- **Delayed first-reply routing proof:** the correction is deployed, but a real
+  delayed first reply has not yet supplied conversation-level proof.
 - **Facebook receipt parity proof:** platform-aware durable receipt intake is
   deployed, but no real Facebook receipt, job, Meta message ID, or continuation
   has been observed yet.
-- **Facebook contradictory terminal state:** a Meta-confirmed AI message and a
-  `FAILED_QUALITY_GATE` job can coexist for the same processing sequence.
+- **Facebook terminal-state proof:** the correction is deployed, but no fresh
+  conversation has yet proved reconciliation after a delivered Meta message.
+- **Location answer plus question-back:** Hussein proves this can create a
+  quality hold after a valid answer. The code correction still needs deployment
+  and a fresh real-conversation proof. Hussein itself has not been replayed.
 - **ManyChat configuration:** ordinary send nodes should report after the send;
   the special Follow-to-DM opener has no normal post-send action, so its early
   callback must remain context-only. The new-follower flow does not add the
