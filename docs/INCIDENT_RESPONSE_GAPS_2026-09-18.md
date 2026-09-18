@@ -1084,17 +1084,16 @@ works. A fresh controlled contact is still required.
 ## Issue 19: unresolved Facebook ingress and reconciliation risks
 
 **Status:** Confirmed by code audit; production impact is unproven unless stated
-below. No correction for these items is included in the location-answer change.
+below. The callback/native race correction is deployed in `6e481f3`; the other
+items remain open.
 
 The following risks remain after the deployed Facebook parity work:
 
-1. **Queued callback and native message race.** Instagram reconciles a queued
-   synthetic first reply with the later native Meta message. Facebook does not
-   enter that reconciliation path. A Facebook queued callback can therefore
-   create a synthetic lead and job, then the native Messenger webhook can create
-   a second lead message, cancel the first job, and schedule another. Closure
-   requires a Facebook `queued_first_reply` followed by the same native MID,
-   with exactly one lead row, one active job, and the receipt linked to it.
+1. **Queued callback and native message race.** Facebook now enters the same
+   platform-specific reconciliation path used by Instagram. The correction is
+   deployed, but zero post-deploy Facebook traffic means it has no live proof.
+   Closure requires a Facebook `queued_first_reply` followed by the same native
+   MID, with exactly one lead row, one active job, and the receipt linked to it.
 2. **No immediate durable Facebook webhook receipt.** The Facebook route awaits
    profile lookup, database work, and scheduling before returning HTTP 200.
    There is no raw durable ingress record before that work. A slow or terminated
@@ -1137,6 +1136,11 @@ The following risks remain after the deployed Facebook parity work:
 10. **Legacy button deduplication is lifetime content-only.** Repeating a valid
     label such as `Yes` later can be discarded as a duplicate even when it is a
     new turn.
+11. **Some first contacts are intentionally created AI-off.** A brand-new
+    Facebook contact whose first text matches the existing-conversation
+    heuristic can be created with AI disabled even while Facebook Away Mode and
+    the account AI default are enabled. The dashboard needs to show that reason
+    and the heuristic needs a separately reviewed product decision.
 
 The minimum Facebook closure exercise is one real Page or phone echo plus one
 real queued callback/native race. It must prove one identity, one lead message,
