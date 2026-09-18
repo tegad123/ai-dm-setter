@@ -15,8 +15,8 @@ during the audit.
 ## Current production baseline
 
 - Runtime version currently reported by `/api/version`:
-  `b11a213538d9c6ee1769d4bf9c2daa6fd6963156`. It was read directly from
-  production at 2026-09-18 19:12 UTC.
+  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. It was read directly from
+  production at 2026-09-18 19:18 UTC.
 - Production code baseline for the ManyChat delivery-truth release:
   `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
@@ -74,14 +74,14 @@ There is no single cause for all unanswered messages. The confirmed classes are:
 14. ManyChat conversations whose first reply arrived more than two hours after
     the opener were reclassified as warm direct inbound. The routing correction
     is deployed, but a delayed production conversation has not yet proved it.
-15. Facebook queued first-reply receipt intake is still Instagram-only, even
-    though the message and completion callbacks are now platform-aware.
+15. Facebook queued first-reply receipt intake was Instagram-only. Platform
+    parity is now deployed, but no real Facebook receipt exists yet.
 16. The Facebook inline webhook could reset terminal quality exceptions to
     pending, and the cron could preserve a failed quality job after a confirmed
     delivery. The reconciliation correction is deployed; historical
     contradictory rows remain unrecovered.
 
-## Immediate incident ledger at 2026-09-18 19:12 UTC
+## Immediate incident ledger at 2026-09-18 19:18 UTC
 
 This is the current operational state. It distinguishes what is live, what is
 only prepared in code, and what still lacks production proof.
@@ -91,7 +91,7 @@ only prepared in code, and what still lacks production proof.
 - PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
   shown as a delivered message, and the durable receipt/worker code exists.
 - Production reports application commit
-  `b11a213538d9c6ee1769d4bf9c2daa6fd6963156`. GitHub reports the Vercel
+  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. GitHub reports the Vercel
   deployment succeeded.
 - The connected Facebook Page subscription now includes both `messages` and
   `message_echoes`. Graph API readback verified the expected field set after the
@@ -120,9 +120,15 @@ only prepared in code, and what still lacks production proof.
   fields, prevents a direct Instagram reconnect from dropping
   `message_echoes`, and makes alerts state the actual missing field. Its focused
   tests, TypeScript, Prisma checks, and production build passed.
-- The combined deployment passed 90 targeted tests, TypeScript, Prisma
+- Facebook durable receipt parity:
+  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. It accepts Facebook
+  `queued_first_reply` receipts, uses a Facebook PSID without Instagram lookup,
+  applies Facebook delivery flags, and preserves the existing retry, review,
+  AI-off, distress, and duplicate protections.
+- The combined deployment passed 94 targeted unit tests and 10 local database
+  integration tests, plus TypeScript, Prisma
   validation, schema lint, and the production build before push. Production
-  `/api/version` then reported `b11a213` after Vercel marked the deployment
+  `/api/version` then reported `d640dfe` after Vercel marked the deployment
   successful.
 
 ### Still open
@@ -138,9 +144,9 @@ only prepared in code, and what still lacks production proof.
   authoritative Instagram thread must prove the opener.
 - One real Facebook Page, phone, or ManyChat outbound must produce a
   `message_echoes` event in Convlo before the subscription repair is closed.
-- Facebook durable `queued_first_reply` intake still rejects non-Instagram
-  receipts. Platform-aware message and completion callbacks do not close this
-  gap.
+- Facebook durable `queued_first_reply` intake is deployed but still needs a
+  real Facebook callback, one persisted receipt, one scheduled reply, one Meta
+  message ID, and a correct continuation.
 - The delayed ManyChat and Facebook terminal-state corrections need
   conversation-level production proof.
 - Historical ownership failures, Rob's suppressed turn, Rade's stranded event,
@@ -159,7 +165,7 @@ only prepared in code, and what still lacks production proof.
 | Facebook callback parity | Code correction deployed | Fresh Facebook callback, one job, Meta message ID, and continuation proof |
 | Facebook outbound echoes | `message_echoes` restored at 2026-09-18 18:54 UTC | Verify one phone/ManyChat echo enters Convlo |
 | Delayed ManyChat first replies | Code correction deployed | Prove delayed first-reply routing with no duplicate |
-| Facebook queued first reply | Intake remains Instagram-only | Extend receipt identity handling and obtain a real Facebook receipt proof |
+| Facebook queued first reply | Code correction deployed | Obtain a real Facebook receipt, one reply job, Meta message ID, and continuation proof |
 | Facebook terminal-quality state | Code correction deployed | Prove a delivered reply cannot remain terminally failed |
 | Meta thread ownership | No new `2534037` after 2026-09-17 20:00 UTC | Identify or document routing owner and separately review 59 stranded failures |
 | Script suppression | Guard deployed | Rob's historical turn remains unrecovered |
@@ -750,13 +756,14 @@ problem is branch selection after ingestion, not a missing Meta webhook.
 - Prove one delayed controlled first reply selects the ManyChat branch and does
   not repeat the greeting or enter a quality hold.
 
-## Issue 16: Facebook queued first-reply intake remains Instagram-only
+## Issue 16: Facebook queued first-reply intake lacked platform parity
 
-**Status:** Confirmed code and proof gap.
+**Status:** Confirmed historical code gap. The correction is deployed in commit
+`d640dfe6c83b02a7657cf88e450a35f32a8737f5`; production proof remains open.
 
 PR #50 made `/manychat-message` and `/manychat-complete` platform-aware, but
-`src/lib/manychat-handoff-receipt.ts` still rejects queued receipt intake unless
-the platform is Instagram. Facebook therefore does not yet have parity for the
+`src/lib/manychat-handoff-receipt.ts` previously rejected queued receipt intake
+unless the platform was Instagram. Facebook therefore lacked parity for the
 durable `queued_first_reply` path released in PR #49.
 
 Production evidence:
@@ -769,10 +776,16 @@ Production evidence:
 - production contains zero Facebook `ManyChatHandoffReceipt` rows;
 - no post-PR #50 Facebook lead or callback exists to serve as live proof.
 
-If Facebook must use the same durable first-reply contract, receipt validation,
-identity resolution, uniqueness, and worker processing must support a Facebook
-PSID. This needs tests and a separate real Facebook callback proof. Message and
-completion callback parity alone does not close this gap.
+The deployed correction accepts Facebook receipts, resolves the identity from
+the explicit Facebook PSID or ManyChat subscriber ID without an Instagram
+lookup, prefers the exact platform ID over a non-unique display name, and uses
+Facebook Away Mode and generate-only settings in the same protected queue and
+worker. Instagram behavior remains compatible.
+
+The correction passed 65 queue/worker unit tests and 10 local PostgreSQL
+integration tests in isolation. The combined branch passed 94 targeted unit
+tests, TypeScript, Prisma validation, schema lint, and the production build.
+Closure still requires a separate real Facebook callback proof.
 
 ## Issue 17: Facebook can report terminal failure after delivery
 
@@ -862,8 +875,9 @@ flow in which ManyChat actually sends the opener.
    Meta-confirmed echo.
 5. Correct delayed ManyChat first-reply routing so source and durable handoff
    state remain authoritative after two hours.
-6. Decide whether Facebook uses durable `queued_first_reply`; if yes, extend the
-   receipt path beyond Instagram and test it with a real Facebook PSID.
+6. Run the deployed Facebook durable `queued_first_reply` path with a real
+   authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
+   and normal continuation.
 7. Align Facebook terminal-quality handling with Instagram and reconcile a
    delivered Meta message before committing terminal failure.
 8. Complete the separate Facebook callback/completion production proof.
@@ -883,8 +897,9 @@ flow in which ManyChat actually sends the opener.
   Page. One real outbound echo must still prove the end-to-end path.
 - **Delayed first-reply routing:** ManyChat conversations older than two hours
   are still relabelled as direct inbound by the current script serializer.
-- **Facebook receipt parity:** message and completion callbacks are
-  platform-aware, but durable queued receipt intake remains Instagram-only.
+- **Facebook receipt parity proof:** platform-aware durable receipt intake is
+  deployed, but no real Facebook receipt, job, Meta message ID, or continuation
+  has been observed yet.
 - **Facebook contradictory terminal state:** a Meta-confirmed AI message and a
   `FAILED_QUALITY_GATE` job can coexist for the same processing sequence.
 - **ManyChat configuration:** ordinary send nodes should report after the send;
