@@ -143,5 +143,9 @@ messages. Do not delete receipt rows to rerun a test.
   Convlo showed the planned ManyChat opener as outbound while both sides of the
   actual Instagram thread had no message. The first-reply callback was therefore
   never reached. See `docs/INCIDENT_MANYCHAT_MESSAGE_TRUTH_2026-09-18.md`.
+- The consolidated production audit, including thread ownership, internal
+  routing suppression, holds, failed jobs, Facebook callback parity, and exact
+  recovery boundaries, is in
+  `docs/INCIDENT_RESPONSE_GAPS_2026-09-18.md`.
 - General new-follower rollout remains gated on controlled concurrent
   Meta/ManyChat production proof and correction of the opener-truth defect.
