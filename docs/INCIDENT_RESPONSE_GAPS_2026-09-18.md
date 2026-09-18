@@ -1270,6 +1270,39 @@ production build. GitHub and `/api/version` confirm the combined release is
 live. Their production closure still requires the controlled evidence described
 above; deployment alone is not proof that a real contact completed each path.
 
+### Post-deploy restriction boundary
+
+GitHub deployment `6532131728` for functional commit
+`6e481f350b50cc291429f709b1df7c70f1198e8d` completed successfully at
+2026-09-18 20:15:11 UTC. `/api/version` confirmed the same commit at about
+20:16 UTC. Through database time 2026-09-18 20:22:59.273 UTC, Daniel's account
+had no new messages, scheduled-reply activity, generation traces, egress rows,
+ManyChat receipts, ownership events, notifications, recovery events, holds, or
+Meta failures. The queue had zero `PENDING` and zero `PROCESSING` jobs.
+
+This quiet window is consistent with an upstream account restriction or paused
+traffic, but does not prove its exact scope or duration. It also means the Step
+7, Step 8, Step 12, structured-suppression, stricter ManyChat evidence, and
+Facebook reconciliation corrections have not yet received fresh live production
+proof.
+
+The closest pre-deploy controls separate three failure locations:
+
+- `@a_m_hussein_` reached Convlo with a native Meta ID at
+  2026-09-18 16:33:31.629 UTC, then failed the quality gate before egress. It
+  remains in human review and never called Meta for that turn.
+- Tiger reached egress at 15:42:53.739 UTC, then Meta rejected the send with
+  code `368`, subcode `1404169`. A later native Tiger turn was delivered
+  successfully at 16:22:48.280 UTC, proving that block was temporary or
+  path-specific.
+- The last recorded `2534037` ownership rejection was for
+  `@mashudu_mafela` on 2026-09-17 19:50:58.939 UTC. No ownership rejection was
+  observed in the post-deploy window.
+
+The absence of new traffic after deployment cannot close or disprove any
+correction. The next valid proof must occur after Meta confirms the restriction
+is lifted.
+
 ## Working production controls
 
 ### Penguin
