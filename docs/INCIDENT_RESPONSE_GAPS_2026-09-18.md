@@ -309,9 +309,26 @@ recheck.
 - Production contains zero `ManyChatHandoffReceipt` rows on either platform.
   The durable worker is deployed but has never processed a real production
   receipt.
-- 69 historical Daniel Instagram outbound rows were stored as
+- A fresh read-only audit found 71 Daniel Instagram conversations with source
+  `MANYCHAT` since September 17. All 71 are marked `new_follower`; 69 contain a
+  historical opener `Message` row.
+- Those 69 historical Daniel Instagram outbound rows were stored as
   `MANYCHAT`/`MANYCHAT_FLOW` without a provider ID, Meta message ID, or delivery
   status. All are planned opener context and cannot be counted as sent.
+- Instagram independently proves that Penguin and Tiger did receive their
+  Follow-to-DM openers: both native threads show Instagram's system label that
+  the business messaged the account because it followed, followed by the exact
+  opener text. Their later lead and Convlo messages carry native Meta IDs. This
+  is a Convlo opener-observability gap, not proof that those two sends failed.
+- Squirrel remains different. Its native business-side thread is a message
+  request containing only the lead's `Hi`; the opener is absent. No fresh
+  Squirrel message, receipt, reply job, or conversation update followed the Ref
+  URL test. Its old `new_follower` opener row cannot be attributed to that Ref
+  URL event.
+- ManyChat's published Follow-to-DM flow lists Squirrel in the flow's `Sends`
+  contact drawer even though the ManyChat inbox and native Instagram thread
+  contain no opener. The flow run therefore proves attempted execution only;
+  it is not per-contact Meta acceptance or delivery evidence.
 - No new missing-ID opener row appeared after the PR #50 deployment boundary.
   This is evidence that the delivery-truth correction stopped creating new
   false sent-history rows.

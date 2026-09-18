@@ -102,6 +102,26 @@ The count of 64 is the size of the unverified population, not proof that all 64
 failed delivery. The two browser comparisons prove at least Squirrel and xo8nx
 were false sent-looking messages.
 
+A later read-only recheck found 71 Daniel Instagram conversations with source
+`MANYCHAT` since September 17. All 71 are marked `new_follower`; 69 contain a
+historical opener row. Every one of those 69 rows has no provider ID, Meta
+message ID, delivery status, delivery-reported timestamp, delivery-confirmed
+timestamp, or delivery-failed timestamp. The account still has zero Instagram
+`ManyChatHandoffReceipt` rows.
+
+Instagram independently proves that Penguin and Tiger received their
+Follow-to-DM openers: each native thread shows Instagram's system label that the
+business messaged the account because it followed, followed by the exact opener
+text. Convlo's missing IDs are an observability gap for those two conversations.
+
+Squirrel's later Ref URL test is not a new row in this population. Its stored row
+is an older `new_follower` context event. After the Ref URL test, Convlo recorded
+no fresh message, receipt, reply job, or conversation update. The native thread
+is a message request containing only Squirrel's `Hi`, with no opener. ManyChat's
+published Follow-to-DM flow nevertheless lists Squirrel in its `Sends` contact
+drawer. That UI state proves the flow attempted the send action, not that Meta
+accepted or displayed the message.
+
 Conclusion from this evidence:
 
 - ManyChat successfully ran the first external callback that supplies opener
