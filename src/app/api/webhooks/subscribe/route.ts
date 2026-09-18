@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getCredentials } from '@/lib/credential-store';
 import { requireAuth, AuthError } from '@/lib/auth-guard';
+import {
+  buildMetaInstagramSubscriptionPayload,
+  buildMetaPageSubscriptionPayload
+} from '@/lib/meta-webhook-subscription';
 
 // ---------------------------------------------------------------------------
 // POST — Manually subscribe all connected pages to webhook events
@@ -97,11 +101,7 @@ export async function POST(request: NextRequest) {
           const res = await fetch(`${GRAPH_API}/${pageId}/subscribed_apps`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subscribed_fields:
-                'messages,message_echoes,messaging_postbacks,messaging_optins,message_deliveries,message_reads',
-              access_token: accessToken
-            })
+            body: JSON.stringify(buildMetaPageSubscriptionPayload(accessToken))
           });
 
           const body = await res.text();
@@ -149,11 +149,9 @@ export async function POST(request: NextRequest) {
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  subscribed_fields:
-                    'messages,message_echoes,messaging_postbacks,messaging_optins',
-                  access_token: accessToken
-                })
+                body: JSON.stringify(
+                  buildMetaInstagramSubscriptionPayload(accessToken)
+                )
               }
             );
             const igBody = await igRes.text();

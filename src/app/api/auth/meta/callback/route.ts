@@ -1,5 +1,6 @@
 import { saveCredentials } from '@/lib/credential-store';
 import { shouldPreserveDirectInstagramCredential } from '@/lib/meta-instagram-credential-policy';
+import { buildMetaPageSubscriptionPayload } from '@/lib/meta-webhook-subscription';
 import { verifyState } from '@/lib/oauth-state';
 import prisma from '@/lib/prisma';
 import { NextRequest, NextResponse } from 'next/server';
@@ -422,17 +423,9 @@ export async function GET(req: NextRequest) {
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                subscribed_fields: [
-                  'messages',
-                  'message_echoes',
-                  'messaging_postbacks',
-                  'messaging_optins',
-                  'message_deliveries',
-                  'message_reads'
-                ].join(','),
-                access_token: finalAccessToken
-              })
+              body: JSON.stringify(
+                buildMetaPageSubscriptionPayload(finalAccessToken)
+              )
             }
           );
           if (subRes.ok) {
@@ -541,17 +534,9 @@ export async function GET(req: NextRequest) {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscribed_fields: [
-              'messages',
-              'message_echoes',
-              'messaging_postbacks',
-              'messaging_optins',
-              'message_deliveries',
-              'message_reads'
-            ].join(','),
-            access_token: pageAccessToken
-          })
+          body: JSON.stringify(
+            buildMetaPageSubscriptionPayload(pageAccessToken)
+          )
         }
       );
 
@@ -578,10 +563,9 @@ export async function GET(req: NextRequest) {
         const igSubRes = await fetch(`${GRAPH_API}/${pageId}/subscribed_apps`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subscribed_fields: 'messages,message_echoes',
-            access_token: pageAccessToken
-          })
+          body: JSON.stringify(
+            buildMetaPageSubscriptionPayload(pageAccessToken)
+          )
         });
         if (igSubRes.ok) {
           console.log(

@@ -19,39 +19,40 @@
 //      severs this subscription even when the token itself is still
 //      valid (rare, but worth catching). Fires a separate alert.
 //
-// Rate-limited: one notification per account per check type per hour,
-// so a sustained bad-token state doesn't spam the operator's inbox.
+// Rate-limited: invalid-token notices can fire once per hour. An unchanged
+// subscription incident fires once per 24 hours, while a changed missing-field
+// fingerprint can alert immediately with the new impact.
 // ---------------------------------------------------------------------------
 
 import prisma from '@/lib/prisma';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { broadcastNotification } from '@/lib/realtime';
 import { checkTokenHealth } from '@/lib/meta-token-health';
+import {
+  assessMetaWebhookSubscription,
+  META_SUBSCRIPTION_ALERT_THROTTLE_MS
+} from '@/lib/meta-webhook-subscription';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 60;
 
 const GRAPH_API = 'https://graph.facebook.com/v22.0';
-const REQUIRED_WEBHOOK_FIELDS = [
-  'messages',
-  'message_echoes',
-  'messaging_postbacks'
-];
-
 async function fireThrottledAlert(
   accountId: string,
   titlePrefix: string,
   title: string,
-  body: string
+  body: string,
+  throttleMs = 60 * 60 * 1000,
+  matchExactTitle = false
 ): Promise<boolean> {
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const throttleStart = new Date(Date.now() - throttleMs);
   const existing = await prisma.notification
     .findFirst({
       where: {
         accountId,
         type: 'SYSTEM',
-        title: { contains: titlePrefix },
-        createdAt: { gte: oneHourAgo }
+        title: matchExactTitle ? titlePrefix : { contains: titlePrefix },
+        createdAt: { gte: throttleStart }
       },
       select: { id: true }
     })
@@ -200,8 +201,9 @@ export async function GET(req: NextRequest) {
       // ── 2. Webhook subscription check — META provider only ─────
       // /{pageId}/subscribed_apps with the Page token returns the apps
       // subscribed to this Page + the fields they're subscribed to.
-      // If our app ID is missing OR `messages` is missing from the
-      // subscribed_fields, Meta isn't forwarding webhooks to us.
+      // Each required field has a different impact. `messages` carries lead
+      // DMs, `message_echoes` carries Page-side sends, and
+      // `messaging_postbacks` carries button interactions.
       if (cred.provider === 'META') {
         const meta = (cred.metadata as Record<string, unknown> | null) ?? {};
         const pageId = meta.pageId as string | undefined;
@@ -224,20 +226,27 @@ export async function GET(req: NextRequest) {
             subscribed_fields?: string[];
           }>;
           const ourApp = apps.find((a) => a.id === appId);
-          const subscribedFields = ourApp?.subscribed_fields ?? [];
-          const missing = REQUIRED_WEBHOOK_FIELDS.filter(
-            (f) => !subscribedFields.includes(f)
-          );
-          if (!ourApp || missing.length > 0) {
+          const assessment = assessMetaWebhookSubscription({
+            pageId,
+            appSubscribed: Boolean(ourApp),
+            subscribedFields: ourApp?.subscribed_fields
+          });
+          if (!assessment.healthy) {
             subscriptionBad++;
-            if (!alertedAccounts.has(cred.accountId)) {
-              await fireThrottledAlert(
+            if (
+              !alertedAccounts.has(cred.accountId) &&
+              assessment.alertTitle &&
+              assessment.alertBody
+            ) {
+              const fired = await fireThrottledAlert(
                 cred.accountId,
-                'Webhook subscription broken',
-                'Webhook subscription broken — reconnect Meta',
-                `Health check: page ${pageId} is ${ourApp ? `missing webhook fields: ${missing.join(', ')}` : 'not subscribed to this app at all'}. New inbound DMs will NOT reach the app. Reconnect via Settings → Integrations to re-subscribe.`
+                assessment.alertTitle,
+                assessment.alertTitle,
+                assessment.alertBody,
+                META_SUBSCRIPTION_ALERT_THROTTLE_MS,
+                true
               );
-              alertedAccounts.add(cred.accountId);
+              if (fired) alertedAccounts.add(cred.accountId);
             }
           }
         } catch (err) {

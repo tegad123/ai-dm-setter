@@ -1,4 +1,5 @@
 import { saveCredentials } from '@/lib/credential-store';
+import { buildMetaPageSubscriptionPayload } from '@/lib/meta-webhook-subscription';
 import { verifyState } from '@/lib/oauth-state';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -466,16 +467,7 @@ async function subscribePageToWebhooks(
   const res = await fetch(`${FB_GRAPH_API}/${pageId}/subscribed_apps`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      subscribed_fields: [
-        'messages',
-        'messaging_postbacks',
-        'messaging_optins',
-        'message_deliveries',
-        'message_reads'
-      ].join(','),
-      access_token: accessToken
-    })
+    body: JSON.stringify(buildMetaPageSubscriptionPayload(accessToken))
   });
 
   if (res.ok) {
