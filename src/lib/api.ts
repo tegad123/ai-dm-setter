@@ -76,6 +76,10 @@ export interface Conversation {
   aiActive: boolean;
   lastMessage: string;
   lastMessageAt: string | null;
+  lastMessageSender?: string | null;
+  lastMessageDeliveryStatus?: MessageDeliveryStatus | null;
+  lastMessagePlatformMessageId?: string | null;
+  lastMessageProviderMessageId?: string | null;
   unreadCount: number;
   priorityScore: number;
   qualityScore: number;
@@ -87,6 +91,12 @@ export interface Conversation {
   source?: 'INBOUND' | 'MANYCHAT' | 'MANUAL_UPLOAD';
   createdAt: string;
 }
+
+export type MessageDeliveryStatus =
+  | 'PLANNED'
+  | 'PROVIDER_REPORTED'
+  | 'META_CONFIRMED'
+  | 'FAILED';
 
 export interface Message {
   id: string;
@@ -116,6 +126,12 @@ export interface Message {
   humanSource?: 'DASHBOARD' | 'PHONE' | null;
   sentByUser?: { id: string; name: string; email?: string | null } | null;
   platformMessageId?: string | null;
+  providerMessageId?: string | null;
+  deliveryStatus?: MessageDeliveryStatus | null;
+  deliveryReportedAt?: string | null;
+  deliveryConfirmedAt?: string | null;
+  deliveryFailedAt?: string | null;
+  deliveryErrorCode?: string | null;
   messageGroupId?: string | null;
   bubbleIndex?: number | null;
   bubbleTotalCount?: number | null;

@@ -51,6 +51,18 @@ export interface Message {
     | 'HUMAN_OVERRIDE'
     | 'UNKNOWN'
     | null;
+  platformMessageId?: string | null;
+  providerMessageId?: string | null;
+  deliveryStatus?:
+    | 'PLANNED'
+    | 'PROVIDER_REPORTED'
+    | 'META_CONFIRMED'
+    | 'FAILED'
+    | null;
+  deliveryReportedAt?: string | null;
+  deliveryConfirmedAt?: string | null;
+  deliveryFailedAt?: string | null;
+  deliveryErrorCode?: string | null;
 }
 
 export interface ConversationTag {
@@ -68,6 +80,15 @@ export interface Conversation {
   aiActive: boolean;
   lastMessage: string;
   lastMessageTime: string;
+  lastMessageSender?: string | null;
+  lastMessageDeliveryStatus?:
+    | 'PLANNED'
+    | 'PROVIDER_REPORTED'
+    | 'META_CONFIRMED'
+    | 'FAILED'
+    | null;
+  lastMessagePlatformMessageId?: string | null;
+  lastMessageProviderMessageId?: string | null;
   unread: number;
   messages: Message[];
   tags?: ConversationTag[];

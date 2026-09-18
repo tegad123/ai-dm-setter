@@ -39,6 +39,10 @@ import { cn } from '@/lib/utils';
 import type { LeadStage } from '@/features/shared/lead-stage-badge';
 import type { PendingSuggestion } from '@/lib/api';
 import { SuggestionBanner } from './suggestion-banner';
+import {
+  effectiveManyChatDeliveryStatus,
+  manyChatDeliveryLabel
+} from '@/lib/message-delivery-display';
 
 // ── Module-scoped training-phase cache ─────────────────────────────
 // OverrideNoteInput self-fetches training phase so we can render
@@ -710,6 +714,12 @@ export function ConversationThread({
                   const isHuman = sender === 'human';
                   const isSystem = sender === 'system';
                   const isManyChat = sender === 'manychat';
+                  const manyChatDeliveryStatus = isManyChat
+                    ? effectiveManyChatDeliveryStatus(msg)
+                    : null;
+                  const manyChatDeliveryState = isManyChat
+                    ? manyChatDeliveryLabel(msg)
+                    : null;
                   // Lead-side soft-deletes render greyed-out with a label.
                   // Dashboard unsends are filtered out before this component.
                   const isDeleted = Boolean(msg.deletedAt);
@@ -720,7 +730,48 @@ export function ConversationThread({
                   // truth for whether unsend is possible. If the window
                   // has passed or the lead has read it, the API returns
                   // a specific error and the toast surfaces the reason.
-                  const canUnsend = !isDeleted && !isLead && !isSystem;
+                  const canUnsend =
+                    !isDeleted &&
+                    !isLead &&
+                    !isSystem &&
+                    (!isManyChat ||
+                      manyChatDeliveryStatus === 'META_CONFIRMED');
+                  // Planned ManyChat context is not conversation history. It
+                  // may exist on historical rows, but it must never appear as
+                  // a sent bubble in the operator inbox.
+                  if (manyChatDeliveryStatus === 'PLANNED') return null;
+                  if (manyChatDeliveryStatus === 'FAILED') {
+                    return (
+                      <div
+                        key={msg.id}
+                        className={cn(
+                          'flex justify-end',
+                          idx === 0 ? '' : 'mt-4'
+                        )}
+                      >
+                        <div className='max-w-[70%] rounded-md border border-red-300 bg-red-50/90 px-3 py-2 text-left text-red-950 shadow-sm dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-100'>
+                          <div className='text-[10px] font-semibold tracking-wide text-red-700 uppercase dark:text-red-300'>
+                            ManyChat delivery failed
+                          </div>
+                          <p className='mt-1 text-sm leading-relaxed whitespace-pre-wrap'>
+                            {msg.content}
+                          </p>
+                          <p className='mt-1 text-[10px] text-red-700/80 dark:text-red-300/80'>
+                            {msg.deliveryErrorCode
+                              ? `Error ${msg.deliveryErrorCode} · `
+                              : ''}
+                            {new Date(msg.timestamp).toLocaleTimeString(
+                              'en-US',
+                              {
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              }
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
                   if (isSystem) {
                     return (
                       <div
@@ -821,23 +872,25 @@ export function ConversationThread({
                           </span>
                         )}
                         {isFirstInGroup && isManyChat && (
-                          <span className='mb-0.5 inline-block text-[10px] text-violet-400'>
-                            {msg.msgSource === 'QUALIFYDMS_AI' ? (
-                              <>
-                                AI Setter
-                                <span className='text-muted-foreground ml-1'>
-                                  · via ManyChat
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                ManyChat
-                                <span className='text-muted-foreground ml-1'>
-                                  · flow
-                                </span>
-                              </>
+                          <div className='mb-0.5 text-[10px]'>
+                            <span className='text-violet-400'>
+                              {msg.msgSource === 'QUALIFYDMS_AI'
+                                ? 'AI Setter · via ManyChat'
+                                : 'ManyChat · flow'}
+                            </span>
+                            {manyChatDeliveryState && (
+                              <span
+                                className={cn(
+                                  'ml-1',
+                                  manyChatDeliveryStatus === 'PROVIDER_REPORTED'
+                                    ? 'text-amber-500'
+                                    : 'text-emerald-500'
+                                )}
+                              >
+                                · {manyChatDeliveryState}
+                              </span>
                             )}
-                          </span>
+                          </div>
                         )}
                         {isDeleted && (
                           <span className='text-muted-foreground mb-0.5 inline-block text-[10px] italic'>
@@ -853,6 +906,9 @@ export function ConversationThread({
                             isAI && 'mine',
                             isHuman && 'mine-human',
                             isManyChat && 'mine mine-manychat',
+                            isManyChat &&
+                              manyChatDeliveryStatus === 'PROVIDER_REPORTED' &&
+                              'border border-dashed border-amber-400/70 opacity-80',
                             isDeleted && 'italic opacity-50'
                           )}
                         >

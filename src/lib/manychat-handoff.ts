@@ -361,8 +361,10 @@ export async function processManyChatHandoff(params: {
     include: { conversation: true }
   });
 
-  // Note: dedup is enforced at the Message level by ensureOpenerMessage and
-  // ensureLeadResponseMessage (content-keyed). Earlier logic returned early
+  // The opener remains hidden conversation context until a post-send provider
+  // callback or native Meta echo supplies delivery evidence. This handoff only
+  // proves flow intent and must not create a sent-looking Message row.
+  // Lead-response dedup remains content-keyed. Earlier logic returned early
   // on any ManyChat handoff fired in the last hour, which silently dropped
   // legitimate follow-up events — most importantly the second External
   // Request that carries the lead's button-click as `leadResponseText`.
@@ -430,7 +432,6 @@ export async function processManyChatHandoff(params: {
         triggerSource
       }
     });
-    await ensureOpenerMessage(updated.id, payload.openerMessage, firedAt);
     leadResponseInserted = await ensureLeadResponseMessage(
       updated.id,
       payload.leadResponseText,
@@ -467,7 +468,6 @@ export async function processManyChatHandoff(params: {
       },
       select: { id: true, aiActive: true }
     });
-    await ensureOpenerMessage(conversation.id, payload.openerMessage, firedAt);
     leadResponseInserted = await ensureLeadResponseMessage(
       conversation.id,
       payload.leadResponseText,
@@ -512,11 +512,6 @@ export async function processManyChatHandoff(params: {
       }
     });
 
-    await ensureOpenerMessage(
-      lead.conversation!.id,
-      payload.openerMessage,
-      firedAt
-    );
     leadResponseInserted = await ensureLeadResponseMessage(
       lead.conversation!.id,
       payload.leadResponseText,
@@ -645,59 +640,8 @@ export async function processManyChatHandoff(params: {
 }
 
 /**
- * Insert the ManyChat opener as a Message row so it appears in the
- * conversation thread (dashboard UI + AI prompt history).
- *
- * Uses sender=MANYCHAT so the dashboard renders it with the violet
- * "ManyChat · automation" treatment — operators can immediately tell
- * which messages came from the ManyChat sequence vs the AI Setter.
- * The voice-quality analyzer keys off training examples + persona
- * style profile, not raw message history, so including this static
- * templated opener does not pollute style inference.
- *
- * Idempotent: skips creation if any message with this exact content
- * already exists on the conversation, regardless of whether it was
- * previously stored as MANYCHAT (current) or AI (legacy, before the
- * MANYCHAT enum value existed). Without the legacy `AI` match here,
- * re-fires on already-handed-off conversations would double-store
- * the opener.
- */
-async function ensureOpenerMessage(
-  conversationId: string,
-  content: string,
-  timestamp: Date
-): Promise<void> {
-  const trimmed = content.trim();
-  if (!trimmed) return;
-  const existing = await prisma.message.findFirst({
-    where: {
-      conversationId,
-      sender: { in: ['MANYCHAT', 'AI'] },
-      content: trimmed
-    },
-    select: { id: true }
-  });
-  if (existing) return;
-  await prisma.message.create({
-    data: {
-      conversationId,
-      sender: 'MANYCHAT',
-      content: trimmed,
-      systemPromptVersion: 'manychat-automation',
-      msgSource: 'MANYCHAT_FLOW',
-      timestamp
-    }
-  });
-  await prisma.conversation.update({
-    where: { id: conversationId },
-    data: { lastMessageAt: timestamp }
-  });
-}
-
-/**
  * Insert the lead's button-click response (if any) as a LEAD-side
- * Message. Mirrors `ensureOpenerMessage` but on the inbound side: when
- * ManyChat fires a follow-up External Request after a button-click
+ * Message. When ManyChat fires a follow-up External Request after a button-click
  * step in the flow, the click label rides through as
  * `leadResponseText` and we land it as a Message so the AI sees
  * "lead engaged with X" on its next turn.

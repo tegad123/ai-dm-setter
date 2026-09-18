@@ -20,6 +20,7 @@ export async function GET(
       include: {
         lead: true,
         messages: {
+          where: { echoAttributionPendingUntil: null },
           orderBy: { timestamp: 'asc' }
         }
       }

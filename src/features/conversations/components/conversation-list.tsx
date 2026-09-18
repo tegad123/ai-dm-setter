@@ -314,6 +314,19 @@ export function ConversationList({
                     </div>
                   )}
                   <p className='text-muted-foreground mt-1 truncate text-xs'>
+                    {convo.lastMessageSender?.toUpperCase() === 'MANYCHAT' &&
+                      convo.lastMessageDeliveryStatus ===
+                        'PROVIDER_REPORTED' && (
+                        <span className='text-amber-600 dark:text-amber-400'>
+                          ManyChat reported ·{' '}
+                        </span>
+                      )}
+                    {convo.lastMessageSender?.toUpperCase() === 'MANYCHAT' &&
+                      convo.lastMessageDeliveryStatus === 'FAILED' && (
+                        <span className='text-red-600 dark:text-red-400'>
+                          Delivery failed ·{' '}
+                        </span>
+                      )}
                     {convo.lastMessage}
                   </p>
                   {/* Call badge: shows when a call is scheduled within the next 7 days */}

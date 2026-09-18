@@ -90,6 +90,16 @@ import {
   type InboundMediaAttachment
 } from '@/lib/media-processing';
 import { randomUUID } from 'crypto';
+import { persistMetaEchoWithManyChatReconciliation } from '@/lib/manychat-delivery-evidence';
+import {
+  isWithinManyChatEchoCorrelationWindow,
+  looksLikeManyChatAutomationEcho
+} from '@/lib/manychat-echo-classifier';
+import { finalizeManyChatEchoAttribution } from '@/lib/manychat-echo-finalizer';
+import {
+  AI_HISTORY_DELIVERY_WHERE,
+  filterAiEligibleMessageHistory
+} from '@/lib/message-history-truth';
 
 // Mirrors the same constant in manychat-handoff.ts — detect when an IGSID
 // leaked through as a username/handle before any DB write.
@@ -784,12 +794,14 @@ export type GenerateReplyHistoryRow = {
   bubbleTotalCount?: number | null;
   suggestionId?: string | null;
   isHumanCorrection?: boolean | null;
+  deliveryStatus?: string | null;
+  echoAttributionPendingUntil?: Date | string | null;
 };
 
 export function formatMessagesForGenerateReply(
   messages: GenerateReplyHistoryRow[]
 ): ConversationMessage[] {
-  return messages.map((m) => ({
+  return filterAiEligibleMessageHistory(messages).map((m) => ({
     id: m.id,
     sender: m.sender,
     content: m.content,
@@ -2682,7 +2694,12 @@ export async function scheduleAIReply(
   // that's the legitimate "deliver the scheduled one now" path.
   if (!options?.skipDelayQueue) {
     const latestMsg = await prisma.message.findFirst({
-      where: { conversationId, sender: { not: 'SYSTEM' }, deletedAt: null },
+      where: {
+        conversationId,
+        sender: { not: 'SYSTEM' },
+        deletedAt: null,
+        ...AI_HISTORY_DELIVERY_WHERE
+      },
       orderBy: { timestamp: 'desc' },
       select: { sender: true, timestamp: true, content: true }
     });
@@ -2869,7 +2886,7 @@ export async function scheduleAIReply(
         // conversation continues as if it never existed — the
         // operator's correction (or the lead's retraction) is the
         // canonical state. See conversation-message-unsend.ts.
-        where: { deletedAt: null },
+        where: { deletedAt: null, ...AI_HISTORY_DELIVERY_WHERE },
         orderBy: { timestamp: 'asc' }
       }
     }
@@ -3100,6 +3117,11 @@ export async function scheduleAIReply(
       );
     }
   }
+
+  // Defense in depth for histories returned by the Meta backfill path or a
+  // future caller that bypasses the relation filter above. Planned, failed,
+  // and legacy status-less ManyChat rows cannot steer routing or prompts.
+  messages = filterAiEligibleMessageHistory(messages);
 
   // ── Step 3: Build lead context with enrichment ─────────────────
   const leadContext: LeadContext = {
@@ -6593,45 +6615,6 @@ export interface AdminMessageParams {
   platformMessageId?: string;
 }
 
-function looksLikeManyChatAutomationEcho(
-  conversation: {
-    source?: string | null;
-    manyChatOpenerMessage?: string | null;
-    awaitingAiResponse?: boolean | null;
-  },
-  messageText: string
-): boolean {
-  if (conversation.source !== 'MANYCHAT') return false;
-  const trimmed = messageText.trim();
-  if (!trimmed) return false;
-
-  const opener = conversation.manyChatOpenerMessage?.trim();
-  if (opener && trimmed === opener) return true;
-
-  // Existing hardcoded shapes for daetradez's current sequence — keep
-  // them as a fast positive match alongside the state-based fallback so
-  // the detector still works even if `awaitingAiResponse` is in a
-  // transient true state during a race.
-  const matchesKnownShape = [
-    /\bthis\s+is\s+gonna\s+make\s+you\s+dangerous\b/i,
-    /\bminutes?\s+of\s+sauce\b/i,
-    /\bdid\s+you\s+give\s+it\s+a\s+watch\b/i
-  ].some((pattern) => pattern.test(trimmed));
-  if (matchesKnownShape) return true;
-
-  // State-based fallback: while a MANYCHAT-source conversation has not
-  // been handed off to AI yet (either via the manychat-complete webhook
-  // or the time-based heartbeat fallback), any echo with no matching
-  // mid in our DB is most likely a ManyChat-sent automation message —
-  // a sequence step we don't have hardcoded text for. Tag it MANYCHAT.
-  //
-  // Trade-off accepted: an operator messaging the lead from IG mobile
-  // during this window also gets tagged MANYCHAT. The window is short
-  // (sequence runs ~30 min) and self-clears once `awaitingAiResponse`
-  // flips to true, after which operator messages resume HUMAN tagging.
-  return conversation.awaitingAiResponse === false;
-}
-
 /**
  * Soft-delete a Message in response to an external deletion event —
  * either the lead unsent on Instagram (`deletedBy='LEAD'`,
@@ -6827,28 +6810,40 @@ export async function processAdminMessage(
     return;
   }
 
-  if (looksLikeManyChatAutomationEcho(lead.conversation, messageText)) {
-    const message = await prisma.message.create({
-      data: {
-        conversationId,
-        sender: 'MANYCHAT',
-        content: messageText,
-        timestamp: new Date(),
-        platformMessageId: platformMessageId || null,
-        systemPromptVersion: 'manychat-automation',
-        // Capture the audio URL on the row so the downstream Whisper
-        // transcription can pick it up. Previously the URL was dropped
-        // here and ManyChat-sent voice notes were 100% un-transcribed —
-        // the AI saw `[Voice note]` with no content and shipped
-        // generic "couldn't catch the audio" replies. (@andreierz
-        // 2026-05-05)
-        isVoiceNote: Boolean(audioUrl),
-        voiceNoteUrl: audioUrl ?? null,
-        msgSource: 'MANYCHAT_FLOW'
-      }
-    });
-    await prisma.conversation.update({
-      where: { id: conversationId },
+  const classifiedAsManyChat = looksLikeManyChatAutomationEcho(
+    lead.conversation,
+    messageText,
+    platformMessageId
+  );
+  const deferHumanAttribution =
+    !classifiedAsManyChat &&
+    Boolean(platformMessageId) &&
+    isWithinManyChatEchoCorrelationWindow(lead.conversation);
+  const persistedEcho = await persistMetaEchoWithManyChatReconciliation({
+    conversationId,
+    messageText,
+    platformMessageId,
+    classifyAsManyChat: classifiedAsManyChat,
+    deferHumanAttribution,
+    audioUrl
+  });
+  if (persistedEcho.disposition === 'EXISTING') {
+    console.log(
+      `[webhook-processor] Admin message ${platformMessageId || persistedEcho.message.id} was persisted concurrently — skipping duplicate processing`
+    );
+    return;
+  }
+  const message = persistedEcho.message;
+
+  if (persistedEcho.classification === 'MANYCHAT') {
+    await prisma.conversation.updateMany({
+      where: {
+        id: conversationId,
+        OR: [
+          { lastMessageAt: null },
+          { lastMessageAt: { lte: message.timestamp } }
+        ]
+      },
       data: {
         // Note: do NOT touch `aiActive` here — the ManyChat sequence is
         // still running. AI takeover happens via the manychat-complete
@@ -6893,7 +6888,11 @@ export async function processAdminMessage(
       }
     }
     await prisma.scheduledReply.updateMany({
-      where: { conversationId, status: 'PENDING' },
+      where: {
+        conversationId,
+        status: 'PENDING',
+        createdAt: { lte: message.timestamp }
+      },
       data: { status: 'CANCELLED' }
     });
     broadcastNewMessage(accountId, {
@@ -6910,265 +6909,61 @@ export async function processAdminMessage(
     return;
   }
 
-  // ── Closed-loop training: detect human override of AI suggestion ──
-  let isHumanOverride = false;
-  let rejectedAISuggestionId: string | null = null;
-  let editedFromSuggestion = false;
-  let loggedDuringTrainingPhase = false;
-
-  try {
-    // Find the most recent AISuggestion in the last 2 hours that hasn't been
-    // selected or rejected yet — this is the suggestion the human is overriding.
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    const recentSuggestion = await prisma.aISuggestion.findFirst({
+  // During the initial ManyChat automation window a native echo can beat the
+  // provider callback. Keep the conservative HUMAN label, but do not record
+  // rejection/training/takeover side effects that cannot be safely undone.
+  // The post-send callback can still correlate this row by exact content and
+  // Meta mid and reclassify it to MANYCHAT. Pending AI work is cancelled for
+  // either interpretation because a real business-side outbound just landed.
+  if (deferHumanAttribution) {
+    if (
+      !message.echoAttributionPendingUntil ||
+      message.echoAttributionFinalizedAt
+    ) {
+      throw new Error('Provisional echo attribution state was not persisted');
+    }
+    await prisma.conversation.updateMany({
+      where: {
+        id: conversationId,
+        OR: [
+          { lastMessageAt: null },
+          { lastMessageAt: { lte: message.timestamp } }
+        ]
+      },
+      data: {
+        lastMessageAt: message.timestamp,
+        awaitingAiResponse: false,
+        awaitingSince: null
+      }
+    });
+    await prisma.scheduledReply.updateMany({
       where: {
         conversationId,
-        wasSelected: false,
-        wasRejected: false,
-        generatedAt: { gte: twoHoursAgo }
+        status: 'PENDING',
+        createdAt: { lte: message.timestamp }
       },
-      orderBy: { generatedAt: 'desc' }
+      data: { status: 'CANCELLED' }
     });
-
-    if (recentSuggestion) {
-      isHumanOverride = true;
-      rejectedAISuggestionId = recentSuggestion.id;
-
-      // Check training phase for snapshot
-      const accountRow = await prisma.account.findUnique({
-        where: { id: accountId },
-        select: { trainingPhase: true, trainingOverrideCount: true }
-      });
-      loggedDuringTrainingPhase = accountRow?.trainingPhase === 'ONBOARDING';
-
-      // Compute rough text similarity (word overlap / Jaccard) for
-      // editedFromSuggestion. For multi-bubble suggestions, the human's
-      // single message is compared against the CONCATENATED group so
-      // "the human typed something covering what the AI planned to say
-      // across 3 bubbles" still registers as a high-similarity override.
-      // Falls back to responseText (= first bubble, or the legacy single
-      // message) for flag-off personas / older suggestion rows.
-      const bubblesRaw = recentSuggestion.messageBubbles;
-      const comparisonSource = Array.isArray(bubblesRaw)
-        ? (bubblesRaw as string[]).join(' ')
-        : recentSuggestion.responseText;
-      const suggestionArr = comparisonSource.toLowerCase().split(/\s+/);
-      const humanArr = messageText.toLowerCase().split(/\s+/);
-      const humanWordSet = new Set(humanArr);
-      const intersection = suggestionArr.filter((w) =>
-        humanWordSet.has(w)
-      ).length;
-      const allWords = new Set(suggestionArr.concat(humanArr));
-      const similarity = allWords.size > 0 ? intersection / allWords.size : 0;
-      editedFromSuggestion = similarity > 0.7;
-
-      // Update the AISuggestion
-      await prisma.aISuggestion.update({
-        where: { id: recentSuggestion.id },
-        data: {
-          wasRejected: true,
-          wasEdited: editedFromSuggestion,
-          finalSentText: messageText,
-          similarityToFinalSent: similarity
-        }
-      });
-
-      // Always increment override count — phase gates the UI experience,
-      // not whether we capture the signal. Previously this was gated on
-      // `loggedDuringTrainingPhase`, which meant accounts that had been
-      // grandfathered to ACTIVE (or manually flipped) could never rebuild
-      // the counter, locking them out of Phase 1 training data forever.
-      // `loggedDuringTrainingPhase` is still set on the Message so we can
-      // filter downstream if we want "onboarding-only" subsets.
-      await prisma.account.update({
-        where: { id: accountId },
-        data: { trainingOverrideCount: { increment: 1 } }
-      });
-
-      console.log(
-        `[webhook-processor] Human override detected for ${conversationId}: ` +
-          `suggestion=${recentSuggestion.id}, similarity=${similarity.toFixed(2)}, ` +
-          `edited=${editedFromSuggestion}, onboarding=${loggedDuringTrainingPhase}`
-      );
-    }
-  } catch (err) {
-    console.error(
-      '[webhook-processor] Override detection failed (non-fatal):',
-      err
+    console.log(
+      `[webhook-processor] Persisted provisional admin echo ${message.id}; source finalization due ${message.echoAttributionPendingUntil.toISOString()}`
     );
+    return;
   }
 
-  // Save as HUMAN message (genuinely sent by a human admin).
-  // humanSource='PHONE' — this message came via Meta's echo webhook,
-  // i.e. the operator typed it in the native Instagram / Messenger
-  // app on their phone rather than through Convlo. The UI uses
-  // this to render a "from phone" badge.
-  const message = await prisma.message.create({
-    data: {
-      conversationId,
-      sender: 'HUMAN',
-      content: messageText,
-      timestamp: new Date(),
-      platformMessageId: platformMessageId || null,
-      humanSource: 'PHONE',
-      isVoiceNote: Boolean(audioUrl),
-      voiceNoteUrl: audioUrl ?? null,
-      isHumanOverride,
-      rejectedAISuggestionId,
-      editedFromSuggestion,
-      loggedDuringTrainingPhase,
-      msgSource: 'HUMAN_OVERRIDE'
-    }
-  });
-  console.log('message saved:', message.id);
-
-  // Transcribe operator-sent voice notes the same way we transcribe
-  // lead-sent ones (processIncomingMessage at line ~1000-1023). The
-  // resulting transcription lands on the row so the next AI
-  // generation sees the operator's actual words instead of a bare
-  // [Voice note] placeholder. Without this, an operator dropping a
-  // 30-second context voice note from their phone got entirely
-  // ignored by the next AI turn.
-  if (audioUrl) {
-    try {
-      const personaForMedia = await prisma.aIPersona.findFirst({
-        where: { accountId },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true }
-      });
-      if (personaForMedia) {
-        await enqueueInboundMediaProcessing({
-          accountId,
-          personaId: personaForMedia.id,
-          conversationId,
-          messageId: message.id,
-          mediaType: 'audio',
-          sourceUrl: audioUrl,
-          durationSeconds: null
-        });
-      } else {
-        console.warn(
-          `[webhook-processor] HUMAN/PHONE echo audio for ${conversationId} not transcribed: no persona for account ${accountId}`
-        );
-      }
-    } catch (mediaErr) {
-      console.error(
-        `[webhook-processor] HUMAN/PHONE echo transcription failed for ${conversationId}:`,
-        mediaErr
-      );
-    }
-  }
-
-  // Bump lastMessageAt but do NOT auto-pause the AI on a single echo.
-  // Previous behavior flipped aiActive=false on every echo, which was
-  // too aggressive — an operator dropping one context message from
-  // their phone doesn't necessarily want to take over the whole
-  // conversation. If they DO want to pause, the dashboard toggle is
-  // one click. Pending queues (scheduledReply, scheduledMessage
-  // follow-ups) ARE still cancelled below because a human just spoke
-  // — a redundant AI queue would cause duplicate sends (daetradez
-  // 7:58 PM 2026-04-24 incident).
-  //
-  // Heuristic addition (2026-04-25): if 2+ HUMAN/PHONE messages land
-  // back-to-back with no LEAD reply between them, the operator HAS
-  // clearly taken over (they aren't dropping single context lines —
-  // they're driving the conversation). At that point we auto-pause
-  // aiActive so the next inbound LEAD reply doesn't trigger an AI
-  // turn that would cross-talk over the human. Single PHONE message
-  // = context only; consecutive PHONE messages = takeover.
-  await prisma.conversation.update({
-    where: { id: conversationId },
-    data: {
-      lastMessageAt: new Date(),
-      awaitingAiResponse: false,
-      awaitingSince: null,
-      awaitingHumanReview: false
-    }
-  });
-
-  let autoPausedFromConsecutivePhone = false;
-  try {
-    const previousMessage = await prisma.message.findFirst({
-      where: { conversationId, id: { not: message.id } },
-      orderBy: { timestamp: 'desc' },
-      select: { sender: true, humanSource: true }
-    });
-    const isConsecutivePhone =
-      previousMessage?.sender === 'HUMAN' &&
-      previousMessage.humanSource === 'PHONE';
-    if (isConsecutivePhone) {
-      // Re-fetch the conversation aiActive in a single update (avoid a
-      // wasted update if it's already false from another path — e.g.
-      // distress, scheduling-conflict, manual operator pause).
-      const updated = await prisma.conversation.update({
-        where: { id: conversationId },
-        data: {
-          awaitingAiResponse: false,
-          awaitingSince: null
-        },
-        select: { aiActive: true }
-      });
-      autoPausedFromConsecutivePhone = true;
-      console.log(
-        `[webhook-processor] 2+ consecutive HUMAN/PHONE messages on ${conversationId} — auto-paused AI (human takeover detected, aiActive=${updated.aiActive})`
-      );
-    }
-  } catch (err) {
-    console.error(
-      '[webhook-processor] consecutive-PHONE auto-pause check failed (non-fatal):',
-      err
-    );
-  }
-
-  // Cancel any pending scheduled replies for this conversation
-  await prisma.scheduledReply.updateMany({
-    where: { conversationId, status: 'PENDING' },
-    data: { status: 'CANCELLED' }
-  });
-
-  // Cancel any pending follow-up cascade rows (BOOKING_LINK_FOLLOWUP /
-  // FOLLOW_UP_*). If a human operator has just sent a manual message,
-  // the AI follow-up queue is redundant — letting it fire produces
-  // duplicate "did you book that call?" messages (daetradez 2026-04-24
-  // incident). Mirrors the LEAD-reply cancellation in
-  // processIncomingMessage.
-  try {
-    const { cancelAllPendingFollowUps } = await import(
-      '@/lib/follow-up-sequence'
-    );
-    await cancelAllPendingFollowUps(conversationId);
-  } catch (err) {
-    console.error(
-      '[webhook-processor] cancelAllPendingFollowUps on HUMAN send failed (non-fatal):',
-      err
-    );
-  }
-
-  // Broadcast real-time events. broadcastNewMessage always; the
-  // AI-status-change broadcast is conditional on the consecutive-
-  // PHONE auto-pause having flipped the flag (otherwise nothing
-  // changed).
-  broadcastNewMessage(accountId, {
-    id: message.id,
-    conversationId,
-    sender: 'HUMAN',
-    content: messageText,
-    humanSource: 'PHONE',
-    platformMessageId: platformMessageId || null,
-    timestamp: message.timestamp.toISOString()
-  });
-  console.log('SSE broadcast message:new:', {
-    conversationId,
+  // Ordinary phone echoes use the same lock and transaction as delayed
+  // attribution. This closes the window where a provider callback could
+  // relabel the row after training and follow-up side effects had committed.
+  // If the process stops here, the due-now row remains durable and the minute
+  // finalizer cron completes it on the next pass.
+  const finalizedHuman = await finalizeManyChatEchoAttribution({
     messageId: message.id,
-    sender: 'HUMAN',
-    humanSource: 'PHONE'
+    conversationId,
+    now: new Date()
   });
-  if (autoPausedFromConsecutivePhone) {
+  if (!finalizedHuman) {
+    throw new Error('Immediate human echo attribution was not finalized');
   }
-
-  console.log(
-    `[webhook-processor] Admin message saved for conversation ${conversationId} (humanSource=PHONE, autoPaused=${autoPausedFromConsecutivePhone})`
-  );
+  return;
 }
 
 // ---------------------------------------------------------------------------
@@ -7484,14 +7279,14 @@ async function backfillFromMetaAPI(
     console.warn(`[webhook-processor] Meta API message fetch failed:`, err);
     // Return local messages as fallback
     return prisma.message.findMany({
-      where: { conversationId },
+      where: { conversationId, ...AI_HISTORY_DELIVERY_WHERE },
       orderBy: { timestamp: 'asc' }
     });
   }
 
   if (apiMessages.length === 0) {
     return prisma.message.findMany({
-      where: { conversationId },
+      where: { conversationId, ...AI_HISTORY_DELIVERY_WHERE },
       orderBy: { timestamp: 'asc' }
     });
   }
@@ -7554,7 +7349,7 @@ async function backfillFromMetaAPI(
 
   // Return all messages in chronological order
   return prisma.message.findMany({
-    where: { conversationId },
+    where: { conversationId, ...AI_HISTORY_DELIVERY_WHERE },
     orderBy: { timestamp: 'asc' }
   });
 }

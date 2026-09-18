@@ -1,4 +1,5 @@
 import prisma from '@/lib/prisma';
+import { AI_HISTORY_DELIVERY_WHERE } from '@/lib/message-history-truth';
 import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
@@ -3188,7 +3189,11 @@ export async function generateReply(
           typeformCapitalConfirmed: true,
           typeformCallScheduledAt: true,
           typeformAnswers: true,
-          _count: { select: { messages: true } }
+          _count: {
+            select: {
+              messages: { where: AI_HISTORY_DELIVERY_WHERE }
+            }
+          }
         }
       })
     : null;

@@ -25,6 +25,7 @@ early `manychat-handoff` webhook — copy it from there.
 
 ```json
 {
+  "platform": "instagram",
   "instagramUserId": "{{user.id}}",
   "instagramUsername": "{{user.name}}"
 }
@@ -33,6 +34,17 @@ early `manychat-handoff` webhook — copy it from there.
 `instagramUsername` is optional but improves matching for legacy leads
 whose Instagram numeric ID was never captured. `instagramUserId` is
 required.
+
+For Facebook, send:
+
+```json
+{
+  "platform": "facebook",
+  "facebookUserId": "<Page-scoped contact ID>",
+  "manyChatSubscriberId": "{{contact.id}}",
+  "contactName": "{{contact.name}}"
+}
+```
 
 ## Where to add it in the ManyChat flow
 
@@ -57,35 +69,32 @@ Example sequence order:
 
 | Status | Body | Meaning |
 |---|---|---|
-| `200` | `{ "success": true, "conversationId": "...", "alreadyHandedOff": false }` | Handoff applied — AI will pick up within ~60 s |
-| `200` | `{ "success": true, "conversationId": "...", "alreadyHandedOff": true }` | Already handed off (idempotent re-fire) |
+| `200` | `{ "success": true, "conversationId": "...", "alreadyHandedOff": false, "processingStatus": "scheduled", "scheduledReplyId": "..." }` | One normal reply job was scheduled. |
+| `200` | `processingStatus` is `already_scheduled` or `already_handled` | Idempotent re-fire; no second reply was created. |
+| `200` | `processingStatus` is `held`, `no_lead_input`, or `needs_review` | No automatic send was created; inspect the existing AI/hold/review state. |
 | `404` | `{ "error": "lead_not_found" }` | No matching Instagram lead found — check `instagramUserId` mapping in the ManyChat External Request |
 | `400` | `{ "error": "Invalid ManyChat payload" }` | Body shape is wrong (missing `instagramUserId`?) |
 | `401` | `{ "error": "Missing X-QualifyDMs-Key" }` or `"Invalid webhook key"` | Header is missing or wrong key |
 
 ## What the endpoint does
 
-1. Looks up the Lead by `accountId + platform=INSTAGRAM +
-   (platformUserId OR handle)` — same lookup the handoff endpoint uses.
-2. Sets on the Conversation:
-   - `aiActive = true`
-   - `awaitingAiResponse = true`
-   - `awaitingSince = now()`
-3. The silent-stop heartbeat (cron, every 1 minute) picks up the row
-   on its next tick and the AI fires its first reply.
+1. Resolves the lead on the requested Instagram or Facebook platform.
+2. Preserves AI-off, generate-only, distress, human-review,
+   scheduling-conflict, expired-window, terminal-failure, and existing-work
+   protections.
+3. Under a conversation lock, creates or adopts exactly one ScheduledReply for
+   the newest unanswered lead message.
+4. The existing ScheduledReply pipeline remains responsible for generation,
+   script routing, quality checks, and Meta delivery.
 
-The endpoint does NOT generate the AI reply itself — that goes through
-the standard recovery flow so the discovery-question bridge
-(`buildManyChatOpeningRecovery`) fires correctly.
+The endpoint does not generate or send inline. It queues the same standard
+pipeline used by normal conversation work.
 
 ## What if you forget to add it
 
-The time-based fallback in `silentStopHeartbeat` covers this case:
-once a `source=MANYCHAT` conversation has a LEAD message that's been
-unanswered for >5 minutes, the heartbeat flips the same flags and the
-AI takes over. So the webhook is "fast path"; the fallback is "safety
-net." Adding the webhook gives ~5× faster handoff and cleaner ops
-logs.
+The time-based fallback still covers eligible conversations after five minutes.
+It no longer turns AI back on or bypasses AI-off, generate-only, distress,
+human-review, or scheduling-conflict state.
 
 ## Related — capture each ManyChat-sent message
 

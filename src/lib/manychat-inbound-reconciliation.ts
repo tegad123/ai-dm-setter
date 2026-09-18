@@ -15,7 +15,21 @@ export async function persistManyChatNativeInbound(
           accountId,
           conversationId,
           platform: 'INSTAGRAM',
-          status: { in: ['PROCESSING', 'RETRY', 'QUEUED', 'ALREADY_HANDLED'] },
+          // A terminal receipt can still own the synthetic first-input row.
+          // For example, the worker may persist the lead answer and then hold
+          // it because AI is off or human review is active. A delayed native
+          // copy must attach its Meta MID to that row instead of creating a
+          // duplicate and re-entering ordinary scheduling.
+          status: {
+            in: [
+              'PROCESSING',
+              'RETRY',
+              'QUEUED',
+              'ALREADY_HANDLED',
+              'HELD',
+              'NEEDS_REVIEW'
+            ]
+          },
           receivedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
           leadMessageId: { not: null }
         }

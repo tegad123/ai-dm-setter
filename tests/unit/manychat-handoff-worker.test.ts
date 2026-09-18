@@ -96,7 +96,10 @@ function fixture() {
       content: 'Are you starting?',
       timestamp: conversation.manyChatFiredAt,
       deletedAt: null,
-      platformMessageId: null
+      platformMessageId: null,
+      providerMessageId: 'manychat-opener-1',
+      deliveryStatus: 'PROVIDER_REPORTED',
+      deliveryReportedAt: conversation.manyChatFiredAt
     }
   ];
   const jobs: Row[] = [];
@@ -270,6 +273,17 @@ describe('durable ManyChat handoff worker', () => {
     assert.equal(f.state.receipt.leadMessageId, 'm1');
     assert.equal(f.state.advisoryLocks, 1);
     assert.equal(f.state.receipt.leaseToken, null);
+  });
+  it('processes a valid first response without manufacturing a visible opener', async () => {
+    const f = fixture();
+    f.state.messages.splice(0, 1);
+    const result = await f.run();
+    assert.equal(result.queued, 1);
+    assert.equal(f.state.messages.length, 1);
+    assert.equal(f.state.messages[0].sender, 'LEAD');
+    assert.equal(f.state.receipt.openerMessageId, null);
+    assert.equal(f.state.receipt.leadMessageId, f.state.messages[0].id);
+    assert.equal(f.state.schedules, 1);
   });
   it('reuses native Meta inbound and existing pending work without another scheduler call', async () => {
     const f = fixture();

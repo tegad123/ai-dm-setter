@@ -5,6 +5,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/finalize-manychat-echoes",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/process-scheduled-replies",
       "schedule": "* * * * *"
     },

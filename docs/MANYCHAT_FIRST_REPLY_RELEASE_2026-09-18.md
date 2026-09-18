@@ -131,7 +131,21 @@ messages. Do not delete receipt rows to rerun a test.
 ## Rollout log
 
 - Initial production baseline: `3a7c03d8d1bf043e0eec04e075409a5b8d1d52ed`.
-- Implementation and local checks complete; deployment verification and live
-  ManyChat test are pending at the time this initial release note is committed.
+- PR #49 was merged and production deployed
+  `cabaeda158a81787a28503f2bc814eb17868853b`. Migration
+  `20260918170000_manychat_handoff_receipts` completed at
+  2026-09-18 17:02:19 UTC. The authenticated worker returned 200 with no pending
+  work and the unauthenticated worker route returned 401.
+- The controlled Default Reply flow was published with
+  `processingMode: "queued_first_reply"` and response mapping changed from
+  `$.ok` to `$.handoffAccepted`. The persisted body and mapping were verified.
+- The fresh Squirrel test exposed a separate pre-existing opener-truth defect:
+  Convlo showed the planned ManyChat opener as outbound while both sides of the
+  actual Instagram thread had no message. The first-reply callback was therefore
+  never reached. See `docs/INCIDENT_MANYCHAT_MESSAGE_TRUTH_2026-09-18.md`.
+- The consolidated production audit, including thread ownership, internal
+  routing suppression, holds, failed jobs, Facebook callback parity, and exact
+  recovery boundaries, is in
+  `docs/INCIDENT_RESPONSE_GAPS_2026-09-18.md`.
 - General new-follower rollout remains gated on controlled concurrent
-  Meta/ManyChat production proof.
+  Meta/ManyChat production proof and correction of the opener-truth defect.
