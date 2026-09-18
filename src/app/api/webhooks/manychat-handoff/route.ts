@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { acceptQueuedManyChatHandoff } from '@/lib/manychat-handoff-receipt';
 import {
   ManyChatHandoffError,
   processManyChatHandoff
@@ -28,6 +29,13 @@ export async function POST(request: NextRequest) {
         400
       );
     });
+    if (payload?.processingMode === 'queued_first_reply') {
+      const receipt = await acceptQueuedManyChatHandoff({
+        webhookKey: getWebhookKey(request),
+        payload
+      });
+      return NextResponse.json(receipt, { status: 200 });
+    }
     const result = await processManyChatHandoff({
       webhookKey: getWebhookKey(request),
       payload
@@ -46,7 +54,8 @@ export async function POST(request: NextRequest) {
     if (err instanceof ManyChatHandoffError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    console.error('[manychat-handoff] fatal:', err);
+    // Prisma errors may include query parameters; never log request credentials.
+    console.error('[manychat-handoff] processing failed');
     return NextResponse.json(
       { error: 'Failed to process ManyChat handoff' },
       { status: 500 }

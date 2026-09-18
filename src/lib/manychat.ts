@@ -208,14 +208,16 @@ export async function looksLikeManyChatHandoff(
  */
 export async function findSubscriberById(
   apiKey: string,
-  subscriberId: string
+  subscriberId: string,
+  options?: { signal?: AbortSignal }
 ): Promise<SubscriberInfo | null> {
   if (!apiKey || !subscriberId) return null;
   const cleaned = subscriberId.trim();
   if (!cleaned) return null;
   return call<SubscriberInfo>(
     apiKey,
-    `/fb/subscriber/getInfo?subscriber_id=${encodeURIComponent(cleaned)}`
+    `/fb/subscriber/getInfo?subscriber_id=${encodeURIComponent(cleaned)}`,
+    options?.signal ? { signal: options.signal } : undefined
   );
 }
 
