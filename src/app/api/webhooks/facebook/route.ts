@@ -5,10 +5,10 @@ import {
   processIncomingMessage,
   scheduleAIReply,
   processScheduledReply,
-  scheduledReplyCompletedAsSuggestion,
   computeReplyDelaySeconds,
   isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
+import { scheduledReplyTerminalNoSendOutcome } from '@/lib/scheduled-reply-no-send';
 import { notifyPlatformNotConnected } from '@/lib/platform-not-connected-alert';
 import prisma from '@/lib/prisma';
 import {
@@ -523,7 +523,9 @@ async function processFacebookEvents(payload: any): Promise<void> {
                 reviewHoldExistedBeforeAttempt =
                   fresh.awaitingHumanReview === true;
                 processingStartedAt = new Date();
-                await processScheduledReply(targetConvoId, accountId);
+                await processScheduledReply(targetConvoId, accountId, {
+                  scheduledReplyId: scheduledReply.id
+                });
                 const deliveredMessage = await prisma.message.findFirst({
                   where: {
                     conversationId: targetConvoId,
@@ -533,13 +535,13 @@ async function processFacebookEvents(payload: any): Promise<void> {
                   select: { id: true }
                 });
                 if (!deliveredMessage) {
-                  // Suggestion mode (auto-send off / generate-only): the
-                  // reply was generated and stored, never meant to ship.
-                  if (
-                    await scheduledReplyCompletedAsSuggestion(scheduledReply.id)
-                  ) {
+                  const noSendOutcome =
+                    await scheduledReplyTerminalNoSendOutcome(
+                      scheduledReply.id
+                    );
+                  if (noSendOutcome) {
                     console.log(
-                      `[facebook-webhook] inline reply completed as suggestion (not auto-sent) for ${targetConvoId}`
+                      `[facebook-webhook] inline reply completed without send (${noSendOutcome.reason}) for ${targetConvoId}`
                     );
                     return;
                   }

@@ -1,6 +1,9 @@
 import prisma from '@/lib/prisma';
 import { AI_HISTORY_DELIVERY_WHERE } from '@/lib/message-history-truth';
-import { isManyChatFirstReplyTurn } from '@/lib/manychat-first-reply-routing';
+import {
+  isManyChatFirstReplyCandidate,
+  isManyChatFirstReplyTurn
+} from '@/lib/manychat-first-reply-routing';
 import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
@@ -129,6 +132,7 @@ export interface ConversationMessage {
   bubbleTotalCount?: number | null;
   suggestionId?: string | null;
   systemPromptVersion?: string | null;
+  deliveryStatus?: string | null;
   // True when an operator unsent the prior AI/HUMAN message and
   // replaced it with this one (within 2 min). The system prompt
   // builder injects an [Operator correction] directive when the most
@@ -1783,6 +1787,15 @@ function branchHasRuntimeJudgmentOnly(
   );
 }
 
+const RUNTIME_JUDGMENT_EXPLICIT_SILENCE_RE =
+  /\b(?:send|say|write|emit|return)\s+(?:absolutely\s+)?nothing\b|\b(?:do not|don'?t|never)\s+(?:send|say|write|emit|respond|reply|answer|greet|message)\b|\b(?:stay|remain|go)\s+silent\b|\bno\s+lead-facing\s+(?:message|reply|response)\b/i;
+const RUNTIME_JUDGMENT_RESPONSE_REQUIRED_RE =
+  /\b(?:acknowledge|respond|reply|answer|react|address|reassure|congratulate|clarify|explain|ask|re-ask|say|tell|send|continue|advance|proceed|move\s+(?:on|forward|to)|transition)\b/i;
+const NO_RESPONSE_ROUTE_RE =
+  /\bno[ -]?(?:response|reply)\b|\b(?:has not|hasn'?t|did not|didn'?t|never)\s+(?:respond(?:ed)?|repl(?:y|ied))\b/i;
+const SOLICITATION_ROUTE_RE =
+  /\bsolicitation\b|\bnon[ -]?lead\b|\b(?:bot|automated)\s+spam\b|\bspam(?:mer)?\b|\b(?:lead|sender|message)\s+(?:is\s+)?(?:pitching|promoting|selling|soliciting)\b/i;
+
 export function runtimeJudgmentOnlyBranchShouldStaySilent(params: {
   branch: JudgeBranchLike | null | undefined;
   conversationHistory: Array<{ sender: string }>;
@@ -1790,12 +1803,12 @@ export function runtimeJudgmentOnlyBranchShouldStaySilent(params: {
   if (!branchHasRuntimeJudgmentOnly(params.branch)) return false;
 
   const routeText = `${params.branch?.branchLabel ?? ''} ${params.branch?.conditionDescription ?? ''}`;
-  const requiresLeadSilence =
-    /\bno[ -]?(?:response|reply)\b|\b(?:has not|hasn'?t|did not|didn'?t|never)\s+(?:respond(?:ed)?|repl(?:y|ied))\b/i.test(
-      routeText
-    );
-  if (!requiresLeadSilence) return true;
-
+  const instructionText =
+    params.branch?.actions
+      .map((action) => action.content?.trim() ?? '')
+      .filter(Boolean)
+      .join(' ') ?? '';
+  const isNoResponseRoute = NO_RESPONSE_ROUTE_RE.test(routeText);
   const latestExternalMessage = [...params.conversationHistory]
     .reverse()
     .find((message) =>
@@ -1803,10 +1816,21 @@ export function runtimeJudgmentOnlyBranchShouldStaySilent(params: {
     );
 
   // A fresh lead message makes a "No response" route structurally
-  // impossible. Keep the model's contextual answer instead of applying the
-  // runtime-judgment-only silence rule. Solicitation and distress branches
-  // remain silent because their route conditions do not require no reply.
-  return latestExternalMessage?.sender !== 'LEAD';
+  // impossible, even if that branch's instruction also says to end silently.
+  if (isNoResponseRoute && latestExternalMessage?.sender === 'LEAD') {
+    return false;
+  }
+
+  // runtime_judgment is an instruction carrier, not proof that a branch has
+  // no lead-facing response. Daniel's reaction branches use this exact shape
+  // for directions such as "Briefly acknowledge" and "advance to the next
+  // step". Preserve the model's generated response unless the instruction or
+  // route explicitly identifies a genuinely silent outcome.
+  if (RUNTIME_JUDGMENT_EXPLICIT_SILENCE_RE.test(instructionText)) return true;
+  if (RUNTIME_JUDGMENT_RESPONSE_REQUIRED_RE.test(instructionText)) return false;
+  if (isNoResponseRoute) return true;
+  if (SOLICITATION_ROUTE_RE.test(routeText)) return true;
+  return false;
 }
 
 function branchIsSilent(branch: JudgeBranchLike | null | undefined) {
@@ -3199,7 +3223,7 @@ export async function generateReply(
       })
     : null;
 
-  const manyChatFirstReplyCandidate = isManyChatFirstReplyTurn({
+  const manyChatFirstReplyCandidate = isManyChatFirstReplyCandidate({
     conversationSource: conversationCallState?.source ?? null,
     openerMessage: conversationCallState?.manyChatOpenerMessage ?? null,
     currentLeadMessageId: lastLeadMsg?.id ?? null,
@@ -8833,11 +8857,12 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
   }
 
-  // ── N1c: a send-nothing branch ships nothing ───────────────────────────
-  // A branch whose only actions are runtime_judgment carries NO lead-facing
-  // deliverable: the script author's instruction is to stay silent (Daniel v2
-  // step 1 "Solicitation / non-lead": "Send nothing. Do not greet, do not ask
-  // location"). Whatever the model emits there is improvised by definition.
+  // ── N1c: an explicitly silent branch ships nothing ─────────────────────
+  // A runtime_judgment-only branch is silent only when its instruction or
+  // route says so (Daniel v2 step 1 "Solicitation / non-lead": "Send nothing.
+  // Do not greet, do not ask location"). Runtime judgment is also used for
+  // response instructions such as "Briefly acknowledge"; those branches must
+  // retain the model's generated acknowledgement and progression.
   // Local flow 3, 2026-09-15: the branch was selected correctly and the model
   // still produced "gimme a sec bro, looking into this" — a promise of a
   // follow-up that will never come, sent to a spam account. The parser fix
@@ -8858,7 +8883,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     );
     if (hadContent) {
       console.warn(
-        `[ai-engine] N1c send-nothing branch — selected branch "${selectedCurrentJudgeBranch.branchLabel}" has no lead-facing actions; suppressing ${bubblesBefore.length} improvised bubble(s) (conv ${activeConversationId}): ${JSON.stringify(bubblesBefore.map((b) => (b ?? '').slice(0, 60)))}`
+        `[ai-engine] N1c explicitly silent branch — selected branch "${selectedCurrentJudgeBranch.branchLabel}" suppressing ${bubblesBefore.length} improvised bubble(s) (conv ${activeConversationId}): ${JSON.stringify(bubblesBefore.map((b) => (b ?? '').slice(0, 60)))}`
       );
     }
     parsed.messages = [];

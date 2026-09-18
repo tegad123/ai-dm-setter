@@ -158,14 +158,86 @@ describe('durable ManyChat first-reply routing', () => {
     );
   });
 
-  it('uses stored opener and pristine message state when no receipt exists', () => {
+  it('does not treat planned opener context alone as proof of a first reply', () => {
     const evidence = firstReplyEvidence(3 * 24 * 60 * 60_000);
     assert.equal(
       isManyChatFirstReplyTurn({
         ...evidence,
         handoffReceipt: null
       }),
-      true
+      false
+    );
+  });
+
+  for (const deliveryStatus of [
+    'PROVIDER_REPORTED',
+    'META_CONFIRMED'
+  ] as const) {
+    it(`preserves a delayed first reply with ${deliveryStatus} opener evidence and no receipt`, () => {
+      const evidence = firstReplyEvidence(3 * 24 * 60 * 60_000);
+      assert.equal(
+        isManyChatFirstReplyTurn({
+          ...evidence,
+          conversationHistory: [
+            {
+              id: 'verified-opener',
+              sender: 'MANYCHAT',
+              content: evidence.openerMessage,
+              deliveryStatus
+            },
+            lead
+          ],
+          handoffReceipt: null
+        }),
+        true
+      );
+    });
+  }
+
+  it('does not accept planned, status-less, or unrelated ManyChat copy as opener evidence', () => {
+    const evidence = firstReplyEvidence(30 * 60_000);
+    for (const openerRow of [
+      {
+        id: 'planned-opener',
+        sender: 'MANYCHAT',
+        content: evidence.openerMessage,
+        deliveryStatus: 'PLANNED'
+      },
+      {
+        id: 'legacy-opener',
+        sender: 'MANYCHAT',
+        content: evidence.openerMessage,
+        deliveryStatus: null
+      },
+      {
+        id: 'different-automation-message',
+        sender: 'MANYCHAT',
+        content: 'here is the training link',
+        deliveryStatus: 'META_CONFIRMED'
+      }
+    ]) {
+      assert.equal(
+        isManyChatFirstReplyTurn({
+          ...evidence,
+          conversationHistory: [openerRow, lead],
+          handoffReceipt: null
+        }),
+        false
+      );
+    }
+  });
+
+  it('requires a receipt to own the current lead message', () => {
+    const evidence = firstReplyEvidence(30 * 60_000);
+    assert.equal(
+      isManyChatFirstReplyTurn({
+        ...evidence,
+        handoffReceipt: {
+          leadMessageId: 'different-lead-message',
+          status: 'QUEUED'
+        }
+      }),
+      false
     );
   });
 });

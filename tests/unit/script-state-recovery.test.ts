@@ -2312,6 +2312,157 @@ describe('routing-only branch completion', () => {
     assert.equal(withReply.step?.stepNumber, 2);
   });
 
+  it('aloysx7: completes Step 8 when runtime_judgment explicitly asks the urgency question and the lead replies', () => {
+    const step8 = branchStep(8, 'Urgency (Only If Needed)', 'Default', [
+      {
+        actionType: 'runtime_judgment',
+        content:
+          'Ask whether now is the right time to overcome their stated obstacle and reach their desired outcome.'
+      },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const step9 = askStep(9, 'Next Step', 'Would support help you do that?');
+    const script = {
+      id: 'aloysx7_step_8_recovery',
+      steps: [step8, step9]
+    } as any;
+    const points = branchSelectedPoints(
+      8,
+      'Urgency (Only If Needed)',
+      'Default',
+      'sug_aloys_step8'
+    );
+
+    const urgencyPrompt = {
+      id: 'ai_aloys_step8',
+      suggestionId: 'sug_aloys_step8',
+      sender: 'AI',
+      content: 'how important is fixing this right now bro?',
+      timestamp: '2026-09-18T14:00:00.000Z'
+    };
+    const beforeReply = computeSystemStage(script, points as any, [
+      urgencyPrompt
+    ]);
+    const stage = computeSystemStage(script, points as any, [
+      urgencyPrompt,
+      {
+        id: 'lead_aloys_step8_reply',
+        sender: 'LEAD',
+        content: "very important, i'm tired of letting this hold me back",
+        timestamp: '2026-09-18T14:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(beforeReply.step?.stepNumber, 8);
+    assert.equal(stage.step?.stepNumber, 9);
+    const completed = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed' && event.stepNumber === 8
+    );
+    assert.equal(completed?.aiMessageId, 'ai_aloys_step8');
+    assert.equal(completed?.leadMessageId, 'lead_aloys_step8_reply');
+    assert.equal(
+      completed?.stepCompletionReason,
+      'completed_by_ask_reply_suggestion'
+    );
+  });
+
+  it('lifeofjacklin: completes Step 8 Alternative from its typed urgency ask and reply', () => {
+    const step8 = branchStep(8, 'Urgency (Only If Needed)', 'Alternative', [
+      {
+        actionType: 'ask_question',
+        content:
+          'So why is now so important for you to let go of these obstacles and overcome them bro? Why now?'
+      },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const step9 = askStep(9, 'Next Step', 'Would support help you do that?');
+    const script = {
+      id: 'lifeofjacklin_step_8_recovery',
+      steps: [step8, step9]
+    } as any;
+    const points = branchSelectedPoints(
+      8,
+      'Urgency (Only If Needed)',
+      'Alternative',
+      'sug_lifeofjacklin_step8'
+    );
+
+    const stage = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_lifeofjacklin_step8',
+        suggestionId: 'sug_lifeofjacklin_step8',
+        sender: 'AI',
+        content:
+          'So why is now so important for you to let go of these obstacles and overcome them bro? Why now?',
+        timestamp: '2026-09-18T15:00:00.000Z'
+      },
+      {
+        id: 'lead_lifeofjacklin_step8_reply',
+        sender: 'LEAD',
+        content: 'because I need to change things for my family now',
+        timestamp: '2026-09-18T15:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 9);
+    const completed = readBranchHistoryEvents(points as any).find(
+      (event) => event.eventType === 'step_completed' && event.stepNumber === 8
+    );
+    assert.equal(completed?.aiMessageId, 'ai_lifeofjacklin_step8');
+    assert.equal(completed?.leadMessageId, 'lead_lifeofjacklin_step8_reply');
+    assert.equal(completed?.stepCompletionReason, 'completed_by_ask_reply');
+  });
+
+  it('keeps a truly silent runtime_judgment plus wait branch ineligible for history completion', () => {
+    const step8 = branchStep(8, 'Silent Stop', 'Solicitation / non-lead', [
+      {
+        actionType: 'runtime_judgment',
+        content: 'Send nothing. Do not greet or ask a question.'
+      },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const step9 = askStep(9, 'Next Step', 'What changed?');
+    const script = {
+      id: 'silent_runtime_wait_recovery',
+      steps: [step8, step9]
+    } as any;
+    const points = branchSelectedPoints(
+      8,
+      'Silent Stop',
+      'Solicitation / non-lead',
+      'sug_silent_step8'
+    );
+
+    const stage = computeSystemStage(script, points as any, [
+      {
+        id: 'ai_unexpected_silent_step8',
+        suggestionId: 'sug_silent_step8',
+        sender: 'AI',
+        content: 'unexpected output',
+        timestamp: '2026-09-18T16:00:00.000Z'
+      },
+      {
+        id: 'lead_after_unexpected_output',
+        sender: 'LEAD',
+        content: 'hello?',
+        timestamp: '2026-09-18T16:01:00.000Z'
+      }
+    ]);
+
+    assert.equal(stage.step?.stepNumber, 8);
+    assert.equal(
+      (points as any).lastStepCompletionTrace?.stepCompletionReason,
+      'no_history_completion_signal'
+    );
+    assert.equal(
+      readBranchHistoryEvents(points as any).some(
+        (event) =>
+          event.eventType === 'step_completed' && event.stepNumber === 8
+      ),
+      false
+    );
+  });
+
   it('parses proceed-to routing directives and can advance to the target step', async () => {
     const step1 = branchStep(1, 'Routing Decision', 'Ready', [
       {

@@ -11,6 +11,7 @@ import {
 } from '@/lib/voice-quality-gate';
 import { processScheduledReply } from '@/lib/webhook-processor';
 import { isManyChatProcessingEligible } from '@/lib/manychat-ai-eligibility';
+import { isScheduledReplyNoSendForLeadTurn } from '@/lib/scheduled-reply-no-send';
 
 // Raised 5 → 10 min on 2026-05-05. The first iteration of the active-
 // conversation guard was correct in theory but bit @shepherdgushe.zw
@@ -644,6 +645,17 @@ async function recoverManyChatStuckConversations(
     const last = conv.messages[0];
     if (!last || last.sender !== 'LEAD') continue;
     if (last.timestamp >= threshold) continue;
+
+    // A durable no-send marker means the last lead turn was deliberately
+    // closed. Do not mistake its truthful awaiting=false state for a missing
+    // ManyChat completion callback and resurrect the cancelled work.
+    const latestScheduledReply = await prisma.scheduledReply.findFirst({
+      where: { conversationId: conv.id },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true, lastError: true, createdAt: true }
+    });
+    if (isScheduledReplyNoSendForLeadTurn(latestScheduledReply, last.timestamp))
+      continue;
 
     // Race vs the completion endpoint: if the endpoint already set
     // `awaitingSince=now()` and our scan ran first this tick, we'd

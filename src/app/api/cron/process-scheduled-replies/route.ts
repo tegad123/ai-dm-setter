@@ -5,10 +5,8 @@ import {
   getScheduledReplyRetryAt,
   SCHEDULED_REPLY_MAX_ATTEMPTS
 } from '@/lib/meta-delivery-errors';
-import {
-  processScheduledReply,
-  scheduledReplyCompletedAsSuggestion
-} from '@/lib/webhook-processor';
+import { processScheduledReply } from '@/lib/webhook-processor';
+import { scheduledReplyTerminalNoSendOutcome } from '@/lib/scheduled-reply-no-send';
 import { reconcileScheduledReplyAfterError } from '@/lib/scheduled-reply-delivery-reconciliation';
 import {
   FAILED_QUALITY_GATE_STATUS,
@@ -453,6 +451,7 @@ export async function GET(req: NextRequest) {
         reviewHoldExistedBeforeAttempt =
           conversationBeforeAttempt?.awaitingHumanReview ?? null;
         await processScheduledReply(reply.conversationId, reply.accountId, {
+          scheduledReplyId: reply.id,
           messageType: reply.messageType,
           generatedResult: reply.generatedResult,
           createdAt: reply.createdAt
@@ -466,12 +465,16 @@ export async function GET(req: NextRequest) {
           select: { id: true }
         });
         if (!deliveredMessage) {
-          // Suggestion mode (auto-send off / generate-only): generated and
-          // stored, never meant to ship. Row is already CANCELLED with the
-          // suggestion marker — not a delivery failure.
-          if (await scheduledReplyCompletedAsSuggestion(reply.id)) {
+          // Some completed paths intentionally produce no outbound Message
+          // (generate-only suggestion or a repeated question after the lead
+          // already answered). Their durable CANCELLED marker is a successful
+          // terminal outcome, not a delivery failure.
+          const noSendOutcome = await scheduledReplyTerminalNoSendOutcome(
+            reply.id
+          );
+          if (noSendOutcome) {
             console.log(
-              `[cron] reply ${reply.id} completed as suggestion (not auto-sent) for convo ${reply.conversationId}`
+              `[cron] reply ${reply.id} completed without send (${noSendOutcome.reason}) for convo ${reply.conversationId}`
             );
             continue;
           }

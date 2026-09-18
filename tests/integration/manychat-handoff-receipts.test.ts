@@ -8,6 +8,7 @@ import { GET as cron } from '../../src/app/api/cron/process-manychat-handoffs/ro
 import { createManyChatHandoffReceiptWorker } from '../../src/lib/manychat-handoff-worker';
 import { queueManyChatFirstReply } from '../../src/lib/manychat-handoff-queue';
 import { persistManyChatNativeInbound } from '../../src/lib/manychat-inbound-reconciliation';
+import { processIncomingMessage } from '../../src/lib/webhook-processor';
 
 // Never run fixtures against a connected client database, even accidentally.
 const url = new URL(process.env.DATABASE_URL || 'postgresql://invalid/invalid');
@@ -188,6 +189,49 @@ test('Facebook queued intake deduplicates, rejects conflicts and schedules throu
   );
 });
 
+test('Facebook worker-owned first reply absorbs the later native MID without replacing its job', async () => {
+  const f = await fixture('FACEBOOK');
+  const nativeMid = `facebook-native-${randomUUID()}`;
+  const body = await (await accept(f)).json();
+  await worker()();
+
+  const before = await prisma.manyChatHandoffReceipt.findUniqueOrThrow({
+    where: { id: body.receiptId }
+  });
+  assert.equal(before.status, 'QUEUED');
+  assert.ok(before.leadMessageId);
+  assert.ok(before.scheduledReplyId);
+
+  const result = await processIncomingMessage({
+    accountId: f.account.id,
+    platformUserId: f.lead.platformUserId!,
+    platform: 'FACEBOOK',
+    senderName: f.lead.name,
+    senderHandle: f.lead.handle,
+    messageText: firstReply,
+    triggerType: 'DM',
+    platformMessageId: nativeMid
+  });
+  assert.equal(result.skipReply, true);
+  assert.equal(result.messageId, before.leadMessageId);
+
+  const after = await prisma.manyChatHandoffReceipt.findUniqueOrThrow({
+    where: { id: body.receiptId }
+  });
+  const leadMessages = await prisma.message.findMany({
+    where: { conversationId: f.conversationId, sender: 'LEAD' }
+  });
+  const jobs = await prisma.scheduledReply.findMany({
+    where: { conversationId: f.conversationId }
+  });
+  assert.equal(leadMessages.length, 1);
+  assert.equal(leadMessages[0].id, after.leadMessageId);
+  assert.equal(leadMessages[0].platformMessageId, nativeMid);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].id, after.scheduledReplyId);
+  assert.equal(jobs[0].status, 'PENDING');
+});
+
 test('legacy context-only payload retains response shape and saves its context', async () => {
   const f = await fixture();
   const response = await accept(f, {
@@ -285,6 +329,7 @@ test('atomic concurrent worker claims schedule one first reply and late native c
   const native = await persistManyChatNativeInbound(
     f.account.id,
     f.conversationId,
+    'INSTAGRAM',
     {
       conversationId: f.conversationId,
       sender: 'LEAD',
@@ -308,13 +353,18 @@ test('native-first and simultaneous intake choose one scheduling owner and adopt
     const f = await fixture();
     const body = await (await accept(f)).json();
     const native = () =>
-      persistManyChatNativeInbound(f.account.id, f.conversationId, {
-        conversationId: f.conversationId,
-        sender: 'LEAD',
-        content: firstReply,
-        platformMessageId: `native-${randomUUID()}`,
-        timestamp: new Date()
-      });
+      persistManyChatNativeInbound(
+        f.account.id,
+        f.conversationId,
+        'INSTAGRAM',
+        {
+          conversationId: f.conversationId,
+          sender: 'LEAD',
+          content: firstReply,
+          platformMessageId: `native-${randomUUID()}`,
+          timestamp: new Date()
+        }
+      );
     if (mode === 'before') {
       await native();
       await worker()();
@@ -427,6 +477,7 @@ test('ambiguous native copy after outbound is preserved for review without anoth
   const result = await persistManyChatNativeInbound(
     f.account.id,
     f.conversationId,
+    'INSTAGRAM',
     {
       conversationId: f.conversationId,
       sender: 'LEAD',

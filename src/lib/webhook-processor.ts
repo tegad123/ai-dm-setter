@@ -51,6 +51,10 @@ import { getCredentials } from '@/lib/credential-store';
 import { isNearDuplicateOfRecentAiMessages } from '@/lib/ai-dedup';
 import { replyAnswersAsk } from '@/lib/answer-satisfaction';
 import {
+  recordNearDuplicateAnsweredSuppression,
+  SUGGESTION_ONLY_MARKER
+} from '@/lib/scheduled-reply-no-send';
+import {
   transitionLeadStage,
   isStageProgressionDisabledForLead,
   personaConfigDisablesStageProgression
@@ -753,29 +757,6 @@ export function shouldAutoSendReply(args: {
   return args.aiActive && (args.awayMode || args.autoSendOverride);
 }
 
-// Stamped on a ScheduledReply that completed as a SUGGESTION (auto-send off:
-// Away Mode off / generate-only). The inline after() paths and the reply
-// cron treat a row carrying this marker as done, not as a missing delivery.
-export const SUGGESTION_ONLY_MARKER =
-  'suggestion_only: generated, not auto-sent (auto-send off for this conversation)';
-
-export async function scheduledReplyCompletedAsSuggestion(
-  scheduledReplyId: string
-): Promise<boolean> {
-  try {
-    const row = await prisma.scheduledReply.findUnique({
-      where: { id: scheduledReplyId },
-      select: { status: true, lastError: true }
-    });
-    return (
-      row?.status === 'CANCELLED' &&
-      (row.lastError ?? '').startsWith('suggestion_only:')
-    );
-  } catch {
-    return false;
-  }
-}
-
 export type GenerateReplyHistoryRow = {
   id: string;
   sender: string;
@@ -824,6 +805,9 @@ export function formatMessagesForGenerateReply(
     bubbleIndex: m.bubbleIndex,
     bubbleTotalCount: m.bubbleTotalCount,
     suggestionId: m.suggestionId,
+    // Preserve the explicit provider/Meta evidence used to distinguish a
+    // delivered ManyChat opener from pre-send planned context.
+    deliveryStatus: m.deliveryStatus,
     // Carry through to ai-engine so the [Operator correction]
     // directive fires when the most recent setter message is a
     // post-unsend manual reply.
@@ -1599,17 +1583,14 @@ export async function processIncomingMessage(
       timestamp: now,
       platformMessageId: params.platformMessageId || null
     };
-    if (
-      platform === 'INSTAGRAM' &&
-      lead.conversation!.source === 'MANYCHAT' &&
-      !inboundMediaType
-    ) {
+    if (lead.conversation!.source === 'MANYCHAT' && !inboundMediaType) {
       const { persistManyChatNativeInbound } = await import(
         '@/lib/manychat-inbound-reconciliation'
       );
       const persisted = await persistManyChatNativeInbound(
         accountId,
         conversationId,
+        platform,
         messageData
       );
       message = persisted.message;
@@ -2641,6 +2622,7 @@ export async function scheduleAIReply(
   accountId: string,
   options?: {
     skipDelayQueue?: boolean;
+    scheduledReplyId?: string;
     queueOnly?: boolean;
     handoffReceiptId?: string;
     handoffLeaseToken?: string;
@@ -4040,7 +4022,13 @@ export async function scheduleAIReply(
       (options?.skipDelayQueue ? ' (delivered after scheduled delay)' : '') +
       ` | pipeline so far: ${((Date.now() - _pipelineStart) / 1000).toFixed(1)}s`
   );
-  await sendAIReply(conversationId, accountId, lead, result);
+  await sendAIReply(
+    conversationId,
+    accountId,
+    lead,
+    result,
+    options?.scheduledReplyId
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4899,7 +4887,8 @@ async function sendAIReply(
     systemStage?: string | null;
     currentScriptStep?: number | null;
     stageOverrideReason?: string | null;
-  }
+  },
+  scheduledReplyId?: string
 ): Promise<void> {
   // Delivery-path R17 backstop. scheduleAIReply normally sanitizes right after
   // generation, but direct/manual AI send paths can call this closer to ship.
@@ -5686,7 +5675,7 @@ async function sendAIReply(
     //   • lead's latest message did NOT answer → ship the near-duplicate
     //     re-drive anyway;
     //   • lead answered and we are still repeating ourselves → genuine dupe,
-    //     suppress — but stay heartbeat-visible instead of dead-ending.
+    //     suppress and close the queued work as an intentional no-send.
     const latestLeadMsg = await prisma.message
       .findFirst({
         where: { conversationId, sender: 'LEAD' },
@@ -5715,16 +5704,13 @@ async function sendAIReply(
           })
           .catch(() => {});
       }
-      await prisma.conversation
-        .update({
-          where: { id: conversationId },
-          data: {
-            awaitingAiResponse: true,
-            awaitingSince: new Date(),
-            lastSilentStopAt: new Date()
-          }
-        })
-        .catch(() => null);
+      // This is a completed no-send, not a delivery failure or silent stop.
+      // Persist the terminal queue outcome with the conversation flag cleanup
+      // so cron/inline runners do not retry it or raise a false failure.
+      await recordNearDuplicateAnsweredSuppression(
+        conversationId,
+        scheduledReplyId
+      );
       return;
     }
   }
@@ -7579,6 +7565,7 @@ export async function processScheduledReply(
   conversationId: string,
   accountId: string,
   storedResult?: {
+    scheduledReplyId?: string;
     messageType?: string | null;
     generatedResult?: unknown;
     createdAt?: Date | null;
@@ -7608,7 +7595,8 @@ export async function processScheduledReply(
           messageType: storedResult.messageType
         });
         await scheduleAIReply(conversationId, accountId, {
-          skipDelayQueue: true
+          skipDelayQueue: true,
+          scheduledReplyId: storedResult.scheduledReplyId
         });
         return;
       }
@@ -7618,13 +7606,17 @@ export async function processScheduledReply(
     await deliverStoredReply(
       conversationId,
       accountId,
-      storedResult.generatedResult
+      storedResult.generatedResult,
+      storedResult.scheduledReplyId
     );
     return;
   }
 
   // Legacy path: no stored result, generate fresh (existing behavior)
-  await scheduleAIReply(conversationId, accountId, { skipDelayQueue: true });
+  await scheduleAIReply(conversationId, accountId, {
+    skipDelayQueue: true,
+    scheduledReplyId: storedResult?.scheduledReplyId
+  });
 }
 
 /**
@@ -7634,7 +7626,8 @@ export async function processScheduledReply(
 async function deliverStoredReply(
   conversationId: string,
   accountId: string,
-  generatedResult: unknown
+  generatedResult: unknown,
+  scheduledReplyId?: string
 ): Promise<void> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
@@ -7692,7 +7685,7 @@ async function deliverStoredReply(
   console.log(
     `[webhook-processor] Delivering pre-generated ${result.shouldVoiceNote || result.voiceNoteAction?.slot_id ? 'voice note' : 'text'} reply for ${conversationId}`
   );
-  await sendAIReply(conversationId, accountId, lead, result);
+  await sendAIReply(conversationId, accountId, lead, result, scheduledReplyId);
 }
 
 // ---------------------------------------------------------------------------

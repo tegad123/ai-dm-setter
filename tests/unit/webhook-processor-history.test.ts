@@ -75,6 +75,10 @@ describe('webhook processor generation history metadata', () => {
       formatted.map((message) => message.id),
       ['lead-1', 'provider-reported', 'meta-confirmed']
     );
+    assert.deepEqual(
+      formatted.map((message) => message.deliveryStatus ?? null),
+      [null, 'PROVIDER_REPORTED', 'META_CONFIRMED']
+    );
   });
 
   it('tags every delivered bubble with the AISuggestion id', () => {

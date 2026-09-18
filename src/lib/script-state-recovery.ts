@@ -1223,6 +1223,25 @@ function contentIsRuntimePlaceholderOnly(
   );
 }
 
+const SILENT_RUNTIME_JUDGMENT_RE =
+  /\b(?:send|say|write|emit|return)\s+(?:absolutely\s+)?nothing\b|\b(?:do not|don'?t|never)\s+(?:send|say|write|emit|respond|reply|answer|greet|message|ask)\b|\b(?:stay|remain|go)\s+silent\b|\bno\s+lead-facing\s+(?:message|reply|response)\b/i;
+const RUNTIME_JUDGMENT_ASK_DIRECTIVE_RE =
+  /(?:^|[.!?;]\s+|\b(?:then|and|also|next)\s+|\b(?:must|should)\s+|\b(?:need|needs)\s+to\s+)(?:briefly\s+|gently\s+|directly\s+|naturally\s+|simply\s+)*(?:ask|re-ask)\b/i;
+
+function runtimeJudgmentExplicitlyAsksQuestion(
+  action: StepCompletionAction
+): boolean {
+  if (
+    action.actionType !== 'runtime_judgment' ||
+    typeof action.content !== 'string'
+  ) {
+    return false;
+  }
+  const content = action.content.trim();
+  if (!content || SILENT_RUNTIME_JUDGMENT_RE.test(content)) return false;
+  return RUNTIME_JUDGMENT_ASK_DIRECTIVE_RE.test(content);
+}
+
 function hasLeadReplyAfter(
   history: ScriptHistoryMessage[],
   setterMessage: ScriptHistoryMessage
@@ -1289,13 +1308,19 @@ function waitableActionsForPath(actions: StepCompletionAction[]): {
   messages: StepCompletionAction[];
   waits: StepCompletionAction[];
 } {
-  const asks = actions.filter(
-    (action) =>
-      action.actionType === 'ask_question' &&
-      typeof action.content === 'string' &&
-      action.content.trim().length > 0 &&
-      !contentIsRuntimePlaceholderOnly(action.content)
-  );
+  const asks = actions.filter((action) => {
+    if (
+      typeof action.content !== 'string' ||
+      action.content.trim().length === 0 ||
+      contentIsRuntimePlaceholderOnly(action.content)
+    ) {
+      return false;
+    }
+    return (
+      action.actionType === 'ask_question' ||
+      runtimeJudgmentExplicitlyAsksQuestion(action)
+    );
+  });
   const messages = actions.filter(
     (action) =>
       action.actionType === 'send_message' &&
@@ -1340,6 +1365,11 @@ function stepHasHistoryCompletionSignal(
       // completion path), which stops the deep-why parking/loop. A judgment
       // path with NO ask (pure routing) stays ineligible (handled elsewhere).
       if (hasRuntimeJudgmentAfterWait(actions)) return asks.length > 0;
+      // Some authored steps express the lead-facing question entirely inside
+      // runtime_judgment (for example, "Ask whether now is the right time")
+      // and then wait_for_response. Treat that explicit ask directive like a
+      // typed ask_question so the suggestionId + lead-reply history signal can
+      // complete the step. A silent runtime instruction is excluded above.
       return asks.length > 0 || (messages.length > 0 && waits.length > 0);
     }
   );

@@ -1,6 +1,8 @@
 export interface ManyChatRoutingMessage {
   id?: string | null;
   sender: string;
+  content?: string | null;
+  deliveryStatus?: string | null;
 }
 
 export interface ManyChatHandoffRoutingReceipt {
@@ -27,7 +29,7 @@ export interface ManyChatFirstReplyRoutingEvidence {
  * conversation has already advanced. Persisted message, script-state, and
  * receipt evidence are the authority.
  */
-export function isManyChatFirstReplyTurn(
+export function isManyChatFirstReplyCandidate(
   evidence: ManyChatFirstReplyRoutingEvidence
 ): boolean {
   if ((evidence.conversationSource ?? '').toUpperCase() !== 'MANYCHAT') {
@@ -76,14 +78,35 @@ export function isManyChatFirstReplyTurn(
   ) {
     return false;
   }
+  return true;
+}
+
+/**
+ * A stored opener string is only planned context because the Follow-to-DM
+ * callback runs before ManyChat's send node. Treat the current lead message as
+ * an answer to that opener only when durable evidence ties the turn together:
+ * either the queued handoff receipt owns this exact lead message, or a visible
+ * ManyChat opener row has explicit provider/Meta evidence.
+ */
+export function isManyChatFirstReplyTurn(
+  evidence: ManyChatFirstReplyRoutingEvidence
+): boolean {
+  if (!isManyChatFirstReplyCandidate(evidence)) return false;
+
   const receipt = evidence.handoffReceipt;
   if (receipt?.status === 'ALREADY_HANDLED') return false;
-  if (
-    receipt?.leadMessageId &&
-    receipt.leadMessageId !== evidence.currentLeadMessageId
-  ) {
-    return false;
-  }
+  const receiptOwnsCurrentLeadMessage =
+    Boolean(receipt?.leadMessageId) &&
+    receipt?.leadMessageId === evidence.currentLeadMessageId;
 
-  return true;
+  const opener = evidence.openerMessage!.trim();
+  const verifiedOpenerExists = evidence.conversationHistory.some(
+    (message) =>
+      message.sender === 'MANYCHAT' &&
+      message.content?.trim() === opener &&
+      (message.deliveryStatus === 'PROVIDER_REPORTED' ||
+        message.deliveryStatus === 'META_CONFIRMED')
+  );
+
+  return receiptOwnsCurrentLeadMessage || verifiedOpenerExists;
 }

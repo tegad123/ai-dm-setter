@@ -548,7 +548,7 @@ const nativeInput = {
 };
 test('native inbound attaches its Meta ID to the receipt-linked first input without duplicating content', async () => {
   const db = database();
-  const result = await native(db)('account', 'conv', nativeInput);
+  const result = await native(db)('account', 'conv', 'INSTAGRAM', nativeInput);
   assert.equal(result.reused, true);
   assert.equal(result.message.id, 'inbound');
   assert.equal(db.state().message.length, 1);
@@ -563,7 +563,12 @@ for (const status of ['HELD', 'NEEDS_REVIEW']) {
     state.manyChatHandoffReceipt[0].leaseToken = null;
     state.manyChatHandoffReceipt[0].leaseUntil = null;
     const db = database(state);
-    const result = await native(db)('account', 'conv', nativeInput);
+    const result = await native(db)(
+      'account',
+      'conv',
+      'INSTAGRAM',
+      nativeInput
+    );
     assert.equal(result.reused, true);
     assert.equal(result.skipReply, true);
     assert.equal(result.message.id, 'inbound');
@@ -573,7 +578,7 @@ for (const status of ['HELD', 'NEEDS_REVIEW']) {
 }
 test('native inbound with different text follows ordinary message creation', async () => {
   const db = database();
-  const result = await native(db)('account', 'conv', {
+  const result = await native(db)('account', 'conv', 'INSTAGRAM', {
     ...nativeInput,
     content: 'Also I live in Houston'
   });
@@ -584,7 +589,18 @@ test('native inbound with different text follows ordinary message creation', asy
 });
 test('reconciliation does not borrow a receipt belonging to another account', async () => {
   const db = database();
-  const result = await native(db)('different-account', 'conv', nativeInput);
+  const result = await native(db)(
+    'different-account',
+    'conv',
+    'INSTAGRAM',
+    nativeInput
+  );
+  assert.equal(result.reused, false);
+  assert.deepEqual(db.writes, ['message.create']);
+});
+test('reconciliation does not borrow a receipt belonging to another platform', async () => {
+  const db = database();
+  const result = await native(db)('account', 'conv', 'FACEBOOK', nativeInput);
   assert.equal(result.reused, false);
   assert.deepEqual(db.writes, ['message.create']);
 });
@@ -592,7 +608,7 @@ test('a later repeated phrase with a different Meta ID remains a new message', a
   const state = baseline();
   state.message[0].platformMessageId = 'earlier-meta-mid';
   const db = database(state);
-  const result = await native(db)('account', 'conv', nativeInput);
+  const result = await native(db)('account', 'conv', 'INSTAGRAM', nativeInput);
   assert.equal(result.reused, false);
   assert.equal(db.state().message.length, 2);
 });
@@ -602,7 +618,7 @@ test('an old receipt cannot absorb a later native message merely because the tex
     NOW.getTime() - 6 * 60000
   );
   const db = database(state);
-  const result = await native(db)('account', 'conv', nativeInput);
+  const result = await native(db)('account', 'conv', 'INSTAGRAM', nativeInput);
   assert.equal(result.reused, false);
   assert.deepEqual(db.writes, ['message.create']);
 });

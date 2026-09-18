@@ -107,6 +107,12 @@ There is no single cause for all unanswered messages. The confirmed classes are:
     triggered, but ManyChat showed no outbound bubble, Instagram showed no
     opener, no matching Meta/standby echo existed, and Convlo received no durable
     receipt. The missing opener is upstream of Convlo's first-reply worker.
+23. Daniel reported that the `@daetradez` Instagram account was restricted on
+    the morning of 2026-09-18. That can explain an account-wide pause in Meta or
+    ManyChat sends during the restriction window and is consistent with the
+    separately observed Meta action-block class. The exact restriction scope and
+    start/end times have not yet been read back from Meta, so it is a reported
+    external incident rather than a fully verified root cause.
 
 ## Immediate incident ledger at 2026-09-18 19:54 UTC
 
@@ -200,6 +206,10 @@ only prepared in code, and what still lacks production proof.
   `ManyChatHandoffReceipt` rows and no new reply jobs in the preceding two
   hours. The recent Daniel Instagram inputs in that interval belonged to an
   AI-off account and correctly created no work.
+- Daniel reported that Instagram restricted `@daetradez` during the morning.
+  Until Meta's Account Status provides the exact reason and restriction window,
+  treat this as a likely external contributor to the broad pause, not as an
+  explanation for every silent conversation.
 
 ## Current status at a glance
 
@@ -221,6 +231,7 @@ only prepared in code, and what still lacks production proof.
 | Runtime-only response branches   | Confirmed pre-send suppression defect             | Review, test, deploy, and prove Step 7 and Step 12 responses                              |
 | Step 8 recovery                  | Confirmed action-model defect                     | Recognize the semantic ask, advance after an answer, and prove no repeated question       |
 | Suppression status               | Duplicate guard works; cron status is misleading  | Persist a structured non-delivery outcome without a false provider/delivery alert         |
+| Instagram account restriction    | Reported by Daniel; exact window unverified       | Capture Meta Account Status evidence and compare it with action-block/send timestamps     |
 | Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment          | A fresh authorized test is still required                                                 |
 
 ## Read-only 24-hour production audit at 2026-09-18 19:30 UTC
@@ -692,6 +703,34 @@ Tiger's initial scheduled reply failed after five attempts with Meta code `368`,
 subcode `1404169`, a temporary action block. Tiger later sent a native lead
 message and received a delivered AI response with a Meta message ID. This is not
 the `2534037` thread-owner failure and should not be diagnosed or retried as one.
+
+### Reported Instagram account restriction
+
+Daniel reported on 2026-09-18 that Meta had restricted his Instagram account
+that morning. This materially changes the incident interpretation:
+
+- it can explain why ManyChat or Instagram could trigger an automation without
+  delivering its opener;
+- it can explain Meta rejecting a real send with an action-block response;
+- it can explain an account-wide pause even when Convlo's scheduler and AI are
+  healthy.
+
+It does not explain every current no-response case:
+
+- the five jobs in Issues 20 and 21 never called Meta;
+- AI-off conversations and distress/human-review holds intentionally create no
+  automatic send;
+- subcode `2534037` is a distinct thread-ownership rejection;
+- zero durable ManyChat receipts means the first-reply worker was never invoked;
+- the missing ManyChat test tag and unverified opener delivery remain separate
+  configuration/evidence gaps.
+
+The restriction is therefore a likely external contributor, not a replacement
+for the confirmed code defects. Closure requires a Meta Account Status record or
+screenshot showing the affected asset, restriction reason, affected features,
+start time, and lift time. A fresh post-lift control must then prove: ManyChat
+opener visible in both Instagram inboxes, one lead reply, one receipt, one
+scheduled job, one Meta-confirmed Convlo response, and one normal continuation.
 
 ## Issue 11: historical phantom rows can affect AI context and counts
 
@@ -1269,36 +1308,40 @@ flow in which ManyChat actually sends the opener.
 
 ## Remaining work in order
 
-1. Finish and review the runtime-action and structured-suppression corrections.
+1. Capture the `@daetradez` restriction evidence from Meta Account Status and
+   record the exact start, lift time, reason, and affected Instagram actions.
+   Do not run the fresh ManyChat proof while the account remains restricted.
+2. Finish and review the runtime-action and structured-suppression corrections.
    Deploy only after focused regressions, TypeScript, Prisma validation, and the
    production build pass. Then prove Step 7, Step 8, and Step 12 on fresh turns.
-2. Run the controlled Instagram proof from a fresh follower. Confirm the opener
+3. Run the controlled Instagram proof from a fresh follower after the
+   restriction is confirmed lifted. Confirm the opener
    in both Instagram inboxes, add `Convlo - Awaiting first reply` only to that
    authorized test contact, then send the first reply.
-3. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+4. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
    ManyChat send node exposes a next action, place `/manychat-message` after the
    send and supply a stable provider operation ID.
-4. Complete the fresh Instagram first-reply production proof from opener through
+5. Complete the fresh Instagram first-reply production proof from opener through
    one normal continuation, including Meta message IDs and duplicate checks.
-5. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
+6. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
    Meta-confirmed echo.
-6. Deploy and prove the stricter causal ManyChat first-reply evidence check so
+7. Deploy and prove the stricter causal ManyChat first-reply evidence check so
    planned context cannot route a turn without a receipt or delivered opener.
-7. Deploy and prove Facebook callback/native receipt reconciliation with one
+8. Deploy and prove Facebook callback/native receipt reconciliation with one
    lead row and one active job under the callback/native race.
-8. Prove the deployed delayed ManyChat first-reply routing correction on a real
+9. Prove the deployed delayed ManyChat first-reply routing correction on a real
    delayed first reply.
-9. Run the deployed Facebook durable `queued_first_reply` path with a real
-   authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
-   and normal continuation.
-10. Prove the deployed Facebook terminal-quality reconciliation on a real
+10. Run the deployed Facebook durable `queued_first_reply` path with a real
+    authorized Facebook PSID and prove one receipt, one job, one Meta message ID,
+    and normal continuation.
+11. Prove the deployed Facebook terminal-quality reconciliation on a real
     conversation.
-11. Complete the separate Facebook callback/completion production proof.
-12. Add an operator recovery flow for safety/review holds and separately approved
+12. Complete the separate Facebook callback/completion production proof.
+13. Add an operator recovery flow for safety/review holds and separately approved
     historical failures.
-13. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+14. Produce a dry-run eligibility list for the 59 stranded ownership failures and
     other historical no-delivery turns. Review before any replay.
-14. Prove the deployed location-answer correction with a fresh reciprocal
+15. Prove the deployed location-answer correction with a fresh reciprocal
     answer. Review Hussein separately before clearing its human-review hold or
     replaying its failed turn.
 
@@ -1340,6 +1383,10 @@ flow in which ManyChat actually sends the opener.
 - **Squirrel:** ManyChat proves only that the automation triggered. There is no
   opener bubble, Instagram message, receipt, matching echo, or job. It remains
   a failed production proof and must not be counted as a delivered opener.
+- **Instagram restriction:** Daniel reported an account restriction on the
+  morning of September 18. Its scope and timing still need Meta Account Status
+  evidence. Do not use a test during the restriction as evidence against the
+  Convlo worker or ManyChat callback.
 - **Manual recovery:** `richest_puppi` received two later Meta-confirmed HUMAN
   messages. Its original automated failure remains evidence and was not replayed.
 - **General rollout:** queued first-reply mode remains restricted to the

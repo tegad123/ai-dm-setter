@@ -1,10 +1,15 @@
-import type { Prisma } from '@prisma/client';
+import type { Platform, Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
 
-/** Only used for IG conversations already created by the ManyChat opener. */
+/**
+ * Reconcile a native Meta first reply with the durable ManyChat receipt that
+ * already persisted the same input. The platform is explicit so a Facebook
+ * receipt can never be matched to an Instagram conversation, or vice versa.
+ */
 export async function persistManyChatNativeInbound(
   accountId: string,
   conversationId: string,
+  platform: Platform,
   data: Prisma.MessageUncheckedCreateInput
 ) {
   return prisma.$transaction(
@@ -14,7 +19,7 @@ export async function persistManyChatNativeInbound(
         where: {
           accountId,
           conversationId,
-          platform: 'INSTAGRAM',
+          platform,
           // A terminal receipt can still own the synthetic first-input row.
           // For example, the worker may persist the lead answer and then hold
           // it because AI is off or human review is active. A delayed native

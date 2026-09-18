@@ -28,6 +28,7 @@ import {
   enforceSendThenAskSequence,
   runtimeJudgmentOnlyBranchShouldStaySilent
 } from '../../src/lib/ai-engine';
+import { getStepActionShape } from '../../src/lib/script-step-progression';
 
 const A = (actionType: string, content = '') => ({ actionType, content });
 
@@ -371,45 +372,104 @@ describe('selected branch SEND plus ASK sequence', () => {
   });
 });
 
-// N1c: a branch whose only actions are runtime_judgment carries no
-// lead-facing deliverable, so whatever the model emits there is improvised.
-// Local flow 3, 2026-09-15: the Solicitation branch was selected correctly
-// and the model still produced "gimme a sec bro, looking into this" — a
-// promise of a follow-up that will never come, sent to a spam account.
-describe('send-nothing branch suppression (N1c)', () => {
-  const branchHasRuntimeJudgmentOnly = (actions: { actionType: string }[]) =>
-    actions.length > 0 &&
-    actions.every((a) => a.actionType === 'runtime_judgment');
-
-  it('a runtime_judgment-only branch is send-nothing', () => {
+// N1c: runtime_judgment is an instruction carrier. It can explicitly request
+// silence, but Daniel's reaction branches also use it to require an improvised
+// acknowledgement, probe, or transition. Only the first class is suppressed.
+describe('explicitly silent branch suppression (N1c)', () => {
+  it('danny.6rown and syed_10129: preserves Step 7 Obstacle — React output that must react and probe', () => {
     assert.equal(
-      branchHasRuntimeJudgmentOnly([
-        { actionType: 'runtime_judgment' },
-        { actionType: 'runtime_judgment' }
-      ]),
-      true
-    );
-  });
-
-  it('a branch with any send or ask action is NOT send-nothing', () => {
-    assert.equal(
-      branchHasRuntimeJudgmentOnly([
-        { actionType: 'runtime_judgment' },
-        { actionType: 'send_message' }
-      ]),
-      false
-    );
-    assert.equal(
-      branchHasRuntimeJudgmentOnly([
-        { actionType: 'ask_question' },
-        { actionType: 'wait_for_response' }
-      ]),
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'Default (vague / no clear symptom given)',
+          conditionDescription:
+            'The lead gave a vague answer or no clear symptom.',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                "React genuinely to whatever they actually said about what's holding them back. If the answer is vague, gently probe for the specific thing."
+            }
+          ]
+        },
+        conversationHistory: [{ sender: 'AI' }, { sender: 'LEAD' }]
+      }),
       false
     );
   });
 
-  it('an empty branch is not treated as send-nothing (nothing to assert about it)', () => {
-    assert.equal(branchHasRuntimeJudgmentOnly([]), false);
+  it('richest_puppi: preserves Step 12 Qualification — React output that must acknowledge and advance to the link', () => {
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'Qualified (yes they can afford it)',
+          conditionDescription: 'The lead qualifies for the next step.',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                'briefly acknowledge they are good with the price, then advance immediately to Send Product Link'
+            }
+          ]
+        },
+        conversationHistory: [{ sender: 'LEAD' }]
+      }),
+      false
+    );
+  });
+
+  it('preserves a response-required runtime judgment even on a solicitation route', () => {
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch: {
+          branchLabel: 'Solicitation / non-lead',
+          conditionDescription: 'A real person is pitching a service.',
+          actions: [
+            {
+              actionType: 'runtime_judgment',
+              content:
+                'Reply with one polite decline, then end the conversation.'
+            }
+          ]
+        },
+        conversationHistory: [{ sender: 'LEAD' }]
+      }),
+      false
+    );
+  });
+
+  it('aloysx7: keeps Step 8 Urgency runtime judgment plus wait response-bearing and marks its question completion signal', () => {
+    const branch = {
+      branchLabel: 'Default',
+      actions: [
+        {
+          actionType: 'runtime_judgment',
+          content:
+            'Ask whether now is the right time to overcome their stated obstacle and reach their desired outcome.'
+        },
+        { actionType: 'wait_for_response', content: '' }
+      ]
+    };
+    assert.equal(
+      runtimeJudgmentOnlyBranchShouldStaySilent({
+        branch,
+        conversationHistory: [{ sender: 'LEAD' }]
+      }),
+      false
+    );
+    const shape = getStepActionShape(
+      {
+        steps: [
+          {
+            stepNumber: 8,
+            actions: [],
+            branches: [branch]
+          }
+        ]
+      },
+      8
+    );
+    assert.equal(shape?.hasRuntimeJudgmentWait, true);
+    assert.equal(shape?.hasSilentBranch, false);
   });
 
   it("v2's Solicitation branch compiles to a send-nothing shape with no deliverables", () => {
