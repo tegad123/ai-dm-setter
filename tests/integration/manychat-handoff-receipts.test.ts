@@ -79,15 +79,6 @@ async function fixture() {
     },
     include: { conversation: true }
   });
-  await prisma.message.create({
-    data: {
-      conversationId: lead.conversation!.id,
-      sender: 'MANYCHAT',
-      content: opener,
-      timestamp: new Date(Date.now() - 60_000),
-      msgSource: 'MANYCHAT_FLOW'
-    }
-  });
   const payload = {
     processingMode: 'queued_first_reply',
     platform: 'instagram',
@@ -184,6 +175,13 @@ test('legacy context-only payload retains response shape and saves its context',
       where: { accountId: f.account.id }
     }),
     0
+  );
+  assert.equal(
+    await prisma.message.count({
+      where: { conversationId: f.conversationId, sender: 'MANYCHAT' }
+    }),
+    0,
+    'context-only handoff must not manufacture a sent opener'
   );
 });
 

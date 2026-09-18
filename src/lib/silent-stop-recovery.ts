@@ -10,6 +10,7 @@ import {
   isExplicitAcceptance
 } from '@/lib/voice-quality-gate';
 import { processScheduledReply } from '@/lib/webhook-processor';
+import { isManyChatProcessingEligible } from '@/lib/manychat-ai-eligibility';
 
 // Raised 5 → 10 min on 2026-05-05. The first iteration of the active-
 // conversation guard was correct in theory but bit @shepherdgushe.zw
@@ -581,7 +582,14 @@ async function recoverManyChatStuckConversations(
   const candidates = await prisma.conversation.findMany({
     where: {
       source: 'MANYCHAT',
+      // A missing completion callback must never turn an operator-paused or
+      // safety-held conversation back on. It may only resume a conversation
+      // that is already eligible for AI processing.
+      aiActive: true,
       awaitingAiResponse: false,
+      awaitingHumanReview: false,
+      distressDetected: false,
+      schedulingConflict: false,
       lead: { stage: { in: ['NEW_LEAD', 'ENGAGED'] } },
       OR: [
         { lastSilentStopAt: null },
@@ -590,8 +598,26 @@ async function recoverManyChatStuckConversations(
     },
     select: {
       id: true,
+      aiActive: true,
+      awaitingHumanReview: true,
+      distressDetected: true,
+      schedulingConflict: true,
       awaitingSince: true,
-      lead: { select: { handle: true } },
+      autoSendOverride: true,
+      lead: {
+        select: {
+          handle: true,
+          platform: true,
+          account: {
+            select: {
+              awayModeInstagram: true,
+              awayModeFacebook: true,
+              generateOnlyInstagram: true,
+              generateOnlyFacebook: true
+            }
+          }
+        }
+      },
       messages: {
         orderBy: { timestamp: 'desc' },
         take: 1,
@@ -603,6 +629,18 @@ async function recoverManyChatStuckConversations(
 
   let flipped = 0;
   for (const conv of candidates) {
+    if (
+      !isManyChatProcessingEligible({
+        platform: conv.lead.platform,
+        aiActive: conv.aiActive,
+        awaitingHumanReview: conv.awaitingHumanReview,
+        distressDetected: conv.distressDetected,
+        schedulingConflict: conv.schedulingConflict,
+        autoSendOverride: conv.autoSendOverride,
+        ...conv.lead.account
+      })
+    )
+      continue;
     const last = conv.messages[0];
     if (!last || last.sender !== 'LEAD') continue;
     if (last.timestamp >= threshold) continue;
@@ -618,7 +656,6 @@ async function recoverManyChatStuckConversations(
     await prisma.conversation.update({
       where: { id: conv.id },
       data: {
-        aiActive: true,
         awaitingAiResponse: true,
         awaitingSince
       }

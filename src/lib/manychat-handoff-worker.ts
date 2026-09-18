@@ -334,28 +334,22 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
           where: { id: lead.id },
           data: { platformUserId: resolvedRecipient }
         });
-        let opener = await tx.message.findFirst({
+        // Reuse a visible opener only when an actual post-send provider
+        // callback or native Meta echo supplied delivery evidence. The Follow
+        // to DM graph can hand off the first response without exposing a
+        // post-opener action, so missing opener evidence must not block the
+        // lead response and must never be manufactured here. The hidden
+        // Conversation.manyChatOpenerMessage remains available to routing.
+        const opener = await tx.message.findFirst({
           where: {
             conversationId: conversation.id,
             deletedAt: null,
-            sender: { in: ['MANYCHAT', 'AI'] },
-            content: payload.openerMessage.trim()
+            sender: 'MANYCHAT',
+            content: payload.openerMessage.trim(),
+            deliveryStatus: { in: ['PROVIDER_REPORTED', 'META_CONFIRMED'] }
           },
           orderBy: { timestamp: 'asc' }
         });
-        if (!opener)
-          opener = await tx.message.create({
-            data: {
-              conversationId: conversation.id,
-              sender: 'MANYCHAT',
-              content: payload.openerMessage.trim(),
-              timestamp:
-                conversation.manyChatFiredAt ??
-                new Date(receipt.receivedAt.getTime() - 1000),
-              systemPromptVersion: 'manychat-automation',
-              msgSource: 'MANYCHAT_FLOW'
-            }
-          });
         let inbound = await tx.message.findFirst({
           where: {
             conversationId: conversation.id,
@@ -395,7 +389,7 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
         }
         const data = {
           conversationId: conversation.id,
-          openerMessageId: opener.id,
+          openerMessageId: opener?.id ?? null,
           leadMessageId: inbound.id,
           nativeInboundOwned: Boolean(inbound.platformMessageId)
         };

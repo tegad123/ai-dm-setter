@@ -130,12 +130,36 @@ export async function GET(request: NextRequest) {
             AND: [
               { sender: { not: 'SYSTEM' } },
               { deletedAt: null },
-              { NOT: { content: { startsWith: 'OPERATOR NOTE:' } } }
+              { echoAttributionPendingUntil: null },
+              { NOT: { content: { startsWith: 'OPERATOR NOTE:' } } },
+              {
+                OR: [
+                  { sender: { not: 'MANYCHAT' } },
+                  {
+                    sender: 'MANYCHAT',
+                    deliveryStatus: {
+                      in: ['PROVIDER_REPORTED', 'META_CONFIRMED', 'FAILED']
+                    }
+                  },
+                  {
+                    sender: 'MANYCHAT',
+                    deliveryStatus: null,
+                    platformMessageId: { not: null }
+                  }
+                ]
+              }
             ]
           },
           orderBy: { timestamp: 'desc' },
           take: 1,
-          select: { content: true }
+          select: {
+            content: true,
+            timestamp: true,
+            sender: true,
+            deliveryStatus: true,
+            platformMessageId: true,
+            providerMessageId: true
+          }
         },
         // Zero-or-one lookup of the most recent unactioned suggestion.
         // The frontend just needs a boolean ("show the ⚡ indicator");
@@ -183,7 +207,20 @@ export async function GET(request: NextRequest) {
         stage: c.lead.stage,
         aiActive: c.aiActive,
         lastMessage: c.messages[0]?.content ?? '',
-        lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+        // Conversation.lastMessageAt historically advanced when an early
+        // ManyChat context callback merely planned an opener. Use the latest
+        // displayable message here so a planned opener cannot look delivered
+        // in the inbox preview or its timestamp.
+        lastMessageAt: c.messages[0]?.timestamp.toISOString() ?? null,
+        lastMessageSender: c.messages[0]?.sender ?? null,
+        lastMessageDeliveryStatus:
+          c.messages[0]?.deliveryStatus ??
+          (c.messages[0]?.sender === 'MANYCHAT' &&
+          c.messages[0]?.platformMessageId
+            ? 'PROVIDER_REPORTED'
+            : null),
+        lastMessagePlatformMessageId: c.messages[0]?.platformMessageId ?? null,
+        lastMessageProviderMessageId: c.messages[0]?.providerMessageId ?? null,
         unreadCount: c.unreadCount,
         priorityScore: c.priorityScore,
         qualityScore: c.lead.qualityScore ?? 0,
@@ -203,6 +240,18 @@ export async function GET(request: NextRequest) {
         createdAt: c.createdAt.toISOString()
       };
     });
+
+    if (priority !== 'true') {
+      conversations.sort((a, b) => {
+        const aTime = a.lastMessageAt
+          ? new Date(a.lastMessageAt).getTime()
+          : Number.NEGATIVE_INFINITY;
+        const bTime = b.lastMessageAt
+          ? new Date(b.lastMessageAt).getTime()
+          : Number.NEGATIVE_INFINITY;
+        return bTime - aTime;
+      });
+    }
 
     return NextResponse.json({ conversations });
   } catch (error) {

@@ -32,6 +32,51 @@ describe('webhook processor generation history metadata', () => {
     assert.equal(leadMessage.suggestionId, null);
   });
 
+  it('keeps unverified ManyChat rows out of the actual generation history', () => {
+    const formatted = formatMessagesForGenerateReply([
+      {
+        id: 'lead-1',
+        sender: 'LEAD',
+        content: 'starting',
+        timestamp: new Date('2026-09-18T18:00:00.000Z')
+      },
+      {
+        id: 'legacy-phantom',
+        sender: 'MANYCHAT',
+        content: 'planned opener',
+        timestamp: new Date('2026-09-18T18:00:01.000Z'),
+        deliveryStatus: null
+      },
+      {
+        id: 'provisional-human-echo',
+        sender: 'HUMAN',
+        content: 'source attribution is still pending',
+        timestamp: new Date('2026-09-18T18:00:01.500Z'),
+        deliveryStatus: 'META_CONFIRMED',
+        echoAttributionPendingUntil: new Date('2026-09-18T18:02:00.000Z')
+      },
+      {
+        id: 'provider-reported',
+        sender: 'MANYCHAT',
+        content: 'provider says this was sent',
+        timestamp: new Date('2026-09-18T18:00:02.000Z'),
+        deliveryStatus: 'PROVIDER_REPORTED'
+      },
+      {
+        id: 'meta-confirmed',
+        sender: 'MANYCHAT',
+        content: 'Meta echoed this send',
+        timestamp: new Date('2026-09-18T18:00:03.000Z'),
+        deliveryStatus: 'META_CONFIRMED'
+      }
+    ]);
+
+    assert.deepEqual(
+      formatted.map((message) => message.id),
+      ['lead-1', 'provider-reported', 'meta-confirmed']
+    );
+  });
+
   it('tags every delivered bubble with the AISuggestion id', () => {
     const bubbleSuggestionIds = ['bubble 0', 'bubble 1', 'bubble 2'].map(() =>
       suggestionIdForDeliveredBubble('sug_multi_bubble')

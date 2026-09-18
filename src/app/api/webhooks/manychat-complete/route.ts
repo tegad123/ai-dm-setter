@@ -29,7 +29,9 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         conversationId: result.conversationId,
-        alreadyHandedOff: result.alreadyHandedOff
+        alreadyHandedOff: result.alreadyHandedOff,
+        processingStatus: result.processingStatus,
+        scheduledReplyId: result.scheduledReplyId
       },
       { status: 200 }
     );

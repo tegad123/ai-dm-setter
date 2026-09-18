@@ -133,7 +133,8 @@ visible to the lead.
 
 ### 1. Correct the ManyChat flow order
 
-The opener must be sent before Convlo is told that it was sent:
+For flows that support an action after their send node, the opener must be sent
+before Convlo is told that it was sent:
 
 1. ManyChat `Send Message` opener.
 2. On successful continuation of that step, call the Convlo context callback.
@@ -144,6 +145,13 @@ The opener must be sent before Convlo is told that it was sent:
 
 If ManyChat cannot provide a delivery receipt, Convlo must call the result
 `sent by ManyChat` or `send unverified`, not `delivered`.
+
+The published Follow-to-DM flow currently uses a special Opening DM node with the
+Convlo Actions node before it and no ordinary immediate post-send next step.
+Therefore its early callback must remain context-only and must not create a
+visible message. A native Meta echo can confirm the opener later. A real first
+lead reply proves that the conversation can continue and must not be held merely
+because a separate opener row is absent.
 
 ### 2. Separate planned context from delivered message history
 
@@ -194,6 +202,12 @@ payloads and resolution logic must be platform-aware. A Facebook completion must
 find the same Facebook conversation and enqueue one idempotent reply instead of
 only setting a waiting flag and relying on delayed recovery.
 
+The current review branch implements this correction. Completion now queues a
+deterministic reply through the ScheduledReply pipeline. AI-off, generate-only,
+and Away-off still produce the existing suggestion-only outcome without changing
+settings; active review, scheduling-conflict and terminal-failure states remain
+held. This remains unproven until deployment and a real Facebook callback test.
+
 ### 6. Keep Instagram standby safe and observable
 
 Facebook currently processes both normal `messaging` and `standby` events as
@@ -215,8 +229,9 @@ all of the following:
 
 1. The opener is visible in the test account's Instagram inbox.
 2. The same opener appears once in `@daetradez`'s Instagram thread.
-3. Convlo shows one opener with a traceable ManyChat/Meta identifier and truthful
-   status.
+3. Convlo either shows one opener with traceable provider/Meta evidence and a
+   truthful status, or keeps the planned opener out of sent history when that
+   evidence is unavailable.
 4. The lead's first answer creates exactly one durable receipt.
 5. Exactly one scheduled AI reply is created.
 6. The AI reply receives a Meta message ID and is visible on both Instagram

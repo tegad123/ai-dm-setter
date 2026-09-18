@@ -18,6 +18,10 @@ import { ConversationList } from './conversation-list';
 import { ConversationThread } from './conversation-thread';
 import { ConversationSidebar } from './conversation-sidebar';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  countsAsConversationMessage,
+  effectiveManyChatDeliveryStatus
+} from '@/lib/message-delivery-display';
 
 /** Map API conversation shape to the local UI shape used by child components */
 function toLocalConvo(
@@ -42,6 +46,10 @@ function toLocalConvo(
           minute: '2-digit'
         })
       : '',
+    lastMessageSender: c.lastMessageSender ?? null,
+    lastMessageDeliveryStatus: c.lastMessageDeliveryStatus ?? null,
+    lastMessagePlatformMessageId: c.lastMessagePlatformMessageId ?? null,
+    lastMessageProviderMessageId: c.lastMessageProviderMessageId ?? null,
     unread: c.unreadCount,
     messages,
     tags: c.tags ?? [],
@@ -148,6 +156,13 @@ export function ConversationsView() {
         bubbleIndex: extra.bubbleIndex ?? null,
         bubbleTotalCount: extra.bubbleTotalCount ?? null,
         msgSource: extra.msgSource ?? null,
+        platformMessageId: m.platformMessageId ?? null,
+        providerMessageId: m.providerMessageId ?? null,
+        deliveryStatus: m.deliveryStatus ?? null,
+        deliveryReportedAt: m.deliveryReportedAt ?? null,
+        deliveryConfirmedAt: m.deliveryConfirmedAt ?? null,
+        deliveryFailedAt: m.deliveryFailedAt ?? null,
+        deliveryErrorCode: m.deliveryErrorCode ?? null,
         // Soft-delete fields. Read via the `extra` cast — ApiMessage's
         // narrow type doesn't list them yet, but the API selects the
         // full Message row so the values are present at runtime.
@@ -156,7 +171,11 @@ export function ConversationsView() {
         deletedSource: extra.deletedSource ?? null
       };
     })
-    .filter((m) => !(m.deletedAt && m.deletedSource === 'DASHBOARD'));
+    .filter(
+      (m) =>
+        !(m.deletedAt && m.deletedSource === 'DASHBOARD') &&
+        effectiveManyChatDeliveryStatus(m) !== 'PLANNED'
+    );
 
   // Map conversations list
   const localConversations: Conversation[] = apiConversations.map((c) =>
@@ -323,7 +342,7 @@ export function ConversationsView() {
             messages={
               msgLoading
                 ? []
-                : apiMessages.map((m) => ({
+                : apiMessages.filter(countsAsConversationMessage).map((m) => ({
                     ...m,
                     timestamp: m.sentAt || m.timestamp || ''
                   }))

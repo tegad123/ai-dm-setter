@@ -83,6 +83,13 @@ enum MessageSource {
   UNKNOWN          // Default for historical rows — no badge in UI
 }
 
+enum MessageDeliveryStatus {
+  PLANNED
+  PROVIDER_REPORTED
+  META_CONFIRMED
+  FAILED
+}
+
 enum CapitalVerificationStatus {
   UNVERIFIED
   VERIFIED_QUALIFIED
@@ -1203,6 +1210,22 @@ model Message {
   mediaCostUsd         Decimal?      @db.Decimal(10, 6)
   sentByUserId         String? // Only for HUMAN sender
   platformMessageId    String? // Meta's message ID (event.message.mid) for dedup
+  // Provider acknowledgement and Meta delivery are different facts. ManyChat's
+  // operation/message id belongs here; platformMessageId remains reserved for
+  // the native Meta mid. Nullable status keeps historical rows truthful rather
+  // than guessing whether an old message was sent.
+  providerMessageId    String?
+  deliveryStatus       MessageDeliveryStatus?
+  deliveryReportedAt   DateTime?
+  deliveryConfirmedAt  DateTime?
+  deliveryFailedAt     DateTime?
+  deliveryErrorCode    String?
+  // A native business-side echo can arrive before ManyChat's post-send
+  // callback. Keep it source-neutral until the short correlation window
+  // expires; the provider callback resolves it as MANYCHAT, otherwise the
+  // cron finalizer applies the normal HUMAN/PHONE side effects once.
+  echoAttributionPendingUntil DateTime?
+  echoAttributionFinalizedAt  DateTime?
   timestamp            DateTime      @default(now())
 
   // Self-Optimizing Layer: Effectiveness Tracking
@@ -1299,8 +1322,11 @@ model Message {
   mediaProcessingLogs MediaProcessingLog[]
 
   @@unique([conversationId, platformMessageId])
+  @@unique([conversationId, providerMessageId])
   @@index([conversationId, timestamp])
   @@index([conversationId, sender, timestamp])
+  @@index([deliveryStatus, deliveryReportedAt])
+  @@index([echoAttributionPendingUntil, echoAttributionFinalizedAt])
   @@index([messageGroupId])
 }
 

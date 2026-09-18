@@ -532,6 +532,21 @@ test('native inbound attaches its Meta ID to the receipt-linked first input with
   assert.deepEqual(db.writes, ['message.update']);
   assert.ok(db.locks.flat().includes('manychat-first-reply:conv'));
 });
+for (const status of ['HELD', 'NEEDS_REVIEW']) {
+  test(`native inbound still reuses the receipt-linked input after the worker ends ${status}`, async () => {
+    const state = baseline();
+    state.manyChatHandoffReceipt[0].status = status;
+    state.manyChatHandoffReceipt[0].leaseToken = null;
+    state.manyChatHandoffReceipt[0].leaseUntil = null;
+    const db = database(state);
+    const result = await native(db)('account', 'conv', nativeInput);
+    assert.equal(result.reused, true);
+    assert.equal(result.skipReply, true);
+    assert.equal(result.message.id, 'inbound');
+    assert.equal(db.state().message.length, 1);
+    assert.equal(db.state().message[0].platformMessageId, 'meta-mid');
+  });
+}
 test('native inbound with different text follows ordinary message creation', async () => {
   const db = database();
   const result = await native(db)('account', 'conv', {

@@ -45,6 +45,8 @@ There is no single cause for all unanswered messages. The confirmed classes are:
    to finish the Facebook handoff correctly.
 9. Instagram standby events are visible to Convlo's audit logger but are not
    safe to process as normal lead messages until ownership is proven.
+10. Historical planned ManyChat opener rows can still enter AI history and raw
+    database counts even after the dashboard stops rendering them as sent.
 
 ## Issue 1: phantom ManyChat opener bubbles
 
@@ -106,14 +108,36 @@ externally verified false sent-looking examples.
 ### Required correction
 
 - Store pre-send opener text as conversation context, not delivered history.
-- Run `/manychat-message` only after ManyChat's actual send step.
+- If a flow exposes a post-send action, run `/manychat-message` only after the
+  actual ManyChat send step. The published Follow-to-DM graph currently does not
+  expose an ordinary immediate next step after its special opener, so this
+  callback cannot be required for that opener.
 - Store ManyChat's provider operation ID separately from Meta's message ID.
 - Represent `planned`, `provider reported`, `Meta confirmed`, and `failed`
   separately in the database and UI.
-- Do not let the queued worker invent an opener message. Missing confirmed or
-  provider-reported context must retry and then require review.
+- Do not let the queued worker invent an opener message. It may use the saved
+  opener text as hidden AI context, and a valid first lead response must still be
+  processed even when no provider-reported opener row exists.
 - Reconcile a later native Meta echo to the provider-reported row without making
   a duplicate bubble.
+
+### Confirmed live ManyChat graph constraint
+
+The published `Say hi to new followers` graph runs:
+
+1. follow trigger;
+2. Actions node containing the Convlo handoff request;
+3. special Instagram Opening DM node.
+
+The Actions node reported 67 unique contacts. The reused Send Message node showed
+large aggregate historical metrics and 100% delivery, but the UI did not provide
+a per-contact Meta message ID tying Squirrel to a delivery. Those aggregate
+metrics therefore do not override the empty authoritative Instagram thread.
+
+For this flow, the safe behavior is to keep the pre-send callback as metadata
+only. If Meta later sends a native echo, Convlo can show a confirmed opener. If
+the lead replies or clicks the opener, Convlo can process that real inbound and
+continue AI even while the opener itself remains unrendered or unverified.
 
 ## Issue 2: durable first-reply intake cannot start before a real opener
 
@@ -215,7 +239,8 @@ delivered.
 
 ## Issue 7: Facebook ManyChat callback mismatch
 
-**Status:** Confirmed code defect. Open.
+**Status:** Confirmed code defect. Fix implemented in the current review branch;
+not deployed or production-proven.
 
 The main handoff accepts `FACEBOOK`, but:
 
@@ -233,9 +258,35 @@ The main handoff accepts `FACEBOOK`, but:
 - Schedule exactly one reply through the existing scheduler on completion.
 - Preserve all AI-off, hold, review, and duplicate protections.
 
+### Implemented correction awaiting deployment
+
+- Both callbacks now accept a platform and resolve a Facebook PSID or the
+  Instagram identity without running Instagram ID resolution for Facebook.
+- Completion uses a deterministic ScheduledReply ID under a conversation lock.
+  Callback retries adopt existing pending or processing work instead of
+  creating a second reply.
+- Completion no longer enables a paused conversation or changes channel
+  settings. AI-off, generate-only, and Away-off conversations still enter the
+  existing scheduler so it can create the same suggestion-only result as normal
+  inbound; the scheduler remains responsible for preventing automatic sends.
+  Active human review, distress review, scheduling conflict, terminal failure,
+  expired-window, prior-outbound and uncertain multi-bubble states remain held
+  or review-only.
+- A proven post-send ManyChat automation callback cancels only older pending AI
+  work when that automation message is still the latest event. A delayed
+  callback cannot cancel a newer lead turn.
+- Multiple leads matching conflicting callback identities now return an
+  explicit conflict instead of selecting an arbitrary conversation.
+- The missing-completion heartbeat now uses the same eligibility guard and no
+  longer turns AI on by itself.
+- The completion response reports `processingStatus` and `scheduledReplyId` so
+  ManyChat logs distinguish scheduled, already scheduled, held and review
+  cases.
+
 ## Issue 8: broad ManyChat echo classification can cancel pending work
 
-**Status:** Confirmed risk in code. Production incidence has not been quantified.
+**Status:** Confirmed risk in code. Fix implemented in the current review branch;
+not deployed or production-proven. Historical incidence remains unquantified.
 
 While a conversation is sourced from ManyChat and `awaitingAiResponse=false`, an
 unmatched administrator echo can be classified as a ManyChat outbound. That path
@@ -248,6 +299,39 @@ or resolves the wrong platform.
 Only classify an echo as ManyChat when it matches a provider-reported message,
 stable operation ID, or narrowly bounded content/time correlation. Do not cancel
 scheduled work for an uncorrelated administrator echo.
+
+### Implemented correction awaiting deployment
+
+- The `awaitingAiResponse=false` inference was removed.
+- Echo-first classification now requires a native Meta message ID plus either
+  the exact configured opener or a known automation shape inside a two-hour
+  window from `manyChatFiredAt`.
+- An unknown business-side echo in that automation window is stored durably as
+  source-pending for two minutes. It is excluded from AI history and the visible
+  conversation while its source is unresolved. The intake path can cancel older
+  pending AI work to prevent a double send, but it does not record a human
+  override, update training data, clear review holds, or cancel follow-up
+  cascades.
+- A post-send provider callback uses the same conversation lock to reclassify
+  that exact pending row as ManyChat and attach its provider evidence without a
+  duplicate bubble.
+- A minute cron finalizes an expired pending row as a genuine HUMAN/PHONE echo.
+  The human override, training counter, pending-reply cancellation and follow-up
+  cancellation commit together once. It preserves distress and human-review
+  holds and cannot clear state created by a newer lead message.
+- An echo outside the ManyChat correlation window is stored as due-now and runs
+  through that same transaction immediately. If the request stops between the
+  durable insert and finalization, the cron safely completes it later.
+- A provider callback arriving after human finalization returns an explicit
+  conflict for review instead of relabelling the message after human-side
+  effects have committed. The conflict creates one stable, deduplicated
+  operator notification containing only the conversation, message and
+  sanitized provider-operation identifiers. Callback retries do not create
+  duplicate alerts, and raw webhook payloads or authentication keys are never
+  copied into the notification.
+- An authenticated callback with `sentAt` more than five minutes in the future
+  or more than 24 hours old is rejected with `sent_at_out_of_range` before lead
+  matching, message ordering or pending-reply cancellation can run.
 
 ## Issue 9: Instagram standby cannot be processed blindly
 
@@ -276,6 +360,29 @@ Tiger's initial scheduled reply failed after five attempts with Meta code `368`,
 subcode `1404169`, a temporary action block. Tiger later sent a native lead
 message and received a delivered AI response with a Meta message ID. This is not
 the `2534037` thread-owner failure and should not be diagnosed or retried as one.
+
+## Issue 11: historical phantom rows can affect AI context and counts
+
+**Status:** Confirmed compatibility risk. Correction is in the current review
+branch and remains undeployed.
+
+Preventing new phantom opener rows does not remove the historical rows already
+stored as `MANYCHAT` messages. Hiding those rows in the dashboard is insufficient
+if the scheduler still includes them in prompt history, script routing, latest
+message selection, or raw message counts. The old `platformMessageId` field is
+also not reliable proof of Meta delivery because earlier provider callbacks could
+store a ManyChat operation ID there.
+
+### Required correction
+
+- Exclude historical planned or delivery-unknown ManyChat opener rows from AI
+  history and routing decisions.
+- Treat old ManyChat rows with a legacy `platformMessageId` as provider-reported,
+  not Meta-confirmed.
+- Keep historical rows for audit; do not delete or rewrite production history as
+  part of this release.
+- Make dashboard counts, previews, and AI context follow the same delivery-truth
+  rule so an invisible phantom cannot still steer the engine.
 
 ## Working production controls
 
@@ -342,4 +449,3 @@ An item is closed only when its evidence bundle includes:
 
 HTTP 200, a Convlo bubble, a completed function, or a generated draft alone is
 not delivery proof.
-
