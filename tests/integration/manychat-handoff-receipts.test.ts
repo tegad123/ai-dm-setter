@@ -39,13 +39,14 @@ after(async () => {
   await prisma.$disconnect();
 });
 
-async function fixture() {
+async function fixture(platform: 'INSTAGRAM' | 'FACEBOOK' = 'INSTAGRAM') {
   const id = randomUUID();
   const account = await prisma.account.create({
     data: {
       name: 'Local handoff test',
       slug: `local-handoff-${id}`,
       awayModeInstagram: true,
+      awayModeFacebook: true,
       responseDelayMin: 45,
       responseDelayMax: 45
     }
@@ -59,13 +60,15 @@ async function fixture() {
       systemPrompt: 'Test only'
     }
   });
+  const isFacebook = platform === 'FACEBOOK';
+  const platformUserId = isFacebook ? '27000000000000001' : '915133958000000';
   const lead = await prisma.lead.create({
     data: {
       accountId: account.id,
       name: 'Test',
       handle: `test-${id}`,
-      platform: 'INSTAGRAM',
-      platformUserId: '915133958000000',
+      platform,
+      platformUserId,
       triggerType: 'DM',
       conversation: {
         create: {
@@ -81,10 +84,12 @@ async function fixture() {
   });
   const payload = {
     processingMode: 'queued_first_reply',
-    platform: 'instagram',
-    instagramUserId: '322000000',
-    manyChatSubscriberId: '322000000',
-    instagramUsername: lead.handle,
+    platform: platform.toLowerCase(),
+    instagramUserId: isFacebook ? '' : '322000000',
+    instagramUsername: isFacebook ? '' : lead.handle,
+    facebookUserId: isFacebook ? platformUserId : undefined,
+    contactName: isFacebook ? 'Local Facebook test' : undefined,
+    manyChatSubscriberId: isFacebook ? platformUserId : '322000000',
     openerMessage: opener,
     triggerType: 'new_follower',
     leadResponseText: firstReply,
@@ -153,8 +158,34 @@ test('real callback accepts once under concurrent retries, stores no key and doe
     409
   );
   assert.equal((await accept(f, {}, 'wrong-key')).status, 401);
-  assert.equal((await accept(f, { platform: 'facebook' })).status, 400);
   assert.equal((await accept(f, { scheduleAi: false })).status, 400);
+});
+
+test('Facebook queued intake deduplicates, rejects conflicts and schedules through the Facebook conversation', async () => {
+  const f = await fixture('FACEBOOK');
+  const first = await accept(f);
+  assert.equal(first.status, 200);
+  const body = await first.json();
+  assert.equal(body.handoffAccepted, true);
+  const duplicate = await accept(f);
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).receiptId, body.receiptId);
+  assert.equal(
+    (await accept(f, { leadResponseText: 'Different Facebook answer' })).status,
+    409
+  );
+  await worker()();
+  const receipt = await prisma.manyChatHandoffReceipt.findUniqueOrThrow({
+    where: { id: body.receiptId }
+  });
+  assert.equal(receipt.platform, 'FACEBOOK');
+  assert.equal(receipt.status, 'QUEUED');
+  assert.equal(
+    await prisma.scheduledReply.count({
+      where: { conversationId: f.conversationId }
+    }),
+    1
+  );
 });
 
 test('legacy context-only payload retains response shape and saves its context', async () => {

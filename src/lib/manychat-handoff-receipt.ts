@@ -51,14 +51,13 @@ export async function acceptQueuedManyChatHandoff(params: {
   const payload = normalizeQueuedHandoff(parsed.data);
   if (
     payload.processingMode !== 'queued_first_reply' ||
-    payload.platform !== 'INSTAGRAM' ||
     !payload.scheduleAi ||
     !payload.leadResponseText ||
     !payload.openerMessage ||
     !payload.manyChatSubscriberId
   ) {
     throw new ManyChatHandoffError(
-      'queued_first_reply requires Instagram, scheduleAi=true and a nonempty first reply',
+      'queued_first_reply requires scheduleAi=true and a nonempty first reply',
       400
     );
   }

@@ -57,20 +57,27 @@ export async function queueManyChatFirstReply(
       const conversation = await tx.conversation.findFirst({
         where: {
           id: conversationId,
-          lead: { accountId, platform: 'INSTAGRAM' }
+          lead: { accountId, platform: receipt.platform }
         },
         include: { lead: { include: { account: true } } }
       });
       if (!conversation)
         throw new Error('HANDOFF_REVIEW: conversation missing');
       const account = conversation.lead.account;
+      const isFacebook = receipt.platform === 'FACEBOOK';
+      const generateOnly = isFacebook
+        ? account.generateOnlyFacebook
+        : account.generateOnlyInstagram;
+      const awayMode = isFacebook
+        ? account.awayModeFacebook
+        : account.awayModeInstagram;
       if (
         !conversation.aiActive ||
         conversation.awaitingHumanReview ||
         conversation.distressDetected ||
         conversation.schedulingConflict ||
-        account.generateOnlyInstagram ||
-        !(account.awayModeInstagram || conversation.autoSendOverride)
+        generateOnly ||
+        !(awayMode || conversation.autoSendOverride)
       ) {
         throw new Error(
           'HANDOFF_HELD: auto-send is disabled or conversation needs review'

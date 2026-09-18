@@ -28,7 +28,8 @@ interface WorkerDependencies {
   token: () => string;
   resolveRecipient: (
     accountId: string,
-    subscriberId: string
+    subscriberId: string,
+    platform: 'INSTAGRAM' | 'FACEBOOK'
   ) => Promise<string | null>;
   schedule: (
     conversationId: string,
@@ -42,10 +43,33 @@ class LeaseLost extends Error {}
 class RetryLater extends Error {}
 
 function usableRecipient(
+  platform: 'INSTAGRAM' | 'FACEBOOK',
   value: string | null | undefined,
   subscriberId: string
 ): value is string {
-  return !!value && value !== subscriberId && /^\d{12,}$/.test(value);
+  if (!value) return false;
+  if (platform === 'FACEBOOK') return /^\d{5,}$/.test(value);
+  return value !== subscriberId && /^\d{12,}$/.test(value);
+}
+
+function payloadIdentity(
+  payload: ReturnType<typeof manyChatHandoffSchema.parse>
+) {
+  if (payload.platform === 'FACEBOOK') {
+    const userId =
+      payload.facebookUserId?.trim() || payload.manyChatSubscriberId.trim();
+    return {
+      userId,
+      handle:
+        payload.contactName?.trim() ||
+        payload.instagramUsername.trim() ||
+        userId
+    };
+  }
+  return {
+    userId: payload.instagramUserId.trim(),
+    handle: payload.instagramUsername.replace(/^@+/, '').trim()
+  };
 }
 
 /** Injectable worker runs the same control flow in tests. Never called by intake. */
@@ -130,16 +154,32 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
       where: { id: receipt.conversationId },
       include: { lead: true }
     });
-    if (!conversation || conversation.lead.accountId !== receipt.accountId)
+    if (
+      !conversation ||
+      conversation.lead.accountId !== receipt.accountId ||
+      conversation.lead.platform !== receipt.platform
+    )
       return finish(receipt, 'NEEDS_REVIEW', 'conversation_identity_conflict');
     const account = await db.account.findUnique({
       where: { id: receipt.accountId },
-      select: { awayModeInstagram: true, generateOnlyInstagram: true }
+      select: {
+        awayModeInstagram: true,
+        generateOnlyInstagram: true,
+        awayModeFacebook: true,
+        generateOnlyFacebook: true
+      }
     });
+    const isFacebook = conversation.lead.platform === 'FACEBOOK';
+    const awayMode = isFacebook
+      ? account?.awayModeFacebook
+      : account?.awayModeInstagram;
+    const generateOnly = isFacebook
+      ? account?.generateOnlyFacebook
+      : account?.generateOnlyInstagram;
     if (
       !account ||
-      !(account.awayModeInstagram || conversation.autoSendOverride) ||
-      account.generateOnlyInstagram ||
+      !(awayMode || conversation.autoSendOverride) ||
+      generateOnly ||
       !conversation.aiActive ||
       conversation.awaitingHumanReview ||
       conversation.distressDetected ||
@@ -252,7 +292,7 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
     const parsed = manyChatHandoffSchema.safeParse(receipt.payload);
     if (
       !parsed.success ||
-      parsed.data.platform !== 'INSTAGRAM' ||
+      parsed.data.platform !== receipt.platform ||
       !parsed.data.scheduleAi ||
       !parsed.data.leadResponseText?.trim()
     )
@@ -262,19 +302,31 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
       const result = await reconcile(receipt, !receipt.schedulingStartedAt);
       if (result) return result;
     } else {
-      const handle = payload.instagramUsername.replace(/^@+/, '').trim();
-      const candidates = await db.lead.findMany({
+      const { userId, handle } = payloadIdentity(payload);
+      // Prefer the platform ID. Facebook display names are not unique, so an
+      // OR query could turn one exact PSID match plus an unrelated same-name
+      // lead into a false ambiguity. Instagram still gets its handle fallback
+      // when ManyChat supplied an internal subscriber id instead of an IGSID.
+      let candidates = await db.lead.findMany({
         where: {
           accountId: receipt.accountId,
-          platform: 'INSTAGRAM',
-          OR: [
-            { platformUserId: payload.instagramUserId },
-            { handle: { equals: handle, mode: 'insensitive' } }
-          ]
+          platform: payload.platform,
+          platformUserId: userId
         },
         include: { conversation: true },
         take: 3
       });
+      if (candidates.length === 0 && handle) {
+        candidates = await db.lead.findMany({
+          where: {
+            accountId: receipt.accountId,
+            platform: payload.platform,
+            handle: { equals: handle, mode: 'insensitive' }
+          },
+          include: { conversation: true },
+          take: 3
+        });
+      }
       if (
         candidates.length === 0 ||
         (candidates.length === 1 && !candidates[0].conversation)
@@ -298,23 +350,25 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
         );
       let recipient = lead.platformUserId;
       if (
-        usableRecipient(payload.instagramUserId, receipt.subscriberId) &&
-        usableRecipient(recipient, receipt.subscriberId) &&
-        payload.instagramUserId !== recipient
+        usableRecipient(payload.platform, userId, receipt.subscriberId) &&
+        usableRecipient(payload.platform, recipient, receipt.subscriberId) &&
+        userId !== recipient
       )
         return finish(receipt, 'NEEDS_REVIEW', 'recipient_identity_conflict');
-      if (!usableRecipient(recipient, receipt.subscriberId)) {
+      if (!usableRecipient(payload.platform, recipient, receipt.subscriberId)) {
         recipient = usableRecipient(
-          payload.instagramUserId,
+          payload.platform,
+          userId,
           receipt.subscriberId
         )
-          ? payload.instagramUserId
+          ? userId
           : await deps.resolveRecipient(
               receipt.accountId,
-              receipt.subscriberId
+              receipt.subscriberId,
+              payload.platform
             );
       }
-      if (!usableRecipient(recipient, receipt.subscriberId))
+      if (!usableRecipient(payload.platform, recipient, receipt.subscriberId))
         throw new RetryLater('recipient_resolution_unavailable');
       const resolvedRecipient = recipient;
       const links = await fenced(receipt, async (tx) => {
@@ -323,10 +377,18 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
           where: { id: conversation.id },
           include: { lead: true }
         });
-        if (!current || current.lead.accountId !== receipt.accountId)
+        if (
+          !current ||
+          current.lead.accountId !== receipt.accountId ||
+          current.lead.platform !== payload.platform
+        )
           throw new RetryLater('conversation_changed');
         if (
-          usableRecipient(current.lead.platformUserId, receipt.subscriberId) &&
+          usableRecipient(
+            payload.platform,
+            current.lead.platformUserId,
+            receipt.subscriberId
+          ) &&
           current.lead.platformUserId !== resolvedRecipient
         )
           throw new RetryLater('recipient_changed');
@@ -521,7 +583,10 @@ export const processManyChatHandoffReceipts =
     db: prisma,
     now: () => new Date(),
     token: randomUUID,
-    resolveRecipient: async (accountId, subscriberId) => {
+    resolveRecipient: async (accountId, subscriberId, platform) => {
+      // A Facebook ManyChat subscriber id is the page-scoped PSID used by
+      // Messenger. It must not be sent through Instagram's identity lookup.
+      if (platform === 'FACEBOOK') return subscriberId;
       const credentials = await getCredentials(accountId, 'MANYCHAT');
       if (!credentials?.apiKey || typeof credentials.apiKey !== 'string')
         return null;

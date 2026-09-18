@@ -92,6 +92,8 @@ function baseline(): State {
           account: {
             awayModeInstagram: true,
             generateOnlyInstagram: false,
+            awayModeFacebook: false,
+            generateOnlyFacebook: false,
             responseDelayMin: 45,
             responseDelayMax: 120,
             debounceWindowSeconds: 45,
@@ -354,6 +356,28 @@ test('an explicit operator override permits enqueueing while away mode is off wi
     false
   );
   assert.equal(db.state().conversation[0].autoSendOverride, true);
+});
+test('Facebook receipt uses Facebook delivery flags and queues one reply', async () => {
+  const state = baseline();
+  state.manyChatHandoffReceipt[0].platform = 'FACEBOOK';
+  state.conversation[0].lead.platform = 'FACEBOOK';
+  state.conversation[0].lead.account.awayModeInstagram = false;
+  state.conversation[0].lead.account.awayModeFacebook = true;
+  const db = database(state);
+  await queue(db)('conv', 'account', 'receipt');
+  assert.equal(db.state().scheduledReply.length, 1);
+  assert.equal(db.state().conversation[0].lead.platform, 'FACEBOOK');
+});
+test('Facebook generate-only holds first reply without mutating state', async () => {
+  const state = baseline();
+  state.manyChatHandoffReceipt[0].platform = 'FACEBOOK';
+  state.conversation[0].lead.platform = 'FACEBOOK';
+  state.conversation[0].lead.account.awayModeFacebook = true;
+  state.conversation[0].lead.account.generateOnlyFacebook = true;
+  const db = database(state);
+  await assert.rejects(queue(db)('conv', 'account', 'receipt'), /HANDOFF_HELD/);
+  assert.deepEqual(db.state(), state);
+  assert.deepEqual(db.writes, []);
 });
 test('defers to a current native generation claim without canceling or clearing it', async () => {
   const state = baseline();

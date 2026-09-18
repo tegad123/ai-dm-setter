@@ -105,7 +105,12 @@ function fixture() {
   const jobs: Row[] = [];
   const groups: Row[] = [];
   const notifications: Row[] = [];
-  const account = { awayModeInstagram: true, generateOnlyInstagram: false };
+  const account = {
+    awayModeInstagram: true,
+    generateOnlyInstagram: false,
+    awayModeFacebook: false,
+    generateOnlyFacebook: false
+  };
   const state = {
     account,
     receipt,
@@ -284,6 +289,81 @@ describe('durable ManyChat handoff worker', () => {
     assert.equal(f.state.receipt.openerMessageId, null);
     assert.equal(f.state.receipt.leadMessageId, f.state.messages[0].id);
     assert.equal(f.state.schedules, 1);
+  });
+  it('queues a Facebook first reply with the subscriber PSID and Facebook settings', async () => {
+    const f = fixture();
+    Object.assign(f.state.receipt, {
+      platform: 'FACEBOOK',
+      subscriberId: '27000000000000001',
+      payload: {
+        processingMode: 'queued_first_reply',
+        platform: 'facebook',
+        facebookUserId: '27000000000000001',
+        contactName: 'Facebook Contact',
+        instagramUserId: '',
+        instagramUsername: '',
+        manyChatSubscriberId: '27000000000000001',
+        openerMessage: 'Are you starting?',
+        triggerType: 'new_follower',
+        scheduleAi: true,
+        leadResponseText: 'Starting'
+      }
+    });
+    Object.assign(f.state.lead, {
+      platform: 'FACEBOOK',
+      platformUserId: '27000000000000001',
+      handle: 'Facebook Contact'
+    });
+    f.state.account.awayModeFacebook = true;
+    f.state.account.awayModeInstagram = false;
+    const result = await f.run();
+    assert.equal(result.queued, 1);
+    assert.equal(f.state.schedules, 1);
+    assert.equal(f.state.lookups, 0, 'Facebook PSID must skip IG lookup');
+    assert.equal(f.state.receipt.leadMessageId, 'm1');
+  });
+  it('uses Facebook generate-only and review holds without changing them', async () => {
+    for (const change of [
+      { generateOnlyFacebook: true },
+      { awaitingHumanReview: true },
+      { distressDetected: true }
+    ]) {
+      const f = fixture();
+      Object.assign(f.state.receipt, {
+        platform: 'FACEBOOK',
+        subscriberId: '27000000000000001',
+        payload: {
+          processingMode: 'queued_first_reply',
+          platform: 'facebook',
+          facebookUserId: '27000000000000001',
+          contactName: 'Facebook Contact',
+          instagramUserId: '',
+          instagramUsername: '',
+          manyChatSubscriberId: '27000000000000001',
+          openerMessage: 'Are you starting?',
+          triggerType: 'new_follower',
+          scheduleAi: true,
+          leadResponseText: 'Starting'
+        }
+      });
+      Object.assign(f.state.lead, {
+        platform: 'FACEBOOK',
+        platformUserId: '27000000000000001',
+        handle: 'Facebook Contact'
+      });
+      f.state.account.awayModeFacebook = true;
+      if ('generateOnlyFacebook' in change)
+        Object.assign(f.state.account, change);
+      else Object.assign(f.state.conversation, change);
+      await f.run();
+      assert.equal(f.state.receipt.status, 'HELD');
+      assert.equal(f.state.schedules, 0);
+      for (const [key, value] of Object.entries(change)) {
+        const owner: Row =
+          key in f.state.account ? f.state.account : f.state.conversation;
+        assert.equal(owner[key], value);
+      }
+    }
   });
   it('reuses native Meta inbound and existing pending work without another scheduler call', async () => {
     const f = fixture();
