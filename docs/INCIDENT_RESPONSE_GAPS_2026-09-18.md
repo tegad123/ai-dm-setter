@@ -14,9 +14,10 @@ during the audit.
 
 ## Current production baseline
 
-- Runtime version currently reported by `/api/version`:
-  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. It was read directly from
-  production at 2026-09-18 19:18 UTC.
+- Production contains application release
+  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. `/api/version` reported that
+  exact commit at 2026-09-18 19:18 UTC; later documentation-only descendants do
+  not change the application behavior described here.
 - Production code baseline for the ManyChat delivery-truth release:
   `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
@@ -90,8 +91,8 @@ only prepared in code, and what still lacks production proof.
 
 - PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
   shown as a delivered message, and the durable receipt/worker code exists.
-- Production reports application commit
-  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. GitHub reports the Vercel
+- Production contains application commit
+  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. GitHub reports its Vercel
   deployment succeeded.
 - The connected Facebook Page subscription now includes both `messages` and
   `message_echoes`. Graph API readback verified the expected field set after the
