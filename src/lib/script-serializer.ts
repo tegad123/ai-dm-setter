@@ -563,6 +563,9 @@ export interface ScriptRoutingContext {
   conversationSource?: string | null;
   leadSource?: string | null;
   manyChatFiredAt?: Date | string | null;
+  /** Durable message/receipt evidence says this is the first lead reply to
+   * the stored ManyChat opener. This is authoritative over elapsed time. */
+  manyChatFirstReply?: boolean;
   selectedBranchLabel?: string | null;
   selectedBranchStepNumber?: number | null;
   smartMode?: boolean;
@@ -575,8 +578,8 @@ export interface ScriptRoutingContext {
         disabled?: boolean;
       })
     | null;
+  /** Optional clock used only for deterministic diagnostics. */
   nowMs?: number;
-  manyChatActiveWindowMs?: number;
 }
 
 type SerializableBranch = {
@@ -621,26 +624,6 @@ function collectLeadFacingActionTexts(
   return texts;
 }
 
-export function isManyChatRoutingRecent(
-  source: string | null | undefined,
-  manyChatFiredAt: Date | string | null | undefined,
-  options?: { nowMs?: number; windowMs?: number }
-): boolean {
-  if ((source || '').toUpperCase() !== 'MANYCHAT') return false;
-  if (!manyChatFiredAt) return true;
-
-  const firedMs =
-    manyChatFiredAt instanceof Date
-      ? manyChatFiredAt.getTime()
-      : Date.parse(String(manyChatFiredAt));
-  if (!Number.isFinite(firedMs)) return true;
-
-  return (
-    (options?.nowMs ?? Date.now()) - firedMs <
-    (options?.windowMs ?? 2 * 60 * 60 * 1000)
-  );
-}
-
 export function resolveStep1BranchMode(
   context?: ScriptRoutingContext | null
 ): 'manychat_cta' | 'warm_inbound' | null {
@@ -648,16 +631,11 @@ export function resolveStep1BranchMode(
 
   const source = (context.conversationSource || '').toUpperCase();
   const leadSource = (context.leadSource || '').toUpperCase();
-  const manyChatIsRecent = isManyChatRoutingRecent(
-    source,
-    context.manyChatFiredAt,
-    {
-      nowMs: context.nowMs,
-      windowMs: context.manyChatActiveWindowMs
-    }
-  );
-
-  if (manyChatIsRecent) return 'manychat_cta';
+  // Step 1 is a turn-identity decision, not a timer decision. The AI engine
+  // derives this flag from persisted opener, message, script-state, and
+  // handoff-receipt evidence. A delayed first answer remains a ManyChat
+  // continuation; a recent re-engagement does not become one again.
+  if (context.manyChatFirstReply === true) return 'manychat_cta';
   if (source === 'MANYCHAT') return 'warm_inbound';
   if (source === 'INBOUND' || source === 'DIRECT' || leadSource === 'INBOUND') {
     return 'warm_inbound';

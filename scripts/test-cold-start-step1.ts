@@ -176,18 +176,19 @@ async function main() {
   );
 
   expect(
-    'Step 1 branch mode: recent MANYCHAT routes to CTA branch',
+    'Step 1 branch mode: durable first reply routes to CTA branch',
     resolveStep1BranchMode({
       conversationSource: 'MANYCHAT',
       leadSource: 'OUTBOUND',
       manyChatFiredAt: recentManyChatFiredAt,
+      manyChatFirstReply: true,
       nowMs
     }),
     'manychat_cta'
   );
 
   expect(
-    'Step 1 branch mode: stale MANYCHAT routes to Warm Inbound',
+    'Step 1 branch mode: later re-engagement routes to Warm Inbound',
     resolveStep1BranchMode({
       conversationSource: 'MANYCHAT',
       leadSource: 'OUTBOUND',
@@ -200,11 +201,20 @@ async function main() {
   const step1Branches = [
     {
       branchLabel: 'CTA Inbound (clicked ManyChat automation)',
-      actions: []
+      actions: [{ actionType: 'runtime_judgment' }]
     },
-    { branchLabel: "CTA Inbound — didn't click button", actions: [] },
-    { branchLabel: 'Outbound (story views / post likes)', actions: [] },
-    { branchLabel: "Warm Inbound (DM'd directly)", actions: [] }
+    {
+      branchLabel: "CTA Inbound — didn't click button",
+      actions: [{ actionType: 'send_message' }]
+    },
+    {
+      branchLabel: 'Outbound (story views / post likes)',
+      actions: [{ actionType: 'send_message' }]
+    },
+    {
+      branchLabel: "Warm Inbound (DM'd directly)",
+      actions: [{ actionType: 'send_message' }]
+    }
   ];
 
   expect(
@@ -219,11 +229,12 @@ async function main() {
   );
 
   expect(
-    'Step 1 branch filter: recent MANYCHAT shows clicked CTA branch',
+    'Step 1 branch filter: durable first reply shows clicked CTA branch',
     selectStep1BranchesForPrompt(step1Branches, {
       conversationSource: 'MANYCHAT',
       leadSource: 'OUTBOUND',
       manyChatFiredAt: recentManyChatFiredAt,
+      manyChatFirstReply: true,
       nowMs
     }).map((b) => b.branchLabel),
     ['CTA Inbound (clicked ManyChat automation)']

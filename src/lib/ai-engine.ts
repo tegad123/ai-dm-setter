@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
 import { AI_HISTORY_DELIVERY_WHERE } from '@/lib/message-history-truth';
+import { isManyChatFirstReplyTurn } from '@/lib/manychat-first-reply-routing';
 import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
@@ -240,7 +241,7 @@ function buildStep10DeepWhyDirective(
 }
 
 /**
- * ManyChat-recency gate (bug-fix 2026-05-10).
+ * ManyChat-recency gate for general outbound context (bug-fix 2026-05-10).
  *
  * `Conversation.source` is set once at creation and never updated. When a
  * lead originally came in via a ManyChat automation weeks ago and now
@@ -252,7 +253,8 @@ function buildStep10DeepWhyDirective(
  *
  * Window: 2 hours. Matches a typical ManyChat sequence duration
  * (opener → video → 30-min delay → follow-up ≈ 1–2 hours). Anything
- * older is a re-engagement, not a continuation.
+ * older is normally a re-engagement. Step 1 first-reply routing does not use
+ * this timer; isManyChatFirstReplyTurn uses durable turn evidence instead.
  */
 export function isManyChatRecentlyActive(
   source: string | null | undefined,
@@ -282,19 +284,18 @@ export function shouldForceColdStartStep1Inbound(params: {
   systemStage?: string | null;
   currentScriptStep?: number | null;
   conversationMessageCount?: number | null;
+  manyChatFirstReply?: boolean;
 }): boolean {
   if (!params.hasActiveScript) return false;
 
   const conversationSource = (params.conversationSource || '').toUpperCase();
   const leadSource = (params.leadSource || '').toUpperCase();
-  // ManyChat counts as "explicitly outbound" only when the handoff is
-  // recent (within 2 hours). Stale MANYCHAT attribution on a long-
-  // dormant conversation should NOT block Step 1 Inbound cold-start
-  // when the lead sends a fresh direct DM.
-  const manyChatIsLive = isManyChatRecentlyActive(
-    conversationSource,
-    params.manyChatFiredAt
-  );
+  // ManyChat counts as explicitly outbound for a durable first-reply turn or
+  // while the automation is recent. Stale source attribution alone must not
+  // block the warm-inbound path when the lead later re-engages.
+  const manyChatIsLive =
+    params.manyChatFirstReply === true ||
+    isManyChatRecentlyActive(conversationSource, params.manyChatFiredAt);
   const staleManyChatConversation =
     conversationSource === 'MANYCHAT' && !manyChatIsLive;
   const leadSourceIsOutbound =
@@ -3198,6 +3199,35 @@ export async function generateReply(
       })
     : null;
 
+  const manyChatFirstReplyCandidate = isManyChatFirstReplyTurn({
+    conversationSource: conversationCallState?.source ?? null,
+    openerMessage: conversationCallState?.manyChatOpenerMessage ?? null,
+    currentLeadMessageId: lastLeadMsg?.id ?? null,
+    conversationHistory,
+    currentScriptStep: conversationCallState?.currentScriptStep ?? null
+  });
+  const linkedManyChatHandoffReceipt =
+    manyChatFirstReplyCandidate && activeConversationId && lastLeadMsg?.id
+      ? await prisma.manyChatHandoffReceipt.findFirst({
+          where: {
+            conversationId: activeConversationId,
+            leadMessageId: lastLeadMsg.id
+          },
+          select: { leadMessageId: true, status: true },
+          orderBy: { receivedAt: 'desc' }
+        })
+      : null;
+  const manyChatFirstReply =
+    manyChatFirstReplyCandidate &&
+    isManyChatFirstReplyTurn({
+      conversationSource: conversationCallState?.source ?? null,
+      openerMessage: conversationCallState?.manyChatOpenerMessage ?? null,
+      currentLeadMessageId: lastLeadMsg?.id ?? null,
+      conversationHistory,
+      currentScriptStep: conversationCallState?.currentScriptStep ?? null,
+      handoffReceipt: linkedManyChatHandoffReceipt
+    });
+
   const hasConfiguredScriptForColdStartGate =
     await hasConfiguredScriptForColdStart({
       accountId,
@@ -3211,7 +3241,8 @@ export async function generateReply(
     manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null,
     systemStage: conversationCallState?.systemStage ?? null,
     currentScriptStep: conversationCallState?.currentScriptStep ?? null,
-    conversationMessageCount: conversationCallState?._count.messages ?? null
+    conversationMessageCount: conversationCallState?._count.messages ?? null,
+    manyChatFirstReply
   });
   if (coldStartStep1Inbound && activeConversationId) {
     await prisma.conversation
@@ -3284,6 +3315,8 @@ export async function generateReply(
         ? stepCompletionTraceAfterPrepare.previousSelectedBranch
         : null,
     currentSelectedBranch: null,
+    manyChatFirstReply,
+    manyChatHandoffReceiptStatus: linkedManyChatHandoffReceipt?.status ?? null,
     selectedSuggestionId:
       typeof stepCompletionTraceAfterPrepare.selectedSuggestionId === 'string'
         ? stepCompletionTraceAfterPrepare.selectedSuggestionId
@@ -3383,7 +3416,8 @@ export async function generateReply(
         leadSource: coldStartStep1Inbound
           ? 'INBOUND'
           : (conversationCallState?.leadSource ?? leadContext.source ?? null),
-        manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null
+        manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null,
+        manyChatFirstReply
       }
     );
     if (selectedStep1Branches.length === 1) {
@@ -3683,6 +3717,7 @@ export async function generateReply(
       leadSource:
         conversationCallState?.leadSource ?? leadContext.source ?? null,
       manyChatFiredAt: conversationCallState?.manyChatFiredAt ?? null,
+      manyChatFirstReply,
       selectedBranchStepNumber:
         selectedCurrentJudgeBranch && currentStepNumberForGate
           ? currentStepNumberForGate
@@ -4014,15 +4049,11 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // Reads metadata (openerMessage, entryStep) from the persona-level
   // MANYCHAT integration credential. Fail-closed: any read error
   // skips the block, AI uses its default opener flow.
-  // Outbound-context injection gate: only fire when the ManyChat
-  // handoff is RECENT (within 2 hours). A conversation that originally
-  // came in via ManyChat weeks ago and is now receiving a fresh direct
-  // DM should NOT get this outbound-context block — the lead isn't
-  // responding to the old ManyChat opener, they're sending a new
-  // message. (Bug-fix 2026-05-10 — tegaumukoro_ stuck on CTA Inbound
-  // branch because May 4 ManyChat opener fired the block on every
-  // subsequent DM.)
+  // Outbound-context injection gate: keep it for a durable first-reply turn
+  // regardless of delay, or for ordinary ManyChat activity within two hours.
+  // A later re-engagement does not inherit the old outbound context.
   if (
+    manyChatFirstReply ||
     isManyChatRecentlyActive(
       conversationCallState?.source,
       conversationCallState?.manyChatFiredAt
@@ -7098,15 +7129,15 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             // hard-escalate — those cases (deep qualification, R24
             // hitting after several turns) genuinely need operator
             // review.
-            // R24 soft-recovery is only appropriate while ManyChat
-            // outbound is actively in play. After 2 hours, the
-            // outbound classification is stale — defer to the normal
-            // escalation path. (Same recency gate as the
-            // outbound_context block + cold-start logic.)
-            const isOutboundSourced = isManyChatRecentlyActive(
-              conversationCallState?.source,
-              conversationCallState?.manyChatFiredAt
-            );
+            // R24 soft-recovery is appropriate while ManyChat outbound is
+            // actively in play. A durable first reply stays eligible even
+            // after two hours; other old activity follows the normal path.
+            const isOutboundSourced =
+              manyChatFirstReply ||
+              isManyChatRecentlyActive(
+                conversationCallState?.source,
+                conversationCallState?.manyChatFiredAt
+              );
             const isEarlyTurn = conversationHistory.length < 6;
             if (isOutboundSourced && isEarlyTurn) {
               parsed.message =
