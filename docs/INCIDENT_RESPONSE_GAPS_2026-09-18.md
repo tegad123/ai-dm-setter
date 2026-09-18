@@ -15,10 +15,10 @@ during the audit.
 ## Current production baseline
 
 - Runtime version currently reported by `/api/version`:
-  `851ad616ecd1ff49a7bcd533a6627e458cca8593`. This is a documentation-only
-  commit on top of the production code release below. It was read directly
-  from production at 2026-09-18 19:04 UTC.
-- Production code release: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
+  `b11a213538d9c6ee1769d4bf9c2daa6fd6963156`. It was read directly from
+  production at 2026-09-18 19:12 UTC.
+- Production code baseline for the ManyChat delivery-truth release:
+  `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
   2026-09-18 18:26:58 UTC and deployed successfully by Vercel.
 - The production dashboard completed a fresh authenticated reload after the
@@ -68,19 +68,20 @@ There is no single cause for all unanswered messages. The confirmed classes are:
 12. The queued first-reply path has never completed a production intake. There
     are currently zero `ManyChatHandoffReceipt` rows in production, so the code
     is deployed but has no live success proof.
-13. The connected Facebook Page is not subscribed to `message_echoes`. Lead
-    inbound still arrives through `messages`, but Page, phone, and ManyChat
-    outbound echoes are missing from Convlo.
-14. ManyChat conversations whose first reply arrives more than two hours after
-    the opener are currently reclassified as warm direct inbound. This can run
-    the wrong opening branch, repeat introductions, and end in a quality hold.
+13. The connected Facebook Page was not subscribed to `message_echoes`. The
+    subscription and reconnect code are corrected, but a real outbound echo is
+    still required as end-to-end proof.
+14. ManyChat conversations whose first reply arrived more than two hours after
+    the opener were reclassified as warm direct inbound. The routing correction
+    is deployed, but a delayed production conversation has not yet proved it.
 15. Facebook queued first-reply receipt intake is still Instagram-only, even
     though the message and completion callbacks are now platform-aware.
-16. The Facebook inline webhook resets terminal quality exceptions to pending,
-    and the cron can preserve a failed quality job even when a Meta-confirmed AI
-    message was delivered through another path.
+16. The Facebook inline webhook could reset terminal quality exceptions to
+    pending, and the cron could preserve a failed quality job after a confirmed
+    delivery. The reconciliation correction is deployed; historical
+    contradictory rows remain unrecovered.
 
-## Immediate incident ledger at 2026-09-18 19:04 UTC
+## Immediate incident ledger at 2026-09-18 19:12 UTC
 
 This is the current operational state. It distinguishes what is live, what is
 only prepared in code, and what still lacks production proof.
@@ -90,8 +91,8 @@ only prepared in code, and what still lacks production proof.
 - PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
   shown as a delivered message, and the durable receipt/worker code exists.
 - Production reports application commit
-  `851ad616ecd1ff49a7bcd533a6627e458cca8593`; the underlying production code
-  release remains `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
+  `b11a213538d9c6ee1769d4bf9c2daa6fd6963156`. GitHub reports the Vercel
+  deployment succeeded.
 - The connected Facebook Page subscription now includes both `messages` and
   `message_echoes`. Graph API readback verified the expected field set after the
   repair at approximately 2026-09-18 18:54 UTC.
@@ -103,7 +104,7 @@ only prepared in code, and what still lacks production proof.
 - There have been no new Meta `2534037` thread-owner failures after
   2026-09-17 20:00 UTC. This does not recover the 59 historical failures.
 
-### Merged on `main`, not yet production-proven
+### Deployed, awaiting conversation-level production proof
 
 - Delayed ManyChat first-reply routing:
   `cb24650c877b6e69793a3c8f7df44e69dfb035f8`. It replaces the two-hour age
@@ -119,6 +120,10 @@ only prepared in code, and what still lacks production proof.
   fields, prevents a direct Instagram reconnect from dropping
   `message_echoes`, and makes alerts state the actual missing field. Its focused
   tests, TypeScript, Prisma checks, and production build passed.
+- The combined deployment passed 90 targeted tests, TypeScript, Prisma
+  validation, schema lint, and the production build before push. Production
+  `/api/version` then reported `b11a213` after Vercel marked the deployment
+  successful.
 
 ### Still open
 
@@ -136,8 +141,8 @@ only prepared in code, and what still lacks production proof.
 - Facebook durable `queued_first_reply` intake still rejects non-Instagram
   receipts. Platform-aware message and completion callbacks do not close this
   gap.
-- The delayed ManyChat and Facebook terminal-state corrections need deployment
-  and conversation-level production proof.
+- The delayed ManyChat and Facebook terminal-state corrections need
+  conversation-level production proof.
 - Historical ownership failures, Rob's suppressed turn, Rade's stranded event,
   and existing terminal failures remain preserved and unreplayed.
 - Distress, human-review, AI-off, and terminal quality cases will remain silent
@@ -153,9 +158,9 @@ only prepared in code, and what still lacks production proof.
 | ManyChat new-follower automation | Pre-test flow restored; no general tag rollout | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
 | Facebook callback parity | Code correction deployed | Fresh Facebook callback, one job, Meta message ID, and continuation proof |
 | Facebook outbound echoes | `message_echoes` restored at 2026-09-18 18:54 UTC | Verify one phone/ManyChat echo enters Convlo |
-| Delayed ManyChat first replies | Code correction merged on `main` | Deploy and prove delayed first-reply routing with no duplicate |
+| Delayed ManyChat first replies | Code correction deployed | Prove delayed first-reply routing with no duplicate |
 | Facebook queued first reply | Intake remains Instagram-only | Extend receipt identity handling and obtain a real Facebook receipt proof |
-| Facebook terminal-quality state | Code correction merged on `main` | Deploy and prove a delivered reply cannot remain terminally failed |
+| Facebook terminal-quality state | Code correction deployed | Prove a delivered reply cannot remain terminally failed |
 | Meta thread ownership | No new `2534037` after 2026-09-17 20:00 UTC | Identify or document routing owner and separately review 59 stranded failures |
 | Script suppression | Guard deployed | Rob's historical turn remains unrecovered |
 | Safety and review holds | Working as designed | Monitored operator queue and explicit respond, resume, or close action |
@@ -703,16 +708,17 @@ impact.
 4. Remaining: correct the health-alert body so it distinguishes inbound-message loss from
    outbound-echo loss.
 
-The alert/reconnect code correction is merged on `main` in commit
-`17dd6f1d7d879e72008751fe4981d324ea524562` but is not yet deployed. Until it
-is deployed, a later direct Instagram
-reconnect can omit `message_echoes` and undo the live subscription repair.
+The alert/reconnect code correction is deployed in commit
+`17dd6f1d7d879e72008751fe4981d324ea524562`. Direct Instagram and Facebook
+reconnect paths now use the same complete Page subscription field set, so a
+later reconnect should not silently remove `message_echoes`. A real echo remains
+required as end-to-end production proof.
 
 ## Issue 15: delayed ManyChat replies are routed as direct inbound
 
-**Status:** Confirmed current code defect. The correction is merged on `main` in
-commit `cb24650c877b6e69793a3c8f7df44e69dfb035f8`; deployment and production proof
-remain open.
+**Status:** Confirmed code defect. The correction is deployed in commit
+`cb24650c877b6e69793a3c8f7df44e69dfb035f8`; conversation-level production
+proof remains open.
 
 `src/lib/script-serializer.ts` treats a conversation as ManyChat-routed only
 while `manyChatFiredAt` is less than two hours old. After that window,
@@ -770,9 +776,9 @@ completion callback parity alone does not close this gap.
 
 ## Issue 17: Facebook can report terminal failure after delivery
 
-**Status:** Confirmed current code defect. The correction is merged on `main` in
-commit `c5b4893f26594e09a06dcd3761e056d2d9d765d7`; deployment and production proof
-remain open.
+**Status:** Confirmed code defect. The correction is deployed in commit
+`c5b4893f26594e09a06dcd3761e056d2d9d765d7`; conversation-level production
+proof remains open.
 
 The inline Facebook webhook catches every processing exception and resets the
 job to `PENDING`, including terminal `QualityGateEscalationError` cases. The
