@@ -2,8 +2,11 @@
 
 ## Status
 
-Open. Confirmed in production on 2026-09-18 with the controlled Instagram
-account `@squirrel.8425393`.
+Code correction deployed in PR #50 at production commit
+`c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`. The incident remains open for the
+fresh controlled Instagram proof. The original discrepancy was confirmed in
+production on 2026-09-18 with `@squirrel.8425393`; that historical test remains
+valid evidence and was not replayed or rewritten.
 
 This incident is separate from the AI engine, sales script routing, Meta thread
 ownership, manual-message recovery, and the durable first-reply callback released
@@ -12,12 +15,14 @@ explain the Squirrel discrepancy.
 
 ## User-visible problem
 
-Convlo currently presents a ManyChat opener as a delivered outbound message even
-when the opener is absent from the real Instagram thread. Operators therefore
-cannot use a purple `ManyChat · flow` bubble or the conversation message count as
-proof that the lead received the message.
+Before PR #50, Convlo presented a ManyChat opener as a delivered outbound message
+even when the opener was absent from the real Instagram thread. Operators could
+not use a purple `ManyChat · flow` bubble or the conversation message count as
+proof that the lead received the message. The deployed correction now keeps
+pre-send opener context out of delivered history until provider or Meta evidence
+exists.
 
-This creates two misleading symptoms:
+This created two misleading symptoms:
 
 1. Convlo appears to have started a conversation that does not exist on Instagram.
 2. The AI appears stale or non-responsive, although the lead never received an
@@ -246,3 +251,14 @@ Do not enable the queued first-reply mode for general new-follower traffic until
 the opener truth problem is corrected and the closure proof above passes. The
 currently published queued mode remains restricted to the existing controlled
 test-tag path.
+
+## Deployment verification
+
+- PR: `#50`
+- Production commit: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`
+- Merge time: 2026-09-18 18:26:58 UTC
+- Vercel deployment: successful
+- Fresh authenticated production reload: successful; the conversation API and
+  dashboard returned current channel data using the additive delivery-evidence
+  schema.
+- Full closure remains gated on the fresh Instagram proof listed above.

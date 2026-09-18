@@ -14,8 +14,14 @@ during the audit.
 
 ## Current production baseline
 
-- Application commit: `cabaeda158a81787a28503f2bc814eb17868853b`
-- That deployment includes PR #49, the durable queued ManyChat first-reply
+- Application commit: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`
+- PR #50, the ManyChat delivery-truth and callback-parity release, merged at
+  2026-09-18 18:26:58 UTC and deployed successfully by Vercel.
+- The production dashboard completed a fresh authenticated reload after the
+  deployment and returned current Instagram and Facebook conversation data.
+  This confirms the additive message-delivery migration is active and the
+  deployed application can read it.
+- The deployment also includes PR #49, the durable queued ManyChat first-reply
   intake and worker.
 - Receipt migration `20260918170000_manychat_handoff_receipts` completed at
   2026-09-18 17:02:19 UTC.
@@ -50,12 +56,15 @@ There is no single cause for all unanswered messages. The confirmed classes are:
 
 ## Issue 1: phantom ManyChat opener bubbles
 
-**Status:** Confirmed live defect. Open.
+**Status:** Confirmed historical defect. The code correction is deployed in
+PR #50. The incident remains open until the fresh controlled Instagram proof
+passes.
 
-Convlo stores the opener supplied by an early ManyChat context callback as a
-normal outbound `Message`. The message has no Meta message ID and no delivery
-status, but the dashboard renders it as a purple `ManyChat · flow` sent bubble,
-increments the message count, and uses it in the conversation-list preview.
+Before PR #50, Convlo stored the opener supplied by an early ManyChat context
+callback as a normal outbound `Message`. The message had no Meta message ID and
+no delivery status, but the dashboard rendered it as a purple
+`ManyChat · flow` sent bubble, incremented the message count, and used it in the
+conversation-list preview.
 
 The callback proves that ManyChat intended to run a flow. It does not prove that
 ManyChat sent the opener or that Meta accepted it.
@@ -94,7 +103,7 @@ This does not prove all 64 openers failed. It proves Convlo cannot distinguish
 delivered, failed, and merely planned openers. Squirrel and xo8nx are the two
 externally verified false sent-looking examples.
 
-### Code cause
+### Original code cause
 
 - `src/lib/manychat-handoff.ts` creates the opener `Message` during the context
   callback.
@@ -239,10 +248,10 @@ delivered.
 
 ## Issue 7: Facebook ManyChat callback mismatch
 
-**Status:** Confirmed code defect. Fix implemented in the current review branch;
-not deployed or production-proven.
+**Status:** Confirmed code defect. The fix is deployed in PR #50. Facebook
+production proof remains open.
 
-The main handoff accepts `FACEBOOK`, but:
+Before PR #50, the main handoff accepted `FACEBOOK`, but:
 
 - `/manychat-message` looks up only an Instagram lead/conversation;
 - `/manychat-complete` also performs Instagram-only resolution;
@@ -258,7 +267,7 @@ The main handoff accepts `FACEBOOK`, but:
 - Schedule exactly one reply through the existing scheduler on completion.
 - Preserve all AI-off, hold, review, and duplicate protections.
 
-### Implemented correction awaiting deployment
+### Deployed correction awaiting production proof
 
 - Both callbacks now accept a platform and resolve a Facebook PSID or the
   Instagram identity without running Instagram ID resolution for Facebook.
@@ -285,14 +294,15 @@ The main handoff accepts `FACEBOOK`, but:
 
 ## Issue 8: broad ManyChat echo classification can cancel pending work
 
-**Status:** Confirmed risk in code. Fix implemented in the current review branch;
-not deployed or production-proven. Historical incidence remains unquantified.
+**Status:** Confirmed risk in code. The fix is deployed in PR #50. Controlled
+callback and echo-race production proof remains open. Historical incidence
+remains unquantified.
 
-While a conversation is sourced from ManyChat and `awaitingAiResponse=false`, an
-unmatched administrator echo can be classified as a ManyChat outbound. That path
-cancels pending ScheduledReply rows. A real human phone reply or unrelated echo
-can therefore cancel AI work, especially when the completion callback is absent
-or resolves the wrong platform.
+Before PR #50, while a conversation was sourced from ManyChat and
+`awaitingAiResponse=false`, an unmatched administrator echo could be classified
+as a ManyChat outbound. That path cancelled pending ScheduledReply rows. A real
+human phone reply or unrelated echo could therefore cancel AI work, especially
+when the completion callback was absent or resolved the wrong platform.
 
 ### Required correction
 
@@ -300,7 +310,7 @@ Only classify an echo as ManyChat when it matches a provider-reported message,
 stable operation ID, or narrowly bounded content/time correlation. Do not cancel
 scheduled work for an uncorrelated administrator echo.
 
-### Implemented correction awaiting deployment
+### Deployed correction awaiting production proof
 
 - The `awaitingAiResponse=false` inference was removed.
 - Echo-first classification now requires a native Meta message ID plus either
@@ -363,8 +373,9 @@ the `2534037` thread-owner failure and should not be diagnosed or retried as one
 
 ## Issue 11: historical phantom rows can affect AI context and counts
 
-**Status:** Confirmed compatibility risk. Correction is in the current review
-branch and remains undeployed.
+**Status:** Confirmed compatibility risk. The correction is deployed in PR #50.
+Historical rows remain preserved for audit and are now excluded from sent
+history, previews, counts, and AI routing unless delivery evidence exists.
 
 Preventing new phantom opener rows does not remove the historical rows already
 stored as `MANYCHAT` messages. Hiding those rows in the dashboard is insufficient
@@ -415,23 +426,48 @@ state, hold, and routing failures.
 - Ownership event logging and reconnect credential preservation were deployed.
 - Durable ManyChat first-reply receipt intake, leases, retries, reconciliation,
   and background scheduling were deployed in PR #49.
+- ManyChat delivery evidence, hidden pre-send opener context, provider/Meta ID
+  separation, callback/echo locking, pending echo attribution, Facebook
+  callback parity, and truthful UI/AI history were deployed in PR #50 at
+  production commit `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 
-None of those changes proves the ManyChat opener was actually sent. The opener
-truth defect is the current blocker for the controlled first-reply test.
+None of those changes can make ManyChat deliver an opener that ManyChat or Meta
+did not send. Convlo now keeps an unproven opener out of sent history and waits
+for real provider or Meta evidence. The remaining blocker is a fresh controlled
+flow in which ManyChat actually sends the opener.
 
-## Fix order
+## Remaining work in order
 
-1. Correct opener truth in data, callbacks, reconciliation, and the UI.
-2. Reorder the controlled ManyChat flow so the opener send precedes the
-   post-send reporting callback.
-3. Complete the fresh Instagram first-reply production proof.
-4. Make Facebook message/completion callbacks platform-aware and schedule once.
-5. Tighten ManyChat echo classification so unrelated admin echoes cannot cancel
-   AI work.
-6. Add an operator recovery flow for safety/review holds and separately approved
+1. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+   ManyChat send node exposes a next action, place `/manychat-message` after the
+   send and supply a stable provider operation ID.
+2. Complete the fresh Instagram first-reply production proof from opener through
+   one normal continuation, including Meta message IDs and duplicate checks.
+3. Complete the separate Facebook callback/completion production proof.
+4. Add an operator recovery flow for safety/review holds and separately approved
    historical failures.
-7. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+5. Produce a dry-run eligibility list for the 59 stranded ownership failures and
    other historical no-delivery turns. Review before any replay.
+
+## Open items as of the PR #50 deployment
+
+- **Fresh Instagram proof:** still required. Squirrel cannot serve as success
+  proof because its opener never appeared in Instagram and it never produced a
+  lead reply or receipt.
+- **Fresh Facebook proof:** still required for platform-aware message and
+  completion callbacks.
+- **ManyChat configuration:** ordinary send nodes should report after the send;
+  the special Follow-to-DM opener has no normal post-send action, so its early
+  callback must remain context-only.
+- **General rollout:** queued first-reply mode remains restricted to the
+  controlled path until both production proofs pass.
+- **Historical recovery:** 59 ownership failures, Rob's suppressed turn, Rade's
+  stranded message, and other old no-delivery turns have not been replayed.
+- **Human operations:** distress and human-review holds still need an actively
+  monitored queue and an explicit resume/close workflow.
+- **Test limitation:** 126 focused tests, TypeScript, Prisma validation, and the
+  production build passed. The receipt integration suite was not run because no
+  isolated local PostgreSQL test database was configured.
 
 ## Production closure standard
 

@@ -162,6 +162,20 @@ Do not call this release fixed until a fresh authorized Instagram test proves:
 Run a separate Facebook test proving platform resolution, one deterministic
 reply job, one delivered Meta message ID, and normal continuation.
 
+## Deployment record
+
+- PR #50 merged at 2026-09-18 18:26:58 UTC.
+- Production commit is
+  `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
+- Vercel deployment completed successfully.
+- `/api/version` reported the production commit above.
+- A fresh authenticated production dashboard reload returned current
+  conversation data after deployment. Because the current conversation query
+  reads the new delivery-evidence fields, this is a production smoke check that
+  the additive migration and application are compatible.
+- This is deployment proof, not closure proof. The fresh Instagram and Facebook
+  controlled flows remain required.
+
 ## Rollback
 
 - Disable the new callback configuration before reverting application code.
