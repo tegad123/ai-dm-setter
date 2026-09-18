@@ -15,8 +15,9 @@ during the audit.
 ## Current production baseline
 
 - Runtime version currently reported by `/api/version`:
-  `a37f2809d80e5297f8da14ccc676de6b1a1fea0a`. This is a documentation-only
-  commit on top of the production code release below.
+  `851ad616ecd1ff49a7bcd533a6627e458cca8593`. This is a documentation-only
+  commit on top of the production code release below. It was read directly
+  from production at 2026-09-18 19:04 UTC.
 - Production code release: `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
   2026-09-18 18:26:58 UTC and deployed successfully by Vercel.
@@ -79,15 +80,78 @@ There is no single cause for all unanswered messages. The confirmed classes are:
     and the cron can preserve a failed quality job even when a Meta-confirmed AI
     message was delivered through another path.
 
+## Immediate incident ledger at 2026-09-18 19:04 UTC
+
+This is the current operational state. It distinguishes what is live, what is
+only prepared in code, and what still lacks production proof.
+
+### Live and verified
+
+- PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
+  shown as a delivered message, and the durable receipt/worker code exists.
+- Production reports application commit
+  `851ad616ecd1ff49a7bcd533a6627e458cca8593`; the underlying production code
+  release remains `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
+- The connected Facebook Page subscription now includes both `messages` and
+  `message_echoes`. Graph API readback verified the expected field set after the
+  repair at approximately 2026-09-18 18:54 UTC.
+- The live ManyChat `Say hi to new followers` flow is back in its pre-test state:
+  context-only external request, then the Instagram Opening DM. The temporary
+  `Convlo - Awaiting first reply` tag action was removed by restoring the last
+  verified pre-test version. A fresh reload confirmed the live Actions node has
+  only the external request and remains connected to the Opening DM.
+- There have been no new Meta `2534037` thread-owner failures after
+  2026-09-17 20:00 UTC. This does not recover the 59 historical failures.
+
+### Prepared in isolated branches, not merged or deployed
+
+- Delayed ManyChat first-reply routing:
+  `24584483483a57c40e172ac53b1d1820653a2700`. It replaces the two-hour age
+  heuristic with durable first-turn evidence and passed focused tests,
+  TypeScript, Prisma validation, and the production build.
+- Facebook terminal-quality reconciliation:
+  `e76ee50bf15c1b758b1c474d8d3f646c4f387e83`. It prevents terminal exceptions
+  from returning to `PENDING` and reconciles a causally relevant delivered Meta
+  message before recording failure. Focused tests, TypeScript, Prisma checks,
+  and the production build passed.
+- Meta subscription-health correction: `cdd65e7`. It centralizes expected Page
+  fields, prevents a direct Instagram reconnect from dropping
+  `message_echoes`, and makes alerts state the actual missing field. Its focused
+  tests, TypeScript, Prisma checks, and production build passed.
+
+### Still open
+
+- Production has zero `ManyChatHandoffReceipt` rows. The queued first-reply path
+  has never completed a real production intake.
+- The Instagram Default Reply still requires the exact test tag. The general
+  new-follower flow deliberately does not add it until the controlled proof
+  passes. For a controlled test, the tag must be added only to the authorized
+  test contact after the opener is visible in both Instagram inboxes.
+- The special Follow-to-DM opener has no ordinary post-send callback. The early
+  callback proves intent and context, not delivery. A native Meta echo or the
+  authoritative Instagram thread must prove the opener.
+- One real Facebook Page, phone, or ManyChat outbound must produce a
+  `message_echoes` event in Convlo before the subscription repair is closed.
+- Facebook durable `queued_first_reply` intake still rejects non-Instagram
+  receipts. Platform-aware message and completion callbacks do not close this
+  gap.
+- The delayed ManyChat and Facebook terminal-state corrections need review,
+  merge, deployment, and conversation-level production proof.
+- Historical ownership failures, Rob's suppressed turn, Rade's stranded event,
+  and existing terminal failures remain preserved and unreplayed.
+- Distress, human-review, AI-off, and terminal quality cases will remain silent
+  until an operator explicitly resolves or closes them. They are not general
+  webhook failures.
+
 ## Current status at a glance
 
 | Area | Current status | What remains |
 | --- | --- | --- |
 | ManyChat opener truth | Code correction deployed | Fresh opener and native Meta echo proof |
 | Instagram first-reply intake | Durable worker deployed | Fix or manually satisfy the ManyChat tag gate, then run a fresh test |
-| ManyChat new-follower automation | Confirmed configuration mismatch | Add `Convlo - Awaiting first reply` before the opener for rollout, after controlled proof |
+| ManyChat new-follower automation | Pre-test flow restored; no general tag rollout | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
 | Facebook callback parity | Code correction deployed | Fresh Facebook callback, one job, Meta message ID, and continuation proof |
-| Facebook outbound echoes | Page subscription missing `message_echoes` | Re-subscribe the field and verify one phone/ManyChat echo enters Convlo |
+| Facebook outbound echoes | `message_echoes` restored at 2026-09-18 18:54 UTC | Verify one phone/ManyChat echo enters Convlo |
 | Delayed ManyChat first replies | Confirmed current code defect | Preserve ManyChat routing beyond the two-hour heuristic and test delayed replies |
 | Facebook queued first reply | Intake remains Instagram-only | Extend receipt identity handling and obtain a real Facebook receipt proof |
 | Facebook terminal-quality state | Confirmed contradictory-state defect | Align inline handling with Instagram and reconcile delivered Meta messages before failure |
@@ -468,8 +532,10 @@ store a ManyChat operation ID there.
 
 ## Issue 12: live ManyChat tag gate bypasses Convlo
 
-**Status:** Confirmed configuration defect. No configuration was changed during
-this audit.
+**Status:** Confirmed configuration defect. A tag correction was briefly
+published during test preparation, then reverted before general rollout because
+the required controlled production proof had not passed. Production behavior
+still needs a fresh follower proof.
 
 The two published Instagram automations do not currently connect end to end.
 
@@ -484,9 +550,10 @@ The live `Say hi to new followers` flow runs in this exact order:
 3. The special Instagram Opening DM node attempts to send
    `Hey there! Thanks for following me are you in the markets rn? or starting?`.
 
-The Actions node does not add the tag `Convlo - Awaiting first reply`. The
-special Opening DM node has no ordinary action after the send, so this graph
-cannot call `/manychat-message` after the opener.
+The current Actions node does not add the tag
+`Convlo - Awaiting first reply`. The special Opening DM node has no ordinary
+action after the send, so this graph cannot call `/manychat-message` after the
+opener.
 
 ### Published Default Reply flow
 
@@ -501,9 +568,26 @@ The live `Instagram Default Reply` flow runs:
 4. Map `$.handoffAccepted` into the `Convlo handoff accepted` field.
 5. Remove the tag after the accepted response.
 
-The false tag branch does nothing. Therefore a fresh follower can receive the
-opener and answer it, yet the answer still bypasses Convlo because the first
-flow never adds the tag required by the second flow.
+The false tag branch does nothing. In the current safe pre-test configuration,
+a fresh untagged follower can receive the opener and answer it, yet the answer
+will bypass Convlo because the first flow does not add the tag required by the
+second flow. This is deliberate until the controlled proof passes; it is not
+the intended general-rollout configuration.
+
+### Configuration attempt and rollback
+
+During controlled-test preparation, `Add Tag: Convlo - Awaiting first reply`
+was briefly inserted between the existing context callback and Opening DM. That
+would have routed every new follower into the queued first-reply path before the
+required controlled proof, so it was not kept as the general production state.
+
+At approximately 2026-09-18 19:04 UTC, the last verified pre-test ManyChat
+version was restored and published. A fresh reload verified:
+
+1. the Actions node contains only the existing context-only external request;
+2. the Actions node remains connected to the same Instagram Opening DM;
+3. the opener text and endpoint are unchanged; and
+4. no general `Convlo - Awaiting first reply` tag action is live.
 
 ### Safe correction and test order
 
@@ -582,13 +666,14 @@ Reference: [ManyChat Follow-to-DM documentation](https://help.manychat.com/hc/en
 
 ## Issue 14: Facebook outbound echo subscription is missing
 
-**Status:** Confirmed live Meta configuration defect. No subscription was
-changed during this audit.
+**Status:** Confirmed live Meta configuration defect, corrected at
+2026-09-18 18:54 UTC. One real outbound echo is still required as production
+behavior proof.
 
-The connected Facebook Page `708196295710896` is subscribed to `messages`,
-postbacks, opt-ins, deliveries, and reads, but it is not subscribed to
-`message_echoes`. The production token is valid and app `1441437191008347` is
-present on the Page subscription.
+The connected Facebook Page `708196295710896` was subscribed to `messages`,
+postbacks, opt-ins, deliveries, and reads, but not `message_echoes`. The
+production token was valid and app `1441437191008347` was present on the Page
+subscription.
 
 ### Consequence
 
@@ -608,17 +693,23 @@ impact.
 
 ### Correction and proof
 
-1. Re-subscribe the Page to `message_echoes` through the existing authenticated
-   subscription route or reconnect flow.
-2. Read the Page subscription back and verify the field is present.
-3. Send one authorized Page or phone message and verify one Facebook echo row
+1. Completed: re-subscribed the Page to the existing expected field set.
+2. Completed: read the Page subscription back from Graph API and verified
+   `message_echoes` is present alongside `messages`, postbacks, opt-ins,
+   deliveries, and reads.
+3. Remaining: send one authorized Page or phone message and verify one Facebook echo row
    appears in Convlo with the Meta message ID.
-4. Correct the health-alert body so it distinguishes inbound-message loss from
+4. Remaining: correct the health-alert body so it distinguishes inbound-message loss from
    outbound-echo loss.
+
+The alert/reconnect code correction is prepared in isolated commit `cdd65e7`
+but is not merged or deployed. Until it is deployed, a later direct Instagram
+reconnect can omit `message_echoes` and undo the live subscription repair.
 
 ## Issue 15: delayed ManyChat replies are routed as direct inbound
 
-**Status:** Confirmed current code defect. It is not corrected by PR #50.
+**Status:** Confirmed current code defect. A correction is prepared in isolated
+commit `24584483483a57c40e172ac53b1d1820653a2700`; it is not merged or deployed.
 
 `src/lib/script-serializer.ts` treats a conversation as ManyChat-routed only
 while `manyChatFiredAt` is less than two hours old. After that window,
@@ -676,7 +767,8 @@ completion callback parity alone does not close this gap.
 
 ## Issue 17: Facebook can report terminal failure after delivery
 
-**Status:** Confirmed current code defect.
+**Status:** Confirmed current code defect. A correction is prepared in isolated
+commit `e76ee50bf15c1b758b1c474d8d3f646c4f387e83`; it is not merged or deployed.
 
 The inline Facebook webhook catches every processing exception and resets the
 job to `PENDING`, including terminal `QualityGateEscalationError` cases. The
@@ -748,28 +840,26 @@ flow in which ManyChat actually sends the opener.
 
 ## Remaining work in order
 
-1. Run the controlled Instagram proof by confirming a real opener, manually
-   adding `Convlo - Awaiting first reply`, and then sending the first reply.
-2. If that proof passes, add the same tag to the published new-follower flow
-   before its Opening DM for general rollout, then repeat the proof without the
-   manual step.
-3. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
+1. Run the controlled Instagram proof from a fresh follower. Confirm the opener
+   in both Instagram inboxes, add `Convlo - Awaiting first reply` only to that
+   authorized test contact, then send the first reply.
+2. Keep the Follow-to-DM pre-send callback metadata-only. Where an ordinary
    ManyChat send node exposes a next action, place `/manychat-message` after the
    send and supply a stable provider operation ID.
-4. Complete the fresh Instagram first-reply production proof from opener through
+3. Complete the fresh Instagram first-reply production proof from opener through
    one normal continuation, including Meta message IDs and duplicate checks.
-5. Restore the Facebook Page `message_echoes` subscription and prove one
-   authorized outbound echo reaches Convlo.
-6. Correct delayed ManyChat first-reply routing so source and durable handoff
+4. Prove one authorized Facebook Page or phone outbound now reaches Convlo as a
+   Meta-confirmed echo.
+5. Correct delayed ManyChat first-reply routing so source and durable handoff
    state remain authoritative after two hours.
-7. Decide whether Facebook uses durable `queued_first_reply`; if yes, extend the
+6. Decide whether Facebook uses durable `queued_first_reply`; if yes, extend the
    receipt path beyond Instagram and test it with a real Facebook PSID.
-8. Align Facebook terminal-quality handling with Instagram and reconcile a
+7. Align Facebook terminal-quality handling with Instagram and reconcile a
    delivered Meta message before committing terminal failure.
-9. Complete the separate Facebook callback/completion production proof.
-10. Add an operator recovery flow for safety/review holds and separately approved
+8. Complete the separate Facebook callback/completion production proof.
+9. Add an operator recovery flow for safety/review holds and separately approved
    historical failures.
-11. Produce a dry-run eligibility list for the 59 stranded ownership failures and
+10. Produce a dry-run eligibility list for the 59 stranded ownership failures and
    other historical no-delivery turns. Review before any replay.
 
 ## Open items as of the PR #50 deployment
@@ -779,8 +869,8 @@ flow in which ManyChat actually sends the opener.
   lead reply or receipt.
 - **Fresh Facebook proof:** still required for platform-aware message and
   completion callbacks.
-- **Facebook subscription:** `message_echoes` is absent on the live Page. This
-  creates incomplete Facebook history even while lead inbound continues.
+- **Facebook subscription proof:** `message_echoes` is restored on the live
+  Page. One real outbound echo must still prove the end-to-end path.
 - **Delayed first-reply routing:** ManyChat conversations older than two hours
   are still relabelled as direct inbound by the current script serializer.
 - **Facebook receipt parity:** message and completion callbacks are
@@ -789,9 +879,9 @@ flow in which ManyChat actually sends the opener.
   `FAILED_QUALITY_GATE` job can coexist for the same processing sequence.
 - **ManyChat configuration:** ordinary send nodes should report after the send;
   the special Follow-to-DM opener has no normal post-send action, so its early
-  callback must remain context-only. The new-follower flow also lacks the exact
-  tag required by the Default Reply flow, so general first replies currently
-  bypass the queued callback.
+  callback must remain context-only. The new-follower flow does not add the
+  Default Reply tag in general production. Add it only to the controlled test
+  contact until the proof passes.
 - **Queued intake evidence:** production contains zero handoff receipts. The
   first-reply worker is deployed but has not completed a live production intake.
 - **General rollout:** queued first-reply mode remains restricted to the
