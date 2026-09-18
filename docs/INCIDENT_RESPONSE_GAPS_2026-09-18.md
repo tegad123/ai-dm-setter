@@ -15,9 +15,9 @@ during the audit.
 ## Current production baseline
 
 - Production contains application release
-  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. `/api/version` reported that
-  exact commit at 2026-09-18 19:18 UTC; later documentation-only descendants do
-  not change the application behavior described here.
+  `c80fb8c195056d0a359e7548f9bab616f9f74359`. GitHub marked the Vercel
+  deployment successful and `/api/version` reported that exact commit on
+  2026-09-18.
 - Production code baseline for the ManyChat delivery-truth release:
   `c962f780e7e4b3dd85391e0fa6bdeeaf81fe1c2c`.
 - PR #50, the ManyChat delivery-truth and callback-parity release, merged at
@@ -100,8 +100,8 @@ only prepared in code, and what still lacks production proof.
 - PR #49 and PR #50 are deployed. Planned ManyChat opener context is no longer
   shown as a delivered message, and the durable receipt/worker code exists.
 - Production contains application commit
-  `d640dfe6c83b02a7657cf88e450a35f32a8737f5`. GitHub reports its Vercel
-  deployment succeeded.
+  `c80fb8c195056d0a359e7548f9bab616f9f74359`. GitHub reports its Vercel
+  deployment succeeded and the production version endpoint confirms it.
 - The connected Facebook Page subscription now includes both `messages` and
   `message_echoes`. Graph API readback verified the expected field set after the
   repair at approximately 2026-09-18 18:54 UTC.
@@ -139,6 +139,13 @@ only prepared in code, and what still lacks production proof.
   validation, schema lint, and the production build before push. Production
   `/api/version` then reported `d640dfe` after Vercel marked the deployment
   successful.
+- Location answers followed by a reciprocal question:
+  `c80fb8c195056d0a359e7548f9bab616f9f74359`. It recognizes a substantive
+  location response before `you?`, `wbu?`, or `hbu?` and preserves pure
+  question-backs, pricing questions, and explicit deferrals as non-answers. The
+  exact Hussein regression, legacy cursor advancement regression, TypeScript,
+  Prisma validation, and production build passed. The production version
+  endpoint confirms deployment; a fresh conversation-level proof remains open.
 
 ### Still open
 
@@ -158,9 +165,9 @@ only prepared in code, and what still lacks production proof.
   message ID, and a correct continuation.
 - The delayed ManyChat and Facebook terminal-state corrections need
   conversation-level production proof.
-- A valid location answer that ends with a reciprocal question can be
-  misclassified as a non-answer, causing a duplicate draft and terminal quality
-  hold. The correction is under validation and has not been deployed yet.
+- The location-answer correction is deployed, but Hussein remains held and
+  unreplayed. A fresh reciprocal location reply must prove correct advancement
+  in production before this issue is closed.
 - Historical ownership failures, Rob's suppressed turn, Rade's stranded event,
   and existing terminal failures remain preserved and unreplayed.
 - Distress, human-review, AI-off, and terminal quality cases will remain silent
@@ -169,22 +176,22 @@ only prepared in code, and what still lacks production proof.
 
 ## Current status at a glance
 
-| Area                             | Current status                                     | What remains                                                                              |
-| -------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| ManyChat opener truth            | Code correction deployed                           | Fresh opener and native Meta echo proof                                                   |
-| Instagram first-reply intake     | Durable worker deployed                            | Fix or manually satisfy the ManyChat tag gate, then run a fresh test                      |
-| ManyChat new-follower automation | Pre-test flow restored; no general tag rollout     | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
-| Facebook callback parity         | Code correction deployed                           | Fresh Facebook callback, one job, Meta message ID, and continuation proof                 |
-| Facebook outbound echoes         | `message_echoes` restored at 2026-09-18 18:54 UTC  | Verify one phone/ManyChat echo enters Convlo                                              |
-| Delayed ManyChat first replies   | Code correction deployed                           | Prove delayed first-reply routing with no duplicate                                       |
-| Facebook queued first reply      | Code correction deployed                           | Obtain a real Facebook receipt, one reply job, Meta message ID, and continuation proof    |
-| Facebook terminal-quality state  | Code correction deployed                           | Prove a delivered reply cannot remain terminally failed                                   |
-| Location answer with `you?`      | Live defect confirmed; correction under validation | Deploy, prove correct advancement, then separately review Hussein                         |
-| Meta thread ownership            | No new `2534037` after 2026-09-17 20:00 UTC        | Identify or document routing owner and separately review 59 stranded failures             |
-| Script suppression               | Guard deployed                                     | Rob's historical turn remains unrecovered                                                 |
-| Safety and review holds          | Working as designed                                | Monitored operator queue and explicit respond, resume, or close action                    |
-| Historical failures              | Preserved, not replayed                            | Dry-run eligibility list and separate approval before any replay                          |
-| Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment           | A fresh authorized test is still required                                                 |
+| Area                             | Current status                                    | What remains                                                                              |
+| -------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| ManyChat opener truth            | Code correction deployed                          | Fresh opener and native Meta echo proof                                                   |
+| Instagram first-reply intake     | Durable worker deployed                           | Fix or manually satisfy the ManyChat tag gate, then run a fresh test                      |
+| ManyChat new-follower automation | Pre-test flow restored; no general tag rollout    | Add the tag only to an authorized test contact, then require a fresh proof before rollout |
+| Facebook callback parity         | Code correction deployed                          | Fresh Facebook callback, one job, Meta message ID, and continuation proof                 |
+| Facebook outbound echoes         | `message_echoes` restored at 2026-09-18 18:54 UTC | Verify one phone/ManyChat echo enters Convlo                                              |
+| Delayed ManyChat first replies   | Code correction deployed                          | Prove delayed first-reply routing with no duplicate                                       |
+| Facebook queued first reply      | Code correction deployed                          | Obtain a real Facebook receipt, one reply job, Meta message ID, and continuation proof    |
+| Facebook terminal-quality state  | Code correction deployed                          | Prove a delivered reply cannot remain terminally failed                                   |
+| Location answer with `you?`      | Correction deployed in `c80fb8c`                  | Prove correct advancement, then separately review Hussein                                 |
+| Meta thread ownership            | No new `2534037` after 2026-09-17 20:00 UTC       | Identify or document routing owner and separately review 59 stranded failures             |
+| Script suppression               | Guard deployed                                    | Rob's historical turn remains unrecovered                                                 |
+| Safety and review holds          | Working as designed                               | Monitored operator queue and explicit respond, resume, or close action                    |
+| Historical failures              | Preserved, not replayed                           | Dry-run eligibility list and separate approval before any replay                          |
+| Post-deploy Instagram traffic    | No Daniel events since PR #50 deployment          | A fresh authorized test is still required                                                 |
 
 ## Read-only 24-hour production audit at 2026-09-18 19:30 UTC
 
@@ -929,8 +936,9 @@ accepted outbound AI messages.
 
 ## Issue 18: a valid location answer with a question-back can stall the script
 
-**Status:** Confirmed live code defect. A correction is prepared and under
-validation; production proof remains open.
+**Status:** Confirmed live code defect. The correction is deployed in commit
+`c80fb8c195056d0a359e7548f9bab616f9f74359`; conversation-level production
+proof remains open.
 
 At 2026-09-18 16:33:31 UTC, Instagram lead `@a_m_hussein_` sent:
 
@@ -1100,7 +1108,7 @@ flow in which ManyChat actually sends the opener.
    historical failures.
 10. Produce a dry-run eligibility list for the 59 stranded ownership failures and
     other historical no-delivery turns. Review before any replay.
-11. Deploy and prove the location-answer correction with a fresh reciprocal
+11. Prove the deployed location-answer correction with a fresh reciprocal
     answer. Review Hussein separately before clearing its human-review hold or
     replaying its failed turn.
 
@@ -1121,8 +1129,9 @@ flow in which ManyChat actually sends the opener.
 - **Facebook terminal-state proof:** the correction is deployed, but no fresh
   conversation has yet proved reconciliation after a delivered Meta message.
 - **Location answer plus question-back:** Hussein proves this can create a
-  quality hold after a valid answer. The code correction still needs deployment
-  and a fresh real-conversation proof. Hussein itself has not been replayed.
+  quality hold after a valid answer. The correction is deployed in `c80fb8c`
+  and still needs a fresh real-conversation proof. Hussein itself has not been
+  replayed.
 - **ManyChat configuration:** ordinary send nodes should report after the send;
   the special Follow-to-DM opener has no normal post-send action, so its early
   callback must remain context-only. The new-follower flow does not add the
