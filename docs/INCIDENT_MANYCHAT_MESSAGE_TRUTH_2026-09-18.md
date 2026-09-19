@@ -160,13 +160,16 @@ Instagram Ref URL `#1` and is configured as:
 2. ManyChat sends `Hey! Are you in the markets right now, or just starting?`;
 3. ManyChat adds the `Convlo - Awaiting first reply` tag.
 
-Squirrel's ManyChat contact record shows both `Instagram Ref URL #1` as the
-opt-in source and the expected tag. Its chat history shows the automation
-triggered and later records the lead's `Hi`, but contains no opener bubble.
-At the same time, the test flow's published send metric is zero. The tag action
-therefore ran without a recorded ManyChat send. This rules out Convlo as the
-cause of Squirrel's missing opener: the missing message occurs in the
-ManyChat-to-Instagram send step or the underlying Meta delivery path.
+Squirrel's ManyChat contact record names `Instagram Ref URL #1` as its opt-in
+source. Its chat history does not show this test flow being triggered and the
+test flow's published send metric is zero. The `Convlo - Awaiting first reply`
+tag appears only after Squirrel sends `Hi`, when the separate `Instagram Default
+Reply` automation runs. The tag is therefore not evidence that the Ref URL test
+sent its opener.
+
+This rules out Convlo as the cause of Squirrel's missing opener. The test did
+not produce a recorded ManyChat send, so the failure occurred before Convlo
+could receive a first-reply handoff.
 
 Tiger provides the contrasting successful record: its ManyChat history shows
 the same follower automation, the opener bubble, and the later Convlo
