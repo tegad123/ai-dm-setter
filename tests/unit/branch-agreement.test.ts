@@ -26,7 +26,8 @@ import { nodeForStep, selectEdge } from '../../src/lib/script-fsm/runtime';
 import {
   enforceOfferBranchPreconditions,
   enforceSendThenAskSequence,
-  runtimeJudgmentOnlyBranchShouldStaySilent
+  runtimeJudgmentOnlyBranchShouldStaySilent,
+  shouldHoldQualificationForProductDetails
 } from '../../src/lib/ai-engine';
 import { getStepActionShape } from '../../src/lib/script-step-progression';
 
@@ -260,6 +261,77 @@ describe('judge + FSM agreement selects the branch', () => {
       ),
       [],
       'a send-nothing branch has no lead-facing copy to require'
+    );
+  });
+});
+
+describe('qualification product-detail questions remain undecided', () => {
+  const qualified = {
+    branchLabel: 'Qualified (yes they can afford it)',
+    conditionDescription:
+      'Lead confirms they can afford the $200, e.g. yes, I can do that.',
+    actions: [A('runtime_judgment', 'Acknowledge and advance.')]
+  };
+  const step = {
+    stepNumber: 12,
+    title: 'Qualification - React',
+    actions: [],
+    branches: [
+      qualified,
+      {
+        branchLabel: "Not qualified (can't afford the price)",
+        conditionDescription: 'Lead says the price is too much.',
+        actions: [A('send_message', 'No worries bro.')]
+      }
+    ]
+  };
+
+  it('holds a details question instead of persisting a Qualified decision', () => {
+    assert.equal(
+      shouldHoldQualificationForProductDetails({
+        step,
+        selectedBranch: qualified,
+        latestLeadMessage: 'with that $200 what can be done?'
+      }),
+      true
+    );
+    assert.equal(
+      shouldHoldQualificationForProductDetails({
+        step,
+        selectedBranch: qualified,
+        latestLeadMessage: "what's included in the program?"
+      }),
+      true
+    );
+  });
+
+  it('does not hold an explicit affordability confirmation', () => {
+    assert.equal(
+      shouldHoldQualificationForProductDetails({
+        step,
+        selectedBranch: qualified,
+        latestLeadMessage: 'yes bro I can do $200'
+      }),
+      false
+    );
+  });
+
+  it('does not alter unrelated steps or the not-qualified branch', () => {
+    assert.equal(
+      shouldHoldQualificationForProductDetails({
+        step: { ...step, branches: [qualified] },
+        selectedBranch: qualified,
+        latestLeadMessage: 'what does it include?'
+      }),
+      false
+    );
+    assert.equal(
+      shouldHoldQualificationForProductDetails({
+        step,
+        selectedBranch: step.branches[1],
+        latestLeadMessage: 'what does it include?'
+      }),
+      false
     );
   });
 });

@@ -618,6 +618,45 @@ export function enforceOfferBranchPreconditions(params: {
   return params.selectedBranch;
 }
 
+const PRODUCT_DETAIL_QUESTION_RE =
+  /\b(what(?:'s|\s+is)\s+(?:actually\s+)?included|what\s+(?:do|would)\s+i\s+(?:get|receive)|what\s+can\s+be\s+done\s+with|with\s+(?:that|this|it|(?:usd\s*)?\$?\d[\d,.]*)[^?]{0,30}\bwhat\s+can\s+be\s+done|what\s+does\s+(?:it|that|this|the\s+(?:course|program|offer))\s+(?:include|cover|come\s+with)|what\s+(?:is|are)\s+(?:in|inside)\s+(?:it|that|this|the\s+(?:course|program|offer))|tell\s+me\s+more\s+about\s+(?:it|that|this|the\s+(?:course|program|offer))|how\s+does\s+(?:it|that|this|the\s+(?:course|program|offer))\s+work)\b/i;
+
+/**
+ * A product-details question after a price ask is not proof that the lead can
+ * afford the offer. Keep the current qualification step open so the engine can
+ * answer the question and ask for the actual price decision. The selected
+ * branch still scopes prompt/gate content for this turn, but it must not be
+ * persisted as a completed qualification decision.
+ */
+export function shouldHoldQualificationForProductDetails(params: {
+  step: JudgeStepLike | null | undefined;
+  selectedBranch: JudgeBranchLike | null | undefined;
+  latestLeadMessage: string | null | undefined;
+}): boolean {
+  const selectedText = `${params.selectedBranch?.branchLabel ?? ''} ${params.selectedBranch?.conditionDescription ?? ''}`;
+  const branchesText = (params.step?.branches ?? [])
+    .map(
+      (branch) => `${branch.branchLabel} ${branch.conditionDescription ?? ''}`
+    )
+    .join(' ');
+  const isQualifiedBranch =
+    /\bqualified\b|\bcan\s+afford\b|\bgood\s+with\s+(?:the\s+)?price\b/i.test(
+      selectedText
+    ) && !/\bnot\s+qualified\b|\bcan(?:not|'?t)\s+afford\b/i.test(selectedText);
+  const isQualificationDecisionStep =
+    isQualifiedBranch &&
+    /\bnot\s+qualified\b|\bcan(?:not|'?t)\s+afford\b|\btoo\s+(?:much|expensive)\b/i.test(
+      branchesText
+    );
+  const leadText = params.latestLeadMessage?.trim() ?? '';
+
+  return (
+    isQualificationDecisionStep &&
+    PRODUCT_DETAIL_QUESTION_RE.test(leadText) &&
+    !isExplicitAcceptance(leadText)
+  );
+}
+
 type JudgeBranchConfidence =
   | 'high'
   | 'medium'
@@ -3412,7 +3451,7 @@ export async function generateReply(
   const currentJudgeBranchLocked = isJudgeBranchLockConfidence(
     currentJudgeBranchMatch.confidence
   );
-  const smartModeActive =
+  let smartModeActive =
     hasRuntimeJudgmentAction(scriptStateSnapshot?.currentStep ?? null) &&
     shouldUseSmartModeForJudgeConfidence(currentJudgeBranchMatch.confidence);
   // Step 1 entry routing is a SOURCE decision (did the lead come through
@@ -3628,11 +3667,29 @@ export async function generateReply(
         : guardedBranch;
     }
   }
+  const qualificationProductDetailsPending =
+    shouldHoldQualificationForProductDetails({
+      step: scriptStateSnapshot?.currentStep,
+      selectedBranch: selectedCurrentJudgeBranch,
+      latestLeadMessage: lastLeadMsg?.content
+    });
+  if (qualificationProductDetailsPending) {
+    // Persist this as an unresolved smart-mode turn. Recording the classifier's
+    // Qualified choice would make legacy recovery complete the step on the
+    // lead's next message and send the product link without ever receiving an
+    // affordability decision.
+    smartModeActive = true;
+    console.warn(
+      `[ai-engine] product-details question is not an affordability confirmation — holding qualification step ${scriptStateSnapshot?.currentStep?.stepNumber ?? '-'} on conv ${activeConversationId}`
+    );
+  }
   if (scriptStateSnapshot) {
     scriptStateSnapshot = {
       ...scriptStateSnapshot,
       activeBranch: selectedCurrentJudgeBranch ?? null,
-      selectedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null
+      selectedBranchLabel: qualificationProductDetailsPending
+        ? null
+        : (selectedCurrentJudgeBranch?.branchLabel ?? null)
     };
   }
 
@@ -3761,6 +3818,9 @@ export async function generateReply(
     },
     scriptStateSnapshot?.currentScriptStep ?? null
   );
+  if (qualificationProductDetailsPending) {
+    systemPrompt += `\n\n===== PRODUCT DETAILS BEFORE PRICE DECISION =====\nThe lead asked what the offer includes or how it works. That is a request for information, not confirmation that they can afford the price. Answer their question directly using only verified details in this prompt. If the requested detail is not configured, say you do not want to make it up and offer to have the team clarify it. Then ask whether the stated price is realistic for them. Do not mark them qualified, advance to the product-link step, send a purchase link, or treat curiosity as payment readiness on this turn.\n=====`;
+  }
   await writeGenerateReplyTrace({
     checkpoint3_promptBuilt: true,
     lastCheckpoint: 'checkpoint3_promptBuilt',
