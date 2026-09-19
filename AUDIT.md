@@ -121,3 +121,15 @@ The Daetradez Business Suite home showed Facebook and Instagram connected to the
 ## Boundaries honored
 
 No historical conversation was replayed. No live follow-to-DM flow was edited, paused, reordered, or republished. The only ManyChat data change was the test-only tag on `@tefeo.444`.
+
+## 2026-09-19 Approved ManyChat configuration repair
+
+**Applied live configuration change:** The active Instagram automation **Say hi to new followers** now applies the `Convlo - Awaiting first reply` tag immediately after its existing context External Request to `/api/webhooks/manychat-handoff` and before the special Instagram opening-DM action.
+
+**Purpose:** When the follower subsequently sends a DM, the active **Instagram Default Reply** automation can identify the conversation as a ManyChat first-reply handoff and call Convlo's queued first-reply endpoint.
+
+**Scope:** No application code, Meta routing, credentials, Default Reply request body, response mapping, or historical messages were changed. The existing context callback remains before the opener. ManyChat's special opening-DM step is terminal in this flow builder, so a separate tag action cannot be placed after that send without rebuilding the automation.
+
+**Verification:** The published live flow shows, in order: External Request, Add Tag `Convlo - Awaiting first reply`, Instagram Send Message. The flow is active and saved.
+
+**Still required before declaring recovery:** A genuinely new test follower must receive the physical Instagram opener, reply once, and produce all of: an accepted queued handoff receipt, one scheduled response, one Meta delivery ID, and correct normal continuation. The prior test showed a correctly configured visible Default Reply request but no persisted receipt, so the new end-to-end run remains the deciding proof.

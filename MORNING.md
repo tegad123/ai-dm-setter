@@ -82,3 +82,9 @@ Convlo reports that the Daetradez Page lacks `message_echoes`. Repair that subsc
 ## Applied changes
 
 None. The live flow, Meta configuration, routing, credentials, production application code, and historical messages were left untouched during both controlled tests.
+
+### Approved configuration repair applied (2026-09-19)
+
+The live `Say hi to new followers` Instagram flow now adds the `Convlo - Awaiting first reply` tag between its existing handoff context request and its Instagram opener. This makes the later inbound reply eligible for `Instagram Default Reply` and the queued first-reply handoff.
+
+This is a configuration-only repair. It does not prove the physical follow opener is delivered, nor does it prove the queued callback produces a receipt. The next clean test must prove opener delivery, receipt creation, scheduling, Meta delivery, and continuation in sequence.
