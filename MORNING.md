@@ -1,44 +1,46 @@
 # Morning packet — 2026-09-19
 
-## 1. Current result
+## Current status
 
-The new-follower test using `@tefeo.444` is **ambiguous**, not a Convlo failure. The account follows Daetradez, but it had no Instagram opener, no Message Request, and no ManyChat contact record. The event stopped before ManyChat created evidence for Convlo to receive.
+The ManyChat first-reply integration is **not yet recovered for general traffic**. A controlled test now isolates the failure precisely:
 
-## 2. Completed code release
+- Instagram accepts the test account's DM.
+- ManyChat receives it and triggers `Instagram Default Reply`.
+- The tagged action path calls the configured Convlo handoff endpoint.
+- Convlo records no new message or AI work, and the tag is not removed.
 
-Production reports commit `c485a0f070436cfd1e836e3a195471f5f51db259`.
+That means the failure is at the callback response or durable receipt intake boundary, before the AI engine, script routing, or Meta delivery.
 
-- Rejects a Facebook queued handoff when it lacks a recipient identity instead of matching a same-named person.
-- Stops retrying permanent Meta delivery rejections.
-- Creates an operator-visible terminal scheduled-delivery failure.
-- Stops pricing/product questions containing a dollar amount from incorrectly advancing the script.
+## Production release already completed
 
-Validation before deployment: targeted reliability tests passed, ManyChat receipt integration passed locally, TypeScript and production build passed. Production has not yet supplied a live ManyChat receipt-to-Meta-message-ID proof.
+Production is on `c485a0f070436cfd1e836e3a195471f5f51db259`.
 
-## 3. Proposed ManyChat change — not applied
+- Rejects an identity-less Facebook queued handoff instead of matching a same-named person.
+- Stops retries for permanent Meta delivery rejections and surfaces terminal delivery failures.
+- Prevents pricing/product questions containing a dollar amount from incorrectly advancing the script.
 
-Add `Convlo - Awaiting first reply` to the **published new-follower flow** before the special Opening DM. It connects a real opener response to the Default Reply flow’s queued-first-reply callback.
+The targeted reliability checks, ManyChat receipt integration suite, TypeScript, Prisma validation, and production build passed before deployment.
 
-Do not apply this to general traffic until one tagged test contact proves: visible opener, one receipt, one scheduled reply, a persisted Meta message ID, and correct second-turn routing.
+## Evidence from test contact `@tefeo.444`
 
-## 4. Safe controlled test
+- ManyChat subscriber: `360134116`.
+- Contact is subscribed through `Instagram Follow to DM`.
+- The follower automation ran but the physical ManyChat opener was not visible in Instagram. That remains a separate opener-delivery issue.
+- A test-only `Convlo - Awaiting first reply` tag was added.
+- Two test messages were sent. ManyChat recorded and triggered Default Reply on the first.
+- The Default Reply flow configuration is correct on its visible fields: correct endpoint, matching account key, queued-first-reply payload, `$.handoffAccepted` mapping, and a true branch that removes the tag.
+- The tag remains and Convlo shows only the earlier outbound context with zero messages.
 
-Use `@tefeo.444`, no additional Instagram account:
+## Required next diagnostic
 
-1. Send a single test inbound to open a window and create its ManyChat contact.
-2. Add the tag only to that contact.
-3. Send a second test reply.
-4. Inspect receipt, scheduler, Meta delivery ID, and script continuation.
+Inspect server-side evidence for the exact callback attempt from subscriber `360134116`:
 
-The required send was prepared but not sent pending Tega’s confirmation. No message was sent and no contact tag was added.
+1. Production request logs for `/api/webhooks/manychat-handoff` at the test time.
+2. The matching `ManyChatHandoffReceipt` row, if any.
+3. The value of `MANYCHAT_QUEUED_HANDOFF_PAUSED` in production.
 
-## 5. Still open
+This will distinguish paused intake, runtime payload rejection, database failure, and receipt conflict. Do not change the general new-follower flow or replay the test until the response is known.
 
-- The precise upstream reason new accounts do not become ManyChat contacts for follow-to-DM.
-- A fresh physical opener proof from an established account or an eligible account with a per-contact ManyChat record.
-- A full queued-first-reply production proof.
-- Historical Meta ownership failures remain historical recovery work; they were not replayed.
+## Separate Meta repair
 
-## 6. Boundaries honored
-
-No live ManyChat flow was edited, paused, republished, or reordered. No Meta routing, permissions, subscriptions, credentials, or production conversation rows were changed. No real lead was contacted.
+Convlo reports that the Daetradez Page lacks `message_echoes`. Repair that subscription through the Meta reconnect/subscription path and recheck health. This improves outbound delivery evidence; it is not the cause of the failed ManyChat callback.
