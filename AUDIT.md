@@ -43,6 +43,21 @@ The dashboard does not expose the request response body or receipt table. The ne
 
 Convlo also reports that the Daetradez Page is missing the `message_echoes` subscription field. This affects delivery evidence and must be repaired through the Meta subscription/reconnect path, but it does not explain why the ManyChat callback itself failed before receipt creation.
 
+## Fresh follow-to-DM check: `@convlo.pipeline.test926`
+
+To avoid the one-shot Default Reply behavior on `@tefeo.444`, a newly created test-only Instagram account followed `@daetradez` on 2026-09-19. The profile control immediately changed to **Following**, with no visible Instagram challenge or restriction.
+
+After a normal propagation interval:
+
+- The test account's Instagram Inbox was empty.
+- Its Message Requests page contained no visible opener.
+- A ManyChat Contacts search for the exact handle returned **0 of 0** results.
+- A Convlo Conversations search for the exact handle returned **No conversations found**.
+
+This is a second controlled failure, but at an earlier boundary than the `@tefeo.444` test: the fresh follow has not yet created a ManyChat contact. It therefore cannot reach the Default Reply callback or Convlo intake. It is not evidence of an AI, script, webhook, or Meta-send failure.
+
+No live ManyChat automation, Meta routing setting, credential, webhook setting, application code, or historical message was changed for this check.
+
 ## Boundaries honored
 
 No historical conversation was replayed. No live follow-to-DM flow was edited, paused, reordered, or republished. The only ManyChat data change was the test-only tag on `@tefeo.444`.

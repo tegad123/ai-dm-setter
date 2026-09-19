@@ -31,6 +31,12 @@ The targeted reliability checks, ManyChat receipt integration suite, TypeScript,
 - The Default Reply flow configuration is correct on its visible fields: correct endpoint, matching account key, queued-first-reply payload, `$.handoffAccepted` mapping, and a true branch that removes the tag.
 - The tag remains and Convlo shows only the earlier outbound context with zero messages.
 
+## Fresh follow trigger check
+
+A separate, new test account, `@convlo.pipeline.test926`, followed Daetradez specifically to avoid deduplication from the prior test. The follow completed and showed **Following**, but the account had no opener in Inbox or Message Requests. ManyChat's exact-handle search returned no contact, and Convlo's exact-handle search returned no conversation.
+
+This isolates a second problem before Convlo: the live follow-to-DM trigger did not create a ManyChat contact for this fresh account within the observed interval. It cannot be used to test the queued handoff until ManyChat has created the contact and physically delivered the opener.
+
 ## Required next diagnostic
 
 Inspect server-side evidence for the exact callback attempt from subscriber `360134116`:
@@ -44,3 +50,7 @@ This will distinguish paused intake, runtime payload rejection, database failure
 ## Separate Meta repair
 
 Convlo reports that the Daetradez Page lacks `message_echoes`. Repair that subscription through the Meta reconnect/subscription path and recheck health. This improves outbound delivery evidence; it is not the cause of the failed ManyChat callback.
+
+## Applied changes
+
+None. The live flow, Meta configuration, routing, credentials, production application code, and historical messages were left untouched during both controlled tests.
