@@ -13,6 +13,12 @@ The controlled test used the user-owned Instagram account `@tefeo.444` only. It 
 7. The tag remains on the contact. Therefore the callback did not return `handoffAccepted: true`.
 8. **Convlo has the original outbound context record for `@tefeo.444`, but it still has 0 messages and 0 AI messages.** It has not received a durable first-reply handoff or either native inbound message.
 
+### Production database corroboration
+
+Read-only production queries scoped to subscriber `360134116` found **no** `ManyChatHandoffReceipt`. An aggregate query scoped to Daniel's workspace found **zero receipts of any status** and **zero** `ManyChat first-reply intake failed` notifications.
+
+ManyChat's published flow metrics show that the External Request action ran once for the test contact. Therefore, the callback did not enter the currently deployed queued-receipt path. The remaining unproven boundary is the exact HTTP request emitted by ManyChat. Plausible causes include malformed/non-JSON body, omitted or nonexact `processingMode`, or an upstream request failure. The evidence does not support choosing among them yet.
+
 This proves the current failure is not a script-selection, AI-generation, or Meta-send failure. The handoff request returns a non-success outcome before Convlo creates a durable receipt.
 
 ## Confirmed configuration facts

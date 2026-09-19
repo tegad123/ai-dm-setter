@@ -30,6 +30,7 @@ The targeted reliability checks, ManyChat receipt integration suite, TypeScript,
 - Two test messages were sent. ManyChat recorded and triggered Default Reply on the first.
 - The Default Reply flow configuration is correct on its visible fields: correct endpoint, matching account key, queued-first-reply payload, `$.handoffAccepted` mapping, and a true branch that removes the tag.
 - The tag remains and Convlo shows only the earlier outbound context with zero messages.
+- Production has no receipt for subscriber `360134116`. Daniel's workspace currently has no queued-handoff receipts and no queued-intake-failure alert. ManyChat reports that its External Request action executed once for this test contact. The request therefore failed before Convlo's deployed queued-receipt path; the exact emitted HTTP body/status is still required before assigning a root cause.
 
 ## Fresh follow trigger check
 
