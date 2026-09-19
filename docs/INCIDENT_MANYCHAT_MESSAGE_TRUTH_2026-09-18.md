@@ -151,6 +151,27 @@ published Follow-to-DM flow nevertheless lists Squirrel in its `Sends` contact
 drawer. That UI state proves the flow attempted the send action, not that Meta
 accepted or displayed the message.
 
+### Reusable Ref URL recheck
+
+The live test flow `TEST ONLY - Convlo reusable IG Ref URL handoff` uses
+Instagram Ref URL `#1` and is configured as:
+
+1. a user clicks the referral link;
+2. ManyChat sends `Hey! Are you in the markets right now, or just starting?`;
+3. ManyChat adds the `Convlo - Awaiting first reply` tag.
+
+Squirrel's ManyChat contact record shows both `Instagram Ref URL #1` as the
+opt-in source and the expected tag. Its chat history shows the automation
+triggered and later records the lead's `Hi`, but contains no opener bubble.
+At the same time, the test flow's published send metric is zero. The tag action
+therefore ran without a recorded ManyChat send. This rules out Convlo as the
+cause of Squirrel's missing opener: the missing message occurs in the
+ManyChat-to-Instagram send step or the underlying Meta delivery path.
+
+Tiger provides the contrasting successful record: its ManyChat history shows
+the same follower automation, the opener bubble, and the later Convlo
+continuation. The difference is visible before Convlo processes a first reply.
+
 Conclusion from this evidence:
 
 - ManyChat successfully ran the first external callback that supplies opener
