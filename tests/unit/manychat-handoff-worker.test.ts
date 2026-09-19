@@ -322,6 +322,40 @@ describe('durable ManyChat handoff worker', () => {
     assert.equal(f.state.lookups, 0, 'Facebook PSID must skip IG lookup');
     assert.equal(f.state.receipt.leadMessageId, 'm1');
   });
+  it('never attaches a Facebook first reply to a same-name contact with a different PSID', async () => {
+    for (const existingId of ['unresolved-recipient', '27000000000000002']) {
+      const f = fixture();
+      Object.assign(f.state.receipt, {
+        platform: 'FACEBOOK',
+        subscriberId: '27000000000000001',
+        payload: {
+          ...f.state.receipt.payload,
+          platform: 'facebook',
+          facebookUserId: '27000000000000001',
+          contactName: 'Facebook Contact',
+          instagramUserId: '',
+          instagramUsername: '',
+          manyChatSubscriberId: '27000000000000001'
+        }
+      });
+      Object.assign(f.state.lead, {
+        platform: 'FACEBOOK',
+        platformUserId: existingId,
+        handle: 'Facebook Contact'
+      });
+      f.state.account.awayModeFacebook = true;
+
+      const result = await f.run();
+
+      assert.equal(result.retried, 1, existingId);
+      assert.equal(f.state.receipt.lastError, 'original_context_not_found');
+      assert.equal(f.state.lead.platformUserId, existingId);
+      assert.equal(f.state.receipt.conversationId, null);
+      assert.equal(f.state.messages.length, 1);
+      assert.equal(f.state.lookups, 0);
+      assert.equal(f.state.schedules, 0);
+    }
+  });
   it('uses Facebook generate-only and review holds without changing them', async () => {
     for (const change of [
       { generateOnlyFacebook: true },

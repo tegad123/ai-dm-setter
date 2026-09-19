@@ -60,10 +60,9 @@ function payloadIdentity(
       payload.facebookUserId?.trim() || payload.manyChatSubscriberId.trim();
     return {
       userId,
-      handle:
-        payload.contactName?.trim() ||
-        payload.instagramUsername.trim() ||
-        userId
+      // Display names are not identity keys on Facebook. Only Instagram
+      // usernames can recover a context row whose numeric ID is unresolved.
+      handle: ''
     };
   }
   return {
@@ -316,7 +315,11 @@ export function createManyChatHandoffReceiptWorker(deps: WorkerDependencies) {
         include: { conversation: true },
         take: 3
       });
-      if (candidates.length === 0 && handle) {
+      if (
+        candidates.length === 0 &&
+        payload.platform === 'INSTAGRAM' &&
+        handle
+      ) {
         candidates = await db.lead.findMany({
           where: {
             accountId: receipt.accountId,

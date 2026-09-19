@@ -125,6 +125,40 @@ function worker(schedule = queueManyChatFirstReply) {
   });
 }
 
+test('Facebook first reply never adopts an unrelated same-name unresolved contact', async () => {
+  const f = await fixture('FACEBOOK');
+  await prisma.lead.update({
+    where: { id: f.lead.id },
+    data: {
+      platformUserId: 'unresolved-recipient',
+      handle: f.payload.contactName
+    }
+  });
+  const accepted = await accept(f);
+  assert.equal(accepted.status, 200);
+  const { receiptId } = await accepted.json();
+  let schedules = 0;
+  await worker(async () => {
+    schedules++;
+  })();
+  const receipt = await prisma.manyChatHandoffReceipt.findUniqueOrThrow({
+    where: { id: receiptId }
+  });
+  assert.equal(receipt.status, 'RETRY');
+  assert.equal(receipt.lastError, 'original_context_not_found');
+  assert.equal(receipt.conversationId, null);
+  assert.equal(schedules, 0);
+  assert.equal(
+    (await prisma.lead.findUniqueOrThrow({ where: { id: f.lead.id } }))
+      .platformUserId,
+    'unresolved-recipient'
+  );
+  assert.equal(
+    await prisma.message.count({ where: { conversationId: f.conversationId } }),
+    0
+  );
+});
+
 test('real callback accepts once under concurrent retries, stores no key and does not schedule inline', async () => {
   const f = await fixture();
   const began = Date.now();
