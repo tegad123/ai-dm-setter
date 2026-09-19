@@ -38,6 +38,12 @@ A separate, new test account, `@convlo.pipeline.test926`, followed Daetradez spe
 
 This isolates a second problem before Convlo: the live follow-to-DM trigger did not create a ManyChat contact for this fresh account within the observed interval. It cannot be used to test the queued handoff until ManyChat has created the contact and physically delivered the opener.
 
+## Meta read-only findings
+
+- The Daetradez Meta Business Suite home showed both connected surfaces: Facebook (24.9K followers) and Instagram (54.1K followers). No active restriction banner was visible on that page at the time of the read.
+- The visible five-item to-do message list was entirely **Messenger**, including the approximately nine-hour-old outbound opener attributed to Daetradez. It is therefore not evidence of an Instagram opener delivery.
+- Instagram-specific inbox counts and historical thread ownership remain unproven. They require a read-only Instagram-filtered inbox view or a Meta routing surface that does not alter a lead thread.
+
 ## Required next diagnostic
 
 Inspect server-side evidence for the exact callback attempt from subscriber `360134116`:

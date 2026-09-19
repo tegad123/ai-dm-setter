@@ -89,6 +89,10 @@ This is a second controlled failure, but at an earlier boundary than the `@tefeo
 
 No live ManyChat automation, Meta routing setting, credential, webhook setting, application code, or historical message was changed for this check.
 
+## Meta Business Suite read-only check
+
+The Daetradez Business Suite home showed Facebook and Instagram connected to the same asset, with 24.9K Facebook followers and 54.1K Instagram followers. Its visible to-do list contained five Messenger threads and no Instagram thread. The approximately nine-hour-old Daetradez opener listed there is a Messenger item, so it does not prove native Instagram delivery. No active restriction banner was visible on the page.
+
 ## Boundaries honored
 
 No historical conversation was replayed. No live follow-to-DM flow was edited, paused, reordered, or republished. The only ManyChat data change was the test-only tag on `@tefeo.444`.
