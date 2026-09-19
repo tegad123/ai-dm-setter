@@ -28,6 +28,31 @@ This proves the current failure is not a script-selection, AI-generation, or Met
 | Success action | Removes `Convlo - Awaiting first reply` |
 | Convlo conversation | Existing ManyChat context only; zero messages |
 
+## ManyChat-to-Convlo contract comparison
+
+| Contract item | ManyChat live flow observation | Convlo receiver requirement | Result |
+|---|---|---|---|
+| Authentication | Account-specific `X-QualifyDMs-Key` header is configured | Header must identify an account | Matches visibly; server acceptance remains unproven |
+| Processing mode | `queued_first_reply` | Exact value required for the durable receipt path | Matches |
+| Platform | Instagram | `INSTAGRAM` or `FACEBOOK`, defaulting to Instagram | Matches |
+| Instagram recipient identity | Contact ID is mapped into `instagramUserId` | Nonempty Instagram recipient ID is required | Mapping exists, but the actual expanded value is unproven |
+| Instagram username | Instagram username variable is mapped | Nonempty username is required for Instagram | Mapping exists, but the actual expanded value is unproven |
+| Subscriber identity | Contact ID is mapped into `manyChatSubscriberId` | Nonempty subscriber ID is required and becomes the dedupe key | Matches visibly |
+| Opener text | Stored opener message is mapped | Nonempty `openerMessage` is required | Matches visibly |
+| First lead response | Last Text Input is mapped | Queued mode requires nonempty `leadResponseText` | This is the leading payload-risk: it must contain the first actual reply at run time |
+| AI handoff | `scheduleAi: true` | Queued mode requires `scheduleAi: true` | Matches |
+| Delivery proof | No native Meta message ID or confirmed-delivery field is sent | Receiver stores opener text, not independent delivery proof | **Mismatch: Convlo can be told an opener exists even when Instagram never displayed it.** |
+| Callback success | `$.handoffAccepted` controls tag removal | A durable receipt returns `handoffAccepted: true` | `@tefeo.444` tag remained, so success was not observed |
+
+## Handoff evidence buckets
+
+| Bucket | Records found in this audit | Evidence |
+|---|---|---|
+| A. Trigger recorded and opener delivery confirmed | None | No persisted Meta message ID was available. |
+| B. Trigger recorded, no opener delivery evidence | `@tefeo.444` / subscriber `360134116`, Instagram Follow to DM | Flow trigger was recorded; opener was absent from Inbox and Requests; no Meta ID available. |
+| C. Delivery evidence, no lead reply | None | No delivery evidence was available. |
+| D. Ambiguous | `@convlo.pipeline.test926` | Follow visibly completed, but no ManyChat contact was created in the observed interval, so there is no trigger record to assess. |
+
 ## What remains to identify
 
 The visible result narrows the response to one of these server-side outcomes:

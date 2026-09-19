@@ -47,6 +47,14 @@ Inspect server-side evidence for the exact callback attempt from subscriber `360
 
 This will distinguish paused intake, runtime payload rejection, database failure, and receipt conflict. Do not change the general new-follower flow or replay the test until the response is known.
 
+## Proposed changes (apply none yet)
+
+1. **Add a delivery-confirmed gate before Convlo handoff.** The live ManyChat flow should only hand the thread to Convlo after its opener has an independent delivery confirmation. The current callback supplies opener text but no Meta message ID or delivery-confirmed field, so Convlo cannot distinguish an actual opener from an attempted one.
+2. **Expose the failed callback response for the test contact.** In ManyChat, open only subscriber `360134116` and capture the External Request response/status for the first direct-message run. This will show whether the problem is a 400 validation error, 401 credential error, 409 receipt conflict, 503 pause, or a database/runtime failure.
+3. **Investigate the fresh-follow enrollment failure separately.** A successful Instagram follow that creates neither a ManyChat contact nor a physical opener is upstream of Convlo. Check the live trigger eligibility/event history for the fresh test account without editing, pausing, or republishing the flow.
+
+No proposed change has been applied.
+
 ## Separate Meta repair
 
 Convlo reports that the Daetradez Page lacks `message_echoes`. Repair that subscription through the Meta reconnect/subscription path and recheck health. This improves outbound delivery evidence; it is not the cause of the failed ManyChat callback.
