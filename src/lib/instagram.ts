@@ -1,8 +1,8 @@
 import crypto from 'crypto';
+import { retryMetaDelivery } from '@/lib/meta-delivery-retry';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
 import prisma from '@/lib/prisma';
-import { classifyMetaDeliveryError } from '@/lib/meta-delivery-errors';
 import { assertHumanAgentTagIsOperatorInitiated } from '@/lib/meta-messaging-window';
 
 const GRAPH_API_VERSION = 'v21.0';
@@ -174,11 +174,8 @@ export async function sendDM(
     };
   }
 
-  const MAX_RETRIES = 3;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
+  return retryMetaDelivery(
+    async () => {
       // IG tokens: pass access_token in body; FB tokens: use Authorization header
       const response = await fetch(url, {
         method: 'POST',
@@ -210,25 +207,16 @@ export async function sendDM(
 
       const data = await response.json();
       return { messageId: data.message_id || data.id || '' };
-    } catch (err: any) {
-      lastError = err;
-      console.error(
-        `[instagram] Send DM attempt ${attempt}/${MAX_RETRIES} failed:`,
-        err.message
-      );
-      if (!classifyMetaDeliveryError(err).retryable) {
-        break;
-      }
-      if (attempt < MAX_RETRIES) {
-        // Exponential backoff: 1s, 2s, 4s
-        await new Promise((r) =>
-          setTimeout(r, Math.pow(2, attempt - 1) * 1000)
+    },
+    {
+      onFailure: (error, attempt) => {
+        console.error(
+          `[instagram] Send attempt ${attempt}/3 failed:`,
+          error instanceof Error ? error.message : error
         );
       }
     }
-  }
-
-  throw lastError || new Error('Instagram send DM failed after retries');
+  );
 }
 
 // ---------------------------------------------------------------------------

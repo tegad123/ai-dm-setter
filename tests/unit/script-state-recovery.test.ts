@@ -100,6 +100,38 @@ describe('computeSystemStage generic sequencing', () => {
     assert.equal(stage.step?.stepNumber, 2);
   });
 
+  it('keeps qualification open when the lead asks what the quoted price includes', () => {
+    const qualificationScript = {
+      id: 'product_details_before_payment',
+      steps: [
+        askStep(11, 'Qualification', 'Would $200 be realistic for you?'),
+        askStep(12, 'Qualification React', 'Ready to get started?')
+      ]
+    } as any;
+    const history = [
+      {
+        sender: 'AI',
+        content: 'Would $200 be realistic for you?',
+        timestamp: new Date('2026-09-19T00:00:00Z')
+      },
+      {
+        sender: 'LEAD',
+        content: 'What does the $200 include before paying?',
+        timestamp: new Date('2026-09-19T00:01:00Z')
+      }
+    ];
+
+    assert.equal(
+      computeSystemStage(qualificationScript, {}, history).step?.stepNumber,
+      11
+    );
+    history[1].content = 'I have $200 ready, what does it include?';
+    assert.equal(
+      computeSystemStage(qualificationScript, {}, history).step?.stepNumber,
+      12
+    );
+  });
+
   it('advances past the +1 cap when every intervening step is PROVABLY complete (F5.1 1b)', () => {
     // Steps 1 AND 2 were both asked + answered in history → both provably
     // complete → true candidate is step 3. Pre-1b, this was wrongly capped to

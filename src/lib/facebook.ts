@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { retryMetaDelivery } from '@/lib/meta-delivery-retry';
 import { getMetaAccessToken } from '@/lib/credential-store';
 import { EgressBlockedError } from '@/lib/state-machine/can-send';
 import { assertHumanAgentTagIsOperatorInitiated } from '@/lib/meta-messaging-window';
@@ -139,11 +140,8 @@ export async function sendMessage(
     };
   }
 
-  const MAX_RETRIES = 3;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
+  return retryMetaDelivery(
+    async () => {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -175,21 +173,16 @@ export async function sendMessage(
 
       const data = await response.json();
       return { messageId: data.message_id || data.id || '' };
-    } catch (err: any) {
-      lastError = err;
-      console.error(
-        `[facebook] Send message attempt ${attempt}/${MAX_RETRIES} failed:`,
-        err.message
-      );
-      if (attempt < MAX_RETRIES) {
-        await new Promise((r) =>
-          setTimeout(r, Math.pow(2, attempt - 1) * 1000)
+    },
+    {
+      onFailure: (error, attempt) => {
+        console.error(
+          `[facebook] Send attempt ${attempt}/3 failed:`,
+          error instanceof Error ? error.message : error
         );
       }
     }
-  }
-
-  throw lastError || new Error('Facebook send message failed after retries');
+  );
 }
 
 // ---------------------------------------------------------------------------

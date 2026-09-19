@@ -22,7 +22,10 @@ import {
   OUTSIDE_STANDARD_WINDOW_MARKER
 } from '@/lib/meta-messaging-window';
 import { notifyOnce } from '@/lib/platform-not-connected-alert';
-import { classifyMetaDeliveryError } from '@/lib/meta-delivery-errors';
+import {
+  decideScheduledMessageFailure,
+  SCHEDULED_MESSAGE_MAX_ATTEMPTS
+} from '@/lib/scheduled-message-failure';
 import { NextRequest, NextResponse } from 'next/server';
 import type { LeadContext } from '@/lib/ai-prompts';
 
@@ -68,7 +71,7 @@ export async function GET(req: NextRequest) {
       where: {
         status: 'PENDING',
         scheduledFor: { lte: now },
-        attempts: { lt: 3 }
+        attempts: { lt: SCHEDULED_MESSAGE_MAX_ATTEMPTS }
       },
       include: {
         conversation: {
@@ -179,32 +182,29 @@ export async function GET(req: NextRequest) {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const deliveryError = classifyMetaDeliveryError(err);
+        const failure = decideScheduledMessageFailure(err, row.attempts);
         console.error(
           `[cron/scheduled-messages] Failed to fire ${row.id}:`,
           msg
         );
-        // Permission/token/policy failures cannot heal on the next minute.
-        // Make them terminal on the first cron attempt instead of hitting Meta
-        // three times with the same permanent request.
-        const nextAttempts = deliveryError.permanent ? 3 : row.attempts + 1;
         await prisma.scheduledMessage.update({
           where: { id: row.id },
           data: {
-            status: nextAttempts >= 3 ? 'FAILED' : 'PENDING',
-            attempts: nextAttempts,
+            status: failure.status,
+            attempts: failure.attempts,
             lastError: msg.slice(0, 500)
           }
         });
-        if (deliveryError.permanent) {
+        if (failure.notifyOperator) {
           const failedLead = row.conversation.lead;
           await notifyOnce({
             accountId: row.accountId,
             title: 'Scheduled message delivery failed',
             body:
-              `${failedLead.handle ? `@${failedLead.handle}` : failedLead.name || 'Lead'} did not receive ` +
-              `${row.messageType}. ScheduledMessage ${row.id} was rejected permanently by Meta. ` +
-              `${deliveryError.meaning}\n\n${msg.slice(0, 500)}`,
+              `Scheduled delivery of ${row.messageType} for ` +
+              `${failedLead.handle ? `@${failedLead.handle}` : failedLead.name || 'Lead'} requires review. ` +
+              `ScheduledMessage ${row.id} failed. Check the conversation's delivery evidence before retrying. ` +
+              `${failure.errorMeaning}\n\n${msg.slice(0, 500)}`,
             leadId: failedLead.id,
             dedupeMs: 24 * 60 * 60 * 1000
           });
@@ -247,6 +247,7 @@ async function fireScheduledMessage(
   | 'skipped_ai_inactive'
   | 'skipped_held_for_review'
   | 'skipped_outside_messaging_window'
+  | 'cancelled'
 > {
   const row = await prisma.scheduledMessage.findUnique({
     where: { id: scheduledMessageId },
@@ -323,7 +324,7 @@ async function fireScheduledMessage(
         lastError: 'call_already_confirmed'
       }
     });
-    return 'skipped_ai_inactive';
+    return 'cancelled';
   }
 
   // Guardrail for silent-lead cascade + booking-link follow-up.
@@ -370,7 +371,7 @@ async function fireScheduledMessage(
               : 'lead_replied_since_scheduling'
         }
       });
-      return 'skipped_ai_inactive';
+      return 'cancelled';
     }
   }
 

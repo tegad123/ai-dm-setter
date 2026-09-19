@@ -57,7 +57,7 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
     /\b(enough|plenty|about|around|like|roughly|maybe)\s+\S/i.test(core);
 
   const deferral =
-    /\b(hold up|hold on|before (you|we|send|sending|anything)|answer (me|my)|not (yet|now|ready)|why (do|would) (you|i) (need|have|wanna|gotta) (to )?(know|tell|answer|give)|dont send|don'?t send|not gonna (say|answer|tell))\b/i.test(
+    /\b(hold up|hold on|before (you|we|send|sending|anything|i pay|paying)|answer (me|my)|not (yet|now|ready)|why (do|would) (you|i) (need|have|wanna|gotta) (to )?(know|tell|answer|give)|dont send|don'?t send|not gonna (say|answer|tell))\b/i.test(
       lower
     ) || /^(wait|hold)\b/i.test(core);
 
@@ -99,6 +99,27 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
     /\b(about|around|like|roughly|maybe)\s+(?:\$?\d|one|two|three|four|five|six|seven|eight|nine|ten|a few|a couple)\b/i.test(
       core
     );
+  // A quantity inside a question is not an answer: "What does the $200
+  // include?" must not complete the affordability step. Keep mixed replies
+  // eligible when they also contain their own declarative answer clause,
+  // such as "not yet, but I've got 5k ready".
+  const hasIndependentAnswerClause =
+    /^(?:(?:(?:about|around|roughly|maybe)\s+)?\$?\d|enough\b|plenty\b)/i.test(
+      core
+    ) ||
+    /^(?:how|what)\s+about\s+\$?\d/i.test(core) ||
+    /^(?:would|is)\s+\$?\d[\d,.]*(?:k|m)?\s+(?:be\s+)?enough\b/i.test(core) ||
+    /(?:^|[.!?;,]\s*|\b(?:but|and)\s+)(?:i|we|i'?ve|we'?ve|ive)\s+(?:want|wanna|make|earn|have|got|can afford|can pay|can cover)\b/i.test(
+      core
+    ) ||
+    /\bbut\s+(?:\$?\d|enough\b|plenty\b)/i.test(core);
+  if (
+    (startsInterrogative || deferral || pricingQuestion) &&
+    hasConcreteAnswer &&
+    !hasIndependentAnswerClause
+  ) {
+    return false;
+  }
   if (hasConcreteAnswer) return true;
   if (deferral) return false;
   if (pricingQuestion) return false;
