@@ -11,6 +11,8 @@ The ManyChat first-reply integration is **not yet recovered for general traffic*
 
 That means the failure is at the callback response or durable receipt intake boundary, before the AI engine, script routing, or Meta delivery.
 
+The live follow-to-DM flow also has two confirmed configuration gaps: it runs the Convlo External Request before its native Instagram opener action, and it does not add `Convlo - Awaiting first reply`. The Default Reply handoff is gated by that tag. This means an ordinary new follower is not reliably handed from the opener to Convlo when they answer.
+
 ## Production release already completed
 
 Production is on `c485a0f070436cfd1e836e3a195471f5f51db259`.
@@ -61,6 +63,7 @@ This will distinguish paused intake, runtime payload rejection, database failure
 2. **Expose the failed callback response for the test contact.** In ManyChat, open only subscriber `360134116` and capture the External Request response/status for the first direct-message run. This will show whether the problem is a 400 validation error, 401 credential error, 409 receipt conflict, 503 pause, or a database/runtime failure.
 3. **Investigate the fresh-follow enrollment failure separately.** A successful Instagram follow that creates neither a ManyChat contact nor a physical opener is upstream of Convlo. Check the live trigger eligibility/event history for the fresh test account without editing, pausing, or republishing the flow.
 4. **Add a manual-review failure path after approval.** When `Convlo handoff accepted` stays false, retain the tag but create a clearly named operator-review state rather than silently doing nothing. This must be designed and approved before touching the live flow.
+5. **Repair the normal follow handoff in one approved change.** In `Say hi to new followers`, ensure the native opener completes before the context callback, then add `Convlo - Awaiting first reply` only after the opener is known to have delivered. Keep the Default Reply’s existing tag gate and queued callback. This must be applied once, reviewed, and tested with one new authorized test follower; do not make piecemeal live edits.
 
 No proposed change has been applied.
 

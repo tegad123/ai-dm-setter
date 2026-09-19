@@ -36,6 +36,23 @@ This proves the current failure is not a script-selection, AI-generation, or Met
 | Success action | Removes `Convlo - Awaiting first reply` |
 | Convlo conversation | Existing ManyChat context only; zero messages |
 
+## Live follow-to-DM sequence, observed in the published flow
+
+The published **Say hi to new followers** automation is live. Its visible action order is:
+
+1. `User follows your account` (Instagram Follow to DM trigger).
+2. One Actions node containing the Convlo External Request.
+3. The same Actions node then performs Instagram `Send Message` with: “Hey there! Thanks for following me are you in the markets rn? or starting?”
+
+The flow has no visible `Add Tag: Convlo - Awaiting first reply` action. The published **Instagram Default Reply** flow requires exactly that tag before it calls the queued first-reply callback.
+
+This establishes two configuration gaps in the normal new-follower path:
+
+- Convlo receives claimed opener context before the native opener action, without independent delivery evidence.
+- A fresh follower is not put into the tag gate that enables the Default Reply handoff after their answer.
+
+These are ManyChat configuration findings, not AI engine defects. No change was applied.
+
 ## ManyChat-to-Convlo contract comparison
 
 | Contract item | ManyChat live flow observation | Convlo receiver requirement | Result |
@@ -52,6 +69,7 @@ This proves the current failure is not a script-selection, AI-generation, or Met
 | Delivery proof | No native Meta message ID or confirmed-delivery field is sent | Receiver stores opener text, not independent delivery proof | **Mismatch: Convlo can be told an opener exists even when Instagram never displayed it.** |
 | Callback success | `$.handoffAccepted` controls tag removal | A durable receipt returns `handoffAccepted: true` | `@tefeo.444` tag remained, so success was not observed |
 | Callback failure behavior | Failure branch does nothing | Operator needs a visible failure and safe retry decision | **Mismatch: a failed callback silently leaves the contact tagged without a receipt or recovery signal.** |
+| Tag handoff gate | Follow-to-DM flow has no visible Add Tag action | Default Reply calls queued intake only when `Convlo - Awaiting first reply` is present | **Mismatch: ordinary follower replies bypass the first-reply handoff.** |
 
 ## Handoff evidence buckets
 
