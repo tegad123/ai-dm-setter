@@ -133,3 +133,18 @@ No historical conversation was replayed. No live follow-to-DM flow was edited, p
 **Verification:** The published live flow shows, in order: External Request, Add Tag `Convlo - Awaiting first reply`, Instagram Send Message. The flow is active and saved.
 
 **Still required before declaring recovery:** A genuinely new test follower must receive the physical Instagram opener, reply once, and produce all of: an accepted queued handoff receipt, one scheduled response, one Meta delivery ID, and correct normal continuation. The prior test showed a correctly configured visible Default Reply request but no persisted receipt, so the new end-to-end run remains the deciding proof.
+
+## Controlled follow attempt: `@convlo.pipeline.qa0926` (2026-09-19)
+
+A new Instagram account was created and followed `@daetradez` after the approved tag repair was published.
+
+**Observed facts:**
+
+- Instagram confirmed the account now follows `@daetradez`.
+- The new account's Inbox showed the empty-state message that chats appear only after a send or receive. No opener was visible.
+- ManyChat Contacts search for `convlo.pipeline.qa0926` returned no matching contact.
+- Production Convlo lookup scoped to exact handle returned no `Lead` and no `ManyChatHandoffReceipt`.
+
+**Conclusion:** This is a fresh reproduction of the failure before Convlo handoff intake: the new-follower event did not create a ManyChat contact, did not generate a physical opener, and therefore did not reach Convlo. The configuration repair can only route a later reply after ManyChat first creates the contact and sends the opener; it cannot repair a trigger that Meta/ManyChat never delivers.
+
+No further test accounts were created. This is the third controlled fresh-follower attempt in this investigation, matching the investigation cap.

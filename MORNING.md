@@ -88,3 +88,11 @@ None. The live flow, Meta configuration, routing, credentials, production applic
 The live `Say hi to new followers` Instagram flow now adds the `Convlo - Awaiting first reply` tag between its existing handoff context request and its Instagram opener. This makes the later inbound reply eligible for `Instagram Default Reply` and the queued first-reply handoff.
 
 This is a configuration-only repair. It does not prove the physical follow opener is delivered, nor does it prove the queued callback produces a receipt. The next clean test must prove opener delivery, receipt creation, scheduling, Meta delivery, and continuation in sequence.
+
+### Fresh post-repair test: trigger still fails before Convlo
+
+`@convlo.pipeline.qa0926` was created as a clean test account and followed Daetradez after the tag repair was published. Instagram confirmed the follow. Its Inbox remained empty; ManyChat had no contact matching the handle; Convlo had no matching lead or handoff receipt.
+
+This rules out the new tag configuration as a fix for the initial failure. The failure happens earlier: Meta/ManyChat is not creating a contact or sending the follow opener for a fresh follower. No further accounts were created because this is the third controlled fresh-follower attempt.
+
+**Required owner:** ManyChat/Meta configuration and support investigation. The next useful evidence is ManyChat's event and delivery log for the exact fresh follower, then Meta's account/event restrictions for the Daetradez Instagram asset. Convlo cannot receive or respond to an event that never arrives.
