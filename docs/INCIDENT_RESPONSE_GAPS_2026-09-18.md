@@ -1240,6 +1240,24 @@ Required correction and proof:
 6. Prove Step 7, Step 8, Step 12, and the solicitation control in focused tests
    and in fresh production conversations before closing the issue.
 
+### Manual recovery performed September 18
+
+After reviewing the current production threads, the following three leads were
+still paused at their last inbound message. Daniel authorized a human recovery
+reply through Convlo. Each reply was then visible in the live conversation as a
+`Manual` / `Human Setter` message. These were deliberate contextual replies,
+not replays of the failed automated jobs.
+
+| Handle | Conversation | Recovery result |
+| --- | --- | --- |
+| `aloysx7` | `cmu64am8k0018kt046uocss96` | Sent a contextual faith-and-timing acknowledgement followed by the interest probe. |
+| `syed_10129` | `cmu5r29ji003tl204d9ual197` | Sent a contextual acknowledgement of the family/world-tour goal followed by an obstacle probe. |
+| `lukooyafarid` | `cmu6eijcz001fl704l8q7a6mm` | Sent a contextual explanation of the discipline diagnosis followed by a question about the trigger for breaking the plan. |
+
+The manual-send route clears the pending human-review/awaiting-AI state while
+leaving AI enabled. It therefore restores normal automation for the next lead
+message without changing the script engine or replaying a stale scheduled job.
+
 ## Issue 21: intentional suppression is recorded as a delivery failure
 
 **Status:** Confirmed observability and job-state defect. The structured outcome
