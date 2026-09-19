@@ -494,6 +494,14 @@ test('cron requires authentication and pause switch prevents intake and processi
     }),
     0
   );
+  const intakeFailure = await prisma.notification.findFirstOrThrow({
+    where: {
+      accountId: f.account.id,
+      title: 'ManyChat first-reply intake failed'
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+  assert.match(intakeFailure.body ?? '', /Queued first-reply intake is paused/);
 });
 
 test('ambiguous native copy after outbound is preserved for review without another reply', async () => {
