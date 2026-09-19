@@ -31,6 +31,7 @@ The targeted reliability checks, ManyChat receipt integration suite, TypeScript,
 - The Default Reply flow configuration is correct on its visible fields: correct endpoint, matching account key, queued-first-reply payload, `$.handoffAccepted` mapping, and a true branch that removes the tag.
 - The tag remains and Convlo shows only the earlier outbound context with zero messages.
 - Production has no receipt for subscriber `360134116`. Daniel's workspace currently has no queued-handoff receipts and no queued-intake-failure alert. ManyChat reports that its External Request action executed once for this test contact. The request therefore failed before Convlo's deployed queued-receipt path; the exact emitted HTTP body/status is still required before assigning a root cause.
+- The published automation shows the condition `Convlo handoff accepted is true` evaluated for one contact, but the success action that removes the test tag ran for zero contacts. Its failure path does nothing. This is a configuration recovery gap: a failed callback is silent and leaves the contact stranded.
 
 ## Fresh follow trigger check
 
@@ -59,6 +60,7 @@ This will distinguish paused intake, runtime payload rejection, database failure
 1. **Add a delivery-confirmed gate before Convlo handoff.** The live ManyChat flow should only hand the thread to Convlo after its opener has an independent delivery confirmation. The current callback supplies opener text but no Meta message ID or delivery-confirmed field, so Convlo cannot distinguish an actual opener from an attempted one.
 2. **Expose the failed callback response for the test contact.** In ManyChat, open only subscriber `360134116` and capture the External Request response/status for the first direct-message run. This will show whether the problem is a 400 validation error, 401 credential error, 409 receipt conflict, 503 pause, or a database/runtime failure.
 3. **Investigate the fresh-follow enrollment failure separately.** A successful Instagram follow that creates neither a ManyChat contact nor a physical opener is upstream of Convlo. Check the live trigger eligibility/event history for the fresh test account without editing, pausing, or republishing the flow.
+4. **Add a manual-review failure path after approval.** When `Convlo handoff accepted` stays false, retain the tag but create a clearly named operator-review state rather than silently doing nothing. This must be designed and approved before touching the live flow.
 
 No proposed change has been applied.
 

@@ -19,6 +19,8 @@ Read-only production queries scoped to subscriber `360134116` found **no** `Many
 
 ManyChat's published flow metrics show that the External Request action ran once for the test contact. Therefore, the callback did not enter the currently deployed queued-receipt path. The remaining unproven boundary is the exact HTTP request emitted by ManyChat. Plausible causes include malformed/non-JSON body, omitted or nonexact `processingMode`, or an upstream request failure. The evidence does not support choosing among them yet.
 
+The published flow also proves that its success branch was not taken: the condition `Convlo handoff accepted is true` was evaluated for one contact, while the following action `Remove Tag Convlo - Awaiting first reply` shows zero contacts. The failure branch is `Do nothing`. This is why the test contact remains stranded with no actionable error visible to an operator.
+
 This proves the current failure is not a script-selection, AI-generation, or Meta-send failure. The handoff request returns a non-success outcome before Convlo creates a durable receipt.
 
 ## Confirmed configuration facts
@@ -49,6 +51,7 @@ This proves the current failure is not a script-selection, AI-generation, or Met
 | AI handoff | `scheduleAi: true` | Queued mode requires `scheduleAi: true` | Matches |
 | Delivery proof | No native Meta message ID or confirmed-delivery field is sent | Receiver stores opener text, not independent delivery proof | **Mismatch: Convlo can be told an opener exists even when Instagram never displayed it.** |
 | Callback success | `$.handoffAccepted` controls tag removal | A durable receipt returns `handoffAccepted: true` | `@tefeo.444` tag remained, so success was not observed |
+| Callback failure behavior | Failure branch does nothing | Operator needs a visible failure and safe retry decision | **Mismatch: a failed callback silently leaves the contact tagged without a receipt or recovery signal.** |
 
 ## Handoff evidence buckets
 
