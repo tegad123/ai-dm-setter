@@ -59,11 +59,19 @@ This will distinguish paused intake, runtime payload rejection, database failure
 
 ## Proposed changes (apply none yet)
 
-1. **Add a delivery-confirmed gate before Convlo handoff.** The live ManyChat flow should only hand the thread to Convlo after its opener has an independent delivery confirmation. The current callback supplies opener text but no Meta message ID or delivery-confirmed field, so Convlo cannot distinguish an actual opener from an attempted one.
+1. **Repair action order, but do not claim delivery confirmation.** In the live follow flow, put the native Instagram opener action before the Convlo context callback and the first-reply tag. This corrects the present callback-before-opener order. ManyChat alone cannot confirm physical delivery per contact, because the published node exposes aggregate metrics rather than a persisted Meta message ID.
 2. **Expose the failed callback response for the test contact.** In ManyChat, open only subscriber `360134116` and capture the External Request response/status for the first direct-message run. This will show whether the problem is a 400 validation error, 401 credential error, 409 receipt conflict, 503 pause, or a database/runtime failure.
 3. **Investigate the fresh-follow enrollment failure separately.** A successful Instagram follow that creates neither a ManyChat contact nor a physical opener is upstream of Convlo. Check the live trigger eligibility/event history for the fresh test account without editing, pausing, or republishing the flow.
 4. **Add a manual-review failure path after approval.** When `Convlo handoff accepted` stays false, retain the tag but create a clearly named operator-review state rather than silently doing nothing. This must be designed and approved before touching the live flow.
-5. **Repair the normal follow handoff in one approved change.** In `Say hi to new followers`, ensure the native opener completes before the context callback, then add `Convlo - Awaiting first reply` only after the opener is known to have delivered. Keep the Default Reply’s existing tag gate and queued callback. This must be applied once, reviewed, and tested with one new authorized test follower; do not make piecemeal live edits.
+5. **Repair the normal follow handoff in one approved change.** In `Say hi to new followers`, place the native opener before the context callback and add `Convlo - Awaiting first reply` after that opener action. Keep the Default Reply’s existing tag gate and queued callback. This establishes correct handoff order, but does not substitute for a delivery proof. Apply once, review, and test with one new authorized follower; do not make piecemeal live edits.
+
+### Proposed application steps for Tega only
+
+1. In ManyChat, open **Automation** → **Say hi to new followers** → **Edit Automation**.
+2. Preserve the existing opener copy and endpoint/key. Reorder the Actions node so the Instagram **Send Message** action precedes the Convlo External Request.
+3. Add **Add Tag** → `Convlo - Awaiting first reply` after the opener action.
+4. Publish this single reviewed version once. Do not pause, duplicate, or separately republish either live automation.
+5. Run one fresh authorized-follower test. Verify the opener in the recipient Inbox or Message Requests, then send the first reply and require a Convlo receipt, one scheduled reply, and a persisted Meta outbound message ID before enabling any broader behavior.
 
 No proposed change has been applied.
 

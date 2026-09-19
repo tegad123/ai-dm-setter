@@ -53,6 +53,10 @@ This establishes two configuration gaps in the normal new-follower path:
 
 These are ManyChat configuration findings, not AI engine defects. No change was applied.
 
+### Important limit on the configuration repair
+
+Moving the opener ahead of the callback can guarantee action order, but it cannot prove that Meta delivered the opener. The published ManyChat node reports aggregate send/delivery metrics, not a per-contact persisted Meta message ID that Convlo can validate. Any repair must describe this honestly: action ordering is a configuration correction; physical delivery still requires separate Meta evidence or an integration-level delivery record.
+
 ## ManyChat-to-Convlo contract comparison
 
 | Contract item | ManyChat live flow observation | Convlo receiver requirement | Result |
