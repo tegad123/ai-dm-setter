@@ -1,3 +1,5 @@
+> Superseded where inconsistent by [September 20 findings and repair handoff](FINDINGS_AND_FIXES_2026-09-20.md). Earlier aggregate counts and causal claims have material limitations documented there.
+
 # ManyChat controlled first-reply evidence audit — 2026-09-19
 
 ## Result: callback failure isolated before Convlo intake
