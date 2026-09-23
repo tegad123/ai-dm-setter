@@ -1,0 +1,547 @@
+{
+  "title": "Convlo P0 launch tracker",
+  "updatedAt": "2026-09-23T06:59:28.230Z",
+  "milestones": [
+    {
+      "date": "2026-09-25",
+      "label": "P0.0 instrumentation checkpoint"
+    },
+    {
+      "date": "2026-10-01",
+      "label": "Engineering evidence delivered"
+    },
+    {
+      "date": "2026-10-02",
+      "label": "Tega P0 sign-off"
+    },
+    {
+      "date": "2026-10-05",
+      "label": "Buffer and rollout decision"
+    },
+    {
+      "date": "2026-10-06",
+      "label": "Daniel approaches client one if all gates pass"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "PLAN",
+      "lane": "Shazim",
+      "title": "Publish day-by-day engineering plan",
+      "due": "2026-09-23",
+      "status": "in_progress",
+      "dependsOn": [],
+      "acceptance": "Order all frozen P0 items, name dependencies and daily evidence, and agree on the 25 September checkpoint with Tega.",
+      "evidence": "docs/LAUNCH_DAY_BY_DAY_2026-09-23.md prepared; awaiting Tega's confirmation of dates and dependencies.",
+      "note": "This tracker is the initial shared plan. Dates remain proposals until Tega confirms them."
+    },
+    {
+      "id": "P0.0",
+      "lane": "Shazim",
+      "title": "Explain every terminal scheduled reply outcome",
+      "due": "2026-09-25",
+      "status": "in_progress",
+      "dependsOn": [],
+      "acceptance": "Every terminal writer records a coded cause, time, step and branch context, and a generation trace or explicit no-generation reason. Separate generation exhaustion from declared hold. Re-run the exact 18–20 September classification and disclose unrecoverable historical gaps.",
+      "evidence": "Production /api/version: babfae8cd40e7d55c16abd803daa611d65ff4c56. 24h monitor on 23 September: 207 historical terminal rows, 0 claim snapshots, 0 trace links, 0 missing reason/time after migration. Forward live proof and historical classification are pending.",
+      "note": "Commit babfae8 is deployed. Migration appears present because production reads the new columns. Do not mark verified from migration backfill alone."
+    },
+    {
+      "id": "P0.1",
+      "lane": "Shazim",
+      "title": "Close ManyChat to Convlo first-reply handoff",
+      "due": "2026-09-25",
+      "status": "blocked",
+      "dependsOn": [],
+      "acceptance": "One continuous follower trigger, visible opener, lead reply, accepted callback, canonical identity, correct Step 1 branch, outbound Meta ID and normal continuation. Preserve planned/provider-reported/Meta-confirmed opener states.",
+      "evidence": "",
+      "note": "Needs ManyChat and Meta access. Tega must approve a direct-webhook fallback before any routing change."
+    },
+    {
+      "id": "P0.1-RACES",
+      "lane": "Shazim",
+      "title": "Prove handoff races, replay and direct inbound",
+      "due": "2026-09-25",
+      "status": "todo",
+      "dependsOn": [
+        "P0.1"
+      ],
+      "acceptance": "Callback-first, native-first, concurrent and replay cases reuse one conversation and reply operation; callback failures are visible; direct inbound chooses its own branch; production revision and rollback are recorded.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.12",
+      "lane": "Shazim",
+      "title": "Explain five silent delivery losses",
+      "due": "2026-09-28",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0"
+      ],
+      "acceptance": "Reconstruct user_7_eham, padihcee, martinghantous, kemical12_music and israelalge3. Reproduce each in controlled tests. Each ends in a correlated Meta result or coded cause visible to the owner, with no silent exhaustion or duplicate send.",
+      "evidence": "",
+      "note": "Preserve historical jobs, attempts and review flags. No automatic replay."
+    },
+    {
+      "id": "STEP14",
+      "lane": "Shazim",
+      "title": "Find Step 14 exhaustion and repeat root cause",
+      "due": "2026-09-28",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0"
+      ],
+      "acceptance": "Check whether d3b4321 covers Steps 10–14; trace syed_10129, lukooyafarid and padihcee through branch, prompt, quality gate, cursor and delivery. Prove the fix on the active script.",
+      "evidence": "",
+      "note": "Coordinate with purchase gate P0.6; do not assume purchase copy is the only cause."
+    },
+    {
+      "id": "P0.2",
+      "lane": "Shazim",
+      "title": "Route non-sales intent before discovery",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "P0.1"
+      ],
+      "acceptance": "Partnership, seller, support, hardship and other non-sales turns exit discovery by branch decision. Unclear greetings prompt clarification.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.3",
+      "lane": "Shazim",
+      "title": "Guard every outgoing script action against context",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "P0.2"
+      ],
+      "acceptance": "A beginner request does not receive unsupported obstacle or urgency copy. New inbound invalidates incompatible pending parts before send.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.4",
+      "lane": "Shazim",
+      "title": "Answer explicit questions before advancing",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "P0.3"
+      ],
+      "acceptance": "Product, access, platform and terminology questions receive an approved answer or an explicit human handoff before another funnel question. Preserve resume point.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.5",
+      "lane": "Shazim",
+      "title": "Treat clear interest as YES",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "P0.2",
+        "P0.4"
+      ],
+      "acceptance": "A prospect saying “100%, what is it?” gets an explanation and valid qualification without another permission prompt.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.9",
+      "lane": "Shazim",
+      "title": "Validate state transitions and reject stale writes",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "P0.3"
+      ],
+      "acceptance": "Allowed transitions and prerequisites are explicit. Qualified affordability proceeds to the link. Backward moves have a recorded reason. Out-of-order jobs cannot overwrite newer state.",
+      "evidence": "",
+      "note": "Legacy computeSystemStage owns the production cursor; FSM-only changes do not close this."
+    },
+    {
+      "id": "P0.6",
+      "lane": "Shazim",
+      "title": "Require purchase evidence before welcome or access",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [
+        "STEP14",
+        "P0.9"
+      ],
+      "acceptance": "“Got it,” “I’m in,” “send it” and product questions do not trigger purchase welcome. Explicit purchase evidence is recorded; access entitlement requires backend verification.",
+      "evidence": "",
+      "note": "Tega approves product copy and facts."
+    },
+    {
+      "id": "P0.7",
+      "lane": "Shazim",
+      "title": "Use approved resource IDs and correct links",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [
+        "P0.4"
+      ],
+      "acceptance": "The free YouTube resource and paid Session Playbook use their approved URLs. Labels match resources; each send records resource, request, result and recipient.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.8",
+      "lane": "Shazim",
+      "title": "Resend requested resources exactly once",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [
+        "P0.7"
+      ],
+      "acceptance": "“Send it again” resends the intended resource once. Ambiguous requests clarify. Redelivery of the same inbound event cannot duplicate the resend.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P0.11",
+      "lane": "Shazim",
+      "title": "Ship owner review and resume on a phone",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0"
+      ],
+      "acceptance": "Durable NEEDS_STEERING hold and one inbox item show draft, reason and context. Owner can approve, edit, guide, keep paused or resume without a draft. Stale and duplicate actions are safe. Both declared holds and exhaustion enter review; phone test passes unaided.",
+      "evidence": "",
+      "note": "Preserve Junior Narandan, user_7_eham, padihcee, kemical12_music, israelalge3 and sumit_thakre156 as before-state evidence."
+    },
+    {
+      "id": "OBS",
+      "lane": "Shazim",
+      "title": "Prove accepted inbound outcomes and alerts",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0",
+        "P0.1",
+        "P0.12"
+      ],
+      "acceptance": "Monitoring covers the full interval and older conversations, separates IG/FB, ties each inbound to a job and outbound or hold, and alerts on actionable age/failure thresholds. Test restarts, timeout, rejection and exhaustion.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "E2E-FB",
+      "lane": "Shazim",
+      "title": "Prove real Facebook lead and continuation",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "P0.2",
+        "P0.9"
+      ],
+      "acceptance": "A real Facebook DM opens the 24-hour window; new and continuing turns reach one conversation, select the correct script step, deliver once through Meta, and store the Meta message ID. Save job/trace IDs and before/after state.",
+      "evidence": "",
+      "note": "Wait for Shazim's live message before starting a production send test."
+    },
+    {
+      "id": "E2E-IG",
+      "lane": "Shazim",
+      "title": "Prove real Instagram lead and continuation",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "P0.1",
+        "P0.2",
+        "P0.9"
+      ],
+      "acceptance": "A real Instagram DM opens the 24-hour window; opener provenance, first reply, next script step and continuing turn are correlated to one conversation and delivered once with Meta message IDs.",
+      "evidence": "",
+      "note": "Wait for Shazim's live message. Do not duplicate a natural inbound with a synthetic webhook."
+    },
+    {
+      "id": "ARCH",
+      "lane": "Shazim",
+      "title": "Write architecture and release evidence handoff",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "OBS"
+      ],
+      "acceptance": "Document intake, identity, runtime cursor, generation, queue, egress, review/resume, flags, rollback, known gaps and exact evidence for each P0 item.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-COST",
+      "lane": "Tega",
+      "title": "Read-only AI cost dashboard",
+      "due": "2026-09-24",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "Cost per conversation uses real token records from the trace table.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-PRICE",
+      "lane": "Tega",
+      "title": "Set pricing and positioning",
+      "due": "2026-09-25",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "Setup fee, monthly fee, included volume, overage and one-line competitor answer are approved for Daniel.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-LEGAL",
+      "lane": "Tega",
+      "title": "Publish terms, privacy policy and client agreement",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "Privacy policy and terms are published; client agreement covers trial, data and support expectations.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-ONBOARD",
+      "lane": "Tega",
+      "title": "Prepare intake and onboarding run-book",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "Intake captures offer, audience, links, script goal, success event and payment system; run-book covers signed to live.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-DEMO",
+      "lane": "Tega",
+      "title": "Prove demo account on a second script",
+      "due": "2026-10-01",
+      "status": "todo",
+      "dependsOn": [
+        "P0.9"
+      ],
+      "acceptance": "A second account and script run without hardcoded Daniel-specific behavior.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "TEGA-SIGNOFF",
+      "lane": "Tega",
+      "title": "Verify and sign off every P0 gate",
+      "due": "2026-10-02",
+      "status": "todo",
+      "dependsOn": [
+        "ARCH",
+        "E2E-FB",
+        "E2E-IG",
+        "P0.11"
+      ],
+      "acceptance": "Every P0 item has a commit, production version, script version, test input, conversation, job/trace IDs, before/after state and observed result. No open launch blocker.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "DANIEL-GATE",
+      "lane": "Daniel",
+      "title": "Confirm conditions for client one",
+      "due": "2026-10-05",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF",
+        "TEGA-PRICE",
+        "TEGA-LEGAL",
+        "TEGA-ONBOARD"
+      ],
+      "acceptance": "Daniel receives approved price and positioning and confirms all P0 launch conditions before outreach.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "DANIEL-CLIENT",
+      "lane": "Daniel",
+      "title": "Approach and onboard first paying client",
+      "due": "2026-10-06",
+      "status": "todo",
+      "dependsOn": [
+        "DANIEL-GATE"
+      ],
+      "acceptance": "Client one is approached after sign-off, signs with a written success event, then completes two weeks of live volume before use as proof for client two.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P1-GOAL",
+      "lane": "After launch",
+      "title": "Acknowledge each lead's stated goal",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Step 5 responds to wealth, learning, family, freedom and consistency goals without a universal materialism comparison.",
+      "evidence": "",
+      "note": "Tega approves the tone."
+    },
+    {
+      "id": "P1-OBSTACLE",
+      "lane": "After launch",
+      "title": "Improve obstacle diagnosis",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Remove the blanket 99% claim. Recognize education, time and capital needs directly; urgency requires a real obstacle and goal.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P1-MEMORY",
+      "lane": "After launch",
+      "title": "Store structured facts with sources and confidence",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Location, experience, job, goal, obstacle, urgency, interest, affordability, resources and purchase evidence are stored with source messages and corrected when the lead updates them.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P1-MEDIA",
+      "lane": "After launch",
+      "title": "Handle images and attachments honestly",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Supported images are understood, or the assistant states the limitation and offers handoff. Chart questions do not silently resume discovery.",
+      "evidence": "",
+      "note": "Tega approves image behavior."
+    },
+    {
+      "id": "P1-RETURNING",
+      "lane": "After launch",
+      "title": "Resume returning conversations with context",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Prior conversation, customer status, resources and human interaction inform the next objective. The assistant acknowledges prior contact.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "P1-HUMAN",
+      "lane": "After launch",
+      "title": "Disclose automation and route human requests",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Bot accusations get an honest disclosure. Explicit requests for Dae or a person interrupt the script and route to human review.",
+      "evidence": "",
+      "note": "Tega approves copy."
+    },
+    {
+      "id": "P1-OFFER",
+      "lane": "After launch",
+      "title": "Explain the offer before discussing price",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Approved product inclusions, audience, access and post-purchase process answer “What do I get?” before affordability. Unknown facts escalate.",
+      "evidence": "",
+      "note": "Tega supplies approved facts."
+    },
+    {
+      "id": "P1-EDU",
+      "lane": "After launch",
+      "title": "Bound educational detours",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "A configurable limit lets the assistant answer briefly and then offer the right resource or resume qualification without forcing a pitch in non-sales or distress cases.",
+      "evidence": "",
+      "note": "Tega approves the limit."
+    },
+    {
+      "id": "P1-TONE",
+      "lane": "After launch",
+      "title": "Use gender-neutral language by default",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Templates and generated replies avoid default gendered address, never infer gender from names or photos, and honor explicit preferences.",
+      "evidence": "",
+      "note": "Tega approves tone."
+    },
+    {
+      "id": "P1-REPEAT",
+      "lane": "After launch",
+      "title": "Find why blocked verbatim repeats were generated",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "STEP14"
+      ],
+      "acceptance": "Trace the repeated candidate replies in syed_10129 and nonyethegreat and verify whether Step 14 repair stops generation of duplicate content.",
+      "evidence": "",
+      "note": ""
+    },
+    {
+      "id": "LATER-UI",
+      "lane": "After launch",
+      "title": "Refresh UI design tokens and app layout",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Tega and Daniel approve a scoped redesign after launch reliability is stable.",
+      "evidence": "",
+      "note": "Deferred by the launch plan."
+    },
+    {
+      "id": "LATER-BUILDER",
+      "lane": "After launch",
+      "title": "Derive script builder rules from Daniel's versions",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "Compare approved script revisions and turn recurring script choices into explicit builder rules.",
+      "evidence": "",
+      "note": "Deferred by the launch plan."
+    },
+    {
+      "id": "LATER-EVENTS",
+      "lane": "After launch",
+      "title": "Ingest completion, payment and booking events",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [
+        "TEGA-SIGNOFF"
+      ],
+      "acceptance": "External completion, payment and booking events update Convlo through authenticated, deduplicated webhooks with traceable provenance.",
+      "evidence": "",
+      "note": "Deferred by the launch plan."
+    }
+  ]
+}
