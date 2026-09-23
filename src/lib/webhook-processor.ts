@@ -55,6 +55,10 @@ import {
   SUGGESTION_ONLY_MARKER
 } from '@/lib/scheduled-reply-no-send';
 import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
+import {
   transitionLeadStage,
   isStageProgressionDisabledForLead,
   personaConfigDisablesStageProgression
@@ -396,7 +400,12 @@ async function escalateQualityGateFailure(params: {
   await prisma.scheduledReply
     .updateMany({
       where: { conversationId, status: 'PENDING' },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.QUALITY_GATE_HOLD,
+        terminalAt: escalatedAt,
+        lastError: QUALITY_GATE_FAILURE_REASON
+      })
     })
     .catch((err) =>
       console.error(
@@ -1459,7 +1468,11 @@ export async function processIncomingMessage(
         conversationId,
         status: { in: ['PENDING', 'PROCESSING'] }
       },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.CONVERSATION_RESET,
+        lastError: 'conversation reset by explicit operator debug command'
+      })
     });
     await prisma.conversation.update({
       where: { id: conversationId },
@@ -1865,7 +1878,11 @@ export async function processIncomingMessage(
         // is defense-in-depth.
         await prisma.scheduledReply.updateMany({
           where: { conversationId, status: 'PENDING' },
-          data: { status: 'CANCELLED' }
+          data: terminalScheduledReplyData({
+            status: 'CANCELLED',
+            reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.DISTRESS_HOLD,
+            lastError: 'distress signal requires human review'
+          })
         });
         // Escalate via unified dispatcher: writes the in-app SYSTEM
         // notification AND sends the URGENT email when the operator
@@ -2266,7 +2283,12 @@ export async function processIncomingMessage(
         // AI follow-up after the handoff has shipped.
         await prisma.scheduledReply.updateMany({
           where: { conversationId, status: 'PENDING' },
-          data: { status: 'CANCELLED' }
+          data: terminalScheduledReplyData({
+            status: 'CANCELLED',
+            reasonCode:
+              SCHEDULED_REPLY_TERMINAL_REASONS.SCHEDULING_CONFLICT_HOLD,
+            lastError: 'hard scheduling conflict requires human handling'
+          })
         });
         try {
           const { cancelAllPendingFollowUps } = await import(
@@ -2769,7 +2791,11 @@ export async function scheduleAIReply(
   if (!options?.skipDelayQueue) {
     const cancelled = await prisma.scheduledReply.updateMany({
       where: { conversationId, status: 'PENDING' },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_NEWER_INBOUND,
+        lastError: 'superseded by a newer inbound lead turn'
+      })
     });
     if (cancelled.count > 0) {
       log(
@@ -3767,7 +3793,8 @@ export async function scheduleAIReply(
       conversation.personaId,
       formattedMessages,
       leadContext,
-      scoringContext
+      scoringContext,
+      options?.scheduledReplyId
     )) as GenerateReplyResult;
     const _aiGenMs = Date.now() - _aiGenStart;
     log(
@@ -3985,11 +4012,11 @@ export async function scheduleAIReply(
     await prisma.scheduledReply
       .updateMany({
         where: { conversationId, status: { in: ['PENDING', 'PROCESSING'] } },
-        data: {
+        data: terminalScheduledReplyData({
           status: 'CANCELLED',
-          processedAt: new Date(),
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.SUGGESTION_ONLY,
           lastError: SUGGESTION_ONLY_MARKER
-        }
+        })
       })
       .catch(() => null);
     // AI is paused — broadcast as a suggestion only, don't save or send
@@ -4958,7 +4985,11 @@ async function sendAIReply(
       });
       await prisma.scheduledReply.updateMany({
         where: { conversationId, status: 'PENDING' },
-        data: { status: 'CANCELLED' }
+        data: terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.DISTRESS_HOLD,
+          lastError: 'layer-2 distress detection requires human review'
+        })
       });
       try {
         const { escalate } = await import('@/lib/escalation-dispatch');
@@ -5109,7 +5140,11 @@ async function sendAIReply(
       });
       await prisma.scheduledReply.updateMany({
         where: { conversationId, status: 'PENDING' },
-        data: { status: 'CANCELLED' }
+        data: terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.NO_TRAINING_HOLD,
+          lastError: 'persona has no approved training data'
+        })
       });
       try {
         const { escalate } = await import('@/lib/escalation-dispatch');
@@ -6363,7 +6398,11 @@ async function sendAIReply(
     );
     await prisma.scheduledReply.updateMany({
       where: { conversationId, status: 'PENDING' },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.TYPEFORM_SCREENED_OUT,
+        lastError: 'typeform completed without booking slot'
+      })
     });
     await prisma.scheduledMessage.updateMany({
       where: { conversationId, status: 'PENDING' },
@@ -6884,7 +6923,11 @@ export async function processAdminMessage(
         status: 'PENDING',
         createdAt: { lte: message.timestamp }
       },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.MANYCHAT_OUTBOUND_ECHO,
+        lastError: 'ManyChat outbound echo superseded pending AI work'
+      })
     });
     broadcastNewMessage(accountId, {
       id: message.id,
@@ -6933,7 +6976,11 @@ export async function processAdminMessage(
         status: 'PENDING',
         createdAt: { lte: message.timestamp }
       },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.MANYCHAT_OUTBOUND_ECHO,
+        lastError: 'provisional business outbound echo superseded AI work'
+      })
     });
     console.log(
       `[webhook-processor] Persisted provisional admin echo ${message.id}; source finalization due ${message.echoAttributionPendingUntil.toISOString()}`
@@ -7499,7 +7546,11 @@ async function handleTypeformFilledNoBookingScreenOut(
   try {
     await prisma.scheduledReply.updateMany({
       where: { conversationId: p.conversationId, status: 'PENDING' },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.TYPEFORM_SCREENED_OUT,
+        lastError: 'typeform completed without booking slot'
+      })
     });
     await prisma.scheduledMessage.updateMany({
       where: { conversationId: p.conversationId, status: 'PENDING' },

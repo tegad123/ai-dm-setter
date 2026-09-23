@@ -1,4 +1,8 @@
 import prisma from '@/lib/prisma';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 import { enqueueInboundMediaProcessing } from '@/lib/media-processing';
 import { broadcastNewMessage } from '@/lib/realtime';
 
@@ -171,7 +175,11 @@ export async function finalizeManyChatEchoAttribution(
         status: 'PENDING',
         ...(newerActivity ? { createdAt: { lte: message.timestamp } } : {})
       },
-      data: { status: 'CANCELLED' }
+      data: terminalScheduledReplyData({
+        status: 'CANCELLED',
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.MANYCHAT_OUTBOUND_ECHO,
+        lastError: 'ManyChat echo finalized before pending AI work'
+      })
     });
     await tx.scheduledMessage.updateMany({
       where: {

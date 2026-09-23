@@ -2849,7 +2849,8 @@ export async function generateReply(
   personaId: string,
   conversationHistory: ConversationMessage[],
   leadContext: LeadContext,
-  scoringContext?: string
+  scoringContext?: string,
+  scheduledReplyId?: string
 ): Promise<GenerateReplyResult> {
   // 0. Extract the last lead message for few-shot retrieval
   const lastLeadMsg = [...conversationHistory]
@@ -8510,6 +8511,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       void recordGenerationTurn({
         conversationId: convoId,
         accountId,
+        scheduledReplyId,
         leadMessageId: lastLeadMsg?.id ?? null,
         branchSelected: scriptStateSnapshot?.selectedBranchLabel ?? null,
         stepNumber: scriptStateSnapshot?.currentStep?.stepNumber ?? null,

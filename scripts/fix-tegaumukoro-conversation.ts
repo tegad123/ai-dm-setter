@@ -29,6 +29,10 @@
 
 import 'dotenv/config';
 import prisma from '../src/lib/prisma';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '../src/lib/scheduled-reply-outcome';
 import { scheduleAIReply } from '../src/lib/webhook-processor';
 
 async function main() {
@@ -132,7 +136,10 @@ async function main() {
       conversationId,
       status: { in: ['PENDING', 'PROCESSING'] }
     },
-    data: { status: 'CANCELLED' }
+    data: terminalScheduledReplyData({
+      status: 'CANCELLED',
+      reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.CONVERSATION_RESET
+    })
   });
   console.log('');
   console.log(

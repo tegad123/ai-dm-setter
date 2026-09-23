@@ -1,5 +1,9 @@
 import prisma from '@/lib/prisma';
 import { isQualityGateEscalationError } from '@/lib/quality-gate-escalation';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 
 export interface DeliveredAiMessageEvidence {
   id: string;
@@ -103,13 +107,13 @@ const defaultDependencies: ScheduledReplyDeliveryReconciliationDependencies = {
   async markScheduledReplySent({ scheduledReplyId, deliveredMessage, error }) {
     await prisma.scheduledReply.update({
       where: { id: scheduledReplyId },
-      data: {
+      data: terminalScheduledReplyData({
         status: 'SENT',
-        processedAt: new Date(),
+        reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.DELIVERED_BY_OTHER_PATH,
         lastError:
           `delivered by another path with Meta MID ${deliveredMessage.platformMessageId} ` +
           `before ${errorLabel(error)} was reconciled (no duplicate sent)`
-      }
+      })
     });
   },
 

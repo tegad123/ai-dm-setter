@@ -11,6 +11,10 @@ import {
   sanitizeDashCharacters
 } from '@/lib/voice-quality-gate';
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 
 export async function GET(
   request: NextRequest,
@@ -321,7 +325,12 @@ export async function POST(
       await prisma.scheduledReply
         .updateMany({
           where: { conversationId: id, status: 'PENDING' },
-          data: { status: 'CANCELLED' }
+          data: terminalScheduledReplyData({
+            status: 'CANCELLED',
+            reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.HUMAN_TAKEOVER,
+            terminalAt: now,
+            lastError: 'operator sent a manual reply before AI delivery'
+          })
         })
         .catch((err) => {
           console.error(

@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { z } from 'zod';
 import * as manyChatContact from '../../src/lib/manychat-contact';
 import * as manyChatEchoClassifier from '../../src/lib/manychat-echo-classifier';
+import * as scheduledReplyOutcome from '../../src/lib/scheduled-reply-outcome';
 
 type Row = Record<string, any>;
 
@@ -45,6 +46,8 @@ function load(path: string, prisma: Row) {
       if (name === '@/lib/manychat-contact') return manyChatContact;
       if (name === '@/lib/manychat-echo-classifier')
         return manyChatEchoClassifier;
+      if (name === '@/lib/scheduled-reply-outcome')
+        return scheduledReplyOutcome;
       throw new Error(`Unexpected dependency: ${name}`);
     }
   });

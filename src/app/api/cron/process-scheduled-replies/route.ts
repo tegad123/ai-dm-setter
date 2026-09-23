@@ -7,6 +7,12 @@ import {
 } from '@/lib/meta-delivery-errors';
 import { processScheduledReply } from '@/lib/webhook-processor';
 import { scheduledReplyTerminalNoSendOutcome } from '@/lib/scheduled-reply-no-send';
+import {
+  claimScheduledReply,
+  retryScheduledReplyData,
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 import { reconcileScheduledReplyAfterError } from '@/lib/scheduled-reply-delivery-reconciliation';
 import {
   FAILED_QUALITY_GATE_STATUS,
@@ -314,11 +320,15 @@ export async function GET(req: NextRequest) {
           attempts: { lt: SCHEDULED_REPLY_MAX_ATTEMPTS }
         },
         data: {
-          status: 'FAILED',
-          attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
-          processedAt: now,
-          lastError:
-            'stale: scheduled more than 24h ago, outside the messaging window — not deliverable'
+          ...terminalScheduledReplyData({
+            status: 'FAILED',
+            reasonCode:
+              SCHEDULED_REPLY_TERMINAL_REASONS.OUTSIDE_MESSAGING_WINDOW,
+            terminalAt: now,
+            attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+            lastError:
+              'stale: scheduled more than 24h ago, outside the messaging window — not deliverable'
+          })
         }
       });
       if (aged.count > 0) {
@@ -355,10 +365,14 @@ export async function GET(req: NextRequest) {
               .update({
                 where: { id: row.id },
                 data: {
-                  status: 'CANCELLED',
-                  processedAt: now,
-                  lastError:
-                    'reclaim: a newer PENDING reply already exists for this conversation'
+                  ...terminalScheduledReplyData({
+                    status: 'CANCELLED',
+                    reasonCode:
+                      SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_PENDING_REPLY,
+                    terminalAt: now,
+                    lastError:
+                      'reclaim: a newer PENDING reply already exists for this conversation'
+                  })
                 }
               })
               .catch(() => null);
@@ -420,7 +434,11 @@ export async function GET(req: NextRequest) {
     if (dupIdsToCancel.length > 0) {
       await prisma.scheduledReply.updateMany({
         where: { id: { in: dupIdsToCancel } },
-        data: { status: 'CANCELLED' }
+        data: terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_PENDING_REPLY,
+          lastError: 'duplicate queued reply for the same conversation'
+        })
       });
       console.log(
         `[cron] cancelled ${dupIdsToCancel.length} duplicate replies (same conversation already queued)`
@@ -428,16 +446,23 @@ export async function GET(req: NextRequest) {
     }
 
     // Mark as PROCESSING (optimistic lock to prevent double-pickup)
-    const ids = pendingReplies.map((r) => r.id);
-    await prisma.scheduledReply.updateMany({
-      where: { id: { in: ids }, status: { in: ['PENDING', 'FAILED'] } },
-      data: { status: 'PROCESSING' }
-    });
+    const claimedReplies: typeof pendingReplies = [];
+    for (const reply of pendingReplies) {
+      if (
+        await claimScheduledReply({
+          id: reply.id,
+          conversationId: reply.conversationId,
+          fromStatuses: ['PENDING', 'FAILED']
+        })
+      ) {
+        claimedReplies.push(reply);
+      }
+    }
 
     let sent = 0;
     let failed = 0;
 
-    for (const reply of pendingReplies) {
+    for (const reply of claimedReplies) {
       console.log(
         `[cron] processing reply ${reply.id} convo=${reply.conversationId}`
       );
@@ -500,10 +525,13 @@ export async function GET(req: NextRequest) {
             await prisma.scheduledReply.update({
               where: { id: reply.id },
               data: {
-                status: 'SENT',
-                processedAt: new Date(),
-                lastError:
-                  'delivered by another path before this row ran (no duplicate sent)'
+                ...terminalScheduledReplyData({
+                  status: 'SENT',
+                  reasonCode:
+                    SCHEDULED_REPLY_TERMINAL_REASONS.DELIVERED_BY_OTHER_PATH,
+                  lastError:
+                    'delivered by another path before this row ran (no duplicate sent)'
+                })
               }
             });
             sent++;
@@ -531,10 +559,12 @@ export async function GET(req: NextRequest) {
             await prisma.scheduledReply.update({
               where: { id: reply.id },
               data: {
-                status: 'CANCELLED',
-                processedAt: new Date(),
-                lastError:
-                  'suppressed: every bubble repeated already-delivered content (VERBATIM_REPEAT guard)'
+                ...terminalScheduledReplyData({
+                  status: 'CANCELLED',
+                  reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.VERBATIM_REPEAT,
+                  lastError:
+                    'suppressed: every bubble repeated already-delivered content (VERBATIM_REPEAT guard)'
+                })
               }
             });
             continue;
@@ -547,7 +577,11 @@ export async function GET(req: NextRequest) {
 
         await prisma.scheduledReply.update({
           where: { id: reply.id },
-          data: { status: 'SENT', processedAt: new Date(), lastError: null }
+          data: terminalScheduledReplyData({
+            status: 'SENT',
+            reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.DELIVERED,
+            lastError: null
+          })
         });
         sent++;
       } catch (err) {
@@ -581,19 +615,22 @@ export async function GET(req: NextRequest) {
           await prisma.scheduledReply.update({
             where: { id: reply.id },
             data: {
-              status: FAILED_QUALITY_GATE_STATUS,
+              ...terminalScheduledReplyData({
+                status: FAILED_QUALITY_GATE_STATUS,
+                reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.QUALITY_GATE_HOLD,
+                terminalAt: failedAt,
+                attempts: reply.attempts + 1,
+                scheduledFor: failedAt,
+                lastError: err.message.slice(0, 2000),
+                ...(err.generatedResult
+                  ? { generatedResult: err.generatedResult }
+                  : {})
+              })
               // 2026-07-27 (Tega): record the REAL attempt count — the
               // terminal status already prevents retries (the picker only
               // claims PENDING rows). Stamping MAX here made a first-attempt
               // gate failure read as "5 attempts" in Needs Attention, which
               // misread as minutes of silent retries.
-              attempts: reply.attempts + 1,
-              scheduledFor: failedAt,
-              processedAt: failedAt,
-              lastError: err.message.slice(0, 2000),
-              ...(err.generatedResult
-                ? { generatedResult: err.generatedResult }
-                : {})
             }
           });
           await prisma.conversation
@@ -638,17 +675,25 @@ export async function GET(req: NextRequest) {
           await prisma.scheduledReply.update({
             where: { id: reply.id },
             data: {
-              status: 'FAILED',
+              ...terminalScheduledReplyData({
+                status: 'FAILED',
+                reasonCode:
+                  errorInfo.permanent || !errorInfo.retryable
+                    ? SCHEDULED_REPLY_TERMINAL_REASONS.META_PERMANENT_FAILURE
+                    : SCHEDULED_REPLY_TERMINAL_REASONS.RETRY_EXHAUSTED,
+                terminalAt: failedAt,
+                attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
+                scheduledFor: failedAt,
+                lastError: errorMessage,
+                ...(storedGeneratedResult
+                  ? { generatedResult: storedGeneratedResult }
+                  : {})
+              })
               // Terminal means terminal: the picker claims FAILED rows with
               // attempts < MAX, so a non-retryable failure stamped with its
               // real attempt count was re-picked every tick until it hit
               // MAX — five alerts for one failure (2026-09-14). Stamp MAX so
               // it is never re-picked; lastError keeps the real story.
-              attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
-              scheduledFor: failedAt,
-              processedAt: failedAt,
-              lastError: errorMessage,
-              ...generatedResultUpdate
             }
           });
           await alertTerminalScheduledReplyFailure({
@@ -668,11 +713,11 @@ export async function GET(req: NextRequest) {
           await prisma.scheduledReply.update({
             where: { id: reply.id },
             data: {
-              status: 'PENDING',
-              attempts: failedAttempt,
-              scheduledFor: retryAt,
-              processedAt: null,
-              lastError: errorMessage,
+              ...retryScheduledReplyData({
+                attempts: failedAttempt,
+                scheduledFor: retryAt,
+                lastError: errorMessage
+              }),
               ...generatedResultUpdate
             }
           });

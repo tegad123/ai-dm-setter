@@ -9,6 +9,12 @@ import {
   isScheduledReplySuperseded
 } from '@/lib/webhook-processor';
 import { scheduledReplyTerminalNoSendOutcome } from '@/lib/scheduled-reply-no-send';
+import {
+  claimScheduledReply,
+  retryScheduledReplyData,
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 import { notifyPlatformNotConnected } from '@/lib/platform-not-connected-alert';
 import {
   FAILED_QUALITY_GATE_STATUS,
@@ -606,7 +612,12 @@ async function processInstagramEvents(payload: any): Promise<void> {
                 conversationId: targetConvoId,
                 status: 'PENDING'
               },
-              data: { status: 'CANCELLED' }
+              data: terminalScheduledReplyData({
+                status: 'CANCELLED',
+                reasonCode:
+                  SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_PENDING_REPLY,
+                lastError: 'replaced by inline scheduled reply'
+              })
             });
             const scheduledReply = await prisma.scheduledReply.create({
               data: {
@@ -646,24 +657,22 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   await prisma.scheduledReply
                     .update({
                       where: { id: scheduledReply.id },
-                      data: {
+                      data: terminalScheduledReplyData({
                         status: 'CANCELLED',
-                        processedAt: new Date(),
+                        reasonCode:
+                          SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_NEWER_INBOUND,
                         lastError:
                           'Superseded by newer lead message (pre-claim)'
-                      }
+                      })
                     })
                     .catch(() => null);
                   return;
                 }
-                const claimed = await prisma.scheduledReply.updateMany({
-                  where: {
-                    id: scheduledReply.id,
-                    status: 'PENDING'
-                  },
-                  data: { status: 'PROCESSING' }
+                const claimed = await claimScheduledReply({
+                  id: scheduledReply.id,
+                  conversationId: targetConvoId
                 });
-                if (claimed.count === 0) {
+                if (!claimed) {
                   console.log(
                     `[instagram-webhook] inline reply skipped — scheduledReply ${scheduledReply.id} already claimed`
                   );
@@ -684,12 +693,13 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   await prisma.scheduledReply
                     .update({
                       where: { id: scheduledReply.id },
-                      data: {
+                      data: terminalScheduledReplyData({
                         status: 'CANCELLED',
-                        processedAt: new Date(),
+                        reasonCode:
+                          SCHEDULED_REPLY_TERMINAL_REASONS.SUPERSEDED_NEWER_INBOUND,
                         lastError:
                           'Superseded by newer lead message (post-claim)'
-                      }
+                      })
                     })
                     .catch(() => null);
                   return;
@@ -706,11 +716,11 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   );
                   await prisma.scheduledReply.update({
                     where: { id: scheduledReply.id },
-                    data: {
+                    data: terminalScheduledReplyData({
                       status: 'CANCELLED',
-                      processedAt: new Date(),
+                      reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.AI_PAUSED,
                       lastError: 'AI inactive at inline delivery time'
-                    }
+                    })
                   });
                   return;
                 }
@@ -743,11 +753,11 @@ async function processInstagramEvents(payload: any): Promise<void> {
                 }
                 await prisma.scheduledReply.update({
                   where: { id: scheduledReply.id },
-                  data: {
+                  data: terminalScheduledReplyData({
                     status: 'SENT',
-                    processedAt: new Date(),
+                    reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.DELIVERED,
                     lastError: null
-                  }
+                  })
                 });
                 console.log(
                   `[instagram-webhook] inline reply delivered for ${targetConvoId}`
@@ -763,16 +773,17 @@ async function processInstagramEvents(payload: any): Promise<void> {
                   await prisma.scheduledReply
                     .update({
                       where: { id: scheduledReply.id },
-                      data: {
+                      data: terminalScheduledReplyData({
                         status: FAILED_QUALITY_GATE_STATUS,
+                        reasonCode:
+                          SCHEDULED_REPLY_TERMINAL_REASONS.QUALITY_GATE_HOLD,
                         attempts: SCHEDULED_REPLY_MAX_ATTEMPTS,
                         scheduledFor: new Date(),
-                        processedAt: new Date(),
                         lastError: afterErr.message.slice(0, 2000),
                         ...(afterErr.generatedResult
                           ? { generatedResult: afterErr.generatedResult }
                           : {})
-                      }
+                      })
                     })
                     .catch(() => null);
                   return;
@@ -783,11 +794,10 @@ async function processInstagramEvents(payload: any): Promise<void> {
                       id: scheduledReply.id,
                       status: 'PROCESSING'
                     },
-                    data: {
-                      status: 'PENDING',
+                    data: retryScheduledReplyData({
                       scheduledFor: new Date(),
                       lastError: details.error.slice(0, 2000)
-                    }
+                    })
                   })
                   .catch(() => null);
               }

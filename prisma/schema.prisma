@@ -1680,20 +1680,32 @@ model ManyChatHandoffReceipt {
 }
 
 model ScheduledReply {
-  id              String               @id @default(cuid())
-  conversationId  String
-  accountId       String
-  scheduledFor    DateTime // Absolute time when reply should be sent
-  status          ScheduledReplyStatus @default(PENDING)
-  attempts        Int                  @default(0)
-  lastError       String?              @db.Text
-  messageType     String? // 'text' | 'voice_note' | null (null = legacy pre-generation)
-  generatedResult Json? // Pre-generated AI result (for VN-aware path)
-  createdAt       DateTime             @default(now())
-  processedAt     DateTime?
+  id                 String               @id @default(cuid())
+  conversationId     String
+  accountId          String
+  scheduledFor       DateTime // Absolute time when reply should be sent
+  status             ScheduledReplyStatus @default(PENDING)
+  attempts           Int                  @default(0)
+  lastError          String?              @db.Text
+  messageType        String? // 'text' | 'voice_note' | null (null = legacy pre-generation)
+  generatedResult    Json? // Pre-generated AI result (for VN-aware path)
+  // Machine-readable terminal truth. `lastError` remains human-readable detail;
+  // every SENT/CANCELLED/FAILED/FAILED_QUALITY_GATE transition must set these.
+  terminalReasonCode String?
+  terminalAt         DateTime?
+  // State observed when a worker successfully claimed this row. Kept as JSON
+  // so claim evidence can grow without repeatedly migrating this hot table.
+  claimSnapshot      Json?
+  // Direct causal link to the generation trace produced for this queue row.
+  generationTraceId  String?              @unique
+  createdAt          DateTime             @default(now())
+  processedAt        DateTime?
+
+  generationTrace GenerationTurnTrace? @relation(fields: [generationTraceId], references: [id], onDelete: SetNull)
 
   @@index([status, scheduledFor])
   @@index([conversationId, status])
+  @@index([terminalReasonCode, terminalAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -1948,6 +1960,8 @@ model GenerationTurnTrace {
   replyPreview   String?
   qualityHardFails Json?
   createdAt      DateTime @default(now())
+
+  scheduledReply ScheduledReply?
 
   @@index([conversationId, createdAt])
   @@index([accountId, createdAt])

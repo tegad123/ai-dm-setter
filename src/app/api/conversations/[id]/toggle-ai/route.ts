@@ -3,6 +3,10 @@ import { requireAuth, AuthError, isPlatformOperator } from '@/lib/auth-guard';
 import { handleAIHandoff } from '@/lib/webhook-processor';
 import { broadcastAIStatusChange } from '@/lib/realtime';
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 
 /**
  * POST /api/conversations/:id/toggle-ai
@@ -121,7 +125,11 @@ export async function POST(
       // Cancel any pending scheduled replies
       await prisma.scheduledReply.updateMany({
         where: { conversationId: id, status: 'PENDING' },
-        data: { status: 'CANCELLED' }
+        data: terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.AI_PAUSED,
+          lastError: 'AI paused by operator'
+        })
       });
 
       broadcastAIStatusChange(conversation.lead.accountId, {

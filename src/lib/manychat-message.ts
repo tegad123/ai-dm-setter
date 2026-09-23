@@ -1,4 +1,8 @@
 import prisma from '@/lib/prisma';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 import { z } from 'zod';
 import { resolveAndUpgradeInstagramNumericId } from '@/lib/manychat-resolve-ig-id';
 import { resolveManyChatContactIdentity } from '@/lib/manychat-contact';
@@ -324,7 +328,12 @@ export async function processManyChatMessage(params: {
           status: 'PENDING',
           createdAt: { lte: reportedAt }
         },
-        data: { status: 'CANCELLED' }
+        data: terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.MANYCHAT_OUTBOUND_ECHO,
+          terminalAt: reportedAt,
+          lastError: 'ManyChat outbound delivery superseded pending AI work'
+        })
       });
       await tx.conversation.updateMany({
         where: {

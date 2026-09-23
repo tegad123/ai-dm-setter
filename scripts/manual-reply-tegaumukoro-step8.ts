@@ -36,6 +36,10 @@
 import 'dotenv/config';
 import prisma from '../src/lib/prisma';
 import { sendDM as sendInstagramDM } from '../src/lib/instagram';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '../src/lib/scheduled-reply-outcome';
 
 const STEP_8_REPLY =
   'gotchu bro — and are you thinking of replacing your job completely with trading or just generating some extra income on the side?';
@@ -136,7 +140,10 @@ async function main() {
       conversationId,
       status: { in: ['PENDING', 'PROCESSING'] }
     },
-    data: { status: 'CANCELLED' }
+    data: terminalScheduledReplyData({
+      status: 'CANCELLED',
+      reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.HUMAN_TAKEOVER
+    })
   });
   console.log(
     `Cancelled ${cancelled.count} pending/processing ScheduledReply row(s).`

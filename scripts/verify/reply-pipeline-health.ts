@@ -81,6 +81,7 @@ async function retry<T>(fn: () => Promise<T>, t = 12): Promise<T> {
         attempts: true,
         scheduledFor: true,
         processedAt: true,
+        terminalReasonCode: true,
         lastError: true
       }
     })
@@ -96,6 +97,8 @@ async function retry<T>(fn: () => Promise<T>, t = 12): Promise<T> {
       r.scheduledFor.toISOString().slice(11, 19),
       'proc',
       r.processedAt?.toISOString().slice(11, 19) ?? '-',
+      'reason',
+      r.terminalReasonCode ?? '-',
       r.lastError ? '| ' + r.lastError.slice(0, 80) : ''
     )
   );

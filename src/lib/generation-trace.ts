@@ -32,6 +32,7 @@ export interface ResolvedVariableTrace {
 export interface GenerationTraceInput {
   conversationId: string;
   accountId: string;
+  scheduledReplyId?: string | null;
   leadMessageId?: string | null;
   branchSelected?: string | null;
   stepNumber?: number | null;
@@ -56,7 +57,7 @@ export interface GenerationTraceInput {
  */
 export async function recordGenerationTurn(
   input: GenerationTraceInput
-): Promise<void> {
+): Promise<string | null> {
   try {
     const rawPrompt = input.promptSent ?? null;
     const promptChars = rawPrompt ? rawPrompt.length : null;
@@ -69,7 +70,7 @@ export async function recordGenerationTurn(
         rawPrompt.slice(rawPrompt.length - half);
     }
 
-    await prisma.generationTurnTrace.create({
+    const trace = await prisma.generationTurnTrace.create({
       data: {
         conversationId: input.conversationId,
         accountId: input.accountId,
@@ -88,8 +89,16 @@ export async function recordGenerationTurn(
         qualityHardFails: (input.qualityHardFails ?? undefined) as never
       }
     });
+    if (input.scheduledReplyId) {
+      await prisma.scheduledReply.updateMany({
+        where: { id: input.scheduledReplyId },
+        data: { generationTraceId: trace.id }
+      });
+    }
+    return trace.id;
   } catch (err) {
     // Non-fatal by contract.
     console.error('[generation-trace] write failed (non-fatal):', err);
+    return null;
   }
 }

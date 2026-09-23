@@ -97,6 +97,10 @@ async function retry<T>(fn: () => Promise<T>, t = 12): Promise<T> {
         attempts: true,
         scheduledFor: true,
         processedAt: true,
+        terminalReasonCode: true,
+        terminalAt: true,
+        claimSnapshot: true,
+        generationTraceId: true,
         lastError: true
       }
     })
@@ -104,7 +108,7 @@ async function retry<T>(fn: () => Promise<T>, t = 12): Promise<T> {
   console.log('\nSCHEDULED REPLIES');
   sr.forEach((s) =>
     console.log(
-      `  ${s.status.padEnd(9)} att=${s.attempts} for=${s.scheduledFor.toISOString().slice(5, 19)} proc=${s.processedAt?.toISOString().slice(5, 19) ?? '-'}${s.lastError ? ' | ' + s.lastError.slice(0, 120) : ''}`
+      `  ${s.status.padEnd(19)} att=${s.attempts} for=${s.scheduledFor.toISOString().slice(5, 19)} proc=${s.processedAt?.toISOString().slice(5, 19) ?? '-'} reason=${s.terminalReasonCode ?? '-'} claim=${s.claimSnapshot ? 'yes' : 'no'} trace=${s.generationTraceId ?? '-'}${s.lastError ? ' | ' + s.lastError.slice(0, 120) : ''}`
     )
   );
   const tr = await retry(() =>

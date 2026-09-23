@@ -1,4 +1,8 @@
 import prisma from '@/lib/prisma';
+import {
+  SCHEDULED_REPLY_TERMINAL_REASONS,
+  terminalScheduledReplyData
+} from '@/lib/scheduled-reply-outcome';
 
 export const SUGGESTION_ONLY_MARKER =
   'suggestion_only: generated, not auto-sent (auto-send off for this conversation)';
@@ -18,6 +22,7 @@ export interface ScheduledReplyNoSendOutcome {
 export interface ScheduledReplyTerminalRow {
   status: string;
   lastError: string | null;
+  terminalReasonCode?: string | null;
 }
 
 export function isScheduledReplyNoSendForLeadTurn(
@@ -54,9 +59,12 @@ export function buildNearDuplicateSuppressionMutation(
         }
       },
       data: {
-        status: 'CANCELLED' as const,
-        processedAt,
-        lastError: marker
+        ...terminalScheduledReplyData({
+          status: 'CANCELLED',
+          reasonCode: SCHEDULED_REPLY_TERMINAL_REASONS.NEAR_DUPLICATE_ANSWERED,
+          terminalAt: processedAt,
+          lastError: marker
+        })
       }
     },
     conversation: {
@@ -103,6 +111,25 @@ export function parseScheduledReplyNoSendOutcome(
 ): ScheduledReplyNoSendOutcome | null {
   if (row?.status !== 'CANCELLED') return null;
 
+  if (
+    row.terminalReasonCode === SCHEDULED_REPLY_TERMINAL_REASONS.SUGGESTION_ONLY
+  ) {
+    return {
+      reason: 'suggestion_only',
+      marker: row.lastError ?? SUGGESTION_ONLY_MARKER
+    };
+  }
+  if (
+    row.terminalReasonCode ===
+    SCHEDULED_REPLY_TERMINAL_REASONS.NEAR_DUPLICATE_ANSWERED
+  ) {
+    return {
+      reason: 'near_duplicate_answered',
+      marker: row.lastError ?? NEAR_DUPLICATE_ANSWERED_MARKER
+    };
+  }
+
+  // Backward compatibility for rows written before structured outcomes.
   if ((row.lastError ?? '').startsWith('suggestion_only:')) {
     return { reason: 'suggestion_only', marker: row.lastError! };
   }
@@ -118,7 +145,7 @@ export async function scheduledReplyTerminalNoSendOutcome(
   try {
     const row = await prisma.scheduledReply.findUnique({
       where: { id: scheduledReplyId },
-      select: { status: true, lastError: true }
+      select: { status: true, lastError: true, terminalReasonCode: true }
     });
     return parseScheduledReplyNoSendOutcome(row);
   } catch {

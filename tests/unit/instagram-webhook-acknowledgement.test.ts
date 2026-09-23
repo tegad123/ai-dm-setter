@@ -156,6 +156,27 @@ function harness(
     '@/lib/prisma': { default: prisma },
     '@/lib/webhook-processor': processor,
     '@/lib/platform-not-connected-alert': {},
+    '@/lib/scheduled-reply-no-send': {
+      scheduledReplyTerminalNoSendOutcome: async () => null
+    },
+    '@/lib/scheduled-reply-outcome': {
+      claimScheduledReply: async () => true,
+      retryScheduledReplyData: (input: Record<string, unknown>) => ({
+        status: 'PENDING',
+        terminalReasonCode: null,
+        terminalAt: null,
+        processedAt: null,
+        ...input
+      }),
+      SCHEDULED_REPLY_TERMINAL_REASONS: {
+        SUPERSEDED_PENDING_REPLY: 'SUPERSEDED_PENDING_REPLY',
+        SUPERSEDED_NEWER_INBOUND: 'SUPERSEDED_NEWER_INBOUND',
+        AI_PAUSED: 'AI_PAUSED',
+        DELIVERED: 'DELIVERED',
+        QUALITY_GATE_HOLD: 'QUALITY_GATE_HOLD'
+      },
+      terminalScheduledReplyData: (input: Record<string, unknown>) => input
+    },
     '@/lib/quality-gate-escalation': {},
     '@/lib/meta-delivery-errors': {},
     '@/lib/instagram-ownership-events': ownershipModule(prisma)

@@ -32,6 +32,17 @@ describe('scheduled reply intentional no-send outcomes', () => {
     );
   });
 
+  it('prefers structured reason codes while retaining legacy marker support', () => {
+    assert.deepEqual(
+      parseScheduledReplyNoSendOutcome({
+        status: 'CANCELLED',
+        terminalReasonCode: 'SUGGESTION_ONLY',
+        lastError: null
+      }),
+      { reason: 'suggestion_only', marker: SUGGESTION_ONLY_MARKER }
+    );
+  });
+
   it('does not excuse a failed or still-processing job with marker-like text', () => {
     for (const status of ['FAILED', 'PROCESSING', 'PENDING', 'SENT']) {
       assert.equal(
@@ -95,6 +106,8 @@ describe('scheduled reply intentional no-send outcomes', () => {
           },
           data: {
             status: 'CANCELLED',
+            terminalReasonCode: 'NEAR_DUPLICATE_ANSWERED',
+            terminalAt: processedAt,
             processedAt,
             lastError: NEAR_DUPLICATE_ANSWERED_MARKER
           }
