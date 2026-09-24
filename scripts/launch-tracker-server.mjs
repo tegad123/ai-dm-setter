@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const trackerPath = resolve(root, 'docs/launch-tracker.json');
 const port = Number(process.env.LAUNCH_TRACKER_PORT || 8765);
-const allowedStatuses = new Set(['todo', 'in_progress', 'blocked', 'verified']);
+const allowedStatuses = new Set(['todo', 'in_progress', 'blocked', 'verified', 'retired']);
 let writeQueue = Promise.resolve();
 
 async function readTracker() {
@@ -77,7 +77,7 @@ const page = String.raw`<!doctype html>
     select{padding:8px 10px}.toolbar select{min-width:160px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));gap:14px}
     .card{background:#172236;border:1px solid #2a3b55;border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px}
-    .card.verified{border-color:#28684c}.card.blocked{border-color:#a06d39}.card.in_progress{border-color:#4e6fb9}
+    .card.verified{border-color:#28684c}.card.blocked{border-color:#a06d39}.card.in_progress{border-color:#4e6fb9}.card.retired{border-color:#6b7280;opacity:.72}
     .top{display:flex;justify-content:space-between;align-items:start;gap:8px}.id{font-size:.8rem;font-weight:700;letter-spacing:.05em;color:#9fc2ff}
     .due{font-size:.8rem;color:#a9b8cc;white-space:nowrap}.title{font-size:1.13rem;font-weight:700;line-height:1.25;margin:4px 0 0}
     .acceptance{font-size:.9rem;line-height:1.48;color:#c6d2e5}.dependencies{font-size:.8rem;color:#a9b8cc}
@@ -95,14 +95,14 @@ const page = String.raw`<!doctype html>
     <div id="stats" class="stats"></div>
     <div class="toolbar">
       <select id="lane" aria-label="Filter by owner"><option value="all">All owners</option><option>Shazim</option><option>Tega</option><option>Daniel</option><option>After launch</option></select>
-      <select id="state" aria-label="Filter by status"><option value="all">All statuses</option><option value="todo">To do</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="verified">Verified</option></select>
+      <select id="state" aria-label="Filter by status"><option value="all">All statuses</option><option value="todo">To do</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="verified">Verified</option><option value="retired">Retired for v3</option></select>
     </div>
     <div id="tasks"></div>
     <p class="foot">Only mark a task verified after the commit, production version, script version, conversation/job/trace and observed result are recorded where applicable. The six preserved review conversations stay untouched.</p>
   </main>
   <script>
     let tracker;
-    const statuses = [['todo','To do'],['in_progress','In progress'],['blocked','Blocked'],['verified','Verified']];
+    const statuses = [['todo','To do'],['in_progress','In progress'],['blocked','Blocked'],['verified','Verified'],['retired','Retired for v3']];
     const make = (tag, className, value) => { const el=document.createElement(tag); if(className) el.className=className; if(value!==undefined) el.textContent=value; return el; };
     async function load() { const response=await fetch('/api/tracker'); if(!response.ok) throw new Error('Tracker unavailable'); tracker=await response.json(); render(); }
     function render() {
@@ -122,7 +122,7 @@ const page = String.raw`<!doctype html>
     }
     function renderTask(task) {
       const card=make('article','card '+task.status); const top=make('div','top');
-      const heading=make('div'); heading.append(make('div','id',task.id),make('div','title',task.title));
+      const heading=make('div'); heading.append(make('div','id',task.id+(task.priority ? ' · '+task.priority : '')),make('div','title',task.title));
       top.append(heading,make('div','due',task.due)); card.append(top,make('div','acceptance',task.acceptance));
       if (task.dependsOn.length) card.append(make('div','dependencies','Depends on: '+task.dependsOn.join(', ')));
       const evidenceLabel=make('label','', 'Closure evidence'); const evidence=make('textarea'); evidence.value=task.evidence; evidenceLabel.append(evidence);

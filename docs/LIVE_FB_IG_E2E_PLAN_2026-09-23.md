@@ -2,6 +2,12 @@
 
 Date: 2026-09-23. This plan is paired with `docs/launch-tracker.json`.
 
+24 September update: Daniel's active script is Final Discord Funnel,
+`cmueln1ns0001l3040lwx9oaf` (seven steps). Capture its exact updatedAt or
+immutable version before every acceptance run. Exercise A1/A2/A3/A5 on a
+fresh sender before treating normal continuation as proof the new script is
+ready. A reused test chat can show a defect but cannot close a fix.
+
 ## Start condition
 
 Shazim sends a real message from his Facebook and Instagram accounts to

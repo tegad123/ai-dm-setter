@@ -1,6 +1,6 @@
 {
   "title": "Convlo P0 launch tracker",
-  "updatedAt": "2026-09-23T06:59:28.230Z",
+  "updatedAt": "2026-09-24T09:45:50.652Z",
   "milestones": [
     {
       "date": "2026-09-25",
@@ -71,6 +71,171 @@
       "note": ""
     },
     {
+      "id": "A1",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Ship fixed script messages verbatim",
+      "due": "2026-09-25",
+      "status": "in_progress",
+      "dependsOn": [],
+      "acceptance": "Literal [MSG] actions are inserted from the selected branch without LLM generation. Only placeholder actions use generation. Wrong-branch copy never ships; test v3 Real goal and Vague branches.",
+      "evidence": "",
+      "note": "Code-path triage started 24 September: ai-engine.ts invokes generation first and uses literal MSG injection only after gate failure. Next: implement action assembly and focused tests, then fresh-lead proof."
+    },
+    {
+      "id": "A2",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Hold on substantive hard fails; audit removed bubbles",
+      "due": "2026-09-25",
+      "status": "todo",
+      "dependsOn": [
+        "A1"
+      ],
+      "acceptance": "A failed fixed-text or off-script gate cannot strip and ship an incomplete turn. It creates one review item with exact draft and reason; any intentionally removed bubble is traced with reason.",
+      "evidence": "",
+      "note": "Current ai-engine.ts has best-effort and deterministic-injection exhaustion paths; review precedence with A1. Build the immediate durable hold with the current review flag; full phone recovery is tracked separately under P0.11."
+    },
+    {
+      "id": "A3",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Make one inbound produce one delivered reply operation",
+      "due": "2026-09-25",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0"
+      ],
+      "acceptance": "Two generation attempts for one native inbound share one operation; at most one generation is delivered, partial parts resume in script order, and the Discord link cannot arrive out of order.",
+      "evidence": "",
+      "note": "Reproduce v3 turns 21-22 and test concurrent workers plus uncertain Meta results. Do not replay real leads."
+    },
+    {
+      "id": "A5",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Advance only from delivered scripted actions",
+      "due": "2026-09-26",
+      "status": "todo",
+      "dependsOn": [
+        "A2",
+        "A3",
+        "P0.9"
+      ],
+      "acceptance": "When the ask was delivered, Step 5 completes despite a draft gate failure; the next Yes is evaluated against the waitlist and Step 6. A stripped or failed unsent action cannot count as delivered.",
+      "evidence": "",
+      "note": "Reproduce v3 turns 23-24 with persisted outbound parts and cursor snapshots."
+    },
+    {
+      "id": "A4",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Give discarded generations a replacement reason",
+      "due": "2026-09-28",
+      "status": "todo",
+      "dependsOn": [
+        "P0.0",
+        "A3"
+      ],
+      "acceptance": "Every generated-but-unsent attempt records a coded discard cause and link to replacing generation or terminal hold; v3 turn 25 shape is explainable.",
+      "evidence": "",
+      "note": "Trace v3 turns 25-26."
+    },
+    {
+      "id": "A6",
+      "priority": "P0",
+      "lane": "Shazim",
+      "title": "Bound and reconcile legacy and FSM cursors",
+      "due": "2026-09-28",
+      "status": "todo",
+      "dependsOn": [
+        "P0.9"
+      ],
+      "acceptance": "Identify the authoritative production position keeper. Neither persisted nor shadow cursor may advance beyond Step 7; discrepancies have a reason and cannot route a send.",
+      "evidence": "",
+      "note": "v3 trace reported fsmCursor last=8>9 on a seven-step script. Do not assume the FSM drives production."
+    },
+    {
+      "id": "A7",
+      "priority": "P1",
+      "lane": "Shazim",
+      "title": "Preserve every Runtime Judgment instruction during parse",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "Upload and Paste Text retain every [JUDGE] line and full sentence in source order as actions; truncation warns; current parse banner warnings are accurate. Test both [JUDGE] shapes.",
+      "evidence": "",
+      "note": "Active v3 had judgment rules restored by hand; parser bug remains for later uploads."
+    },
+    {
+      "id": "A8",
+      "priority": "P1",
+      "lane": "Shazim",
+      "title": "Exempt scripted verbatim emoji from cosmetic ban",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "A1"
+      ],
+      "acceptance": "An emoji present in approved literal script copy is preserved; newly generated banned emoji still follows policy without consuming unnecessary retries.",
+      "evidence": "",
+      "note": "v3 turns 16, 21-22."
+    },
+    {
+      "id": "A9",
+      "priority": "P1",
+      "lane": "Shazim",
+      "title": "Recognize Ask Question by action type",
+      "due": "2026-09-29",
+      "status": "todo",
+      "dependsOn": [
+        "A1"
+      ],
+      "acceptance": "The exact action text lmk once you are in counts as the required ask despite no question mark; do not let a missed ask advance the lead to the VIP pitch.",
+      "evidence": "",
+      "note": "v3 turns 21-23."
+    },
+    {
+      "id": "A10",
+      "priority": "P1",
+      "lane": "Shazim",
+      "title": "Emit stage labels from the active script",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [
+        "A5"
+      ],
+      "acceptance": "v3 Step 5/6 never emits obsolete booking or timezone stages. Trace stage and cursor match the active script.",
+      "evidence": "",
+      "note": "Old BOOKING_TZ_ASK/BOOKING_LINK_DROP labels appeared in v3 traces."
+    },
+    {
+      "id": "A11",
+      "priority": "P1",
+      "lane": "Shazim",
+      "title": "Make reset clear or disclose captured variables",
+      "due": "2026-09-30",
+      "status": "todo",
+      "dependsOn": [
+        "A6"
+      ],
+      "acceptance": "A reset removes captured variables and fsmCursor, or the UI explicitly states and shows retained state; fresh-test turn 1 records variables.",
+      "evidence": "",
+      "note": "Used lead mr.cocoabutter retained fallbackContentUrl_delivered across resets; use a new account for closure."
+    },
+    {
+      "id": "A12",
+      "priority": "P2",
+      "lane": "After launch",
+      "title": "Omit name when only a username is known",
+      "due": "After launch",
+      "status": "todo",
+      "dependsOn": [],
+      "acceptance": "If no verified first name is available, {{name}} resolves to empty rather than a username fragment.",
+      "evidence": "",
+      "note": "v3 mr.cocoabutter became mr."
+    },
+    {
       "id": "P0.12",
       "lane": "Shazim",
       "title": "Explain five silent delivery losses",
@@ -87,14 +252,12 @@
       "id": "STEP14",
       "lane": "Shazim",
       "title": "Find Step 14 exhaustion and repeat root cause",
-      "due": "2026-09-28",
-      "status": "todo",
-      "dependsOn": [
-        "P0.0"
-      ],
+      "due": "Retired for v3",
+      "status": "retired",
+      "dependsOn": [],
       "acceptance": "Check whether d3b4321 covers Steps 10–14; trace syed_10129, lukooyafarid and padihcee through branch, prompt, quality gate, cursor and delivery. Prove the fix on the active script.",
       "evidence": "",
-      "note": "Coordinate with purchase gate P0.6; do not assume purchase copy is the only cause."
+      "note": "Retired from active v3 release gate: seven-step script has no Step 14. Historical exhaustion remains relevant to P0.12/P0.11 root-cause review."
     },
     {
       "id": "P0.2",
@@ -105,7 +268,7 @@
       "dependsOn": [
         "P0.1"
       ],
-      "acceptance": "Partnership, seller, support, hardship and other non-sales turns exit discovery by branch decision. Unclear greetings prompt clarification.",
+      "acceptance": "On active v3 Step 1, Solicitation / non-lead sends nothing; prospect intent routes to the correct branch. Record script ID/version and native delivery outcome.",
       "evidence": "",
       "note": ""
     },
@@ -145,7 +308,7 @@
         "P0.2",
         "P0.4"
       ],
-      "acceptance": "A prospect saying “100%, what is it?” gets an explanation and valid qualification without another permission prompt.",
+      "acceptance": "On active v3 Step 4, clear YES bypasses Hesitant. Answer accompanying questions and continue to the correct Step 5 objective without asking permission again.",
       "evidence": "",
       "note": ""
     },
@@ -158,23 +321,20 @@
       "dependsOn": [
         "P0.3"
       ],
-      "acceptance": "Allowed transitions and prerequisites are explicit. Qualified affordability proceeds to the link. Backward moves have a recorded reason. Out-of-order jobs cannot overwrite newer state.",
+      "acceptance": "On active v3, Step 4 to Step 5 to Step 6 follows delivered actions, not draft gate output. Cursor is bounded by seven steps; stale writes cannot overwrite newer progress.",
       "evidence": "",
-      "note": "Legacy computeSystemStage owns the production cursor; FSM-only changes do not close this."
+      "note": "A5/A6 are concrete live evidence. Legacy computeSystemStage owns routing unless FIX_D_ROUTING_AUTHORITATIVE names this account; verify the production flag before editing either tracker."
     },
     {
       "id": "P0.6",
       "lane": "Shazim",
       "title": "Require purchase evidence before welcome or access",
-      "due": "2026-09-30",
-      "status": "todo",
-      "dependsOn": [
-        "STEP14",
-        "P0.9"
-      ],
+      "due": "Retired for v3",
+      "status": "retired",
+      "dependsOn": [],
       "acceptance": "“Got it,” “I’m in,” “send it” and product questions do not trigger purchase welcome. Explicit purchase evidence is recorded; access entitlement requires backend verification.",
       "evidence": "",
-      "note": "Tega approves product copy and facts."
+      "note": "Retired for active v3: no purchase step. Preserve old incident as historical evidence, but exclude from current launch gate."
     },
     {
       "id": "P0.7",
@@ -185,7 +345,7 @@
       "dependsOn": [
         "P0.4"
       ],
-      "acceptance": "The free YouTube resource and paid Session Playbook use their approved URLs. Labels match resources; each send records resource, request, result and recipient.",
+      "acceptance": "Approved resource IDs resolve to the Discord, Typeform waitlist and Apex/Lucid affiliate URLs. The application inserts exact approved URLs; the model cannot invent or swap them. Record send result and recipient.",
       "evidence": "",
       "note": ""
     },
@@ -198,7 +358,7 @@
       "dependsOn": [
         "P0.7"
       ],
-      "acceptance": "“Send it again” resends the intended resource once. Ambiguous requests clarify. Redelivery of the same inbound event cannot duplicate the resend.",
+      "acceptance": "Resend the Discord link only when the lead cannot find it or it failed, once per new eligible inbound. Do not resend after a duplicate webhook event.",
       "evidence": "",
       "note": ""
     },
@@ -209,11 +369,12 @@
       "due": "2026-10-01",
       "status": "todo",
       "dependsOn": [
-        "P0.0"
+        "P0.0",
+        "A2"
       ],
       "acceptance": "Durable NEEDS_STEERING hold and one inbox item show draft, reason and context. Owner can approve, edit, guide, keep paused or resume without a draft. Stale and duplicate actions are safe. Both declared holds and exhaustion enter review; phone test passes unaided.",
       "evidence": "",
-      "note": "Preserve Junior Narandan, user_7_eham, padihcee, kemical12_music, israelalge3 and sumit_thakre156 as before-state evidence."
+      "note": "Preserve Junior Narandan, user_7_eham, padihcee, kemical12_music, israelalge3 and sumit_thakre156 as before-state evidence. A2 hard fail must enter this hold; never strip a fixed [MSG] or placeholder and call the turn successful."
     },
     {
       "id": "OBS",
@@ -224,7 +385,8 @@
       "dependsOn": [
         "P0.0",
         "P0.1",
-        "P0.12"
+        "P0.12",
+        "A4"
       ],
       "acceptance": "Monitoring covers the full interval and older conversations, separates IG/FB, ties each inbound to a job and outbound or hold, and alerts on actionable age/failure thresholds. Test restarts, timeout, rejection and exhaustion.",
       "evidence": "",
@@ -238,9 +400,14 @@
       "status": "todo",
       "dependsOn": [
         "P0.2",
-        "P0.9"
+        "P0.9",
+        "A1",
+        "A2",
+        "A3",
+        "A5",
+        "A6"
       ],
-      "acceptance": "A real Facebook DM opens the 24-hour window; new and continuing turns reach one conversation, select the correct script step, deliver once through Meta, and store the Meta message ID. Save job/trace IDs and before/after state.",
+      "acceptance": "On a brand-new sender and a continuing real Facebook DM, verify active v3 script ID/version, native inbound once, correct step and branch, one delivered reply, stored Meta ID and no reset. Preserve conversation state.",
       "evidence": "",
       "note": "Wait for Shazim's live message before starting a production send test."
     },
@@ -253,9 +420,14 @@
       "dependsOn": [
         "P0.1",
         "P0.2",
-        "P0.9"
+        "P0.9",
+        "A1",
+        "A2",
+        "A3",
+        "A5",
+        "A6"
       ],
-      "acceptance": "A real Instagram DM opens the 24-hour window; opener provenance, first reply, next script step and continuing turn are correlated to one conversation and delivered once with Meta message IDs.",
+      "acceptance": "On a brand-new sender and a continuing real Instagram DM, verify active v3 script ID/version, opener provenance, correct step and branch, one delivered reply, Meta ID and no reset. Preserve conversation state.",
       "evidence": "",
       "note": "Wait for Shazim's live message. Do not duplicate a natural inbound with a synthetic webhook."
     },
@@ -339,7 +511,13 @@
         "ARCH",
         "E2E-FB",
         "E2E-IG",
-        "P0.11"
+        "P0.11",
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6"
       ],
       "acceptance": "Every P0 item has a commit, production version, script version, test input, conversation, job/trace IDs, before/after state and observed result. No open launch blocker.",
       "evidence": "",
@@ -378,27 +556,23 @@
       "id": "P1-GOAL",
       "lane": "After launch",
       "title": "Acknowledge each lead's stated goal",
-      "due": "After launch",
-      "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "due": "Retired for v3",
+      "status": "retired",
+      "dependsOn": [],
       "acceptance": "Step 5 responds to wealth, learning, family, freedom and consistency goals without a universal materialism comparison.",
       "evidence": "",
-      "note": "Tega approves the tone."
+      "note": "Retired as a script-specific check: old goal step no longer exists in v3."
     },
     {
       "id": "P1-OBSTACLE",
       "lane": "After launch",
       "title": "Improve obstacle diagnosis",
-      "due": "After launch",
-      "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "due": "Retired for v3",
+      "status": "retired",
+      "dependsOn": [],
       "acceptance": "Remove the blanket 99% claim. Recognize education, time and capital needs directly; urgency requires a real obstacle and goal.",
       "evidence": "",
-      "note": ""
+      "note": "Retired as a script-specific check: old obstacle step no longer exists in v3."
     },
     {
       "id": "P1-MEMORY",
@@ -461,7 +635,7 @@
       "dependsOn": [
         "TEGA-SIGNOFF"
       ],
-      "acceptance": "Approved product inclusions, audience, access and post-purchase process answer “What do I get?” before affordability. Unknown facts escalate.",
+      "acceptance": "On active v3 Step 6, an approved answer to price questions precedes any further pitch; unknown facts go to review.",
       "evidence": "",
       "note": "Tega supplies approved facts."
     },
@@ -498,9 +672,9 @@
       "due": "After launch",
       "status": "todo",
       "dependsOn": [
-        "STEP14"
+        "A3"
       ],
-      "acceptance": "Trace the repeated candidate replies in syed_10129 and nonyethegreat and verify whether Step 14 repair stops generation of duplicate content.",
+      "acceptance": "Trace v3 turns 21-22 and historical repeat cases. A single inbound produces at most one delivered generation; retries cannot append duplicate parts.",
       "evidence": "",
       "note": ""
     },
@@ -543,5 +717,13 @@
       "evidence": "",
       "note": "Deferred by the launch plan."
     }
-  ]
+  ],
+  "activeScript": {
+    "id": "cmueln1ns0001l3040lwx9oaf",
+    "name": "Final Discord Funnel",
+    "steps": 7,
+    "actionsShownInEditor": 117,
+    "version": "unverified; capture updatedAt/trace version before acceptance",
+    "verifiedVia": "Production Sales Scripts editor, 2026-09-24"
+  }
 }
