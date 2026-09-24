@@ -80,7 +80,7 @@
       "dependsOn": [],
       "acceptance": "Literal [MSG] actions are inserted from the selected branch without LLM generation. Only placeholder actions use generation. Wrong-branch copy never ships; test v3 Real goal and Vague branches.",
       "evidence": "",
-      "note": "Code-path triage started 24 September: ai-engine.ts invokes generation first and uses literal MSG injection only after gate failure. Next: implement action assembly and focused tests, then fresh-lead proof."
+      "note": "24 September: selected branches with only literal pre-WAIT messages/questions now assemble outbound copy from script actions before quality checks; model draft text is discarded. Placeholder, link and ambiguous branches still use the adaptive path. Local focused tests and TypeScript pass; full unit suite remains 890/900 with the known 10 failures. A1 is open until mixed placeholder paths and fresh v3 Real goal/Vague inbox proof are complete."
     },
     {
       "id": "A2",

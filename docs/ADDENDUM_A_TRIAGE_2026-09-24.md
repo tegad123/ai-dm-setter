@@ -59,6 +59,17 @@ they can trigger retries and progression errors on the active script.
 | A11 P1 reset variables | New. Reset route intends to clear captured data except two system flags; reported surviving `fallbackContentUrl_delivered` needs a trace, not an assumed patch. | Record variables before and immediately after reset and at fresh turn 1. |
 | A12 P2 username as name | New. | No verified first name means omit `{{name}}`. |
 
+### A1 implementation checkpoint, 24 September
+
+For a selected branch whose current-turn deliverables are fixed text only,
+the outbound messages now come from the branch's ordered actions before the
+quality checks. The model draft is discarded for those messages, including a
+draft that borrowed a sibling branch's copy. Pure routing branches do not
+inherit shared step copy. Branches with a runtime placeholder or link still
+use the existing adaptive path; that path needs action-slot assembly before
+A1 can close across the whole script. No production conversation or native
+inbox delivery has been verified for this change yet.
+
 ## Questions before changing runtime code
 
 1. Confirm the active v3 script version and whether `FIX_D_ROUTING_AUTHORITATIVE`

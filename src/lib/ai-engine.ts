@@ -5,6 +5,7 @@ import {
   isManyChatFirstReplyTurn
 } from '@/lib/manychat-first-reply-routing';
 import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
+import { buildSelectedBranchLiteralReply } from '@/lib/selected-branch-literal-reply';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
@@ -5087,6 +5088,38 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         break;
       }
       throw err;
+    }
+
+    // A1: the model may classify the turn and provide metadata, but it must
+    // not author fixed [MSG] copy. For a selected branch whose pre-WAIT
+    // deliverables are all literal, construct the outbound in script order.
+    // In particular, discard a draft that borrowed a sibling branch's text.
+    // Placeholder and link branches stay on the adaptive path until their
+    // generated slots can be mapped to action IDs without ambiguity.
+    if (selectedCurrentJudgeBranch && !smartModeActive && !activeInterrupt) {
+      const literalReply = buildSelectedBranchLiteralReply({
+        directActions: scriptStateSnapshot?.currentStep?.actions ?? [],
+        branchActions: selectedCurrentJudgeBranch.actions,
+        resolve: (content) =>
+          applyResolvedScriptVariables(content, gateVariableResolutionMap, {
+            includeFallback: false
+          }) ?? content,
+        alreadyDelivered: (content) =>
+          requiredMsgAlreadyDeliveredInHistory(
+            content,
+            priorAIMessages.map((message) => message.content)
+          )
+      });
+      if (literalReply) {
+        parsed = {
+          ...parsed,
+          message: literalReply[0],
+          messages: literalReply,
+          parserMetadataLeak: detectMetadataLeak(literalReply.join('\n')).leak
+            ? parsed.parserMetadataLeak
+            : null
+        };
+      }
     }
 
     // BUG-02: the generation hit the output-token ceiling — the text was cut
