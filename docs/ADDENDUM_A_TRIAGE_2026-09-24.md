@@ -61,14 +61,26 @@ they can trigger retries and progression errors on the active script.
 
 ### A1 implementation checkpoint, 24 September
 
-For a selected branch whose current-turn deliverables are fixed text only,
-the outbound messages now come from the branch's ordered actions before the
-quality checks. The model draft is discarded for those messages, including a
-draft that borrowed a sibling branch's copy. Pure routing branches do not
-inherit shared step copy. Branches with a runtime placeholder or link still
-use the existing adaptive path; that path needs action-slot assembly before
-A1 can close across the whole script. No production conversation or native
-inbox delivery has been verified for this change yet.
+For a selected branch, outbound messages now come from its ordered actions
+before quality checks. Fixed messages, questions, and configured links are
+inserted from the script. Runtime placeholder messages are generated in a
+separate short call; a mismatch, wrong market role, or later mutation holds the
+turn for review rather than sending incomplete or wrong-branch copy. Pure
+routing branches do not inherit shared step copy. An unresolved link still
+uses the existing link guard and operator alert path.
+
+25 September local proof, using an active-script clone with Meta sends stubbed:
+Instagram conversation `cmugndxoz00g49kbykkntp40f` and Facebook conversation
+`cmugnjw2800js9kby743dw3lh` each completed Step 1 Futures, Step 2 Live
+account, Step 3 Real goal, and Step 4 YES. Step 3 delivered the contextual goal
+acknowledgment followed by the exact selected-branch fixed message and ask.
+Step 4 delivered one Discord URL between the fixed opener and generated
+Futures-role instruction, then the exact fixed follow-up and ask. The separate
+Instagram Vague case `cmugm5096004u9kbyo1ha2yey` delivered its three fixed
+bubbles without Real goal copy. The local driver now waits for the send cycle
+to finish before advancing. These are local dry-run message IDs, not native
+Meta delivery. A1 remains open for a production fresh-lead inbox trace on both
+platforms and Tega's review; no client production settings or rows were changed.
 
 ## Questions before changing runtime code
 

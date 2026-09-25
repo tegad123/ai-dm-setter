@@ -80,7 +80,7 @@
       "dependsOn": [],
       "acceptance": "Literal [MSG] actions are inserted from the selected branch without LLM generation. Only placeholder actions use generation. Wrong-branch copy never ships; test v3 Real goal and Vague branches.",
       "evidence": "",
-      "note": "24 September: selected branches with only literal pre-WAIT messages/questions now assemble outbound copy from script actions before quality checks; model draft text is discarded. Placeholder, link and ambiguous branches still use the adaptive path. Local focused tests and TypeScript pass; full unit suite remains 890/900 with the known 10 failures. A1 is open until mixed placeholder paths and fresh v3 Real goal/Vague inbox proof are complete."
+      "note": "25 September: selected branches assemble fixed messages, asks and configured links in script order; isolated generation fills runtime message slots, with wrong-role and post-gate mutation holds. Local IG cmugndxoz00g49kbykkntp40f and FB cmugnjw2800js9kby743dw3lh completed Futures -> Live account -> Real goal -> YES/Discord; IG Vague cmugm5096004u9kbyo1ha2yey delivered its three fixed bubbles. Meta sends were stubbed. A1 remains open until fresh real IG and FB inbox delivery, version and script snapshot, and Tega review are recorded."
     },
     {
       "id": "A2",

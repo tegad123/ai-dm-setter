@@ -24,8 +24,8 @@ const IG_BUSINESS_ID = process.env.IG_BUSINESS_ID ?? '17841445698923309';
 const SENDER_IGSID = process.env.SENDER_IGSID ?? '1474847644133208';
 const BASE = process.env.WEBHOOK_BASE ?? 'http://localhost:3000';
 const WAIT_S = Number(process.env.WAIT_S ?? 120);
-// Seconds of silence after the last bubble before the group counts as done
-// (the drip delay between bubbles can be 10-20s).
+// Seconds of silence after the last bubble, once the conversation has also
+// finished sending. Drip delays can exceed this value between bubbles.
 const SETTLE_S = Number(process.env.SETTLE_S ?? 25);
 const SECRET = process.env.META_APP_SECRET;
 
@@ -94,23 +94,54 @@ async function main() {
   let lastCount = 0;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
+    const activeConversation = await prisma.conversation.findFirst({
+      where: { lead: { platformUserId: senderId } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, awaitingAiResponse: true, awaitingHumanReview: true }
+    });
+    if (!activeConversation) continue;
     const fresh = await prisma.message.findMany({
-      where: { sender: 'AI', id: { notIn: Array.from(before.ids) } },
+      where: {
+        sender: 'AI',
+        conversationId: activeConversation.id,
+        id: { notIn: Array.from(before.ids) }
+      },
       orderBy: { timestamp: 'asc' },
       select: { content: true, platformMessageId: true, timestamp: true }
     });
     if (fresh.length > 0 && fresh.length === lastCount) {
       // no new bubble for SETTLE_S after the last one → the group is done
-      if (settledAt && Date.now() - settledAt > SETTLE_S * 1000) break;
+      if (
+        settledAt &&
+        Date.now() - settledAt > SETTLE_S * 1000 &&
+        activeConversation?.awaitingAiResponse === false
+      ) {
+        break;
+      }
       if (!settledAt) settledAt = Date.now();
     } else {
       settledAt = null;
       lastCount = fresh.length;
     }
+    if (
+      activeConversation?.awaitingHumanReview &&
+      activeConversation.awaitingAiResponse === false
+    ) {
+      break;
+    }
   }
 
+  const finalConversation = await prisma.conversation.findFirst({
+    where: { lead: { platformUserId: senderId } },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true }
+  });
   const fresh = await prisma.message.findMany({
-    where: { sender: 'AI', id: { notIn: Array.from(before.ids) } },
+    where: {
+      sender: 'AI',
+      conversationId: finalConversation?.id,
+      id: { notIn: Array.from(before.ids) }
+    },
     orderBy: { timestamp: 'asc' },
     select: { content: true, platformMessageId: true, timestamp: true }
   });
@@ -187,6 +218,12 @@ async function main() {
     console.log(
       `    routing step=${r.stepNumber} legacy=${JSON.stringify(r.legacyBranchLabel)} fsm=${JSON.stringify(r.fsmBranchLabel)} (${(r.fsmReason ?? '').slice(0, 60)}) advance ${r.legacyNextStep ?? '-'}→${r.fsmNextStep ?? '-'}`
     );
+  if (conv?.awaitingHumanReview || conv?.awaitingAiResponse) {
+    console.error(
+      `    flow stopped: review=${conv?.awaitingHumanReview} awaitingAi=${conv?.awaitingAiResponse}`
+    );
+    process.exitCode = 2;
+  }
   await prisma.$disconnect();
 }
 

@@ -5,7 +5,10 @@ import {
   isManyChatFirstReplyTurn
 } from '@/lib/manychat-first-reply-routing';
 import { matchScriptedCopy } from '@/lib/state-machine/copy-match';
-import { buildSelectedBranchLiteralReply } from '@/lib/selected-branch-literal-reply';
+import {
+  assembleMixedSelectedBranchReply,
+  buildSelectedBranchLiteralReply
+} from '@/lib/selected-branch-literal-reply';
 import { safeOpenAI, safeAnthropic } from '@/lib/ai-error-handler';
 import { Prisma } from '@prisma/client';
 import { buildDynamicSystemPrompt, getPromptVersion } from '@/lib/ai-prompts';
@@ -5012,8 +5015,136 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     }
   }
 
+  const storedBranchHistory = (
+    scriptStateSnapshot?.capturedDataPoints as Record<string, unknown> | null
+  )?.branchHistory;
+  const branchHistoryForRole = Array.isArray(storedBranchHistory)
+    ? (storedBranchHistory as Array<{
+        stepNumber?: number;
+        selectedBranchLabel?: string;
+      }>)
+    : [];
+  const firstMarketBranch = branchHistoryForRole.find(
+    (event) =>
+      event.stepNumber === 1 && typeof event.selectedBranchLabel === 'string'
+  )?.selectedBranchLabel;
+  const requiredScriptRole: 'Futures' | 'Forex' | null =
+    firstMarketBranch === 'Futures'
+      ? 'Futures'
+      : firstMarketBranch === 'Forex / Gold'
+        ? 'Forex'
+        : null;
+  const selectedMixedPlan =
+    selectedCurrentJudgeBranch && !smartModeActive && !activeInterrupt
+      ? assembleMixedSelectedBranchReply({
+          directActions: scriptStateSnapshot?.currentStep?.actions ?? [],
+          branchActions: selectedCurrentJudgeBranch.actions,
+          allBranchActions: (
+            scriptStateSnapshot?.currentStep?.branches ?? []
+          ).map((branch) => branch.actions),
+          generatedMessages: [],
+          requiredRole: requiredScriptRole,
+          alreadyDelivered: (content) =>
+            requiredMsgAlreadyDeliveredInHistory(
+              content,
+              priorAIMessages.map((message) => message.content)
+            )
+        })
+      : null;
+  const placeholderOnlyDirective =
+    selectedMixedPlan?.kind === 'missing_placeholder'
+      ? `\n\nSELECTED-BRANCH ACTION SLOTS: The selected branch is "${selectedCurrentJudgeBranch?.branchLabel}". In messages[], write exactly ${selectedMixedPlan.expected} short contextual non-question bubble(s), one for each {{placeholder}} send_message action in order. Do not write fixed [MSG], [ASK], links, or copy from another branch. The application inserts fixed text from the script. Keep the other JSON fields as usual.`
+      : '';
+  if (placeholderOnlyDirective) {
+    systemPromptForLLM = baseSystemPrompt + placeholderOnlyDirective;
+  }
+  // The full conversation prompt can cause the model to emit only the fixed
+  // actions and omit the runtime slot entirely. Generate those slots in a
+  // small, isolated call; the main call still supplies routing metadata, but
+  // it cannot author or replace fixed branch copy.
+  const placeholderActions =
+    selectedMixedPlan?.kind === 'missing_placeholder' &&
+    selectedCurrentJudgeBranch
+      ? selectedCurrentJudgeBranch.actions
+          .slice(
+            0,
+            selectedCurrentJudgeBranch.actions.findIndex(
+              (action) => action.actionType === 'wait_for_response'
+            ) >= 0
+              ? selectedCurrentJudgeBranch.actions.findIndex(
+                  (action) => action.actionType === 'wait_for_response'
+                )
+              : undefined
+          )
+          .filter(
+            (action) =>
+              action.actionType === 'send_message' &&
+              /^\s*\{\{[^}]+\}\}\s*$/.test(action.content ?? '')
+          )
+          .map((action) => action.content!.trim().slice(2, -2))
+      : [];
+  const generateIsolatedPlaceholders = async (
+    attempt: number
+  ): Promise<string[] | null> => {
+    if (!selectedCurrentJudgeBranch || placeholderActions.length === 0) {
+      return null;
+    }
+    try {
+      const slotResult = await callLLM(
+        provider,
+        apiKey,
+        model,
+        `You write only the generated message slots of a trading DM script. Return valid JSON with one key, "messages", containing exactly ${placeholderActions.length} strings. Write one short, natural, contextual bubble for each instruction in order. React to the lead's LATEST answer using their own words. Do not recap a market, account type, or other fact already acknowledged in an earlier AI message. Do not include a question, link, fixed script text, or another branch's wording. Do not output the instructions or braces.${requiredScriptRole ? ` The lead's confirmed market branch is ${requiredScriptRole}. If an instruction mentions roles, say ${requiredScriptRole} role and do not say ${requiredScriptRole === 'Futures' ? 'Forex' : 'Futures'} role.` : ''}${attempt > 0 ? ` The previous slot failed: ${qualityGateHardFails.join(' | ').slice(0, 300)}. Write a materially different bubble.` : ''} Slot instructions: ${JSON.stringify(placeholderActions)}`,
+        [
+          {
+            role: 'user',
+            content: `Recent lead messages: ${JSON.stringify(recentLeadMessages)}. Latest message: ${JSON.stringify(lastLeadMsg?.content ?? '')}. Already sent AI bubbles: ${JSON.stringify(priorAIMessages.slice(-6).map((message) => message.content))}`
+          }
+        ],
+        fallback
+      );
+      usageTotal = addUsage(usageTotal, slotResult.usage);
+      const slotDraft = parseAIResponse(slotResult.text).messages;
+      const checkedSlots = assembleMixedSelectedBranchReply({
+        directActions: scriptStateSnapshot?.currentStep?.actions ?? [],
+        branchActions: selectedCurrentJudgeBranch.actions,
+        allBranchActions: (
+          scriptStateSnapshot?.currentStep?.branches ?? []
+        ).map((branch) => branch.actions),
+        generatedMessages: slotDraft,
+        requiredRole: requiredScriptRole,
+        alreadyDelivered: (content) =>
+          requiredMsgAlreadyDeliveredInHistory(
+            content,
+            priorAIMessages.map((message) => message.content)
+          )
+      });
+      await writeGenerateReplyTrace({
+        scriptPlaceholderIsolation: checkedSlots.kind,
+        scriptPlaceholderIsolationCount: slotDraft.length
+      });
+      if (checkedSlots.kind === 'assembled') {
+        return slotDraft;
+      }
+    } catch (error) {
+      await writeGenerateReplyTrace({
+        scriptPlaceholderIsolation: 'error',
+        scriptPlaceholderIsolationError:
+          error instanceof Error ? error.message.slice(0, 160) : 'unknown'
+      });
+    }
+    return null;
+  };
+  let isolatedPlaceholderMessages: string[] | null = null;
+  let scriptAssemblyExpectedFixed: string[] = [];
+  let scriptAssemblyExpectedBubbles: string[] = [];
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    scriptAssemblyExpectedFixed = [];
+    scriptAssemblyExpectedBubbles = [];
     qualityGateAttempts = attempt + 1;
+    if (placeholderActions.length > 0) {
+      isolatedPlaceholderMessages = await generateIsolatedPlaceholders(attempt);
+    }
     const sanitizedPrompt = resolveOrStripTemplateVariables(
       systemPromptForLLM,
       {
@@ -5111,6 +5242,8 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           )
       });
       if (literalReply) {
+        scriptAssemblyExpectedBubbles = literalReply;
+        scriptAssemblyExpectedFixed = literalReply;
         parsed = {
           ...parsed,
           message: literalReply[0],
@@ -5119,6 +5252,66 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
             ? parsed.parserMetadataLeak
             : null
         };
+      } else {
+        const mixedReply = assembleMixedSelectedBranchReply({
+          directActions: scriptStateSnapshot?.currentStep?.actions ?? [],
+          branchActions: selectedCurrentJudgeBranch.actions,
+          allBranchActions: (
+            scriptStateSnapshot?.currentStep?.branches ?? []
+          ).map((branch) => branch.actions),
+          generatedMessages: isolatedPlaceholderMessages ?? parsed.messages,
+          requiredRole: requiredScriptRole,
+          alreadyDelivered: (content) =>
+            requiredMsgAlreadyDeliveredInHistory(
+              content,
+              priorAIMessages.map((message) => message.content)
+            )
+        });
+        if (mixedReply.kind === 'assembled') {
+          scriptAssemblyExpectedFixed = mixedReply.fixedMessages;
+          scriptAssemblyExpectedBubbles = mixedReply.bubbles;
+          parsed = {
+            ...parsed,
+            message: mixedReply.bubbles[0] ?? '',
+            messages: mixedReply.bubbles,
+            parserMetadataLeak: detectMetadataLeak(
+              mixedReply.bubbles.join('\n')
+            ).leak
+              ? parsed.parserMetadataLeak
+              : null
+          };
+          await writeGenerateReplyTrace({
+            scriptActionAssembly: 'mixed_selected_branch',
+            scriptActionBranch: selectedCurrentJudgeBranch.branchLabel,
+            scriptActionFixedCount: mixedReply.fixedMessages.length,
+            scriptActionPlaceholderCount:
+              mixedReply.bubbles.length - mixedReply.fixedMessages.length
+          });
+        } else if (mixedReply.kind === 'missing_placeholder') {
+          await writeGenerateReplyTrace({
+            scriptActionAssembly: 'placeholder_slot_mismatch',
+            scriptActionBranch: selectedCurrentJudgeBranch.branchLabel,
+            scriptActionPlaceholderExpected: mixedReply.expected,
+            scriptActionPlaceholderFound: mixedReply.found,
+            scriptActionDraftPreview: parsed.messages.join(' | ').slice(0, 300)
+          });
+          if (attempt < MAX_RETRIES) {
+            systemPromptForLLM =
+              baseSystemPrompt +
+              placeholderOnlyDirective +
+              "\n\nRETRY: The previous response did not fill the placeholder action slots. Reference the lead's latest answer. Output only those placeholder bubbles in messages[].";
+            continue;
+          }
+          qualityGateTerminalFailure = true;
+          qualityGateFailureReason = 'script_placeholder_slot_mismatch';
+          qualityGateHardFails = [
+            `selected_branch_placeholder_missing:${selectedCurrentJudgeBranch.branchLabel}:expected=${mixedReply.expected}:found=${mixedReply.found}`
+          ];
+          parsed.escalateToHuman = true;
+          parsed.messages = [];
+          parsed.message = '';
+          break;
+        }
       }
     }
 
@@ -5262,17 +5455,31 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
       }
     }
 
-    const judgeBranchViolation = await detectJudgeBranchViolation({
-      step: scriptStateSnapshot?.currentStep ?? null,
-      latestLeadMessage: lastLeadMsg?.content ?? null,
-      generatedMessages:
-        parsed.messages && parsed.messages.length > 0
-          ? parsed.messages
-          : [parsed.message],
-      accountId,
-      cache: judgeBranchSelectionCache,
-      variableResolutionMap: gateVariableResolutionMap
-    });
+    // Action assembly already used the classifier's selected branch and
+    // validated its fixed copy. The older judge check compares a link's
+    // display label ("Discord") as if it were outbound text, then replaces
+    // an ordered URL reply with that label. Keep the judge check for adaptive
+    // replies only; assembled replies still pass through quality and the
+    // final exact-order guard below.
+    const judgeBranchViolation: JudgeBranchViolation =
+      scriptAssemblyExpectedBubbles.length > 0
+        ? {
+            blocked: false,
+            reason: null,
+            matchedBranchLabel: selectedCurrentJudgeBranch?.branchLabel ?? null,
+            fallbackMessages: []
+          }
+        : await detectJudgeBranchViolation({
+            step: scriptStateSnapshot?.currentStep ?? null,
+            latestLeadMessage: lastLeadMsg?.content ?? null,
+            generatedMessages:
+              parsed.messages && parsed.messages.length > 0
+                ? parsed.messages
+                : [parsed.message],
+            accountId,
+            cache: judgeBranchSelectionCache,
+            variableResolutionMap: gateVariableResolutionMap
+          });
     if (judgeBranchViolation.blocked) {
       const judgeOverride = `\n\n===== [JUDGE] BRANCH MISMATCH — REGENERATE CURRENT BRANCH =====\n${judgeBranchViolation.reason}\n\nThe script engine already classified the latest lead reply into branch "${judgeBranchViolation.matchedBranchLabel}". You must run that branch's scripted actions now.\n\nFORBIDDEN ON THIS REGEN:\n  ✗ Using a different branch's [ASK] or [MSG]\n  ✗ Advancing to the NEXT STEP preview before the matched branch completes\n  ✗ Defaulting to a branch just because it appears later in the script\n\nREQUIRED ON THIS REGEN:\n  ✓ Send the matched branch's [MSG]/[ASK] content verbatim or near-verbatim\n  ✓ Then wait for the lead's reply before advancing\n=====`;
       if (attempt < MAX_RETRIES) {
@@ -5488,6 +5695,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     // bubble remains.
     if (
       !quality.passed &&
+      scriptAssemblyExpectedBubbles.length === 0 &&
       Array.isArray(parsed.messages) &&
       parsed.messages.length > 1
     ) {
@@ -8360,6 +8568,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   });
   if (
     activeConversationId &&
+    !qualityGateTerminalFailure &&
     !rescheduleFlow &&
     recoveryTrigger.triggered &&
     !lastLeadMsg?.content?.trimStart().startsWith('OPERATOR NOTE:')
@@ -8931,7 +9140,10 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   // and the older deterministic injector deliberately skipped every step that
   // contained an ask. Preserve the authored sequence here: insert any missing
   // literal sends before the ask, scoped only to the selected branch.
-  if (selectedCurrentJudgeBranch) {
+  if (
+    selectedCurrentJudgeBranch &&
+    scriptAssemblyExpectedBubbles.length === 0
+  ) {
     const bubbles = Array.isArray(parsed.messages)
       ? [...parsed.messages]
       : [parsed.message];
@@ -9138,7 +9350,9 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
         if (
           !isPlaceholder &&
           bubbles.some((b) => URL_RE.test(b)) &&
-          qualityGateTerminalFailure
+          qualityGateTerminalFailure &&
+          qualityGateFailureReason !== 'script_placeholder_slot_mismatch' &&
+          scriptAssemblyExpectedBubbles.length === 0
         ) {
           qualityGateTerminalFailure = false;
           qualityGateFailureReason = null;
@@ -9206,6 +9420,59 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
   const suppressFunnelStage = personaConfigDisablesStageProgression(
     personaForGate?.promptConfig
   );
+
+  // Downstream recovery, repeat stripping, and link enforcement can mutate a
+  // reply after action assembly. Never send a turn whose assembled bubble was lost
+  // or whose final bubbles contain a sibling branch's fixed [MSG]. The caller
+  // converts this terminal result to an operator review instead of sending.
+  if (scriptAssemblyExpectedBubbles.length > 0 && !qualityGateTerminalFailure) {
+    const finalBubbles = parsed.messages.map((message) => message.trim());
+    const assemblyChanged =
+      finalBubbles.length !== scriptAssemblyExpectedBubbles.length ||
+      finalBubbles.some(
+        (message, index) => message !== scriptAssemblyExpectedBubbles[index]
+      );
+    const selectedFixed = new Set(scriptAssemblyExpectedFixed);
+    const siblingFixed = (scriptStateSnapshot?.currentStep?.branches ?? [])
+      .filter(
+        (branch) =>
+          branch.branchLabel !== selectedCurrentJudgeBranch?.branchLabel
+      )
+      .flatMap((branch) => branch.actions)
+      .filter(
+        (action) =>
+          action.actionType === 'send_message' &&
+          typeof action.content === 'string' &&
+          action.content.trim().length > 0 &&
+          !/\{\{[^}]+\}\}/.test(action.content) &&
+          !selectedFixed.has(action.content.trim())
+      )
+      .map((action) => action.content!.trim());
+    const shippedSibling = siblingFixed.find((content) =>
+      requiredMsgAlreadyDeliveredInHistory(content, parsed.messages)
+    );
+    if (assemblyChanged || shippedSibling) {
+      qualityGateTerminalFailure = true;
+      qualityGateFailureReason = 'script_action_assembly_changed_after_gate';
+      qualityGateHardFails = [
+        ...(assemblyChanged ? ['scripted_action_bubbles_changed'] : []),
+        ...(shippedSibling
+          ? [`sibling_branch_message_present:${shippedSibling.slice(0, 80)}`]
+          : [])
+      ];
+      parsed.escalateToHuman = true;
+      await writeGenerateReplyTrace({
+        scriptActionAssembly: 'post_gate_hold',
+        scriptActionBranch: selectedCurrentJudgeBranch?.branchLabel ?? null,
+        scriptActionAssemblyChanged: assemblyChanged,
+        scriptActionSiblingCopy: shippedSibling?.slice(0, 120) ?? null,
+        scriptActionExpectedPreview: scriptAssemblyExpectedBubbles
+          .join(' | ')
+          .slice(0, 500),
+        scriptActionActualPreview: finalBubbles.join(' | ').slice(0, 500)
+      });
+    }
+  }
 
   return {
     reply: parsed.message,
