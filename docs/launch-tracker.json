@@ -1,6 +1,6 @@
 {
   "title": "Convlo P0 launch tracker",
-  "updatedAt": "2026-09-24T09:45:50.652Z",
+  "updatedAt": "2026-09-26T16:18:47.000Z",
   "milestones": [
     {
       "date": "2026-09-25",
@@ -303,27 +303,27 @@
       "lane": "Shazim",
       "title": "Treat clear interest as YES",
       "due": "2026-09-29",
-      "status": "todo",
+      "status": "in_progress",
       "dependsOn": [
         "P0.2",
         "P0.4"
       ],
       "acceptance": "On active v3 Step 4, clear YES bypasses Hesitant. Answer accompanying questions and continue to the correct Step 5 objective without asking permission again.",
-      "evidence": "",
-      "note": ""
+      "evidence": "26 September controlled IG conversation cmuiigvvx0003l504j7mbdfek on production 8ae38df: explicit 'definitely send the link' entered Hesitant; a second yes entered Not in yet, and no Discord link was sent. Commit fe1daec changes token routing to classify only the latest reply and passes prior completed branch context to the model. 63 relevant tests and TypeScript passed; production version confirmed, but live link-delivery proof is pending.",
+      "note": "Two attempts to reset the own-account test conversation after fe1daec stopped on a transient production database interactive-transaction error before any webhook turn. Both attempts restored the response delay to 0-250 seconds. Do not mark this gate verified without a delivered Discord link and Meta ID."
     },
     {
       "id": "P0.9",
       "lane": "Shazim",
       "title": "Validate state transitions and reject stale writes",
       "due": "2026-09-29",
-      "status": "todo",
+      "status": "in_progress",
       "dependsOn": [
         "P0.3"
       ],
       "acceptance": "On active v3, Step 4 to Step 5 to Step 6 follows delivered actions, not draft gate output. Cursor is bounded by seven steps; stale writes cannot overwrite newer progress.",
-      "evidence": "",
-      "note": "A5/A6 are concrete live evidence. Legacy computeSystemStage owns routing unless FIX_D_ROUTING_AUTHORITATIVE names this account; verify the production flag before editing either tracker."
+      "evidence": "26 September production 8ae38df, IG conversation cmuiigvvx0003l504j7mbdfek: a direct answer to the Step 2 either/or ask advanced to Step 3 and three outbound bubbles received Meta IDs. The previous Step 2 repeat failure was reproduced before the fix in cmuih4wsf003fkx04p46g2ahk. This is partial progression evidence, not A5/A6 closure.",
+      "note": "A5/A6 remain open: delivered-action truth, seven-step cursor bound, and stale-write rejection have not been proven. Legacy computeSystemStage owns routing unless FIX_D_ROUTING_AUTHORITATIVE names this account."
     },
     {
       "id": "P0.6",
@@ -416,7 +416,7 @@
       "lane": "Shazim",
       "title": "Prove real Instagram lead and continuation",
       "due": "2026-10-01",
-      "status": "todo",
+      "status": "in_progress",
       "dependsOn": [
         "P0.1",
         "P0.2",
@@ -428,8 +428,8 @@
         "A6"
       ],
       "acceptance": "On a brand-new sender and a continuing real Instagram DM, verify active v3 script ID/version, opener provenance, correct step and branch, one delivered reply, Meta ID and no reset. Preserve conversation state.",
-      "evidence": "",
-      "note": "Wait for Shazim's live message. Do not duplicate a natural inbound with a synthetic webhook."
+      "evidence": "@iamshazimkhan native IG inbound opened a verified 24-hour window at 2026-09-26T11:35:09.475Z. Controlled signed-webhook test on 8ae38df delivered ordered outbound bubbles with Meta IDs and proved the Step 2 answer advances. Synthetic inbound appears in Convlo, not the native IG inbox; this is not the fresh natural follower chain required for closure.",
+      "note": "The full script remains unproven: Step 4/5 link routing failed on 8ae38df. Candidate fe1daec is deployed but its rerun hit the database reset transaction error before a new inbound. Do not treat Meta IDs alone as a native inbox screenshot."
     },
     {
       "id": "ARCH",
