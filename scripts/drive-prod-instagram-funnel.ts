@@ -10,6 +10,7 @@
  *
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --check
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --run
+ * ... --run --fast temporarily sets this account's delay to 0 and restores it.
  *
  * Optional: E2E_MAX_TURNS=12 E2E_WAIT_SECONDS=600 E2E_SETTLE_SECONDS=20
  */
@@ -406,9 +407,11 @@ async function nextNaturalLeadReply(state: NonNullable<State>, ai: string[]) {
 
 async function main() {
   const mode = process.argv[2];
+  const fast = process.argv.includes('--fast');
   if (mode !== '--check' && mode !== '--run') {
     throw new Error('Use --check (read-only) or --run (reset + drive)');
   }
+  if (fast && mode !== '--run') throw new Error('--fast requires --run');
   await checkConfiguration();
   const initial = await requireOpenWindow();
   console.log(
@@ -416,35 +419,72 @@ async function main() {
   );
   if (mode === '--check') return;
   if (!SECRET) throw new Error('META_APP_SECRET is required');
-  const settled = await waitForPriorWork(initial.conversation.id);
-  await resetTestLead(settled);
-
-  let leadMessage = 'hey, i am new to futures trading. where should i start?';
-  let previousAiIds = new Set<string>();
-  for (let turn = 1; turn <= MAX_TURNS; turn++) {
-    const mid = await sendSignedInbound(leadMessage);
-    console.log(`\n[${turn}] LEAD: ${leadMessage} | webhook mid=${mid}`);
-    const { state, freshAi } = await waitForDeliveredTurn(mid, previousAiIds);
-    previousAiIds = new Set(
-      state.conversation.messages
-        .filter((msg) => msg.sender === 'AI')
-        .map((msg) => msg.id)
-    );
-    for (const msg of freshAi) {
-      console.log(`AI: ${msg.content} | Meta mid=${msg.platformMessageId}`);
-    }
+  const originalDelay = fast
+    ? await prisma.account.findUniqueOrThrow({
+        where: { id: ACCOUNT_ID },
+        select: { responseDelayMin: true, responseDelayMax: true }
+      })
+    : null;
+  if (originalDelay) {
+    const changed = await prisma.account.updateMany({
+      where: {
+        id: ACCOUNT_ID,
+        responseDelayMin: originalDelay.responseDelayMin,
+        responseDelayMax: originalDelay.responseDelayMax
+      },
+      data: { responseDelayMin: 0, responseDelayMax: 0 }
+    });
+    if (changed.count !== 1) throw new Error('Delay changed concurrently');
     console.log(
-      `conversation=${state.conversation.id} step=${state.conversation.currentScriptStep} queue=${state.queue[0]?.status ?? 'none'}`
-    );
-    if (turn === MAX_TURNS) break;
-    leadMessage = await nextNaturalLeadReply(
-      state,
-      freshAi.map((msg) => msg.content)
+      `Temporarily set IG account response delay from ${originalDelay.responseDelayMin}-${originalDelay.responseDelayMax}s to 0s`
     );
   }
-  console.log(
-    'Completed requested turns. Review the native IG inbox and traces.'
-  );
+  try {
+    const settled = await waitForPriorWork(initial.conversation.id);
+    await resetTestLead(settled);
+
+    let leadMessage = 'hey, i am new to futures trading. where should i start?';
+    let previousAiIds = new Set<string>();
+    for (let turn = 1; turn <= MAX_TURNS; turn++) {
+      const mid = await sendSignedInbound(leadMessage);
+      console.log(`\n[${turn}] LEAD: ${leadMessage} | webhook mid=${mid}`);
+      const { state, freshAi } = await waitForDeliveredTurn(mid, previousAiIds);
+      previousAiIds = new Set(
+        state.conversation.messages
+          .filter((msg) => msg.sender === 'AI')
+          .map((msg) => msg.id)
+      );
+      for (const msg of freshAi) {
+        console.log(`AI: ${msg.content} | Meta mid=${msg.platformMessageId}`);
+      }
+      console.log(
+        `conversation=${state.conversation.id} step=${state.conversation.currentScriptStep} queue=${state.queue[0]?.status ?? 'none'}`
+      );
+      if (turn === MAX_TURNS) break;
+      leadMessage = await nextNaturalLeadReply(
+        state,
+        freshAi.map((msg) => msg.content)
+      );
+    }
+    console.log(
+      'Completed requested turns. Review the native IG inbox and traces.'
+    );
+  } finally {
+    if (originalDelay) {
+      const restored = await prisma.account.updateMany({
+        where: { id: ACCOUNT_ID, responseDelayMin: 0, responseDelayMax: 0 },
+        data: originalDelay
+      });
+      if (restored.count !== 1) {
+        throw new Error(
+          'Delay restoration needs manual review: account setting changed during test'
+        );
+      }
+      console.log(
+        `Restored account response delay to ${originalDelay.responseDelayMin}-${originalDelay.responseDelayMax}s`
+      );
+    }
+  }
 }
 
 main()
