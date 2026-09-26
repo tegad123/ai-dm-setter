@@ -320,7 +320,7 @@ export function anchoredCaptureIsConsistent(
     entries.flatMap((a) => a.askContents)
   );
   if (!anchored?.reply) return false; // ask never delivered/answered
-  if (!replyAnswersAskShared(anchored.reply)) return false;
+  if (!replyAnswersAskShared(anchored.reply, anchored.scriptAsk)) return false;
   const valTokens = askMatchTokens(value);
   if (valTokens.length === 0) {
     return anchored.reply.toLowerCase().includes(value.toLowerCase().trim());
@@ -336,13 +336,16 @@ export function anchoredCaptureIsConsistent(
 function findAnchoredReply(
   history: ScriptVariableHistoryMessage[],
   askContents: string[]
-): { ask: string; reply: string | null } | null {
+): { ask: string; scriptAsk: string; reply: string | null } | null {
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i];
     const sender = (msg.sender ?? '').toUpperCase();
     if (sender !== 'AI' && sender !== 'HUMAN') continue;
     const content = msg.content ?? '';
-    if (!askContents.some((ask) => askMatchesMessage(ask, content))) continue;
+    const scriptAsk = askContents.find((ask) =>
+      askMatchesMessage(ask, content)
+    );
+    if (!scriptAsk) continue;
     // Direct reply = the next LEAD message after the ask that actually
     // ANSWERS it. 2026-07-28 (live: {{goal}} rendered "u there"): the lead
     // replied "you there?" to the goal ask, the AI re-asked in different
@@ -354,11 +357,11 @@ function findAnchoredReply(
     for (let j = i + 1; j < history.length; j++) {
       if ((history[j].sender ?? '').toUpperCase() !== 'LEAD') continue;
       const candidate = history[j].content ?? '';
-      if (!replyAnswersAskShared(candidate)) continue;
+      if (!replyAnswersAskShared(candidate, scriptAsk)) continue;
       reply = candidate;
       break;
     }
-    return { ask: content, reply };
+    return { ask: content, scriptAsk, reply };
   }
   return null;
 }
@@ -1242,7 +1245,10 @@ export async function resolveScriptVariablesForTexts(
           context.conversationHistory ?? [],
           anchorEntries.flatMap((a) => a.askContents)
         );
-        if (anchored?.reply && replyAnswersAskShared(anchored.reply)) {
+        if (
+          anchored?.reply &&
+          replyAnswersAskShared(anchored.reply, anchored.scriptAsk)
+        ) {
           anchorQuestion = anchored.ask;
           scopedHistory = [
             { sender: 'AI', content: anchored.ask },

@@ -3742,12 +3742,14 @@ export async function generateReply(
       for (let i = 0; i < history.length - 1; i++) {
         const m = history[i];
         if (m.sender !== 'AI' || typeof m.content !== 'string') continue;
-        if (!asks.some((ask) => scriptAskMatchesText(ask, m.content ?? '')))
-          continue;
+        const deliveredAsk = asks.find((ask) =>
+          scriptAskMatchesText(ask, m.content ?? '')
+        );
+        if (!deliveredAsk) continue;
         const next = history
           .slice(i + 1)
           .find((h) => h.sender === 'LEAD' && typeof h.content === 'string');
-        if (next && replyAnswersAsk(next.content)) {
+        if (next && replyAnswersAsk(next.content, deliveredAsk)) {
           answered.add(anchor.variableName);
           break;
         }

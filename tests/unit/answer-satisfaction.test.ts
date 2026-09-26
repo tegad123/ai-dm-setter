@@ -24,7 +24,7 @@ describe('replyAnswersAsk', () => {
     assert.equal(replyAnswersAsk('Hold on, what about you?'), false);
   });
 
-  it('accepts not yet, still learning as an answer only to a trading activity ask', () => {
+  it('accepts a named alternative after not yet across different asks', () => {
     const reply =
       "nah not yet, still in learning mode. i'm based in texas and want a foundation before risking anything. do you have a free discord?";
     assert.equal(replyAnswersAsk(reply), false);
@@ -43,6 +43,24 @@ describe('replyAnswersAsk', () => {
       replyAnswersAsk(
         'not yet, you?',
         'you trading anything yet, even on demo?'
+      ),
+      false
+    );
+    assert.equal(
+      replyAnswersAsk(
+        'not yet, still deciding',
+        'have you booked a call yet, or still deciding?'
+      ),
+      true
+    );
+    assert.equal(
+      replyAnswersAsk('not yet, next week', 'can you pay today or next week?'),
+      true
+    );
+    assert.equal(
+      replyAnswersAsk(
+        'not yet, can you explain it?',
+        'can you pay today or next week?'
       ),
       false
     );

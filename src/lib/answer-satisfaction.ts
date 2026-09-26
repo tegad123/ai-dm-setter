@@ -20,6 +20,59 @@
 // question, an explicit deferral, or a pure question-back with no answer clause.
 // ---------------------------------------------------------------------------
 
+const OPTION_FILLER_WORDS = new Set([
+  'about',
+  'after',
+  'anything',
+  'before',
+  'first',
+  'just',
+  'right',
+  'still',
+  'that',
+  'them',
+  'then',
+  'there',
+  'these',
+  'this',
+  'your'
+]);
+
+function optionWords(text: string): Set<string> {
+  return new Set(
+    (text.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(
+      (word) => !OPTION_FILLER_WORDS.has(word)
+    )
+  );
+}
+
+function selectsStatedAlternative(replyCore: string, ask: string): boolean {
+  // An either/or ask can be answered with "not yet" followed by a statement
+  // about the lead's present state. Only consider the first clause: mentioning
+  // an offered option in a question is a clarification, not an answer.
+  if (!/^not yet\b/i.test(replyCore)) return false;
+  const alternatives = ask.split(/\bor\b/i);
+  if (alternatives.length < 2) return false;
+  const tail = replyCore
+    .slice('not yet'.length)
+    .replace(/^[\s,;:!-]+/, '')
+    .trim();
+  const firstClause = (tail.match(/^[^.!?;]+[.!?;]?/)?.[0] ?? '').trim();
+  if (
+    !firstClause ||
+    firstClause.endsWith('?') ||
+    /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should)\b/i.test(
+      firstClause
+    )
+  ) {
+    return false;
+  }
+  if (/^still\s+\S/i.test(firstClause)) return true;
+  const offeredWords = optionWords(alternatives.at(-1) ?? '');
+  const replyWords = optionWords(firstClause);
+  return Array.from(offeredWords).some((word) => replyWords.has(word));
+}
+
 export function replyAnswersAsk(
   reply: string | null | undefined,
   ask?: string | null
@@ -69,19 +122,7 @@ export function replyAnswersAsk(
       lower
     ) || /^(price|cost)\??$/i.test(core);
 
-  // "not yet" is normally a deferral. For an ask about whether the lead has
-  // traded (including demo trading), "not yet, still learning" is a direct
-  // answer to the offered alternative. Keep the exception tied to the ask so
-  // the same reply cannot complete an unrelated capital or purchase step.
-  if (
-    ask &&
-    /\b(?:trading anything|traded anything|demo|paper trad(?:e|ing)|started trading)\b/i.test(
-      ask
-    ) &&
-    /^not yet\b/i.test(core) &&
-    /\b(?:still|just)\s+(?:in\s+)?(?:learning|studying)\b/i.test(core) &&
-    !pricingQuestion
-  ) {
+  if (ask && selectsStatedAlternative(core, ask)) {
     return true;
   }
 
