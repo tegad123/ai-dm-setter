@@ -51,8 +51,29 @@ on an isolated checkout of `9ec9069`. That issue remains open separately.
 
 ## Acceptance still needed
 
-After the replacement deploys, rerun the controlled conversation under the
-verified Meta window. Confirm Step 2 completes on the same answer, Step 3
-does not repeat the answered ask, and every outbound has a Meta message ID.
-Restore the response delay after the run. A clean native Instagram inbound
-and the intended script path still require separate acceptance evidence.
+Commit `8ae38df` deployed and the controlled rerun used conversation
+`cmuiigvvx0003l504j7mbdfek`. The Step 2 reply “nah not yet, still in the
+learning phase” completed Step 2 and the next turn delivered the Step 3 bridge
+and link offer as three distinct Meta-ID bubbles. That closes the specific
+Step 2 repeat failure.
+
+The same run exposed a separate link-routing defect: the lead said “definitely
+send the link,” but the router locked Step 4 “Hesitant” and asked permission
+again. After a second yes, it locked Step 5 “Not in yet” without having sent
+the link. The Step 5 classifier trace recorded a high token score of 21 for
+“Not in yet” versus 5 for the next branch, so it never called the model. The
+token scorer had included two older replies containing “not yet.” A regression
+test reproduced the Step 4 wrong choice on the deployed code. The candidate
+change scores the latest reply only; earlier messages and the verified prior
+branch remain available to the model when it needs context. In a local check
+using the production Step 5 script, the model selected “Hesitant, now yes.”
+The link-routing fix still needs its own production proof.
+
+The test driver's database pooler connection dropped during Turn 5. The turn
+itself finished and sent two Meta-ID messages. The driver's first attempt to
+restore the temporary response delay also lost database access. Once the pooler
+recovered, the delay was manually verified and restored from 0–0 to 0–250
+seconds. The driver now retries restoration through a transient outage.
+
+A clean native Instagram inbound and the full intended script path still
+require separate acceptance evidence.

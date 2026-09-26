@@ -492,6 +492,39 @@ async function changeDelay(
   }
 }
 
+async function restoreDelay(original: {
+  responseDelayMin: number;
+  responseDelayMax: number;
+}) {
+  const deadline = Date.now() + 3 * 60 * 1000;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const current = await readDelay();
+      if (
+        current.responseDelayMin === original.responseDelayMin &&
+        current.responseDelayMax === original.responseDelayMax
+      ) {
+        return;
+      }
+      if (current.responseDelayMin !== 0 || current.responseDelayMax !== 0) {
+        throw new Error(
+          `Response delay changed outside this test: ${current.responseDelayMin}-${current.responseDelayMax}s`
+        );
+      }
+      await changeDelay(current, original);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        'Response delay restore pending; retrying after database recovery'
+      );
+      await sleep(5000);
+    }
+  }
+  throw lastError;
+}
+
 async function main() {
   const mode = process.argv[2];
   const fast = process.argv.includes('--fast');
@@ -548,13 +581,7 @@ async function main() {
     );
   } finally {
     if (originalDelay) {
-      await changeDelay(
-        { responseDelayMin: 0, responseDelayMax: 0 },
-        {
-          responseDelayMin: originalDelay.responseDelayMin,
-          responseDelayMax: originalDelay.responseDelayMax
-        }
-      );
+      await restoreDelay(originalDelay);
       console.log(
         `Restored account response delay to ${originalDelay.responseDelayMin}-${originalDelay.responseDelayMax}s`
       );

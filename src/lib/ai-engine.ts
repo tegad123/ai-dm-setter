@@ -991,10 +991,16 @@ function scoreJudgeBranchesForLead(
     };
   }
 
+  // Recent lines are context for the LLM fallback. The token fast path must
+  // classify the reply to the immediately preceding ask; otherwise an older
+  // "not yet" can outvote a new "send the link" and lock the wrong branch
+  // before the LLM is consulted.
+  const latestLeadMessage =
+    /\nLatest: ([\s\S]*)$/.exec(leadMessage)?.[1] ?? leadMessage;
   const scored = step.branches
     .map((branch) => ({
       branch,
-      score: scoreJudgeBranch(branch, leadMessage)
+      score: scoreJudgeBranch(branch, latestLeadMessage)
     }))
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
@@ -1363,7 +1369,7 @@ function buildJudgeBranchLLMPrompt(
     .join('\n');
   const multi = /\nLatest: /.test(leadMessage);
   const leadBlock = multi
-    ? `Lead's recent messages, oldest first ("Latest" is the reply to our last message). Route on what the lead has actually stated across these lines; an answer given an earlier line still counts:\n${leadMessage}`
+    ? `Conversation context follows. "Previous completed script branch" is verified engine state, and "Latest" is the lead's reply to our last message. Route on the latest reply while using older facts and branch state when a condition requires them:\n${leadMessage}`
     : `Lead message: ${leadMessage}`;
   return `You are a branch router for a sales conversation.
 Given a lead's message and a list of possible branches with their conditions, select the single best matching branch.
@@ -1378,6 +1384,26 @@ Use the operator's runtime judgment criteria in the branch text as the source of
 If NO branch condition genuinely matches the lead's message (e.g. a check-in like "you there?", small talk, or an answer that none of the conditions describe), respond with exactly NONE — do NOT force the closest branch.
 
 Respond with ONLY the exact branchLabel of the best match, or NONE. No explanation. No punctuation.`;
+}
+
+export function formatJudgeLeadContext(params: {
+  recentLeadMessages: string[];
+  previousCompletedBranch?: { stepNumber: number; label: string } | null;
+}): string | null {
+  const messages = params.recentLeadMessages.filter((text) => text.trim());
+  if (messages.length === 0) return null;
+  const branchContext = params.previousCompletedBranch
+    ? `Previous completed script branch at Step ${params.previousCompletedBranch.stepNumber}: ${params.previousCompletedBranch.label}\n`
+    : '';
+  if (messages.length === 1 && !branchContext) return messages[0];
+  return (
+    branchContext +
+    messages
+      .map((text, index) =>
+        index === messages.length - 1 ? `Latest: ${text}` : `Earlier: ${text}`
+      )
+      .join('\n')
+  );
 }
 
 async function classifyJudgeBranchWithAnthropic(params: {
@@ -3435,16 +3461,26 @@ export async function generateReply(
     .filter((m) => m.sender === 'LEAD' && (m.content ?? '').trim())
     .slice(-3)
     .map((m) => m.content.trim());
-  const judgeLeadText =
-    recentLeadMessages.length > 1
-      ? recentLeadMessages
-          .map((t, i) =>
-            i === recentLeadMessages.length - 1
-              ? `Latest: ${t}`
-              : `Earlier: ${t}`
-          )
-          .join('\n')
-      : (lastLeadMsg?.content ?? null);
+  const previousCompletedBranch = readBranchHistoryEvents(
+    scriptStateSnapshot?.capturedDataPoints
+  )
+    .filter(
+      (event) =>
+        event.eventType === 'step_completed' &&
+        typeof currentStepNumberForGate === 'number' &&
+        event.stepNumber < currentStepNumberForGate &&
+        !!event.selectedBranchLabel
+    )
+    .at(-1);
+  const judgeLeadText = formatJudgeLeadContext({
+    recentLeadMessages,
+    previousCompletedBranch: previousCompletedBranch?.selectedBranchLabel
+      ? {
+          stepNumber: previousCompletedBranch.stepNumber,
+          label: previousCompletedBranch.selectedBranchLabel
+        }
+      : null
+  });
   const currentJudgeBranchMatch = await selectJudgeBranchForLead(
     scriptStateSnapshot?.currentStep ?? null,
     judgeLeadText,
