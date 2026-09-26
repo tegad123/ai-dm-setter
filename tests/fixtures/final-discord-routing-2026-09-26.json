@@ -253,6 +253,204 @@
       ]
     },
     {
+      "stepNumber": 2,
+      "title": "Account and Goal",
+      "actions": [
+        {
+          "actionType": "runtime_judgment",
+          "content": "If their reason is concrete (quit the job, help family, extra income), capture it as their goal."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Tag as prop. Note the firm if they named one. Do not mention codes, discounts, or any offer."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Tag as futures or forex based on their answer. If they also mentioned prop or live, tag that too."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Tag as live account."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Tag as undecided. Do not recommend a firm."
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one short line to the market they named. never thank them for answering}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one line to the account type or firm they named}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "respect, trading your own money is a whole different kind of pressure"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{one line acknowledging where they're at without making them feel behind}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one line to their reason using their own words. no generic compliments}}"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "you trading anything yet, even on demo, or still learning the basics first?"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        }
+      ],
+      "branches": [
+        {
+          "branchLabel": "Prop account",
+          "conditionDescription": "Take this branch when they said they're on a prop, funded, or evaluation account.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Tag as prop. Note the firm if they named one. Do not mention codes, discounts, or any offer."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one line to the account type or firm they named}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Live account",
+          "conditionDescription": "Take this branch when they trade their own capital, either a live futures account or their own broker account.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Tag as live account."
+            },
+            {
+              "actionType": "send_message",
+              "content": "respect, trading your own money is a whole different kind of pressure"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Hasn't picked yet",
+          "conditionDescription": "Take this branch when they want to get funded but haven't chosen a firm, or they're unsure how it works.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Tag as undecided. Do not recommend a firm."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{one line acknowledging where they're at without making them feel behind}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Named their market",
+          "conditionDescription": "Take this branch when they were asked what they trade and answered with a market.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Tag as futures or forex based on their answer. If they also mentioned prop or live, tag that too."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one short line to the market they named. never thank them for answering}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "what's the actual goal with it though? like what does it look like if this works out for you"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "New, gave their reason",
+          "conditionDescription": "Take this branch when they are tagged new and answered why they got into trading.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "If their reason is concrete (quit the job, help family, extra income), capture it as their goal."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one line to their reason using their own words. no generic compliments}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "you trading anything yet, even on demo, or still learning the basics first?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "stepNumber": 4,
       "title": "Send the Link",
       "actions": [

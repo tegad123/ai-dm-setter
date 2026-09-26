@@ -22,6 +22,23 @@ const fixture = JSON.parse(
   )
 );
 const cases = [
+  {
+    name: 'account question with beginner context',
+    step: 2,
+    prior: 'Futures',
+    assistant: 'you on a prop account or trading your own live account?',
+    reply:
+      "honestly still figuring that out. i'm in texas and pretty new to all this, so i'm looking for a solid repeatable process to follow before i commit to anything. would love to join a free discord community if you have one where people share strategies and stuff like that.",
+    expected: "Hasn't picked yet"
+  },
+  {
+    name: 'new lead actually answering their reason',
+    step: 2,
+    prior: 'New, no market yet',
+    assistant: 'what made you wanna get into trading?',
+    reply: 'i want to learn a solid repeatable process',
+    expected: 'New, gave their reason'
+  },
   ...[
     [
       'new but market explicit',
@@ -119,6 +136,7 @@ async function main() {
             (step: { stepNumber: number }) => step.stepNumber === item.step
           ),
           formatJudgeLeadContext({
+            latestAssistantMessage: 'assistant' in item ? item.assistant : null,
             recentLeadMessages:
               item.step === 1
                 ? [item.reply]

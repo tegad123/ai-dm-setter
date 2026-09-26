@@ -26,3 +26,9 @@ Classifier traces now retain an explicit null final selection instead of display
 The driver can now continue the existing own-test conversation without resetting. It refuses paused conversations or an unanswered latest inbound. Reset mode remains restricted to @iamshazimkhan. Tests use signed synthetic lead webhooks after a native DM establishes the real messaging window. Meta IDs prove API acceptance; the user still needs to confirm inbox receipt. The last completed test restored reply delay to 0–250 seconds. No other leads, routing settings, ManyChat settings or historical replays were changed.
 
 The browser tracker displays verified active items / all active items, excluding retired requirements. It currently has 0/48 formally accepted items; partial technical evidence is recorded separately and is not counted as completion.
+
+## Production proof on ee8a683
+
+/api/version confirmed ee8a683979d270331139e88dc18ad163f24ccc9a before the reset. Own test conversation cmuinmtob0003js04crcplzvx selected Futures on the exact formerly failing opener. Step 4 selected YES and sent the Discord link once followed by “grab the Futures role for the prop firm deals.” All twelve outbound bubbles have Meta message IDs; four scheduled jobs are SENT with claim snapshots and trace IDs. Evidence: evidence/IG_MARKET_ROUTE_ee8a683_2026-09-26.txt. Reply delay was restored to 0–250 seconds.
+
+This is narrow market-routing proof, not an end-to-end acceptance pass. Step 2 selected “New, gave their reason” despite answering the account question. The router had no preceding assistant question in its context. Follow-up change adds that question and shares the same contextual decision with prompt construction and violation checks, avoiding conflicting reclassification and duplicate provider calls. Expanded live-provider benchmark: 16/16 including the exact account answer and a genuine reason-answer control. Fresh production proof of that follow-up is still required.

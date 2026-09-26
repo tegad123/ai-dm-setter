@@ -1399,6 +1399,7 @@ Respond with ONLY the exact branchLabel of the best match, or NONE. No explanati
 
 export function formatJudgeLeadContext(params: {
   recentLeadMessages: string[];
+  latestAssistantMessage?: string | null;
   previousCompletedBranch?: { stepNumber: number; label: string } | null;
 }): string | null {
   const messages = params.recentLeadMessages.filter((text) => text.trim());
@@ -1406,9 +1407,14 @@ export function formatJudgeLeadContext(params: {
   const branchContext = params.previousCompletedBranch
     ? `Previous completed script branch at Step ${params.previousCompletedBranch.stepNumber}: ${params.previousCompletedBranch.label}\n`
     : '';
-  if (messages.length === 1 && !branchContext) return messages[0];
+  const assistantContext = params.latestAssistantMessage?.trim()
+    ? `Last assistant message: ${JSON.stringify(params.latestAssistantMessage.trim())}\n`
+    : '';
+  if (messages.length === 1 && !branchContext && !assistantContext)
+    return messages[0];
   return (
     branchContext +
+    assistantContext +
     messages
       .map((text, index) =>
         index === messages.length - 1 ? `Latest: ${text}` : `Earlier: ${text}`
@@ -3491,6 +3497,9 @@ export async function generateReply(
     .at(-1);
   const judgeLeadText = formatJudgeLeadContext({
     recentLeadMessages,
+    latestAssistantMessage: conversationHistory.findLast(
+      (message) => message.sender === 'AI'
+    )?.content,
     previousCompletedBranch: previousCompletedBranch?.selectedBranchLabel
       ? {
           stepNumber: previousCompletedBranch.stepNumber,
@@ -4568,7 +4577,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
     : '';
   const judgeClassificationDirective = await buildJudgeClassificationDirective({
     step: scriptStateSnapshot?.currentStep ?? null,
-    latestLeadMessage: lastLeadMsg?.content ?? null,
+    latestLeadMessage: judgeLeadText,
     accountId,
     cache: judgeBranchSelectionCache,
     variableResolutionMap: gateVariableResolutionMap
@@ -5526,7 +5535,7 @@ If you catch yourself writing plain text, stop and rewrite as JSON. The entire p
           }
         : await detectJudgeBranchViolation({
             step: scriptStateSnapshot?.currentStep ?? null,
-            latestLeadMessage: lastLeadMsg?.content ?? null,
+            latestLeadMessage: judgeLeadText,
             generatedMessages:
               parsed.messages && parsed.messages.length > 0
                 ? parsed.messages

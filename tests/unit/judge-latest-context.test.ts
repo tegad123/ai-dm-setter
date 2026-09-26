@@ -2,8 +2,11 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import {
+  buildJudgeClassificationDirective,
+  detectJudgeBranchViolation,
   formatJudgeLeadContext,
-  selectJudgeBranchForLead
+  selectJudgeBranchForLead,
+  type JudgeBranchSelectionCache
 } from '../../src/lib/ai-engine';
 
 const step = {
@@ -82,6 +85,39 @@ const joinCheckStep = {
 };
 
 describe('judge branch routing with recent lead context', () => {
+  it('shares the contextual decision with the directive and violation check', async () => {
+    const context = formatJudgeLeadContext({
+      recentLeadMessages: ['not yet', 'yes please'],
+      latestAssistantMessage: 'want the link?',
+      previousCompletedBranch: { stepNumber: 3, label: 'New or still learning' }
+    });
+    assert.match(context ?? '', /Last assistant message: "want the link\?"/);
+    assert.ok(context?.endsWith('Latest: yes please'));
+    const cache: JudgeBranchSelectionCache = new Map();
+    let calls = 0;
+    await selectJudgeBranchForLead(step, context, {
+      cache,
+      classifier: async () => {
+        calls++;
+        return 'YES';
+      }
+    });
+    const directive = await buildJudgeClassificationDirective({
+      step,
+      latestLeadMessage: context,
+      cache
+    });
+    const violation = await detectJudgeBranchViolation({
+      step,
+      latestLeadMessage: context,
+      cache,
+      generatedMessages: ['Discord']
+    });
+    assert.match(directive, /YES/);
+    assert.equal(violation.matchedBranchLabel, 'YES');
+    assert.equal(calls, 1);
+    assert.equal(cache.size, 1);
+  });
   it('routes the newest explicit link request over an earlier not-yet answer', async () => {
     const result = await selectJudgeBranchForLead(
       step,
