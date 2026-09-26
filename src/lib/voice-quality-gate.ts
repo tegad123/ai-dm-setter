@@ -1410,6 +1410,26 @@ function operatorRequiredLiteralTexts(options?: VoiceQualityOptions): string[] {
   return [...requiredMessages, ...scriptedQuestionsForOptions(options)];
 }
 
+function isExactOperatorLiteral(
+  reply: string,
+  options?: VoiceQualityOptions
+): boolean {
+  // An explicitly empty selected branch cannot borrow another branch's copy
+  // to gain an exemption. Retain the legacy step fallback only when unrouted.
+  const messages = literalRequiredMessages(
+    options?.activeBranchRequiredMessages ??
+      options?.currentStepRequiredMessages ??
+      []
+  );
+  const questions =
+    options?.activeBranchScriptedQuestions ??
+    options?.currentStepScriptedQuestions ??
+    [];
+  return [...messages, ...questions].some(
+    (text) => text.trim() === reply.trim()
+  );
+}
+
 function bannedTermAppearsInOperatorRequiredLiteral(
   term: string,
   options: VoiceQualityOptions | undefined,
@@ -2243,6 +2263,7 @@ export function scoreVoiceQuality(
   if (
     options?.currentStepHasAnyAskAction &&
     replyQuestionCount > 0 &&
+    !isExactOperatorLiteral(reply, options) &&
     Array.isArray(options.currentStepScriptedQuestions) &&
     options.currentStepScriptedQuestions.length > 0
   ) {
@@ -2395,7 +2416,11 @@ export function scoreVoiceQuality(
 
   // 4. Banned emojis
   for (const emoji of BANNED_EMOJIS) {
-    if (reply.includes(emoji) && !reply.includes(emoji + '\u{1F3FF}')) {
+    if (
+      reply.includes(emoji) &&
+      !reply.includes(emoji + '\u{1F3FF}') &&
+      !isExactOperatorLiteral(reply, options)
+    ) {
       // Allow 💪🏿 (with dark skin tone) but ban plain 💪
       hardFails.push(`banned_emoji: ${emoji}`);
     }
