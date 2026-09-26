@@ -8,7 +8,13 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const trackerPath = resolve(root, 'docs/launch-tracker.json');
 const port = Number(process.env.LAUNCH_TRACKER_PORT || 8765);
-const allowedStatuses = new Set(['todo', 'in_progress', 'blocked', 'verified', 'retired']);
+const allowedStatuses = new Set([
+  'todo',
+  'in_progress',
+  'blocked',
+  'verified',
+  'retired'
+]);
 let writeQueue = Promise.resolve();
 
 async function readTracker() {
@@ -108,8 +114,7 @@ const page = String.raw`<!doctype html>
     function render() {
       const milestones=document.getElementById('milestones'); milestones.replaceChildren();
       for (const item of tracker.milestones) { const box=make('div','milestone'); box.append(make('b','',item.date),make('span','',item.label)); milestones.append(box); }
-      const stats=document.getElementById('stats'); stats.replaceChildren();
-      for (const [key,label] of statuses) { const box=make('div','stat'); box.append(make('b','',tracker.tasks.filter(task=>task.status===key).length),make('span','',label)); stats.append(box); }
+      renderStats();
       const host=document.getElementById('tasks'); host.replaceChildren();
       const lane=document.getElementById('lane').value, state=document.getElementById('state').value;
       for (const owner of ['Shazim','Tega','Daniel','After launch']) {
@@ -142,7 +147,15 @@ const page = String.raw`<!doctype html>
       });
       controls.append(select,button); card.append(controls,feedback); return card;
     }
-    function renderStats(){const stats=document.getElementById('stats'); stats.replaceChildren(); for(const [key,label] of statuses){const box=make('div','stat'); box.append(make('b','',tracker.tasks.filter(task=>task.status===key).length),make('span','',label));stats.append(box);}}
+    function renderStats(){
+      const stats=document.getElementById('stats'); stats.replaceChildren();
+      const active=tracker.tasks.filter(task=>task.status!=='retired');
+      const verified=active.filter(task=>task.status==='verified').length;
+      const progress=make('div','stat');
+      progress.append(make('b','',active.length ? Math.round(100*verified/active.length)+'%' : 'N/A'),make('span','',verified+'/'+active.length+' full-plan items verified'));
+      stats.append(progress);
+      for(const [key,label] of statuses){const box=make('div','stat'); box.append(make('b','',tracker.tasks.filter(task=>task.status===key).length),make('span','',label));stats.append(box);}
+    }
     document.getElementById('lane').addEventListener('change',render);
     document.getElementById('state').addEventListener('change',render);
     load().catch(error=>{document.getElementById('tasks').textContent=error.message;});

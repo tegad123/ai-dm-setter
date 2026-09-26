@@ -10,6 +10,7 @@
  *
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --check
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --run
+ * ... --continue drives more turns from the current test conversation without resetting.
  * ... --run --fast temporarily sets this account's delay to 0 and restores it.
  * After a reset, --window-proof=<real inbound ISO> --window-source=<deleted
  * conversation ID> reuses that same verified Meta window if its reset audit
@@ -537,10 +538,11 @@ async function restoreDelay(original: {
 async function main() {
   const mode = process.argv[2];
   const fast = process.argv.includes('--fast');
-  if (mode !== '--check' && mode !== '--run') {
-    throw new Error('Use --check (read-only) or --run (reset + drive)');
+  if (mode !== '--check' && mode !== '--run' && mode !== '--continue') {
+    throw new Error('Use --check, --run (reset + drive), or --continue');
   }
-  if (fast && mode !== '--run') throw new Error('--fast requires --run');
+  if (fast && mode === '--check')
+    throw new Error('--fast requires a drive mode');
   await checkConfiguration();
   const initial = await requireOpenWindow();
   console.log(
@@ -560,10 +562,45 @@ async function main() {
   }
   try {
     const settled = await waitForPriorWork(initial.conversation.id);
-    await resetTestLead(settled);
-
     let leadMessage = 'hey, i am new to futures trading. where should i start?';
     let previousAiIds = new Set<string>();
+    if (mode === '--run') {
+      await resetTestLead(settled);
+    } else {
+      if (
+        settled.conversation.awaitingHumanReview ||
+        !settled.conversation.aiActive
+      ) {
+        throw new Error('Conversation is paused; continuation refused');
+      }
+      const messages = settled.conversation.messages;
+      const lastLeadIndex = messages
+        .map((message) => message.sender)
+        .lastIndexOf('LEAD');
+      const lastReply = messages
+        .slice(lastLeadIndex + 1)
+        .filter((message) => message.sender === 'AI');
+      if (
+        lastReply.length === 0 ||
+        lastReply.some(
+          (message) =>
+            !message.platformMessageId || message.deliveryStatus === 'FAILED'
+        )
+      ) {
+        throw new Error(
+          'Continuation requires a delivered AI reply to the latest inbound'
+        );
+      }
+      previousAiIds = new Set(
+        messages
+          .filter((message) => message.sender === 'AI')
+          .map((message) => message.id)
+      );
+      leadMessage = await nextNaturalLeadReply(
+        settled,
+        lastReply.map((message) => message.content)
+      );
+    }
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
       const mid = await sendSignedInbound(leadMessage);
       console.log(`\n[${turn}] LEAD: ${leadMessage} | webhook mid=${mid}`);

@@ -148,6 +148,7 @@ describe('judge branch routing with recent lead context', () => {
       });
       assert.equal(result.branchLabel, null);
       assert.equal(result.confidence, 'none');
+      assert.equal(result.classifierTrace?.finalSelectedLabel, null);
     });
   }
 
@@ -159,5 +160,6 @@ describe('judge branch routing with recent lead context', () => {
     });
     assert.equal(result.branchLabel, null);
     assert.equal(result.confidence, 'none');
+    assert.equal(result.classifierTrace?.finalSelectedLabel, null);
   });
 });

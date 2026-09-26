@@ -1,6 +1,6 @@
 {
   "title": "Convlo P0 launch tracker",
-  "updatedAt": "2026-09-26T16:18:47.000Z",
+  "updatedAt": "2026-09-26T17:15:00.000Z",
   "milestones": [
     {
       "date": "2026-09-25",
@@ -43,7 +43,7 @@
       "status": "in_progress",
       "dependsOn": [],
       "acceptance": "Every terminal writer records a coded cause, time, step and branch context, and a generation trace or explicit no-generation reason. Separate generation exhaustion from declared hold. Re-run the exact 18–20 September classification and disclose unrecoverable historical gaps.",
-      "evidence": "Production /api/version: babfae8cd40e7d55c16abd803daa611d65ff4c56. 24h monitor on 23 September: 207 historical terminal rows, 0 claim snapshots, 0 trace links, 0 missing reason/time after migration. Forward live proof and historical classification are pending.",
+      "evidence": "Production /api/version: babfae8cd40e7d55c16abd803daa611d65ff4c56. 24h monitor on 23 September: 207 historical terminal rows, 0 claim snapshots, 0 trace links, 0 missing reason/time after migration. Forward live proof and historical classification are pending. 26 September controlled IG cmuimqvun0003ky04pvklz2uw: four forward SENT jobs have DELIVERED reason, claim snapshots and generation trace IDs. Other terminal outcomes and historical classification remain open.",
       "note": "Commit babfae8 is deployed. Migration appears present because production reads the new columns. Do not mark verified from migration backfill alone."
     },
     {
@@ -63,9 +63,7 @@
       "title": "Prove handoff races, replay and direct inbound",
       "due": "2026-09-25",
       "status": "todo",
-      "dependsOn": [
-        "P0.1"
-      ],
+      "dependsOn": ["P0.1"],
       "acceptance": "Callback-first, native-first, concurrent and replay cases reuse one conversation and reply operation; callback failures are visible; direct inbound chooses its own branch; production revision and rollback are recorded.",
       "evidence": "",
       "note": ""
@@ -89,9 +87,7 @@
       "title": "Hold on substantive hard fails; audit removed bubbles",
       "due": "2026-09-25",
       "status": "todo",
-      "dependsOn": [
-        "A1"
-      ],
+      "dependsOn": ["A1"],
       "acceptance": "A failed fixed-text or off-script gate cannot strip and ship an incomplete turn. It creates one review item with exact draft and reason; any intentionally removed bubble is traced with reason.",
       "evidence": "",
       "note": "Current ai-engine.ts has best-effort and deterministic-injection exhaustion paths; review precedence with A1. Build the immediate durable hold with the current review flag; full phone recovery is tracked separately under P0.11."
@@ -103,9 +99,7 @@
       "title": "Make one inbound produce one delivered reply operation",
       "due": "2026-09-25",
       "status": "todo",
-      "dependsOn": [
-        "P0.0"
-      ],
+      "dependsOn": ["P0.0"],
       "acceptance": "Two generation attempts for one native inbound share one operation; at most one generation is delivered, partial parts resume in script order, and the Discord link cannot arrive out of order.",
       "evidence": "",
       "note": "Reproduce v3 turns 21-22 and test concurrent workers plus uncertain Meta results. Do not replay real leads."
@@ -117,11 +111,7 @@
       "title": "Advance only from delivered scripted actions",
       "due": "2026-09-26",
       "status": "todo",
-      "dependsOn": [
-        "A2",
-        "A3",
-        "P0.9"
-      ],
+      "dependsOn": ["A2", "A3", "P0.9"],
       "acceptance": "When the ask was delivered, Step 5 completes despite a draft gate failure; the next Yes is evaluated against the waitlist and Step 6. A stripped or failed unsent action cannot count as delivered.",
       "evidence": "",
       "note": "Reproduce v3 turns 23-24 with persisted outbound parts and cursor snapshots."
@@ -133,10 +123,7 @@
       "title": "Give discarded generations a replacement reason",
       "due": "2026-09-28",
       "status": "todo",
-      "dependsOn": [
-        "P0.0",
-        "A3"
-      ],
+      "dependsOn": ["P0.0", "A3"],
       "acceptance": "Every generated-but-unsent attempt records a coded discard cause and link to replacing generation or terminal hold; v3 turn 25 shape is explainable.",
       "evidence": "",
       "note": "Trace v3 turns 25-26."
@@ -148,9 +135,7 @@
       "title": "Bound and reconcile legacy and FSM cursors",
       "due": "2026-09-28",
       "status": "todo",
-      "dependsOn": [
-        "P0.9"
-      ],
+      "dependsOn": ["P0.9"],
       "acceptance": "Identify the authoritative production position keeper. Neither persisted nor shadow cursor may advance beyond Step 7; discrepancies have a reason and cannot route a send.",
       "evidence": "",
       "note": "v3 trace reported fsmCursor last=8>9 on a seven-step script. Do not assume the FSM drives production."
@@ -174,9 +159,7 @@
       "title": "Exempt scripted verbatim emoji from cosmetic ban",
       "due": "2026-09-29",
       "status": "todo",
-      "dependsOn": [
-        "A1"
-      ],
+      "dependsOn": ["A1"],
       "acceptance": "An emoji present in approved literal script copy is preserved; newly generated banned emoji still follows policy without consuming unnecessary retries.",
       "evidence": "",
       "note": "v3 turns 16, 21-22."
@@ -188,9 +171,7 @@
       "title": "Recognize Ask Question by action type",
       "due": "2026-09-29",
       "status": "todo",
-      "dependsOn": [
-        "A1"
-      ],
+      "dependsOn": ["A1"],
       "acceptance": "The exact action text lmk once you are in counts as the required ask despite no question mark; do not let a missed ask advance the lead to the VIP pitch.",
       "evidence": "",
       "note": "v3 turns 21-23."
@@ -202,9 +183,7 @@
       "title": "Emit stage labels from the active script",
       "due": "2026-09-30",
       "status": "todo",
-      "dependsOn": [
-        "A5"
-      ],
+      "dependsOn": ["A5"],
       "acceptance": "v3 Step 5/6 never emits obsolete booking or timezone stages. Trace stage and cursor match the active script.",
       "evidence": "",
       "note": "Old BOOKING_TZ_ASK/BOOKING_LINK_DROP labels appeared in v3 traces."
@@ -216,9 +195,7 @@
       "title": "Make reset clear or disclose captured variables",
       "due": "2026-09-30",
       "status": "todo",
-      "dependsOn": [
-        "A6"
-      ],
+      "dependsOn": ["A6"],
       "acceptance": "A reset removes captured variables and fsmCursor, or the UI explicitly states and shows retained state; fresh-test turn 1 records variables.",
       "evidence": "",
       "note": "Used lead mr.cocoabutter retained fallbackContentUrl_delivered across resets; use a new account for closure."
@@ -241,9 +218,7 @@
       "title": "Explain five silent delivery losses",
       "due": "2026-09-28",
       "status": "todo",
-      "dependsOn": [
-        "P0.0"
-      ],
+      "dependsOn": ["P0.0"],
       "acceptance": "Reconstruct user_7_eham, padihcee, martinghantous, kemical12_music and israelalge3. Reproduce each in controlled tests. Each ends in a correlated Meta result or coded cause visible to the owner, with no silent exhaustion or duplicate send.",
       "evidence": "",
       "note": "Preserve historical jobs, attempts and review flags. No automatic replay."
@@ -265,9 +240,7 @@
       "title": "Route non-sales intent before discovery",
       "due": "2026-09-29",
       "status": "todo",
-      "dependsOn": [
-        "P0.1"
-      ],
+      "dependsOn": ["P0.1"],
       "acceptance": "On active v3 Step 1, Solicitation / non-lead sends nothing; prospect intent routes to the correct branch. Record script ID/version and native delivery outcome.",
       "evidence": "",
       "note": ""
@@ -278,9 +251,7 @@
       "title": "Guard every outgoing script action against context",
       "due": "2026-09-29",
       "status": "todo",
-      "dependsOn": [
-        "P0.2"
-      ],
+      "dependsOn": ["P0.2"],
       "acceptance": "A beginner request does not receive unsupported obstacle or urgency copy. New inbound invalidates incompatible pending parts before send.",
       "evidence": "",
       "note": ""
@@ -291,9 +262,7 @@
       "title": "Answer explicit questions before advancing",
       "due": "2026-09-29",
       "status": "todo",
-      "dependsOn": [
-        "P0.3"
-      ],
+      "dependsOn": ["P0.3"],
       "acceptance": "Product, access, platform and terminology questions receive an approved answer or an explicit human handoff before another funnel question. Preserve resume point.",
       "evidence": "",
       "note": ""
@@ -304,13 +273,10 @@
       "title": "Treat clear interest as YES",
       "due": "2026-09-29",
       "status": "in_progress",
-      "dependsOn": [
-        "P0.2",
-        "P0.4"
-      ],
+      "dependsOn": ["P0.2", "P0.4"],
       "acceptance": "On active v3 Step 4, clear YES bypasses Hesitant. Answer accompanying questions and continue to the correct Step 5 objective without asking permission again.",
       "evidence": "26 September controlled IG conversation cmuiigvvx0003l504j7mbdfek on production 8ae38df: explicit 'definitely send the link' entered Hesitant; a second yes entered Not in yet, and no Discord link was sent. Commit fe1daec changes token routing to classify only the latest reply and passes prior completed branch context to the model. 63 relevant tests and TypeScript passed; production version confirmed, but live link-delivery proof is pending.",
-      "note": "Two attempts to reset the own-account test conversation after fe1daec stopped on a transient production database interactive-transaction error before any webhook turn. Both attempts restored the response delay to 0-250 seconds. Do not mark this gate verified without a delivered Discord link and Meta ID."
+      "note": "Two attempts to reset the own-account test conversation after fe1daec stopped on a transient production database interactive-transaction error before any webhook turn. Both attempts restored the response delay to 0-250 seconds. Do not mark this gate verified without a delivered Discord link and Meta ID. 26 September: c7e7d9f delivered Step 4 YES and Discord link once with five Meta-accepted bubbles. First-turn market misclassification remains under repair; see docs/IG_BRANCH_ELIGIBILITY_2026-09-26.md. Not accepted as an end-to-end pass."
     },
     {
       "id": "P0.9",
@@ -318,9 +284,7 @@
       "title": "Validate state transitions and reject stale writes",
       "due": "2026-09-29",
       "status": "in_progress",
-      "dependsOn": [
-        "P0.3"
-      ],
+      "dependsOn": ["P0.3"],
       "acceptance": "On active v3, Step 4 to Step 5 to Step 6 follows delivered actions, not draft gate output. Cursor is bounded by seven steps; stale writes cannot overwrite newer progress.",
       "evidence": "26 September production 8ae38df, IG conversation cmuiigvvx0003l504j7mbdfek: a direct answer to the Step 2 either/or ask advanced to Step 3 and three outbound bubbles received Meta IDs. The previous Step 2 repeat failure was reproduced before the fix in cmuih4wsf003fkx04p46g2ahk. This is partial progression evidence, not A5/A6 closure.",
       "note": "A5/A6 remain open: delivered-action truth, seven-step cursor bound, and stale-write rejection have not been proven. Legacy computeSystemStage owns routing unless FIX_D_ROUTING_AUTHORITATIVE names this account."
@@ -342,9 +306,7 @@
       "title": "Use approved resource IDs and correct links",
       "due": "2026-09-30",
       "status": "todo",
-      "dependsOn": [
-        "P0.4"
-      ],
+      "dependsOn": ["P0.4"],
       "acceptance": "Approved resource IDs resolve to the Discord, Typeform waitlist and Apex/Lucid affiliate URLs. The application inserts exact approved URLs; the model cannot invent or swap them. Record send result and recipient.",
       "evidence": "",
       "note": ""
@@ -355,9 +317,7 @@
       "title": "Resend requested resources exactly once",
       "due": "2026-09-30",
       "status": "todo",
-      "dependsOn": [
-        "P0.7"
-      ],
+      "dependsOn": ["P0.7"],
       "acceptance": "Resend the Discord link only when the lead cannot find it or it failed, once per new eligible inbound. Do not resend after a duplicate webhook event.",
       "evidence": "",
       "note": ""
@@ -368,10 +328,7 @@
       "title": "Ship owner review and resume on a phone",
       "due": "2026-10-01",
       "status": "todo",
-      "dependsOn": [
-        "P0.0",
-        "A2"
-      ],
+      "dependsOn": ["P0.0", "A2"],
       "acceptance": "Durable NEEDS_STEERING hold and one inbox item show draft, reason and context. Owner can approve, edit, guide, keep paused or resume without a draft. Stale and duplicate actions are safe. Both declared holds and exhaustion enter review; phone test passes unaided.",
       "evidence": "",
       "note": "Preserve Junior Narandan, user_7_eham, padihcee, kemical12_music, israelalge3 and sumit_thakre156 as before-state evidence. A2 hard fail must enter this hold; never strip a fixed [MSG] or placeholder and call the turn successful."
@@ -382,12 +339,7 @@
       "title": "Prove accepted inbound outcomes and alerts",
       "due": "2026-10-01",
       "status": "todo",
-      "dependsOn": [
-        "P0.0",
-        "P0.1",
-        "P0.12",
-        "A4"
-      ],
+      "dependsOn": ["P0.0", "P0.1", "P0.12", "A4"],
       "acceptance": "Monitoring covers the full interval and older conversations, separates IG/FB, ties each inbound to a job and outbound or hold, and alerts on actionable age/failure thresholds. Test restarts, timeout, rejection and exhaustion.",
       "evidence": "",
       "note": ""
@@ -398,15 +350,7 @@
       "title": "Prove real Facebook lead and continuation",
       "due": "2026-10-01",
       "status": "todo",
-      "dependsOn": [
-        "P0.2",
-        "P0.9",
-        "A1",
-        "A2",
-        "A3",
-        "A5",
-        "A6"
-      ],
+      "dependsOn": ["P0.2", "P0.9", "A1", "A2", "A3", "A5", "A6"],
       "acceptance": "On a brand-new sender and a continuing real Facebook DM, verify active v3 script ID/version, native inbound once, correct step and branch, one delivered reply, stored Meta ID and no reset. Preserve conversation state.",
       "evidence": "",
       "note": "Wait for Shazim's live message before starting a production send test."
@@ -417,16 +361,7 @@
       "title": "Prove real Instagram lead and continuation",
       "due": "2026-10-01",
       "status": "in_progress",
-      "dependsOn": [
-        "P0.1",
-        "P0.2",
-        "P0.9",
-        "A1",
-        "A2",
-        "A3",
-        "A5",
-        "A6"
-      ],
+      "dependsOn": ["P0.1", "P0.2", "P0.9", "A1", "A2", "A3", "A5", "A6"],
       "acceptance": "On a brand-new sender and a continuing real Instagram DM, verify active v3 script ID/version, opener provenance, correct step and branch, one delivered reply, Meta ID and no reset. Preserve conversation state.",
       "evidence": "@iamshazimkhan native IG inbound opened a verified 24-hour window at 2026-09-26T11:35:09.475Z. Controlled signed-webhook test on 8ae38df delivered ordered outbound bubbles with Meta IDs and proved the Step 2 answer advances. Synthetic inbound appears in Convlo, not the native IG inbox; this is not the fresh natural follower chain required for closure.",
       "note": "The full script remains unproven: Step 4/5 link routing failed on 8ae38df. Candidate fe1daec is deployed but its rerun hit the database reset transaction error before a new inbound. Do not treat Meta IDs alone as a native inbox screenshot."
@@ -437,9 +372,7 @@
       "title": "Write architecture and release evidence handoff",
       "due": "2026-10-01",
       "status": "todo",
-      "dependsOn": [
-        "OBS"
-      ],
+      "dependsOn": ["OBS"],
       "acceptance": "Document intake, identity, runtime cursor, generation, queue, egress, review/resume, flags, rollback, known gaps and exact evidence for each P0 item.",
       "evidence": "",
       "note": ""
@@ -494,9 +427,7 @@
       "title": "Prove demo account on a second script",
       "due": "2026-10-01",
       "status": "todo",
-      "dependsOn": [
-        "P0.9"
-      ],
+      "dependsOn": ["P0.9"],
       "acceptance": "A second account and script run without hardcoded Daniel-specific behavior.",
       "evidence": "",
       "note": ""
@@ -529,12 +460,7 @@
       "title": "Confirm conditions for client one",
       "due": "2026-10-05",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF",
-        "TEGA-PRICE",
-        "TEGA-LEGAL",
-        "TEGA-ONBOARD"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF", "TEGA-PRICE", "TEGA-LEGAL", "TEGA-ONBOARD"],
       "acceptance": "Daniel receives approved price and positioning and confirms all P0 launch conditions before outreach.",
       "evidence": "",
       "note": ""
@@ -545,9 +471,7 @@
       "title": "Approach and onboard first paying client",
       "due": "2026-10-06",
       "status": "todo",
-      "dependsOn": [
-        "DANIEL-GATE"
-      ],
+      "dependsOn": ["DANIEL-GATE"],
       "acceptance": "Client one is approached after sign-off, signs with a written success event, then completes two weeks of live volume before use as proof for client two.",
       "evidence": "",
       "note": ""
@@ -580,9 +504,7 @@
       "title": "Store structured facts with sources and confidence",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Location, experience, job, goal, obstacle, urgency, interest, affordability, resources and purchase evidence are stored with source messages and corrected when the lead updates them.",
       "evidence": "",
       "note": ""
@@ -593,9 +515,7 @@
       "title": "Handle images and attachments honestly",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Supported images are understood, or the assistant states the limitation and offers handoff. Chart questions do not silently resume discovery.",
       "evidence": "",
       "note": "Tega approves image behavior."
@@ -606,9 +526,7 @@
       "title": "Resume returning conversations with context",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Prior conversation, customer status, resources and human interaction inform the next objective. The assistant acknowledges prior contact.",
       "evidence": "",
       "note": ""
@@ -619,9 +537,7 @@
       "title": "Disclose automation and route human requests",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Bot accusations get an honest disclosure. Explicit requests for Dae or a person interrupt the script and route to human review.",
       "evidence": "",
       "note": "Tega approves copy."
@@ -632,9 +548,7 @@
       "title": "Explain the offer before discussing price",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "On active v3 Step 6, an approved answer to price questions precedes any further pitch; unknown facts go to review.",
       "evidence": "",
       "note": "Tega supplies approved facts."
@@ -645,9 +559,7 @@
       "title": "Bound educational detours",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "A configurable limit lets the assistant answer briefly and then offer the right resource or resume qualification without forcing a pitch in non-sales or distress cases.",
       "evidence": "",
       "note": "Tega approves the limit."
@@ -658,9 +570,7 @@
       "title": "Use gender-neutral language by default",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Templates and generated replies avoid default gendered address, never infer gender from names or photos, and honor explicit preferences.",
       "evidence": "",
       "note": "Tega approves tone."
@@ -671,9 +581,7 @@
       "title": "Find why blocked verbatim repeats were generated",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "A3"
-      ],
+      "dependsOn": ["A3"],
       "acceptance": "Trace v3 turns 21-22 and historical repeat cases. A single inbound produces at most one delivered generation; retries cannot append duplicate parts.",
       "evidence": "",
       "note": ""
@@ -684,9 +592,7 @@
       "title": "Refresh UI design tokens and app layout",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Tega and Daniel approve a scoped redesign after launch reliability is stable.",
       "evidence": "",
       "note": "Deferred by the launch plan."
@@ -697,9 +603,7 @@
       "title": "Derive script builder rules from Daniel's versions",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "Compare approved script revisions and turn recurring script choices into explicit builder rules.",
       "evidence": "",
       "note": "Deferred by the launch plan."
@@ -710,9 +614,7 @@
       "title": "Ingest completion, payment and booking events",
       "due": "After launch",
       "status": "todo",
-      "dependsOn": [
-        "TEGA-SIGNOFF"
-      ],
+      "dependsOn": ["TEGA-SIGNOFF"],
       "acceptance": "External completion, payment and booking events update Convlo through authenticated, deduplicated webhooks with traceable provenance.",
       "evidence": "",
       "note": "Deferred by the launch plan."

@@ -3,6 +3,256 @@
   "updatedAt": "2026-09-24T03:56:23.516Z",
   "steps": [
     {
+      "stepNumber": 1,
+      "title": "Classify",
+      "actions": [
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"forex\", \"XAU\", \"XAUUSD\", \"gold\", \"CFDs\", \"spot\", a broker name. Tag as forex."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"both\", \"I do futures and gold\", \"XAU and MGC\". Tag as futures and forex."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"I just got into trading\", \"just starting out\", \"I'm trying to learn\", \"brand new\", \"haven't started yet\". Tag as new. Do not ask the market question."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"I keep blowing accounts\", \"I can't stay consistent\", \"I don't know where to start\", \"I keep getting stopped out\"."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"hey\", \"yo\", a lone emoji, \"?\", \"[Image]\", \"[Voice note]\". If the futures-or-cfds question was already sent earlier in this conversation, ask it again in different, casual words instead of repeating it verbatim."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"futures\", \"MGC\", \"GC\", \"NQ\", \"ES\", \"prop account\", \"funded account\", \"Apex\", \"Lucid\", \"Topstep\", \"Blue Guardian\". Tag as futures. If they named a firm, note the firm."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"JOIN MY TRADING CHANNEL\", agency or partnership outreach, broker rebate offers, follow-for-follow, links to another creator's channel, requests to DM a third party, dating or Snap handle bait. Send nothing at all. End of script."
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one short line to the exact thing they named. if a firm, acknowledge the firm; if a contract, acknowledge the contract. never thank them for answering}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one short line to what they named}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one line to the fact they run both}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{react in one line to the fact they actually started, referencing their own words. no generic compliments}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{name their problem back in one line using their own words. if it's something you went through, say so briefly}}"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "yo what's good what you trading right now, futures or cfds?"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "you on a prop account or trading your own live account?"
+        },
+        {
+          "actionType": "send_message",
+          "content": "I trade gold, mostly MGC. same chart, same levels as XAU, so you're in the right place either way"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "you on a prop account or trading your own live account?"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "what made you wanna get into trading?"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "{{ask what they're trading it on, phrased as a follow-up to their problem, for example 'you doing that on cfds or futures?'}}"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "ask_question",
+          "content": "you trading it through a prop firm or your own broker account?"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        }
+      ],
+      "branches": [
+        {
+          "branchLabel": "Solicitation / non-lead",
+          "conditionDescription": "Take this branch when the message is a pitch, promotion, bot spam, or an attempt to sell to or recruit Dae rather than a request for help.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"JOIN MY TRADING CHANNEL\", agency or partnership outreach, broker rebate offers, follow-for-follow, links to another creator's channel, requests to DM a third party, dating or Snap handle bait. Send nothing at all. End of script."
+            }
+          ]
+        },
+        {
+          "branchLabel": "Futures",
+          "conditionDescription": "Take this branch when their message names futures or anything futures-adjacent.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"futures\", \"MGC\", \"GC\", \"NQ\", \"ES\", \"prop account\", \"funded account\", \"Apex\", \"Lucid\", \"Topstep\", \"Blue Guardian\". Tag as futures. If they named a firm, note the firm."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one short line to the exact thing they named. if a firm, acknowledge the firm; if a contract, acknowledge the contract. never thank them for answering}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "you on a prop account or trading your own live account?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Forex / Gold",
+          "conditionDescription": "Take this branch when their message names forex, gold, or a broker.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"forex\", \"XAU\", \"XAUUSD\", \"gold\", \"CFDs\", \"spot\", a broker name. Tag as forex."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one short line to what they named}}"
+            },
+            {
+              "actionType": "send_message",
+              "content": "I trade gold, mostly MGC. same chart, same levels as XAU, so you're in the right place either way"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "you trading it through a prop firm or your own broker account?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Both",
+          "conditionDescription": "Take this branch when they name both futures and forex.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"both\", \"I do futures and gold\", \"XAU and MGC\". Tag as futures and forex."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one line to the fact they run both}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "you on a prop account or trading your own live account?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "New, no market yet",
+          "conditionDescription": "Take this branch when they are new and have not picked a market.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"I just got into trading\", \"just starting out\", \"I'm trying to learn\", \"brand new\", \"haven't started yet\". Tag as new. Do not ask the market question."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{react in one line to the fact they actually started, referencing their own words. no generic compliments}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "what made you wanna get into trading?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Named a pain instead",
+          "conditionDescription": "Take this branch when they named a problem rather than a market.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"I keep blowing accounts\", \"I can't stay consistent\", \"I don't know where to start\", \"I keep getting stopped out\"."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{name their problem back in one line using their own words. if it's something you went through, say so briefly}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "{{ask what they're trading it on, phrased as a follow-up to their problem, for example 'you doing that on cfds or futures?'}}"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "No signal",
+          "conditionDescription": "Take this branch when there is no usable content.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"hey\", \"yo\", a lone emoji, \"?\", \"[Image]\", \"[Voice note]\". If the futures-or-cfds question was already sent earlier in this conversation, ask it again in different, casual words instead of repeating it verbatim."
+            },
+            {
+              "actionType": "ask_question",
+              "content": "yo what's good what you trading right now, futures or cfds?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "stepNumber": 4,
       "title": "Send the Link",
       "actions": [

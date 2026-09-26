@@ -1133,7 +1133,9 @@ function buildJudgeClassifierTrace(params: {
     llmSelectedLabel: params.llmSelectedLabel ?? null,
     llmError: params.llmError ?? null,
     finalSelectedLabel:
-      params.finalSelectedLabel ?? params.tokenMatch.branchLabel ?? null,
+      params.finalSelectedLabel !== undefined
+        ? params.finalSelectedLabel
+        : (params.tokenMatch.branchLabel ?? null),
     finalConfidence: params.finalConfidence ?? params.tokenMatch.confidence,
     timestamp: new Date().toISOString()
   };
@@ -1363,8 +1365,15 @@ function buildJudgeBranchLLMPrompt(
   leadMessage: string
 ): string {
   const branchLines = step.branches
-    .map(
-      (branch) => `- ${branch.branchLabel}: ${judgeBranchRoutingText(branch)}`
+    .map((branch) =>
+      JSON.stringify({
+        branchLabel: branch.branchLabel,
+        eligibilityCondition: branch.conditionDescription || null,
+        judgmentGuidance: branch.actions
+          .filter((action) => action.actionType === 'runtime_judgment')
+          .map((action) => judgmentConditionText(action.content ?? ''))
+          .filter(Boolean)
+      })
     )
     .join('\n');
   const multi = /\nLatest: /.test(leadMessage);
@@ -1379,9 +1388,11 @@ ${leadBlock}
 Branches:
 ${branchLines}
 
-Use the operator's runtime judgment criteria in the branch text as the source of truth. When branches distinguish clear conviction from lukewarm interest, emphatic language, specific stakes, and strong personal importance should match the clear/committed branch; hedging language such as "maybe", "could", "possibly", or "I guess" should match the lukewarm/uncertain branch.
+First check each branch's entire eligibilityCondition against the lead's actual meaning. Every required clause must hold, including AND, exclusions and negations. A partially matching condition is not eligible. Examples in judgmentGuidance illustrate a condition; matching an example does not override a failed condition. Explicit facts take precedence over assumptions based on experience level or tone. Among eligible branches, choose the most specific matching condition, using judgmentGuidance to resolve ambiguity. When no eligibilityCondition is provided, use judgmentGuidance as the condition.
 
-If NO branch condition genuinely matches the lead's message (e.g. a check-in like "you there?", small talk, or an answer that none of the conditions describe), respond with exactly NONE — do NOT force the closest branch.
+For example, with conditions "names a sport" and "beginner who has not chosen a sport", "I am new to tennis" satisfies the first condition, not the second. Experience and choice are separate facts. Similarly, "I want both A and B" matches a condition requiring both more specifically than one requiring only A.
+
+If NO branch condition genuinely matches the lead's message, respond with NONE. Do not force the closest branch.
 
 Respond with ONLY the exact branchLabel of the best match, or NONE. No explanation. No punctuation.`;
 }
@@ -1417,7 +1428,7 @@ async function classifyJudgeBranchWithAnthropic(params: {
   const timeout = setTimeout(() => {
     didTimeout = true;
     controller.abort();
-  }, 3000);
+  }, 5000);
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1428,7 +1439,9 @@ async function classifyJudgeBranchWithAnthropic(params: {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        // Haiku repeatedly treated a matching example as overriding a failed
+        // branch condition. Use Sonnet for routing only; reply generation is unchanged.
+        model: 'claude-sonnet-4-6',
         max_tokens: 50,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }]
@@ -1539,7 +1552,7 @@ async function classifyJudgeBranchWithOpenAI(params: {
       error: null,
       timedOut: didTimeout
     });
-    return { selectedLabel: text, error: null, timedOut: didTimeout };
+    return { selectedLabel: text || null, error: null, timedOut: didTimeout };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     console.warn('[branch-classifier] LLM RESULT:', {
