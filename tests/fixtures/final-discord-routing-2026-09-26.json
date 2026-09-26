@@ -1,0 +1,290 @@
+{
+  "scriptId": "cmueln1ns0001l3040lwx9oaf",
+  "updatedAt": "2026-09-24T03:56:23.516Z",
+  "steps": [
+    {
+      "stepNumber": 4,
+      "title": "Send the Link",
+      "actions": [
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"yes\", \"yeah send it\", \"bet\", \"please\", \"what's the link\". Send the link exactly once."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "Examples: \"what is it\", \"maybe\", \"is it free\", \"idk bro\", \"nah\". A first no always lands here and never ends the script. Tag as hesitant. Do not send the link."
+        },
+        {
+          "actionType": "send_message",
+          "content": "bet, here you go 💯"
+        },
+        {
+          "actionType": "send_message",
+          "content": "no pressure, it's completely free. I trade gold live every asia session in there, post the recaps, and people ask questions all day"
+        },
+        {
+          "actionType": "send_link",
+          "content": "Discord"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "want me to send it anyway?"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{tell them which role to grab. forex tag: grab the Forex role because something is dropping for that side. futures tag: grab the Futures role for the prop firm deals. new or unclear: pick your role in Channels & Roles when you land}}"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "send_message",
+          "content": "say what's good in general-chat when you get in, and run through starter-bootcamp. I'm in there daily and I trade live every asia session, 7pm cst"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "lmk once you're in?"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        }
+      ],
+      "branches": [
+        {
+          "branchLabel": "YES",
+          "conditionDescription": "Take this branch when they say yes or show clear interest.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"yes\", \"yeah send it\", \"bet\", \"please\", \"what's the link\". Send the link exactly once."
+            },
+            {
+              "actionType": "send_message",
+              "content": "bet, here you go 💯"
+            },
+            {
+              "actionType": "send_link",
+              "content": "Discord"
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{tell them which role to grab. forex tag: grab the Forex role because something is dropping for that side. futures tag: grab the Futures role for the prop firm deals. new or unclear: pick your role in Channels & Roles when you land}}"
+            },
+            {
+              "actionType": "send_message",
+              "content": "say what's good in general-chat when you get in, and run through starter-bootcamp. I'm in there daily and I trade live every asia session, 7pm cst"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "lmk once you're in?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Hesitant",
+          "conditionDescription": "Take this branch when they're non-committal, ask what it is first, or say no for the first time.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "Examples: \"what is it\", \"maybe\", \"is it free\", \"idk bro\", \"nah\". A first no always lands here and never ends the script. Tag as hesitant. Do not send the link."
+            },
+            {
+              "actionType": "send_message",
+              "content": "no pressure, it's completely free. I trade gold live every asia session in there, post the recaps, and people ask questions all day"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "want me to send it anyway?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "stepNumber": 5,
+      "title": "Join Check",
+      "actions": [
+        {
+          "actionType": "runtime_judgment",
+          "content": "End of script. No link, no second pitch, no follow-up cadence."
+        },
+        {
+          "actionType": "runtime_judgment",
+          "content": "They say not yet or later, seem confused, or reply with something else. Examples: \"not yet\", \"later\", \"wym\", \"ok\". Do not resend the link unless they say they can't find it or it didn't work. Do not mention the VIP side."
+        },
+        {
+          "actionType": "send_message",
+          "content": "let's go 🔥 drop a message in general-chat so I know who you are"
+        },
+        {
+          "actionType": "send_message",
+          "content": "bet, here you go 💯"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{one genuine line thanking them for joining, referencing something they said earlier in the conversation}}"
+        },
+        {
+          "actionType": "send_link",
+          "content": "Discord"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{if they seem confused, one line clarifying you meant the discord link you just sent. otherwise, one line saying no rush}}"
+        },
+        {
+          "actionType": "send_message",
+          "content": "all good bro, door's open whenever"
+        },
+        {
+          "actionType": "send_message",
+          "content": "real quick since you're in. I'm putting together something for a VIP side of the discord. I'll be honest with you, there's a price to it. but it's less than what one bad trade costs you, and way less than what people used to pay me for the same thing. the reason I'm building it is I don't want a room full of people copying my entries and learning nothing. my whole thing is if I don't trade with you for two weeks, can you still feed yourself and your family? that's the only version of this worth doing"
+        },
+        {
+          "actionType": "send_message",
+          "content": "{{tell them which role to grab, same rules as STEP 4}}"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "lmk once you're in?"
+        },
+        {
+          "actionType": "send_message",
+          "content": "inside it's live ny session on top of asia, 2 live calls a week where you put your chart on screen and I break it down with you, weekly lessons on my full system, and a private chat where your questions don't get buried"
+        },
+        {
+          "actionType": "send_message",
+          "content": "say what's good in general-chat when you get in, and run through starter-bootcamp. I'm in there daily and I trade live every asia session, 7pm cst"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "ask_question",
+          "content": "I'm putting together a waitlist right now. the few people on it get in at a much lower monthly price than anyone who joins after. want me to put you on it so you're the first to know when I launch it?"
+        },
+        {
+          "actionType": "ask_question",
+          "content": "lmk once you're in?"
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        },
+        {
+          "actionType": "wait_for_response",
+          "content": null
+        }
+      ],
+      "branches": [
+        {
+          "branchLabel": "Joined",
+          "conditionDescription": "Take this branch when the link was sent and they confirm they joined.",
+          "actions": [
+            {
+              "actionType": "send_message",
+              "content": "let's go 🔥 drop a message in general-chat so I know who you are"
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{one genuine line thanking them for joining, referencing something they said earlier in the conversation}}"
+            },
+            {
+              "actionType": "send_message",
+              "content": "real quick since you're in. I'm putting together something for a VIP side of the discord. I'll be honest with you, there's a price to it. but it's less than what one bad trade costs you, and way less than what people used to pay me for the same thing. the reason I'm building it is I don't want a room full of people copying my entries and learning nothing. my whole thing is if I don't trade with you for two weeks, can you still feed yourself and your family? that's the only version of this worth doing"
+            },
+            {
+              "actionType": "send_message",
+              "content": "inside it's live ny session on top of asia, 2 live calls a week where you put your chart on screen and I break it down with you, weekly lessons on my full system, and a private chat where your questions don't get buried"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "I'm putting together a waitlist right now. the few people on it get in at a much lower monthly price than anyone who joins after. want me to put you on it so you're the first to know when I launch it?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Not in yet",
+          "conditionDescription": "Take this branch when the link was sent but they have not confirmed joining.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "They say not yet or later, seem confused, or reply with something else. Examples: \"not yet\", \"later\", \"wym\", \"ok\". Do not resend the link unless they say they can't find it or it didn't work. Do not mention the VIP side."
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{if they seem confused, one line clarifying you meant the discord link you just sent. otherwise, one line saying no rush}}"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "lmk once you're in?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Hesitant, now yes",
+          "conditionDescription": "Take this branch when they are tagged hesitant and now say yes.",
+          "actions": [
+            {
+              "actionType": "send_message",
+              "content": "bet, here you go 💯"
+            },
+            {
+              "actionType": "send_link",
+              "content": "Discord"
+            },
+            {
+              "actionType": "send_message",
+              "content": "{{tell them which role to grab, same rules as STEP 4}}"
+            },
+            {
+              "actionType": "send_message",
+              "content": "say what's good in general-chat when you get in, and run through starter-bootcamp. I'm in there daily and I trade live every asia session, 7pm cst"
+            },
+            {
+              "actionType": "ask_question",
+              "content": "lmk once you're in?"
+            },
+            {
+              "actionType": "wait_for_response",
+              "content": null
+            }
+          ]
+        },
+        {
+          "branchLabel": "Soft exit",
+          "conditionDescription": "Take this branch when they are tagged hesitant and decline a second time.",
+          "actions": [
+            {
+              "actionType": "runtime_judgment",
+              "content": "End of script. No link, no second pitch, no follow-up cadence."
+            },
+            {
+              "actionType": "send_message",
+              "content": "all good bro, door's open whenever"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

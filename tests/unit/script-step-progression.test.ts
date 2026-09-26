@@ -1834,7 +1834,7 @@ describe('bug-34-llm-branch-classifier', () => {
     assert.equal(match.tokenScoringResult?.confidence, 'medium');
   });
 
-  it('does not call classifier for high token confidence', async () => {
+  it('requires semantic confirmation even for high token confidence', async () => {
     let calls = 0;
     const match = await selectJudgeBranchForLead(
       bug34JudgeStep,
@@ -1842,14 +1842,14 @@ describe('bug-34-llm-branch-classifier', () => {
       {
         classifier: async () => {
           calls++;
-          return 'Obstacle given — detailed and emotional';
+          return 'Going well';
         }
       }
     );
 
-    assert.equal(calls, 0);
+    assert.equal(calls, 1);
     assert.equal(match.branchLabel, 'Going well');
-    assert.equal(match.confidence, 'high');
+    assert.equal(match.confidence, 'llm_classified');
   });
 
   it('bug-005b routes clear conviction language using branch runtime judgment criteria', async () => {
@@ -1897,14 +1897,14 @@ describe('bug-34-llm-branch-classifier', () => {
       {
         classifier: async () => {
           calls++;
-          return 'Lukewarm buy-in';
+          return 'Clear buy-in';
         }
       }
     );
 
-    assert.equal(calls, 0);
+    assert.equal(calls, 1);
     assert.equal(match.branchLabel, 'Clear buy-in');
-    assert.ok(match.confidence === 'medium' || match.confidence === 'high');
+    assert.equal(match.confidence, 'llm_classified');
   });
 
   it('ignores placeholder-only [MSG] actions when checking judge branch violations', async () => {

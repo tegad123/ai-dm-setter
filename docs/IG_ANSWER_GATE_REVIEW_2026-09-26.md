@@ -77,3 +77,31 @@ seconds. The driver now retries restoration through a transient outage.
 
 A clean native Instagram inbound and the full intended script path still
 require separate acceptance evidence.
+
+## Second routing reproduction and semantic routing benchmark
+
+The controlled test on `fe1daec` (documentation release `8a7e94c`) used
+conversation `cmuim8g2b000jjv047l2artz7`. Step 2 advanced correctly again.
+Step 4 still chose Hesitant for a message ending “yeah send the link over.”
+The same message said “not trying to risk money,” so even latest-only token
+scoring picked Hesitant (9 versus 4) and skipped the semantic classifier.
+This disproves the earlier candidate as a complete fix.
+
+The new candidate always consults the semantic classifier for conditional
+branches. Token scores remain in the trace but cannot lock a branch. A
+provider failure, invalid label or NONE abstains rather than resurrecting a
+token guess; existing structural fallback rules remain in place.
+
+`tests/benchmarks/judge-routing-benchmark.ts --live-model` evaluates eight
+cases against the captured production Step 4/5 script, without webhooks or
+Meta sends. The `8a7e94c` baseline scored 6/8; the candidate scored 8/8.
+These are curated semantic regression cases, not a general accuracy estimate.
+The relevant unit group passes 268/270; the baseline passes 263/265, with
+the same two failures: the medium-token-confidence assertion and
+bug-49-locked-branch-fallback. TypeScript passes.
+
+The own-account reset succeeded after giving its atomic transaction an
+explicit 30-second timeout. A read-only four-query pooler check took about
+seven seconds end to end. The test completed four turns and restored the
+response delay to 0-250 seconds. The semantic routing candidate still needs
+its separate production send proof.

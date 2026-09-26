@@ -288,37 +288,46 @@ async function resetTestLead(state: NonNullable<State>) {
   // Match the dashboard's delete behavior but constrain it to the one
   // account/platform/sender/handle verified above. Notification is the audit.
   try {
-    await prisma.$transaction(async (tx) => {
-      const current = await tx.lead.findUnique({
-        where: { id: state.lead.id },
-        select: {
-          accountId: true,
-          platform: true,
-          platformUserId: true,
-          handle: true
+    await prisma.$transaction(
+      async (tx) => {
+        const current = await tx.lead.findUnique({
+          where: { id: state.lead.id },
+          select: {
+            accountId: true,
+            platform: true,
+            platformUserId: true,
+            handle: true
+          }
+        });
+        if (
+          current?.accountId !== ACCOUNT_ID ||
+          current.platform !== 'INSTAGRAM' ||
+          current.platformUserId !== SENDER_ID ||
+          current.handle.replace(/^@/, '').toLowerCase() !== SENDER_HANDLE
+        ) {
+          throw new Error('Test-lead identity changed; reset refused');
         }
-      });
-      if (
-        current?.accountId !== ACCOUNT_ID ||
-        current.platform !== 'INSTAGRAM' ||
-        current.platformUserId !== SENDER_ID ||
-        current.handle.replace(/^@/, '').toLowerCase() !== SENDER_HANDLE
-      ) {
-        throw new Error('Test-lead identity changed; reset refused');
+        await tx.scheduledReply.deleteMany({
+          where: { conversationId: conversation.id }
+        });
+        await tx.notification.create({
+          data: {
+            accountId: ACCOUNT_ID,
+            type: 'SYSTEM',
+            title: 'Controlled test conversation reset',
+            body: `Authorized @${SENDER_HANDLE} Instagram test reset: conversation ${conversation.id}, lead ${state.lead.id}, ${conversation.messages.length} messages. The real inbound opened the Meta messaging window before the reset.`
+          }
+        });
+        await tx.lead.delete({ where: { id: state.lead.id } });
+      },
+      {
+        // This laptop reaches production through the pooler. Identity checks,
+        // audit insertion and cascading deletion must remain one transaction,
+        // but their network round trips can exceed Prisma's default five seconds.
+        maxWait: 10000,
+        timeout: 30000
       }
-      await tx.scheduledReply.deleteMany({
-        where: { conversationId: conversation.id }
-      });
-      await tx.notification.create({
-        data: {
-          accountId: ACCOUNT_ID,
-          type: 'SYSTEM',
-          title: 'Controlled test conversation reset',
-          body: `Authorized @${SENDER_HANDLE} Instagram test reset: conversation ${conversation.id}, lead ${state.lead.id}, ${conversation.messages.length} messages. The real inbound opened the Meta messaging window before the reset.`
-        }
-      });
-      await tx.lead.delete({ where: { id: state.lead.id } });
-    });
+    );
   } catch (error) {
     // A dropped DB connection can hide a successful commit. Resolve the
     // uncertain result by reading the exact lead before deciding to retry.

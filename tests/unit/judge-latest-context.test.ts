@@ -86,7 +86,7 @@ describe('judge branch routing with recent lead context', () => {
     const result = await selectJudgeBranchForLead(
       step,
       `Earlier: nah not yet, still in the learning phase. i'm based in texas and looking for a free community.\nLatest: yeah that sounds perfect, definitely send the link. appreciate you breaking it down`,
-      { classifier: async () => null }
+      { classifier: async () => 'YES' }
     );
     assert.equal(result.branchLabel, 'YES');
   });
@@ -95,7 +95,7 @@ describe('judge branch routing with recent lead context', () => {
     const result = await selectJudgeBranchForLead(
       step,
       'Earlier: yeah definitely send the link.\nLatest: actually maybe later, what is it first?',
-      { classifier: async () => null }
+      { classifier: async () => 'Hesitant' }
     );
     assert.equal(result.branchLabel, 'Hesitant');
   });
@@ -122,5 +122,42 @@ describe('judge branch routing with recent lead context', () => {
     });
     assert.equal(classifierCalled, true);
     assert.equal(result.branchLabel, 'Hesitant, now yes');
+  });
+
+  it('lets semantic meaning override a high token score from negated background facts', async () => {
+    let calls = 0;
+    const result = await selectJudgeBranchForLead(
+      step,
+      "yeah that sounds perfect honestly, i'm definitely not trying to risk money while i'm still figuring things out. a free discord with an actual process would be exactly what i'm looking for right now. yeah send the link over",
+      {
+        classifier: async () => {
+          calls++;
+          return 'YES';
+        }
+      }
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.branchLabel, 'YES');
+    assert.equal(result.confidence, 'llm_classified');
+  });
+
+  for (const outcome of ['NONE', 'invented-branch', null]) {
+    it(`abstains instead of reviving a token guess when the classifier returns ${outcome}`, async () => {
+      const result = await selectJudgeBranchForLead(step, 'no never not yet', {
+        classifier: async () => outcome
+      });
+      assert.equal(result.branchLabel, null);
+      assert.equal(result.confidence, 'none');
+    });
+  }
+
+  it('abstains on classifier failure even when tokens strongly match', async () => {
+    const result = await selectJudgeBranchForLead(step, 'no never not yet', {
+      classifier: async () => {
+        throw new Error('provider timeout');
+      }
+    });
+    assert.equal(result.branchLabel, null);
+    assert.equal(result.confidence, 'none');
   });
 });

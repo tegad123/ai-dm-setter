@@ -1662,9 +1662,9 @@ export async function selectJudgeBranchForLead(
         confidence: tokenMatch.confidence,
         selectedLabel: tokenMatch.branchLabel ?? null,
         willAttemptLLM:
-          tokenMatch.confidence === 'none' ||
-          tokenMatch.confidence === 'low' ||
-          tokenMatch.confidence === 'medium'
+          !!step &&
+          !!leadMessage?.trim() &&
+          (hasRuntimeJudgmentAction(step) || step.branches.length >= 2)
       });
     } catch (err) {
       console.error('[branch-classifier] TOKEN SCORE ERROR:', {
@@ -1695,12 +1695,7 @@ export async function selectJudgeBranchForLead(
     const stepNeedsClassification =
       !!step &&
       (hasRuntimeJudgmentAction(step) || (step.branches?.length ?? 0) >= 2);
-    if (
-      !step ||
-      !stepNeedsClassification ||
-      !leadMessage?.trim() ||
-      tokenMatch.confidence === 'high'
-    ) {
+    if (!step || !stepNeedsClassification || !leadMessage?.trim()) {
       return withJudgeClassifierTrace(tokenMatch, baseTrace);
     }
 
@@ -1709,6 +1704,15 @@ export async function selectJudgeBranchForLead(
     if (cached) return cached;
 
     const classifier = options?.classifier ?? classifyJudgeBranchWithLLM;
+    // Lexical overlap is diagnostic, not evidence that a prose condition is
+    // true. Negated facts and examples can give the wrong branch a high score.
+    // Only a valid semantic decision may lock a conditional branch. An
+    // unavailable classifier abstains, preserving structural fallback rules.
+    const abstainedMatch: JudgeBranchMatch = {
+      ...tokenMatch,
+      branchLabel: null,
+      confidence: 'none'
+    };
     const selectionPromise = (async (): Promise<JudgeBranchMatch> => {
       let classifierOutcome: JudgeBranchClassifierOutcome;
       try {
@@ -1736,7 +1740,7 @@ export async function selectJudgeBranchForLead(
           classifierOutcome.error ||
           (selectedLabel ? 'invalid_branch_label' : null);
         return withJudgeClassifierTrace(
-          tokenMatch,
+          abstainedMatch,
           buildJudgeClassifierTrace({
             step,
             leadMessage,
@@ -1745,8 +1749,8 @@ export async function selectJudgeBranchForLead(
             llmAttempted: true,
             llmSelectedLabel: selectedLabel,
             llmError,
-            finalSelectedLabel: tokenMatch.branchLabel,
-            finalConfidence: tokenMatch.confidence
+            finalSelectedLabel: null,
+            finalConfidence: 'none'
           })
         );
       }
@@ -1787,7 +1791,7 @@ export async function selectJudgeBranchForLead(
       );
     })().catch((err) =>
       withJudgeClassifierTrace(
-        tokenMatch,
+        abstainedMatch,
         buildJudgeClassifierTrace({
           step,
           leadMessage,
@@ -1795,8 +1799,8 @@ export async function selectJudgeBranchForLead(
           tokenScoreError,
           llmAttempted: true,
           llmError: err instanceof Error ? err.message : String(err),
-          finalSelectedLabel: tokenMatch.branchLabel,
-          finalConfidence: tokenMatch.confidence
+          finalSelectedLabel: null,
+          finalConfidence: 'none'
         })
       )
     );
