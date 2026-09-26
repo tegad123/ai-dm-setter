@@ -11,6 +11,9 @@
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --check
  * NODE_PATH=$PWD/node_modules npx tsx scripts/drive-prod-instagram-funnel.ts --run
  * ... --run --fast temporarily sets this account's delay to 0 and restores it.
+ * After a reset, --window-proof=<real inbound ISO> --window-source=<deleted
+ * conversation ID> reuses that same verified Meta window if its reset audit
+ * still exists. It expires 22 hours after the native inbound.
  *
  * Optional: E2E_MAX_TURNS=12 E2E_WAIT_SECONDS=600 E2E_SETTLE_SECONDS=20
  */
@@ -189,6 +192,42 @@ function latestRealInbound(state: NonNullable<State>) {
 async function requireOpenWindow() {
   const state = await readState();
   if (!state) throw new Error('No current test conversation or real inbound');
+  const proofArg = process.argv.find((arg) =>
+    arg.startsWith('--window-proof=')
+  );
+  if (proofArg) {
+    const sourceArg = process.argv.find((arg) =>
+      arg.startsWith('--window-source=')
+    );
+    const sourceId = sourceArg?.slice('--window-source='.length);
+    const proofAt = new Date(proofArg.slice('--window-proof='.length));
+    const ageMinutes = (Date.now() - proofAt.getTime()) / 60000;
+    if (
+      !sourceId ||
+      !Number.isFinite(ageMinutes) ||
+      ageMinutes < 0 ||
+      ageMinutes >= 22 * 60
+    ) {
+      throw new Error('Prior native window proof is missing or expired');
+    }
+    const audit = await retry('window reset audit', () =>
+      prisma.notification.findFirst({
+        where: {
+          accountId: ACCOUNT_ID,
+          title: 'Controlled test conversation reset',
+          body: { contains: `conversation ${sourceId},` },
+          createdAt: { gte: proofAt }
+        },
+        select: { id: true, createdAt: true }
+      })
+    );
+    if (!audit)
+      throw new Error('No matching test reset audit for window proof');
+    console.log(
+      `Reusing verified native inbound ${proofAt.toISOString()} (${ageMinutes.toFixed(1)}m ago), reset audit ${audit.id}`
+    );
+    return state;
+  }
   const inbound = latestRealInbound(state);
   if (!inbound) throw new Error('No real Instagram inbound found');
   const ageMinutes = (Date.now() - inbound.timestamp.getTime()) / 60000;
@@ -212,10 +251,24 @@ async function waitForPriorWork(conversationId: string) {
     const busy = state.queue.some(
       (reply) => reply.status === 'PENDING' || reply.status === 'PROCESSING'
     );
-    if (!busy && !state.conversation.awaitingAiResponse) return state;
+    // A quality-gate failure is terminal and intentionally leaves the chat
+    // marked for human review. It has no worker left to wait for.
+    if (
+      !busy &&
+      (!state.conversation.awaitingAiResponse || isTerminalReviewHold(state))
+    ) {
+      return state;
+    }
     await sleep(3000);
   }
   throw new Error('Current real inbound is still processing; reset cancelled');
+}
+
+function isTerminalReviewHold(state: NonNullable<State>) {
+  return (
+    state.conversation.awaitingHumanReview &&
+    state.queue[0]?.status === 'FAILED_QUALITY_GATE'
+  );
 }
 
 async function resetTestLead(state: NonNullable<State>) {
@@ -228,7 +281,7 @@ async function resetTestLead(state: NonNullable<State>) {
     state.queue.some(
       (reply) => reply.status === 'PENDING' || reply.status === 'PROCESSING'
     ) ||
-    conversation.awaitingAiResponse
+    (conversation.awaitingAiResponse && !isTerminalReviewHold(state))
   ) {
     throw new Error('Pending AI work: deletion refused');
   }
@@ -405,6 +458,40 @@ async function nextNaturalLeadReply(state: NonNullable<State>, ai: string[]) {
   throw new Error('Could not generate a safe natural lead reply');
 }
 
+async function readDelay() {
+  return retry('response delay', () =>
+    prisma.account.findUniqueOrThrow({
+      where: { id: ACCOUNT_ID },
+      select: { responseDelayMin: true, responseDelayMax: true }
+    })
+  );
+}
+
+async function changeDelay(
+  from: { responseDelayMin: number; responseDelayMax: number },
+  to: { responseDelayMin: number; responseDelayMax: number }
+) {
+  try {
+    const changed = await prisma.account.updateMany({
+      where: { id: ACCOUNT_ID, ...from },
+      data: to
+    });
+    if (changed.count === 1) return;
+  } catch {
+    // A pooler disconnect can happen after the update committed. Read back
+    // before deciding the setting still needs a write.
+  }
+  const actual = await readDelay();
+  if (
+    actual.responseDelayMin !== to.responseDelayMin ||
+    actual.responseDelayMax !== to.responseDelayMax
+  ) {
+    throw new Error(
+      `Response delay change was not confirmed; actual=${actual.responseDelayMin}-${actual.responseDelayMax}s`
+    );
+  }
+}
+
 async function main() {
   const mode = process.argv[2];
   const fast = process.argv.includes('--fast');
@@ -419,22 +506,12 @@ async function main() {
   );
   if (mode === '--check') return;
   if (!SECRET) throw new Error('META_APP_SECRET is required');
-  const originalDelay = fast
-    ? await prisma.account.findUniqueOrThrow({
-        where: { id: ACCOUNT_ID },
-        select: { responseDelayMin: true, responseDelayMax: true }
-      })
-    : null;
+  const originalDelay = fast ? await readDelay() : null;
   if (originalDelay) {
-    const changed = await prisma.account.updateMany({
-      where: {
-        id: ACCOUNT_ID,
-        responseDelayMin: originalDelay.responseDelayMin,
-        responseDelayMax: originalDelay.responseDelayMax
-      },
-      data: { responseDelayMin: 0, responseDelayMax: 0 }
+    await changeDelay(originalDelay, {
+      responseDelayMin: 0,
+      responseDelayMax: 0
     });
-    if (changed.count !== 1) throw new Error('Delay changed concurrently');
     console.log(
       `Temporarily set IG account response delay from ${originalDelay.responseDelayMin}-${originalDelay.responseDelayMax}s to 0s`
     );
@@ -471,15 +548,13 @@ async function main() {
     );
   } finally {
     if (originalDelay) {
-      const restored = await prisma.account.updateMany({
-        where: { id: ACCOUNT_ID, responseDelayMin: 0, responseDelayMax: 0 },
-        data: originalDelay
-      });
-      if (restored.count !== 1) {
-        throw new Error(
-          'Delay restoration needs manual review: account setting changed during test'
-        );
-      }
+      await changeDelay(
+        { responseDelayMin: 0, responseDelayMax: 0 },
+        {
+          responseDelayMin: originalDelay.responseDelayMin,
+          responseDelayMax: originalDelay.responseDelayMax
+        }
+      );
       console.log(
         `Restored account response delay to ${originalDelay.responseDelayMin}-${originalDelay.responseDelayMax}s`
       );

@@ -20,7 +20,10 @@
 // question, an explicit deferral, or a pure question-back with no answer clause.
 // ---------------------------------------------------------------------------
 
-export function replyAnswersAsk(reply: string | null | undefined): boolean {
+export function replyAnswersAsk(
+  reply: string | null | undefined,
+  ask?: string | null
+): boolean {
   const t = (reply ?? '').trim();
   if (t.length === 0) return false;
   const lower = t.toLowerCase().replace(/[’‘]/g, "'");
@@ -65,6 +68,22 @@ export function replyAnswersAsk(reply: string | null | undefined): boolean {
     /\b(how much (does|is|would|for|to)|what('?s| is) (the |your )?(price|cost)|does (it|this) cost|whats the price|how much is it|what(?:'|’)?s? the (damage|cost|price)|is (this|it) (free|paid|expensive))\b/i.test(
       lower
     ) || /^(price|cost)\??$/i.test(core);
+
+  // "not yet" is normally a deferral. For an ask about whether the lead has
+  // traded (including demo trading), "not yet, still learning" is a direct
+  // answer to the offered alternative. Keep the exception tied to the ask so
+  // the same reply cannot complete an unrelated capital or purchase step.
+  if (
+    ask &&
+    /\b(?:trading anything|traded anything|demo|paper trad(?:e|ing)|started trading)\b/i.test(
+      ask
+    ) &&
+    /^not yet\b/i.test(core) &&
+    /\b(?:still|just)\s+(?:in\s+)?(?:learning|studying)\b/i.test(core) &&
+    !pricingQuestion
+  ) {
+    return true;
+  }
 
   const startsInterrogative =
     /^(how|what|when|where|why|who|which|can|could|would|do|does|did|is|are|will|should|whats?|hows?)\b/i.test(

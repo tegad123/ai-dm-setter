@@ -24,6 +24,30 @@ describe('replyAnswersAsk', () => {
     assert.equal(replyAnswersAsk('Hold on, what about you?'), false);
   });
 
+  it('accepts not yet, still learning as an answer only to a trading activity ask', () => {
+    const reply =
+      "nah not yet, still in learning mode. i'm based in texas and want a foundation before risking anything. do you have a free discord?";
+    assert.equal(replyAnswersAsk(reply), false);
+    assert.equal(
+      replyAnswersAsk(
+        reply,
+        'you trading anything yet, even on demo, or still learning the basics first?'
+      ),
+      true
+    );
+    assert.equal(
+      replyAnswersAsk(reply, 'do you have enough capital to get started?'),
+      false
+    );
+    assert.equal(
+      replyAnswersAsk(
+        'not yet, you?',
+        'you trading anything yet, even on demo?'
+      ),
+      false
+    );
+  });
+
   it('does not treat the price quoted in a product question as an affordability answer', () => {
     for (const reply of [
       'What does the $200 include before paying?',

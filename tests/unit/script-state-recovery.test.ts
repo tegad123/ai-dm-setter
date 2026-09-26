@@ -2150,6 +2150,55 @@ describe('routing-only branch completion', () => {
     };
   }
 
+  it('advances a trading activity ask after the lead says not yet, still learning', () => {
+    const ask =
+      'you trading anything yet, even on demo, or still learning the basics first?';
+    const step2 = branchStep(2, 'Account and Goal', 'New, gave their reason', [
+      { actionType: 'runtime_judgment', content: 'Capture their reason.' },
+      { actionType: 'send_message', content: '{{react to their reason}}' },
+      { actionType: 'ask_question', content: ask },
+      { actionType: 'wait_for_response', content: null }
+    ]);
+    const script = {
+      id: 'new_trader_progression',
+      steps: [step2, askStep(3, 'The Bridge', 'Want the free link?')]
+    } as any;
+    const points = branchSelectedPoints(
+      2,
+      'Account and Goal',
+      'New, gave their reason',
+      'sug_step2'
+    );
+    const history = [
+      {
+        id: 'ai_ack',
+        suggestionId: 'sug_step2',
+        sender: 'AI',
+        content: 'makes sense, learning first is smart',
+        timestamp: '2026-09-26T14:18:58.000Z'
+      },
+      {
+        id: 'ai_ask',
+        suggestionId: 'sug_step2',
+        sender: 'AI',
+        content: ask,
+        timestamp: '2026-09-26T14:19:22.000Z'
+      },
+      {
+        id: 'lead_answer',
+        sender: 'LEAD',
+        content:
+          "nah not yet, still in learning mode. i'm based in texas and want a foundation before risking anything. do you have a free discord?",
+        timestamp: '2026-09-26T14:19:53.000Z'
+      }
+    ];
+
+    assert.equal(
+      computeSystemStage(script, points as any, history).step?.stepNumber,
+      3
+    );
+  });
+
   it('auto-completes a selected JUDGE-only branch', () => {
     const step1 = branchStep(1, 'Pure Routing', 'Qualified', [
       { actionType: 'runtime_judgment', content: 'They qualify.' }

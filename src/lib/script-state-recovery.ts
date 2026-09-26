@@ -1693,7 +1693,10 @@ function stepCompletionFromHistory(
             // who keeps deflecting can't park the position forever (better to
             // move on than re-ask infinitely). So: hold on a non-answer for the
             // first 1–2 asks, then the anti-loop escape releases it.
-            const answered = replyAnswersAsk(leadReply.content);
+            const answered = replyAnswersAsk(
+              leadReply.content,
+              judgmentAsks[0]?.content
+            );
             if (!answered && reAskCount < 2) {
               lastReason = 'judgment_ask_reply_did_not_answer';
               continue;
@@ -1737,7 +1740,11 @@ function stepCompletionFromHistory(
       // does this cost"), a pricing question, or an explicit deferral does NOT
       // complete the step and does NOT get bound as the step's answer — it
       // parks the position so the same ask is re-driven next turn.
-      if (sent && leadReply && !replyAnswersAsk(leadReply.content)) {
+      if (
+        sent &&
+        leadReply &&
+        !replyAnswersAsk(leadReply.content, action.content)
+      ) {
         lastReason = 'ask_reply_did_not_answer';
         continue;
       }
@@ -1805,7 +1812,7 @@ function stepCompletionFromHistory(
         if (
           askBySuggestion &&
           leadReply &&
-          !replyAnswersAsk(leadReply.content)
+          !replyAnswersAsk(leadReply.content, asks[0]?.content)
         ) {
           lastReason = 'ask_reply_did_not_answer';
           continue;
